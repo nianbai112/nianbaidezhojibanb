@@ -1,0 +1,32 @@
+.DS_Store
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.env.*.local
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Backend runtime artifacts
+backend/certs/
+backend/uploads/
+backend/.env
+backend/.env.local
+backend/prisma/*.db
+
+# Admin build artifacts
+admin/dist/
+admin/.env
+admin/.env.local
+admin/.env.development
+admin/.env.production
+admin/.env.*.local
+
+# IDE
+.idea/
+.vscode/

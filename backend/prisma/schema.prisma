@@ -1,0 +1,4403 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 枚举定义 ====================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  DELETED
+}
+
+enum Gender {
+  UNKNOWN
+  MALE
+  FEMALE
+}
+
+enum StudentVerifyStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RoleType {
+  SUPER_ADMIN
+  ADMIN
+  REGION_ADMIN
+  MERCHANT
+  RIDER
+  USER
+}
+
+enum PostType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  VOTE
+  REPOST
+}
+
+enum PostStatus {
+  DRAFT
+  PENDING
+  PUBLISHED
+  REJECTED
+  DELETED
+  TOP
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+enum CircleMemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum CircleJoinType {
+  OPEN
+  APPLY
+  INVITE
+}
+
+enum OrderStatus {
+  PENDING_PAY
+  PAID
+  SHIPPED
+  DELIVERED
+  RECEIVED
+  COMPLETED
+  CANCELLED
+  REFUNDING
+  REFUNDED
+}
+
+enum DeliveryOrderStatus {
+  PENDING_PAY
+  PENDING_ACCEPT
+  ACCEPTED
+  IN_PROGRESS
+  ARRIVED
+  COMPLETED
+  CANCELLED
+  REFUNDING
+  REFUNDED
+}
+
+enum DeliveryTaskType {
+  PICKUP
+  DELIVER
+  MEAL
+  UNIVERSAL
+}
+
+enum RiderStatus {
+  OFFLINE
+  ONLINE
+  BUSY
+}
+
+enum WalletType {
+  BALANCE
+  FREEZE
+}
+
+enum TransactionType {
+  RECHARGE
+  WITHDRAW
+  PAY
+  REFUND
+  REWARD
+  TRANSFER_IN
+  TRANSFER_OUT
+  COMMISSION
+  PENALTY
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum WithdrawStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  REJECTED
+}
+
+enum PaymentChannel {
+  WX_PAY
+  ALI_PAY
+  BALANCE
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  LOCATION
+  SYSTEM
+}
+
+enum NotificationType {
+  SYSTEM
+  LIKE
+  COMMENT
+  FOLLOW
+  ORDER
+  DELIVERY
+  WALLET
+  CIRCLE
+}
+
+enum CouponType {
+  FULL_REDUCTION
+  DISCOUNT
+  EXCHANGE
+}
+
+enum CheckInType {
+  DAILY
+  CONTINUOUS
+}
+
+enum SecondHandStatus {
+  ON_SALE
+  SOLD
+  OFFLINE
+}
+
+enum MatchStatus {
+  PENDING
+  MATCHED
+  REJECTED
+  EXPIRED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  APPROVE
+  REJECT
+  BAN
+  UNBAN
+}
+
+enum PriceAdjustmentType {
+  PERCENTAGE
+  FIXED
+}
+
+enum PriceAdjustmentScope {
+  REGION
+  CATEGORY
+  MERCHANT
+}
+
+// ==================== 用户与权限 ====================
+
+model User {
+  id          String     @id @default(cuid())
+  openid      String     @unique
+  unionid     String?
+  avatar      String?
+  nickname    String?
+  phone       String?
+  status      UserStatus @default(ACTIVE)
+  userType    Int        @default(1) // 1=normal user, 4=bot
+  muteEndAt   DateTime?
+  muteReason  String?
+  lastLoginAt DateTime?
+  lastLoginIp String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  profile               UserProfile?
+  settings              UserSettings?
+  studentVerify         StudentVerify?
+  roles                 UserRole[]
+  posts                 Post[]
+  comments              Comment[]
+  likes                 Like[]
+  favorites             Favorite[]
+  follows               Follow[]                 @relation("UserFollows")
+  followers             Follow[]                 @relation("UserFollowers")
+  blocks                Block[]                  @relation("UserBlocks")
+  blockedBy             Block[]                  @relation("UserBlockedBy")
+  browseHistory         BrowseHistory[]
+  tags                  UserTag[]
+  experiences           UserExperience[]
+  circles               CircleMember[]
+  circlePayments        CirclePayment[]
+  cartItems             Cart[]
+  orders                Order[]                  @relation("UserOrders")
+  deliveryOrders        DeliveryOrder[]          @relation("UserDeliveryOrders")
+  riderOrders           DeliveryOrder[]          @relation("RiderDeliveryOrders")
+  wallet                Wallet?
+  transactions          WalletTransaction[]
+  withdraws             Withdraw[]
+  messages              Message[]                @relation("SenderMessages")
+  conversations         ConversationMember[]
+  notifications         Notification[]
+  coupons               CouponReceive[]
+  checkIns              CheckIn[]
+  badges                UserBadge[]
+  activityJoins         ActivityJoin[]
+  competitionPhotos     CompetitionPhoto[]
+  competitionVotes      CompetitionPhotoVote[]
+  competitionRatings    CompetitionPhotoRating[]
+  activityClubMembers   ActivityClubMember[]
+  secondHands           SecondHand[]
+  driftBottles          DriftBottle[]
+  matches               Match[]                  @relation("UserMatches")
+  matchTargets          Match[]                  @relation("TargetMatches")
+  netDisks              NetDisk[]
+  postCollaborators     PostCollaborator[]
+  reviews               Review[]
+  reports               Report[]                 @relation("Reporter")
+  reported              Report[]                 @relation("Reported")
+  auditLogs             AuditLog[]
+  addresses             Address[]
+  titleRecords          UserTitleRecord[]
+  datingProfile         DatingProfile?
+  netDiskResources      NetDiskResource[]
+  netDiskDownloads      NetDiskDownload[]
+  netDiskComments       NetDiskComment[]
+  stickers              Sticker[]
+  inviterInvites        ShareInvite[]        @relation("InviterRelation")
+  inviteeInvites        ShareInvite[]        @relation("InviteeRelation")
+  shareRewards          ShareReward[]
+  punchInRecords        PunchInRecord[]
+  punchInWishlists      PunchInWishlist[]
+  punchInComments       PunchInComment[]
+  userRatings           UserRating[]
+  mallOrders            MallOrder[]
+  mallReviews           MallReview[]
+  distributor           MallDistributor?
+  groupBuyOrders        GroupBuyOrder[]
+  groupBuyReviews       GroupBuyReview[]
+  alipayTransfers       AlipayTransfer[]     @relation("OperatorAlipayTransfers")
+  regionBalanceLogs     RegionBalanceLog[]   @relation("OperatorRegionBalanceLogs")
+  activityOrders        ActivityOrder[]
+  secondHandOrders      SecondHandOrder[]
+  topupOrders           TopupOrder[]
+  errandOrders          ErrandOrder[]
+  datingOrders          DatingOrder[]
+  datingReportsFiled    DatingReport[]         @relation("DatingReporter")
+  datingReportsAgainst  DatingReport[]         @relation("DatingReported")
+  communityPayments     CommunityPayment[]
+  incentiveRecords      IncentiveRecord[]
+  regionRiders          RegionRider[]
+  cityAgent             CityAgent?
+  cityAgentApplications CityAgentApplication[]
+  transferRequests      TransferRequest[]
+  botAccount            BotAccount?
+  photoContestEntries   PhotoContestEntry[]
+  photoContestRatings   PhotoContestRating[]
+  ratingReplies         RatingReply[]
+
+  @@index([openid])
+  @@index([phone])
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserProfile {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gender    Gender    @default(UNKNOWN)
+  birthday  DateTime?
+  bio       String?
+  region    String?
+  school    String?
+  major     String?
+  grade     String?
+  dormitory String?
+  wechat    String?
+  qq        String?
+  email     String?
+  realName  String?
+  idCard    String?
+  updatedAt DateTime  @updatedAt
+
+  @@map("user_profiles")
+}
+
+model UserSettings {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  privacyLevel     Int      @default(0) // 0:公开 1:粉丝 2:互关 3:私密
+  allowFollow      Boolean  @default(true)
+  allowComment     Boolean  @default(true)
+  allowMessage     Boolean  @default(true)
+  showOnlineStatus Boolean  @default(true)
+  notifyLike       Boolean  @default(true)
+  notifyComment    Boolean  @default(true)
+  notifyFollow     Boolean  @default(true)
+  notifySystem     Boolean  @default(true)
+  notifyOrder      Boolean  @default(true)
+  language         String   @default("zh-CN")
+  updatedAt        DateTime @updatedAt
+
+  @@map("user_settings")
+}
+
+model StudentVerify {
+  id         String              @id @default(cuid())
+  userId     String              @unique
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  realName   String
+  idCard     String?
+  studentId  String
+  schoolName String
+  major      String?
+  grade      String?
+  cardImage  String?
+  status     StudentVerifyStatus @default(PENDING)
+  remark     String?
+  verifiedAt DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@map("student_verifies")
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  type        RoleType
+  description String?
+  permissions Permission[]
+  users       UserRole[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  module      String
+  action      String
+  description String?
+  roles       Role[]
+  createdAt   DateTime @default(now())
+
+  @@map("permissions")
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  regionId  String?
+  region    Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleId, regionId])
+  @@map("user_roles")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  follower    User     @relation("UserFollows", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("UserBlocks", fields: [userId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("UserBlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, blockedId])
+  @@map("blocks")
+}
+
+model BrowseHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType String // post, product, circle, second_hand
+  targetId   String
+  title      String?
+  image      String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([targetType, targetId])
+  @@map("browse_histories")
+}
+
+model UserTag {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  color     String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, name])
+  @@map("user_tags")
+}
+
+// ==================== 区域系统 ====================
+
+model Region {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  description String?
+  cover       String?
+  logo        String?
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  radius      Int      @default(5000) // 距离限制，单位米
+  distanceLimit Int?   @default(0) // 0=关闭距离限制
+  studentOnly Boolean  @default(false)
+  isOpen      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  settings    Json? // 区域配置(保留兼容)
+
+  // 基础信息
+  regionType       String?  @default("other") // campus / community / other
+  isHot            Boolean  @default(false)
+  regionCoverMode  String?  @default("cover") // cover / popup
+
+  // 财务配置
+  balance         Decimal? @default(0) @db.Decimal(12,2)
+  minWithdraw     Decimal? @default(0) @db.Decimal(10,2)
+  maxWithdraw     Decimal? @default(0) @db.Decimal(10,2)
+  withdrawFee     Decimal? @default(0) @db.Decimal(10,2)
+  withdrawRate    Decimal? @default(0) @db.Decimal(5,4)
+  commissionRate  Decimal? @default(0) @db.Decimal(5,4)
+  selfUnbanFee    Decimal? @default(0) @db.Decimal(10,2)
+  // 财务：区域累计佣金
+  totalCommission Decimal? @default(0) @db.Decimal(12,2)
+
+  // 显示设置
+  showHotList                 Boolean  @default(false)
+  hotFeaturedDisplay          String?  @default("none") // none / hot / featured / mixed
+  isForceGuidance             Boolean  @default(false)
+  privateMessageEnabled       Boolean  @default(true)
+  contactsRequireStudentAuth  Boolean  @default(false)
+  onlyStudentAuthUsers        Boolean  @default(false)
+  groupChatEnabled            Boolean  @default(false)
+  enableQrcodeFilter          Boolean  @default(false)
+
+  // 页面布局
+  homeNavLayout       Int?     @default(1) // 1-9
+  messagePageLayout   String?  @default("default") // default / xiaohongshu
+  profilePageLayout   String?  @default("default")
+
+  // 复杂 JSON 配置
+  carouselImages      Json?
+  regionTabs          Json?
+  homeLeaderboard     Json?
+  messageIcons        Json?
+  messageNavigation   Json?
+  profileLayoutItems  Json?
+  homeNavLayoutConfig Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  admins          UserRole[]
+  banners         RegionBanner[]
+  notices         RegionNotice[]
+  navs            RegionNav[]
+  tabBar          RegionTabBar?
+  posts           Post[]
+  circles         Circle[]
+  merchants       Merchant[]
+  deliveryConfigs DeliveryConfig[]
+  activities      Activity[]
+  secondHands     SecondHand[]
+  cityAgents       CityAgent[]
+  cityAgentApps    CityAgentApplication[]
+  priceAdjustments ProductPriceAdjustment[]
+  merchantSettings         RegionMerchantSettings?
+  secondHandRegionSetting  SecondHandRegionSetting?
+  coupons                  Coupon[]
+  datingPackages           DatingPackage[]
+  balanceLogs              RegionBalanceLog[]
+
+  @@map("regions")
+}
+
+model RegionBanner {
+  id        String    @id @default(cuid())
+  regionId  String
+  region    Region    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  title     String?
+  image     String
+  link      String?
+  sortOrder Int       @default(0)
+  isShow    Boolean   @default(true)
+  startAt   DateTime?
+  endAt     DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("region_banners")
+}
+
+model RegionNotice {
+  id        String    @id @default(cuid())
+  regionId  String
+  region    Region    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  type      String    @default("normal") // normal, important, emergency
+  isTop     Boolean   @default(false)
+  isShow    Boolean   @default(true)
+  startAt   DateTime?
+  endAt     DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("region_notices")
+}
+
+model RegionNav {
+  id        String   @id @default(cuid())
+  regionId  String
+  region    Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  name      String
+  icon      String
+  link      String
+  type      String   @default("page") // page, miniapp, web
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("region_navs")
+}
+
+model RegionTabBar {
+  id        String   @id @default(cuid())
+  regionId  String   @unique
+  region    Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  config    Json // TabBar 配置
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("region_tab_bars")
+}
+
+// ==================== 内容社区 ====================
+
+model Post {
+  id            String     @id @default(cuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId      String?
+  region        Region?    @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  type          PostType   @default(TEXT)
+  status        PostStatus @default(PENDING)
+  title         String?
+  content       String     @db.Text
+  location      String?
+  latitude      Float?
+  longitude     Float?
+  viewCount     Int        @default(0)
+  likeCount     Int        @default(0)
+  commentCount  Int        @default(0)
+  favoriteCount Int        @default(0)
+  shareCount    Int        @default(0)
+  isTop         Boolean    @default(false)
+  topExpireAt   DateTime?
+  isCoCreate    Boolean    @default(false)
+  auditStatus   String     @default("pending") // pending, approved, rejected
+  auditReason   String?
+  isEssence     Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  deletedAt     DateTime?
+
+  // Relations
+  media         PostMedia[]
+  topics        PostTopic[]
+  comments      Comment[]
+  likes         Like[]
+  favorites     Favorite[]
+  votes         Vote[]
+  collaborators PostCollaborator[]
+  reports       Report[]
+
+  @@index([userId, createdAt])
+  @@index([regionId, status, createdAt])
+  @@index([status, isTop, createdAt])
+  @@index([type])
+  @@map("posts")
+}
+
+model PostMedia {
+  id        String    @id @default(cuid())
+  postId    String
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  type      MediaType
+  url       String
+  thumb     String?
+  width     Int?
+  height    Int?
+  duration  Int? // 视频/音频时长，单位秒
+  size      Int? // 文件大小，单位字节
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@map("post_media")
+}
+
+model Topic {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  cover       String?
+  description String?
+  postCount   Int      @default(0)
+  followCount Int      @default(0)
+  isHot       Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  status      String   @default("active") // active, disabled
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  posts   PostTopic[]
+  circles CircleTopicGroup[]
+
+  @@map("topics")
+}
+
+model PostTopic {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  topicId   String
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, topicId])
+  @@map("post_topics")
+}
+
+model Comment {
+  id          String    @id @default(cuid())
+  postId      String
+  post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentId    String?
+  parent      Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies     Comment[] @relation("CommentReplies")
+  content     String
+  likeCount   Int       @default(0)
+  isTop       Boolean   @default(false)
+  status      String    @default("active") // active, hidden, deleted
+  auditStatus String    @default("pending") // pending, approved, rejected
+  auditReason String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([postId, createdAt])
+  @@index([parentId])
+  @@map("comments")
+}
+
+model Like {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType String // post, comment
+  targetId   String
+  createdAt  DateTime @default(now())
+
+  post Post? @relation(fields: [targetId], references: [id], onDelete: Cascade, map: "like_post_fk")
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("likes")
+}
+
+model Favorite {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType String // post, product, second_hand
+  targetId   String
+  createdAt  DateTime @default(now())
+
+  post Post? @relation(fields: [targetId], references: [id], onDelete: Cascade, map: "favorite_post_fk")
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("favorites")
+}
+
+model Vote {
+  id        String    @id @default(cuid())
+  postId    String
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  title     String
+  options   Json // [{id, text, count}]
+  maxSelect Int       @default(1)
+  endAt     DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("votes")
+}
+
+model VoteRecord {
+  id        String   @id @default(cuid())
+  voteId    String
+  userId    String
+  options   Json // [optionId]
+  createdAt DateTime @default(now())
+
+  @@unique([voteId, userId])
+  @@map("vote_records")
+}
+
+model PostCollaborator {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@map("post_collaborators")
+}
+
+model Report {
+  id         String    @id @default(cuid())
+  reporterId String
+  reporter   User      @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedId String?
+  reported   User?     @relation("Reported", fields: [reportedId], references: [id], onDelete: SetNull)
+  targetType String // post, comment, user, message, merchant
+  targetId   String
+  reason     String
+  detail     String?
+  images     Json?
+  status     String    @default("pending") // pending, processing, resolved, rejected
+  result     String?
+  handlerId  String?
+  handledAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  post Post? @relation(fields: [targetId], references: [id], onDelete: Cascade, map: "report_post_fk")
+
+  @@index([targetType, targetId])
+  @@index([status])
+  @@map("reports")
+}
+
+// ==================== 圈子系统 ====================
+
+model Circle {
+  id          String         @id @default(cuid())
+  name        String
+  icon        String?
+  cover       String?
+  description String?
+  regionId    String?
+  region      Region?        @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  joinType    CircleJoinType @default(OPEN)
+  isOfficial  Boolean        @default(false)
+  memberCount Int            @default(0)
+  postCount   Int            @default(0)
+  maxMembers  Int            @default(500)
+  tags        Json?
+  status      String         @default("active") // active, dissolved
+  price       Decimal?       @db.Decimal(10, 2)
+  paidJoin    Boolean        @default(false)
+  inviteCode  String?
+  deadline    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  members     CircleMember[]
+  channels    CircleChannel[]
+  topicGroups CircleTopicGroup[]
+  payments    CirclePayment[]
+
+  @@map("circles")
+}
+
+model CircleMember {
+  id         String           @id @default(cuid())
+  circleId   String
+  circle     Circle           @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       CircleMemberRole @default(MEMBER)
+  nickName   String?
+  joinAt     DateTime         @default(now())
+  lastReadAt DateTime?
+
+  @@unique([circleId, userId])
+  @@map("circle_members")
+}
+
+model CircleChannel {
+  id        String   @id @default(cuid())
+  circleId  String
+  circle    Circle   @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  name      String
+  type      String   @default("text") // text, voice, notice
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("circle_channels")
+}
+
+model CircleTopicGroup {
+  id        String   @id @default(cuid())
+  circleId  String
+  circle    Circle   @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  topicId   String
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([circleId, topicId])
+  @@map("circle_topic_groups")
+}
+
+model CirclePayment {
+  id          String    @id @default(cuid())
+  circleId    String
+  circle      Circle    @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Decimal   @db.Decimal(10, 2)
+  payChannel  String?
+  status      String    @default("pending") // pending, paid, refunded
+  payTime     DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("circle_payments")
+}
+
+// ==================== 商家/商城 ====================
+
+model Merchant {
+  id             String   @id @default(cuid())
+  userId         String
+  regionId       String?
+  region         Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  name           String
+  logo           String?
+  cover          String?
+  phone          String?
+  contactPerson  String?
+  address        String?
+  latitude       Float?
+  longitude      Float?
+  businessHours  String?
+  description    String?
+  categoryId     String?
+  category       Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  status         String   @default("pending") // pending, approved, rejected, closed
+  rejectReason   String?
+  rating         Float    @default(5)
+  saleCount      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  products         Product[]
+  orders           Order[]
+  freightTemplates FreightTemplate[]
+  settlements      MerchantSettlement[]
+  priceAdjustments ProductPriceAdjustment[]
+  groupBuyPackages GroupBuyPackage[]
+  coupons          Coupon[]
+
+  @@map("merchants")
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  parentId  String?
+  parent    Category? @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  name      String
+  icon      String?
+  sortOrder Int       @default(0)
+  isShow    Boolean   @default(true)
+  type      String    @default("product") // product, post, circle
+  status    String    @default("active") // active, disabled, deleted
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  children         Category[]                 @relation("CategoryChildren")
+  products         Product[]
+  merchants        Merchant[]
+  priceAdjustments ProductPriceAdjustment[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String    @id @default(cuid())
+  merchantId  String
+  merchant    Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name        String
+  images      Json
+  detail      String?   @db.Text
+  price       Decimal   @db.Decimal(10, 2)
+  originPrice Decimal?  @db.Decimal(10, 2)
+  stock       Int       @default(0)
+  saleCount   Int       @default(0)
+  unit        String?
+  weight      Int? // 单位克
+  status      String    @default("on_sale") // on_sale, off_sale, deleted
+  isHot       Boolean   @default(false)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  skus       SKU[]
+  cartItems  Cart[]
+  orderItems OrderItem[]
+  reviews    Review[]
+  promotions PromotionProduct[]
+
+  @@index([merchantId, status])
+  @@index([categoryId])
+  @@map("products")
+}
+
+model SKU {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  specs       Json // [{key: "颜色", value: "红色"}]
+  price       Decimal  @db.Decimal(10, 2)
+  originPrice Decimal? @db.Decimal(10, 2)
+  stock       Int      @default(0)
+  image       String?
+  status      String   @default("on_sale")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cartItems  Cart[]
+  orderItems OrderItem[]
+
+  @@map("skus")
+}
+
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  skuId     String?
+  sku       SKU?     @relation(fields: [skuId], references: [id], onDelete: SetNull)
+  quantity  Int      @default(1)
+  selected  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, productId, skuId])
+  @@map("carts")
+}
+
+model Order {
+  id              String          @id @default(cuid())
+  orderNo         String          @unique
+  userId          String
+  user            User            @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
+  merchantId      String
+  merchant        Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  status          OrderStatus     @default(PENDING_PAY)
+  totalAmount     Decimal         @db.Decimal(10, 2)
+  discountAmount  Decimal         @default(0) @db.Decimal(10, 2)
+  freightAmount   Decimal         @default(0) @db.Decimal(10, 2)
+  payAmount       Decimal         @db.Decimal(10, 2)
+  payChannel      PaymentChannel?
+  payTime         DateTime?
+  deliverTime     DateTime?
+  receiveTime     DateTime?
+  completeTime    DateTime?
+  cancelTime      DateTime?
+  cancelReason    String?
+  remark          String?
+  receiverName    String
+  receiverPhone   String
+  receiverAddress String
+  trackingNo      String?
+  trackingCompany String?
+  refundStatus    String          @default("none") // none, refunding, refunded
+  refundAmount    Decimal?        @db.Decimal(10, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  items     OrderItem[]
+  refunds   Refund[]
+  reviews   Review[]
+  orderLogs OrderLog[]
+
+  @@index([userId, createdAt])
+  @@index([merchantId, status])
+  @@index([orderNo])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String  @id @default(cuid())
+  orderId      String
+  order        Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  skuId        String?
+  sku          SKU?    @relation(fields: [skuId], references: [id], onDelete: SetNull)
+  productName  String
+  productImage String
+  skuSpecs     Json?
+  price        Decimal @db.Decimal(10, 2)
+  quantity     Int
+  totalPrice   Decimal @db.Decimal(10, 2)
+
+  @@map("order_items")
+}
+
+model Refund {
+  id           String    @id @default(cuid())
+  orderId      String
+  order        Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refundNo     String    @unique
+  amount       Decimal   @db.Decimal(10, 2)
+  reason       String
+  images       Json?
+  status       String    @default("pending") // pending, approved, rejected, completed
+  rejectReason String?
+  refundTime   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("refunds")
+}
+
+model Review {
+  id          String    @id @default(cuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  merchantId  String?
+  rating      Int       @default(5)
+  content     String?
+  images      Json?
+  isAnonymous Boolean   @default(false)
+  reply       String?
+  replyAt     DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("reviews")
+}
+
+model Promotion {
+  id        String   @id @default(cuid())
+  name      String
+  type      String // full_reduction, discount
+  rules     Json // {full: 100, reduction: 10}
+  startAt   DateTime
+  endAt     DateTime
+  isGlobal  Boolean  @default(false)
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+
+  products PromotionProduct[]
+
+  @@map("promotions")
+}
+
+model PromotionProduct {
+  id          String    @id @default(cuid())
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, productId])
+  @@map("promotion_products")
+}
+
+model FreightTemplate {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name       String
+  rules      Json // [{region: [], firstWeight: 1000, firstPrice: 10, continueWeight: 500, continuePrice: 5}]
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@map("freight_templates")
+}
+
+// ==================== 外卖/跑腿 ====================
+
+model DeliveryConfig {
+  id            String           @id @default(cuid())
+  regionId      String
+  region        Region           @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  type          DeliveryTaskType
+  basePrice     Decimal          @db.Decimal(10, 2)
+  distancePrice Decimal          @db.Decimal(10, 2) // 每公里价格
+  weightPrice   Decimal          @default(0) @db.Decimal(10, 2)
+  timePrice     Decimal          @default(0) @db.Decimal(10, 2)
+  nightPrice    Decimal          @default(0) @db.Decimal(10, 2)
+  maxDistance   Int              @default(10) // 公里
+  maxWeight     Int              @default(20) // 公斤
+  isOpen        Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([regionId, type])
+  @@map("delivery_configs")
+}
+
+model DeliveryOrder {
+  id             String              @id @default(cuid())
+  orderNo        String              @unique
+  userId         String
+  user           User                @relation("UserDeliveryOrders", fields: [userId], references: [id], onDelete: Cascade)
+  riderId        String?
+  rider          User?               @relation("RiderDeliveryOrders", fields: [riderId], references: [id], onDelete: SetNull)
+  type           DeliveryTaskType
+  status         DeliveryOrderStatus @default(PENDING_PAY)
+  title          String
+  description    String?
+  pickupAddress  String
+  pickupContact  String?
+  pickupPhone    String?
+  pickupLat      Float?
+  pickupLng      Float?
+  deliverAddress String
+  deliverContact String?
+  deliverPhone   String?
+  deliverLat     Float?
+  deliverLng     Float?
+  weight         Float? // 公斤
+  distance       Float? // 公里
+  price          Decimal             @db.Decimal(10, 2)
+  tip            Decimal             @default(0) @db.Decimal(10, 2)
+  payChannel     PaymentChannel?
+  payTime        DateTime?
+  acceptTime     DateTime?
+  pickupTime     DateTime?
+  deliverTime    DateTime?
+  completeTime   DateTime?
+  cancelTime     DateTime?
+  cancelReason   String?
+  refundStatus   String              @default("none")
+  refundAmount   Decimal?            @db.Decimal(10, 2)
+  images         Json?
+  remark         String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([riderId, status])
+  @@index([status, createdAt])
+  @@map("delivery_orders")
+}
+
+model Rider {
+  id                String      @id @default(cuid())
+  userId            String      @unique
+  realName          String
+  idCard            String
+  phone             String
+  status            RiderStatus @default(OFFLINE)
+  verifyStatus      String      @default("pending") // pending, approved, rejected
+  rating            Float       @default(5)
+  totalOrders       Int         @default(0)
+  todayOrders       Int         @default(0)
+  lat               Float?
+  lng               Float?
+  locationUpdatedAt DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@map("riders")
+}
+
+// ==================== 财务系统 ====================
+
+model Wallet {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance     Decimal  @default(0) @db.Decimal(12, 2)
+  freeze      Decimal  @default(0) @db.Decimal(12, 2)
+  totalIn     Decimal  @default(0) @db.Decimal(12, 2)
+  totalOut    Decimal  @default(0) @db.Decimal(12, 2)
+  payPassword String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String            @id @default(cuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        TransactionType
+  amount      Decimal           @db.Decimal(12, 2)
+  balance     Decimal           @db.Decimal(12, 2)
+  channel     PaymentChannel?
+  orderNo     String?
+  description String?
+  status      TransactionStatus @default(SUCCESS)
+  createdAt   DateTime          @default(now())
+
+  @@index([userId, createdAt])
+  @@index([type])
+  @@map("wallet_transactions")
+}
+
+model Withdraw {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Decimal        @db.Decimal(10, 2)
+  channel     PaymentChannel
+  account     String // 收款账号
+  realName    String?
+  status      WithdrawStatus @default(PENDING)
+  failReason  String?
+  transferNo  String? // 转账单号
+  processedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([userId, status])
+  @@map("withdraws")
+}
+
+model Recharge {
+  id        String         @id @default(cuid())
+  userId    String
+  amount    Decimal        @db.Decimal(10, 2)
+  channel   PaymentChannel
+  orderNo   String         @unique
+  status    String         @default("pending") // pending, success, failed
+  payTime   DateTime?
+  createdAt DateTime       @default(now())
+
+  @@map("recharges")
+}
+
+// ==================== 支付宝转账 ====================
+
+model AlipayTransfer {
+  id            String   @id @default(cuid())
+  transferNo    String   @unique
+  payeeAccount  String
+  payeeName     String?
+  amount        Decimal  @db.Decimal(10, 2)
+  status        String   @default("pending") // pending, processing, success, failed
+  failReason    String?
+  alipayOrderNo String?
+  operatorId    String?
+  remark        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  operator      User?    @relation("OperatorAlipayTransfers", fields: [operatorId], references: [id])
+
+  @@map("alipay_transfers")
+}
+
+// ==================== 区域余额变动 ====================
+
+model RegionBalanceLog {
+  id          String   @id @default(cuid())
+  regionId    String
+  type        String   // commission, withdraw, adjust, reward
+  amount      Decimal  @db.Decimal(10, 2)
+  balance     Decimal  @db.Decimal(12, 2)
+  orderNo     String?
+  description String?
+  operatorId  String?
+  createdAt   DateTime @default(now())
+
+  region      Region   @relation(fields: [regionId], references: [id])
+  operator    User?    @relation("OperatorRegionBalanceLogs", fields: [operatorId], references: [id])
+
+  @@index([regionId, createdAt])
+  @@map("region_balance_logs")
+}
+
+// ==================== 消息系统 ====================
+
+model Conversation {
+  id          String    @id @default(cuid())
+  type        String    @default("private") // private, group, circle
+  title       String?
+  avatar      String?
+  lastMessage String?
+  lastMsgTime DateTime?
+  unreadCount Int       @default(0)
+  isBlocked   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String       @default("member") // owner, admin, member
+  nickName       String?
+  unreadCount    Int          @default(0)
+  lastReadMsgId  String?
+  isMuted        Boolean      @default(false)
+  joinedAt       DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+  @@map("conversation_members")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation("SenderMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  type           MessageType
+  content        String
+  extra          Json? // 额外数据，如图片URL、位置等
+  isRecalled     Boolean      @default(false)
+  recalledAt     DateTime?
+  readCount      Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  content   String
+  data      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+// ==================== 运营功能 ====================
+
+model Coupon {
+  id            String     @id @default(cuid())
+  name          String
+  type          CouponType
+  value         Decimal    @db.Decimal(10, 2)
+  minAmount     Decimal    @default(0) @db.Decimal(10, 2)
+  totalCount    Int
+  receivedCount Int        @default(0)
+  usedCount     Int        @default(0)
+  limitPerUser  Int        @default(1)
+  startAt       DateTime
+  endAt         DateTime
+  status        String     @default("active")
+  description   String?
+  code          String?    @unique
+  regionId      String?
+  region        Region?    @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  merchantId    String?
+  merchant      Merchant?  @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  receives CouponReceive[]
+
+  @@index([status, endAt])
+  @@index([regionId])
+  @@map("coupons")
+}
+
+model CouponReceive {
+  id        String    @id @default(cuid())
+  couponId  String
+  coupon    Coupon    @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String    @default("unused") // unused, used, expired
+  usedAt    DateTime?
+  orderNo   String?
+  createdAt DateTime  @default(now())
+
+  @@map("coupon_receives")
+}
+
+model CheckIn {
+  id             String      @id @default(cuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           CheckInType @default(DAILY)
+  continuousDays Int         @default(1)
+  reward         Decimal     @default(0) @db.Decimal(10, 2)
+  createdAt      DateTime    @default(now())
+
+  @@unique([userId, createdAt]) // 每日只能签到一次
+  @@map("check_ins")
+}
+
+model Badge {
+  id          String   @id @default(cuid())
+  name        String
+  icon        String
+  description String?
+  condition   String // 获取条件描述
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  users UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  badgeId   String
+  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([badgeId, userId])
+  @@map("user_badges")
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  regionId    String?
+  region      Region?       @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  typeId      String?
+  type        ActivityType? @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  clubId      String?
+  club        ActivityClub? @relation(fields: [clubId], references: [id], onDelete: SetNull)
+  title       String
+  cover       String?
+  description String?       @db.Text
+  location    String?
+  lat         Float?
+  lng         Float?
+  startAt     DateTime
+  endAt       DateTime
+  signStartAt DateTime?
+  signEndAt   DateTime?
+  maxPeople   Int?
+  joinCount   Int           @default(0)
+  fee         Decimal?      @db.Decimal(10, 2)
+  refundPolicy String?
+  visibility  String        @default("public")
+  status      String        @default("upcoming") // upcoming, signup, ongoing, ended, cancelled
+  organizer   String?
+  contact     String?
+  sortOrder   Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  joins    ActivityJoin[]
+  orders   ActivityOrder[]
+  packages ActivityPackage[]
+  rewards  ActivityReward[]
+
+  @@index([regionId, status, createdAt])
+  @@map("activities")
+}
+
+model ActivityJoin {
+  id         String   @id @default(cuid())
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     String   @default("joined") // joined, cancelled
+  createdAt  DateTime @default(now())
+
+  @@unique([activityId, userId])
+  @@map("activity_joins")
+}
+
+model ActivityType {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  icon        String?
+  description String?  @db.Text
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  activities  Activity[]
+
+  @@index([regionId, sortOrder])
+  @@map("activity_types")
+}
+
+model ActivityPackage {
+  id              String   @id @default(cuid())
+  activityId      String
+  activity        Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  name            String
+  price           Decimal  @db.Decimal(10, 2)
+  originalPrice   Decimal? @db.Decimal(10, 2)
+  stock           Int      @default(0)
+  availableTickets Int     @default(0)
+  limitPerUser    Int?
+  ticketType      String   @default("single")
+  description     String?  @db.Text
+  genderLimit     String?
+  saleStartAt     DateTime?
+  saleEndAt       DateTime?
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders ActivityOrder[]
+
+  @@index([activityId, sortOrder])
+  @@map("activity_packages")
+}
+
+model ActivityReward {
+  id          String   @id @default(cuid())
+  activityId  String?
+  activity    Activity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  regionId    String?
+  name        String
+  rewardType  String
+  rewardValue Decimal? @db.Decimal(10, 2)
+  titleId     String?
+  quantity    Int      @default(0)
+  issuedCount Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([regionId])
+  @@map("activity_rewards")
+}
+
+model ActivityTicket {
+  id           String        @id @default(cuid())
+  orderId      String
+  order        ActivityOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  packageId    String?
+  activityId   String
+  userId       String
+  ticketNumber String
+  ticketStatus String        @default("valid")
+  checkInTime  DateTime?
+  checkedInBy  String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([activityId, ticketStatus])
+  @@index([orderId])
+  @@map("activity_tickets")
+}
+
+model ActivityCompetition {
+  id          String    @id @default(cuid())
+  regionId    String?
+  title       String
+  cover       String?
+  description String?   @db.Text
+  rules       Json?
+  startAt     DateTime?
+  endAt       DateTime?
+  status      String    @default("active")
+  sortOrder   Int       @default(0)
+  createdBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  photos CompetitionPhoto[]
+
+  @@index([regionId, status, createdAt])
+  @@map("activity_competitions")
+}
+
+model CompetitionPhoto {
+  id            String              @id @default(cuid())
+  competitionId String
+  competition   ActivityCompetition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String?
+  description   String?             @db.Text
+  imageUrl      String
+  thumbUrl      String?
+  status        String              @default("approved")
+  votesCount    Int                 @default(0)
+  ratingsCount  Int                 @default(0)
+  ratingTotal   Int                 @default(0)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  votes   CompetitionPhotoVote[]
+  ratings CompetitionPhotoRating[]
+
+  @@index([competitionId, status, votesCount])
+  @@index([userId, createdAt])
+  @@map("competition_photos")
+}
+
+model CompetitionPhotoVote {
+  id        String           @id @default(cuid())
+  photoId   String
+  photo     CompetitionPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@unique([photoId, userId])
+  @@index([userId, createdAt])
+  @@map("competition_photo_votes")
+}
+
+model CompetitionPhotoRating {
+  id        String           @id @default(cuid())
+  photoId   String
+  photo     CompetitionPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  content   String?          @db.Text
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([photoId, userId])
+  @@index([photoId, createdAt])
+  @@map("competition_photo_ratings")
+}
+
+model ScoreCheckIn {
+  id         String   @id @default(cuid())
+  userId     String
+  targetType String // post, product, merchant
+  targetId   String
+  score      Int      @default(5)
+  content    String?
+  images     Json?
+  createdAt  DateTime @default(now())
+
+  @@map("score_check_ins")
+}
+
+model SecondHand {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId    String?
+  region      Region?          @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  title       String
+  description String?          @db.Text
+  images      Json
+  price       Decimal          @db.Decimal(10, 2)
+  originPrice Decimal?         @db.Decimal(10, 2)
+  category    String
+  condition   String           @default("new") // new, like_new, good, fair
+  status      SecondHandStatus @default(ON_SALE)
+  viewCount   Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([regionId, status])
+  @@index([userId, createdAt])
+  @@map("second_hands")
+}
+
+model DriftBottle {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content     String
+  images      Json?
+  voice       String?
+  isAnonymous Boolean  @default(true)
+  throwLat    Float?
+  throwLng    Float?
+  pickCount   Int      @default(0)
+  replyCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("drift_bottles")
+}
+
+model Match {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation("UserMatches", fields: [userId], references: [id], onDelete: Cascade)
+  targetId  String
+  target    User        @relation("TargetMatches", fields: [targetId], references: [id], onDelete: Cascade)
+  status    MatchStatus @default(PENDING)
+  matchType String // interest, appearance, random
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([userId, targetId])
+  @@map("matches")
+}
+
+model NetDisk {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  url           String
+  size          Int // 字节
+  type          String // file, folder
+  parentId      String?
+  downloadCount Int      @default(0)
+  isPublic      Boolean  @default(false)
+  password      String?
+  createdAt     DateTime @default(now())
+
+  @@map("net_disks")
+}
+
+// ==================== 系统 ====================
+
+model Config {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  group     String?
+  desc      String?
+  isEnabled Boolean  @default(true)
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("configs")
+}
+
+model SensitiveWord {
+  id          String   @id @default(cuid())
+  word        String   @unique
+  category    String   @default("other")
+  level       String   @default("audit")
+  replaceWord String?
+  status      Int      @default(1)
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category, level, status])
+  @@map("sensitive_words")
+}
+
+model Advertisement {
+  id         String    @id @default(cuid())
+  name       String
+  image      String
+  linkType   String    @default("none")
+  linkValue  String?
+  position   String
+  regionId   String?
+  startTime  DateTime?
+  endTime    DateTime?
+  priority   Int       @default(0)
+  status     Int       @default(1)
+  viewCount  Int       @default(0)
+  clickCount Int       @default(0)
+  createdBy  String?
+  updatedBy  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([position, regionId, status])
+  @@map("advertisements")
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    AuditAction
+  module    String
+  targetId  String?
+  detail    Json?
+  ip        String?
+  ua        String?
+  createdAt DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, module])
+  @@map("audit_logs")
+}
+
+// ==================== 地址系统 ====================
+
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId  String?
+  name      String
+  phone     String
+  detail    String
+  isDefault Boolean  @default(false)
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+// ==================== 评论抽奖 ====================
+
+model CommentLottery {
+  id              String   @id @default(cuid())
+  postId          String   @unique
+  title           String
+  drawAt          DateTime
+  allowDuplicate  Boolean  @default(false)
+  status          String   @default("active") // active, drawn, cancelled
+  cancelledReason String?
+  createdAt       DateTime @default(now())
+
+  prizes  CommentLotteryPrize[]
+  winners CommentLotteryWinner[]
+
+  @@map("comment_lotteries")
+}
+
+model CommentLotteryPrize {
+  id        String         @id @default(cuid())
+  lotteryId String
+  lottery   CommentLottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
+  name      String
+  count     Int            @default(1)
+  createdAt DateTime       @default(now())
+
+  @@map("comment_lottery_prizes")
+}
+
+model CommentLotteryWinner {
+  id        String         @id @default(cuid())
+  lotteryId String
+  lottery   CommentLottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
+  userId    String
+  prizeId   String
+  createdAt DateTime       @default(now())
+
+  @@map("comment_lottery_winners")
+}
+
+// ==================== 帖子投票 (PostVote) ====================
+
+model PostVote {
+  id        String    @id @default(cuid())
+  postId    String    @unique
+  title     String?
+  maxSelect Int       @default(1)
+  allowAdd  Boolean   @default(false)
+  endAt     DateTime?
+  createdAt DateTime  @default(now())
+
+  options PostVoteOption[]
+
+  @@map("post_votes")
+}
+
+model PostVoteOption {
+  id        String   @id @default(cuid())
+  voteId    String
+  vote      PostVote @relation(fields: [voteId], references: [id], onDelete: Cascade)
+  text      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("post_vote_options")
+}
+
+model PostVoteRecord {
+  id        String   @id @default(cuid())
+  voteId    String
+  userId    String
+  optionIds Json // [optionId]
+  createdAt DateTime @default(now())
+
+  @@unique([voteId, userId])
+  @@map("post_vote_records")
+}
+
+// ==================== 跑腿系统 (Errand) ====================
+
+model ErrandConfig {
+  id            String   @id @default(cuid())
+  regionId      String   @unique
+  basePrice     Decimal  @default(0) @db.Decimal(10, 2)
+  distancePrice Decimal  @default(0) @db.Decimal(10, 2)
+  weightPrice   Decimal  @default(0) @db.Decimal(10, 2)
+  timePrice     Decimal  @default(0) @db.Decimal(10, 2)
+  nightPrice    Decimal  @default(0) @db.Decimal(10, 2)
+  maxDistance   Int      @default(10)
+  maxWeight     Int      @default(20)
+  isOpen        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("errand_configs")
+}
+
+model ErrandOrder {
+  id             String    @id @default(cuid())
+  orderNo        String    @unique
+  userId         String
+  riderId        String?
+  regionId       String?
+  type           String    @default("universal") // pickup, deliver, meal, universal
+  status         String    @default("pending_pay") // pending_pay, pending_accept, accepted, in_progress, arrived, completed, cancelled, refunding, refunded
+  title          String
+  description    String?
+  pickupAddress  String
+  pickupContact  String?
+  pickupPhone    String?
+  pickupLat      Float?
+  pickupLng      Float?
+  deliverAddress String
+  deliverContact String?
+  deliverPhone   String?
+  deliverLat     Float?
+  deliverLng     Float?
+  weight         Float?
+  distance       Float?
+  price          Decimal   @db.Decimal(10, 2)
+  tip            Decimal   @default(0) @db.Decimal(10, 2)
+  couponDiscount Decimal   @default(0) @db.Decimal(10, 2)
+  payAmount      Decimal   @db.Decimal(10, 2)
+  payChannel     String?
+  payTime        DateTime?
+  acceptTime     DateTime?
+  pickupTime     DateTime?
+  deliverTime    DateTime?
+  completeTime   DateTime?
+  cancelTime     DateTime?
+  cancelReason   String?
+  refundStatus   String    @default("none")
+  refundAmount   Decimal?  @db.Decimal(10, 2)
+  images         Json?
+  remark         String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  User           User      @relation(fields: [userId], references: [id])
+  RegionRider    RegionRider? @relation(fields: [riderId], references: [userId])
+
+  @@index([userId, createdAt])
+  @@index([riderId, status])
+  @@index([status, createdAt])
+  @@map("errand_orders")
+}
+
+model ErrandItemSize {
+  id        String   @id @default(cuid())
+  regionId  String
+  name      String
+  weightMin Float?
+  weightMax Float?
+  price     Decimal  @default(0) @db.Decimal(10, 2)
+  applyTo   String   @default("all") // all, pickup, deliver, meal
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("errand_item_sizes")
+}
+
+model ErrandPickupPoint {
+  id        String   @id @default(cuid())
+  regionId  String
+  name      String
+  address   String?
+  type      String   @default("pickup") // pickup, deliver
+  latitude  Float?
+  longitude Float?
+  isOpen    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("errand_pickup_points")
+}
+
+// ==================== 二手交易订单 ====================
+
+model SecondHandOrder {
+  id         String    @id @default(cuid())
+  orderNo    String    @unique
+  buyerId    String
+  sellerId   String
+  productId  String
+  price      Decimal   @db.Decimal(10, 2)
+  status     String    @default("pending_pay") // pending_pay, paid, shipped, completed, cancelled, refunded
+  payChannel String?
+  payTime    DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  user       User?     @relation(fields: [userId], references: [id])
+  userId     String?
+
+  @@map("second_hand_orders")
+}
+
+model SecondHandRegionSetting {
+  id                String   @id @default(cuid())
+  regionId          String   @unique
+  region            Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  enableSecondHand  Boolean  @default(true)
+  maxListings       Int?
+  requirePhone      Boolean  @default(true)
+  requireAudit      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("second_hand_region_settings")
+}
+
+// ==================== 活动社团系统 ====================
+
+model ActivityClub {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  logo        String?
+  cover       String?
+  background  String?
+  description String?  @db.Text
+  location    String?
+  lat         Float?
+  lng         Float?
+  phone       String?
+  leaderId    String
+  adminUserId String?
+  memberCount Int      @default(0)
+  isOfficial  Boolean  @default(false)
+  status      String   @default("active")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members    ActivityClubMember[]
+  activities Activity[]
+
+  @@index([regionId, status])
+  @@map("activity_clubs")
+}
+
+model ActivityClubMember {
+  id        String       @id @default(cuid())
+  clubId    String
+  club      ActivityClub @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String       @default("member") // leader, admin, member
+  createdAt DateTime     @default(now())
+
+  @@unique([clubId, userId])
+  @@map("activity_club_members")
+}
+
+model ActivityOrder {
+  id           String    @id @default(cuid())
+  orderNo      String    @unique
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  activityId   String
+  activity     Activity  @relation(fields: [activityId], references: [id], onDelete: Restrict)
+  packageId    String?
+  package      ActivityPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  quantity     Int       @default(1)
+  amount       Decimal   @db.Decimal(10, 2)
+  payStatus    String    @default("unpaid")
+  orderStatus  String    @default("pending")
+  refundStatus String?
+  refundReason String?
+  refundAmount Decimal?  @db.Decimal(10, 2)
+  payChannel   String?
+  payTime      DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tickets ActivityTicket[]
+
+  @@index([activityId, orderStatus])
+  @@index([userId, createdAt])
+  @@map("activity_orders")
+}
+
+// ==================== 充值系统 ====================
+
+model TopupPackage {
+  id         String   @id @default(cuid())
+  regionId   String
+  name       String
+  amount     Decimal  @db.Decimal(10, 2)
+  giveAmount Decimal  @default(0) @db.Decimal(10, 2)
+  sortOrder  Int      @default(0)
+  isShow     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@map("topup_packages")
+}
+
+model TopupOrder {
+  id         String    @id @default(cuid())
+  orderNo    String    @unique
+  userId     String
+  packageId  String
+  amount     Decimal   @db.Decimal(10, 2)
+  giveAmount Decimal   @default(0) @db.Decimal(10, 2)
+  payChannel String?
+  status     String    @default("pending") // pending, success, failed, cancelled
+  payTime    DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  User       User      @relation(fields: [userId], references: [id])
+
+  @@map("topup_orders")
+}
+
+// ==================== 打卡系统 ====================
+
+enum PunchInCategoryStatus {
+  ENABLED
+  DISABLED
+}
+
+enum PunchInLocationStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum PunchInRecordStatus {
+  NORMAL
+  DELETED
+}
+
+enum PunchInCommentStatus {
+  NORMAL
+  DELETED
+}
+
+enum RankingCycle {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// 地点分类
+model PunchInCategory {
+  id        String                @id @default(cuid())
+  name      String
+  icon      String?
+  sortOrder Int                   @default(0)
+  status    PunchInCategoryStatus @default(ENABLED)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  locations PunchInLocation[]
+
+  @@map("punch_in_categories")
+}
+
+// 区域配置
+model PunchInConfig {
+  id                     String      @id @default(cuid())
+  regionId               String      @unique
+  isEnabled              Boolean     @default(true)
+  maxDailyCheckins       Int         @default(10)
+  maxLocationCheckins    Int         @default(3)
+  minCheckinInterval     Int         @default(300) // 秒
+  allowDuplicateLocation Boolean     @default(true)
+  requireLocationVerify  Boolean     @default(false)
+  locationVerifyRadius   Int         @default(100) // 米
+  allowImageUpload       Boolean     @default(true)
+  maxImageCount          Int         @default(9)
+  allowVideoUpload       Boolean     @default(true)
+  maxContentLength       Int         @default(500)
+  requireContent         Boolean     @default(false)
+  allowComment           Boolean     @default(true)
+  allowReply             Boolean     @default(true)
+  maxCommentLength       Int         @default(300)
+  enableRanking          Boolean     @default(true)
+  rankingCycle           RankingCycle @default(WEEKLY)
+  enableSharedLocations  Boolean     @default(true)
+  enableUserSuggest      Boolean     @default(true)
+  workingHoursStart      String      @default("00:00:00")
+  workingHoursEnd        String      @default("23:59:59")
+  weekendEnabled         Boolean     @default(true)
+  holidayEnabled         Boolean     @default(true)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  @@map("punch_in_configs")
+}
+
+// 打卡地点
+model PunchInLocation {
+  id          String                @id @default(cuid())
+  regionId    String
+  categoryId  String?
+  category    PunchInCategory?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name        String
+  description String?
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  coverImage  String?
+  images      Json?
+  videos      Json?
+  status      PunchInLocationStatus @default(DRAFT)
+  isShared    Boolean               @default(false)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  records  PunchInRecord[]
+  comments PunchInComment[]
+
+  @@map("punch_in_locations")
+}
+
+// 打卡记录
+model PunchInRecord {
+  id          String             @id @default(cuid())
+  userId      String
+  locationId  String?
+  location    PunchInLocation?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  regionId    String
+  date        String // YYYY-MM-DD
+  images      Json?
+  content     String?
+  status      PunchInRecordStatus @default(NORMAL)
+  rewardValue Decimal            @default(0) @db.Decimal(10, 2)
+  isMakeup    Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  User        User               @relation(fields: [userId], references: [id])
+
+  @@unique([userId, regionId, date])
+  @@map("punch_in_records")
+}
+
+// 打卡评论
+model PunchInComment {
+  id         String               @id @default(cuid())
+  userId     String
+  User       User                 @relation(fields: [userId], references: [id])
+  locationId String
+  location   PunchInLocation      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  content    String               @db.Text
+  parentId   String?
+  parent     PunchInComment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    PunchInComment[]     @relation("CommentReplies")
+  status     PunchInCommentStatus @default(NORMAL)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@map("punch_in_comments")
+}
+
+// 打卡心愿单
+model PunchInWishlist {
+  id         String   @id @default(cuid())
+  userId     String
+  locationId String
+  content    String
+  createdAt  DateTime @default(now())
+  User       User     @relation(fields: [userId], references: [id])
+
+  @@map("punch_in_wishlists")
+}
+
+// ==================== 评分系统 ====================
+
+model RatingCategory {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  icon        String?
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items RatingItem[]
+
+  @@map("rating_categories")
+}
+
+model RatingItem {
+  id          String         @id @default(cuid())
+  categoryId  String
+  category    RatingCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  regionId    String?
+  name        String
+  cover       String?
+  description String?
+  avgScore    Float          @default(0)
+  ratingCount Int            @default(0)
+  sortOrder   Int            @default(0)
+  status      String         @default("enabled")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  ratings UserRating[]
+
+  @@map("rating_items")
+}
+
+model UserRating {
+  id        String     @id @default(cuid())
+  itemId    String
+  item      RatingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId    String
+  regionId  String?
+  score     Int        @default(5)
+  content   String?
+  images    Json?
+  likes     Int        @default(0)
+  status    String     @default("active")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  User      User       @relation(fields: [userId], references: [id])
+
+  replies RatingReply[]
+
+  @@map("user_ratings")
+}
+
+model RatingReply {
+  id        String     @id @default(cuid())
+  ratingId  String
+  rating    UserRating @relation(fields: [ratingId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  content   String     @db.Text
+  status    String     @default("approved")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@map("rating_replies")
+}
+
+model RatingRegionSetting {
+  id                  String   @id @default(cuid())
+  regionId            String   @unique
+  enableRating        Boolean  @default(true)
+  enableDynamic       Boolean  @default(true)
+  requireLoginToRate  Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("rating_region_settings")
+}
+
+// ==================== 网盘系统扩展 ====================
+
+model NetDiskCategory {
+  id        String   @id @default(cuid())
+  regionId  String?
+  name      String
+  icon      String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  resources  NetDiskResource[]
+
+  @@map("net_disk_categories")
+}
+
+model NetDiskResource {
+  id            String   @id @default(cuid())
+  userId        String
+  categoryId    String?
+  category      NetDiskCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  platformId    String?
+  platform      NetDiskPlatform? @relation(fields: [platformId], references: [id], onDelete: SetNull)
+  title         String
+  cover         String?
+  description   String?
+  url           String
+  extractCode   String?
+  price         Decimal?         @db.Decimal(10, 2)
+  size          Int // 字节
+  type          String // file, folder
+  isShared      Boolean          @default(false)
+  status        String           @default("active") // active, banned, pending
+  downloadCount Int              @default(0)
+  favoriteCount Int              @default(0)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  User          User             @relation(fields: [userId], references: [id])
+
+  downloads     NetDiskDownload[]
+  comments      NetDiskComment[]
+
+  @@map("net_disk_resources")
+}
+
+model NetDiskPlatform {
+  id        String   @id @default(cuid())
+  name      String
+  icon      String?
+  baseUrl   String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  resources  NetDiskResource[]
+
+  @@map("net_disk_platforms")
+}
+
+model NetDiskComment {
+  id         String   @id @default(cuid())
+  resourceId String
+  resource   NetDiskResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content    String
+  status     String   @default("active") // active, deleted
+  createdAt  DateTime @default(now())
+
+  @@map("net_disk_comments")
+}
+
+model NetDiskFavorite {
+  id         String   @id @default(cuid())
+  userId     String
+  resourceId String
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, resourceId])
+  @@map("net_disk_favorites")
+}
+
+model NetDiskDownload {
+  id         String          @id @default(cuid())
+  resourceId String
+  resource   NetDiskResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip         String?
+  paid       Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+
+  @@map("net_disk_downloads")
+}
+
+model NetDiskProfitConfig {
+  id                  String   @id @default(cuid())
+  regionId            String   @unique
+  platformCommission  Decimal  @default(0) @db.Decimal(5, 4)
+  regionCommission    Decimal  @default(0) @db.Decimal(5, 4)
+  authorShare         Decimal  @default(1) @db.Decimal(5, 4)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("net_disk_profit_configs")
+}
+
+// ==================== 贴纸系统 ====================
+
+model StickerCategory {
+  id        String   @id @default(cuid())
+  name      String
+  icon      String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("sticker_categories")
+}
+
+model Sticker {
+  id         String   @id @default(cuid())
+  categoryId String?
+  userId     String
+  packId     String?
+  name       String
+  url        String
+  thumbnail  String?
+  isShared   Boolean  @default(false)
+  status     String   @default("active") // active, banned, deleted
+  createdAt  DateTime @default(now())
+  User       User     @relation(fields: [userId], references: [id])
+
+  @@map("stickers")
+}
+
+// ==================== 分享系统 ====================
+
+enum ShareInviteStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ShareRewardType {
+  INVITER
+  INVITEE
+}
+
+enum ShareRewardStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ShareUserLimit {
+  ALL_USERS
+  NEW_USERS
+}
+
+model ShareSettings {
+  id               String          @id @default(cuid())
+  regionId         String          @unique
+  isEnabled        Boolean         @default(true)
+  activityTitle    String?
+  activityImage    String?
+  activityRules    String?
+  inviterReward    Decimal         @default(0) @db.Decimal(10, 2)
+  inviteeReward    Decimal         @default(0) @db.Decimal(10, 2)
+  userLimit        ShareUserLimit  @default(ALL_USERS)
+  dailyInviteLimit Int             @default(100)
+  totalInviteLimit Int?
+  startTime        DateTime?
+  endTime          DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@map("share_settings")
+}
+
+model ShareInvite {
+  id                  String            @id @default(cuid())
+  inviterId           String
+  inviteeId           String
+  isNewUser           Boolean           @default(false)
+  rewardAmount        Decimal           @default(0) @db.Decimal(10, 2)
+  inviteeRewardAmount Decimal           @default(0) @db.Decimal(10, 2)
+  status              ShareInviteStatus @default(PENDING)
+  failedReason        String?
+  regionId            String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  inviter             User              @relation("InviterRelation", fields: [inviterId], references: [id])
+  invitee             User              @relation("InviteeRelation", fields: [inviteeId], references: [id])
+  rewards             ShareReward[]
+
+  @@map("share_invites")
+}
+
+model ShareReward {
+  id                   String            @id @default(cuid())
+  inviteId             String
+  userId               String
+  type                 ShareRewardType
+  amount               Decimal           @db.Decimal(10, 2)
+  status               ShareRewardStatus @default(SUCCESS)
+  failedReason         String?
+  relatedTransactionId String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  invite               ShareInvite       @relation(fields: [inviteId], references: [id])
+  user                 User              @relation(fields: [userId], references: [id])
+
+  @@map("share_rewards")
+}
+
+// ==================== 匿名身份 ====================
+
+model AnonymousIdentity {
+  id        String   @id @default(cuid())
+  name      String
+  avatar    String?
+  createdAt DateTime @default(now())
+
+  @@map("anonymous_identities")
+}
+
+// ==================== 用户头衔 ====================
+
+model UserTitle {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  icon        String?
+  description String?
+  type        String   @default("badge") // badge, title
+  condition   String? // 获取条件
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  records UserTitleRecord[]
+
+  @@map("user_titles")
+}
+
+model UserTitleRedeemCode {
+  id        String    @id @default(cuid())
+  titleId   String
+  code      String    @unique
+  isUsed    Boolean   @default(false)
+  usedBy    String?
+  usedAt    DateTime?
+  expireAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("user_title_redeem_codes")
+}
+
+model UserTitleRecord {
+  id        String    @id @default(cuid())
+  userId    String
+  titleId   String
+  title     UserTitle @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  isWearing Boolean   @default(false)
+  claimedAt DateTime  @default(now())
+  User      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, titleId])
+  @@map("user_title_records")
+}
+
+// ==================== 交友系统 ====================
+
+model DatingConfig {
+  id              String   @id @default(cuid())
+  regionId        String   @unique
+  isOpen          Boolean  @default(true)
+  price           Decimal  @default(0) @db.Decimal(10, 2)
+  dailyMatchLimit Int      @default(10)
+  requireAudit    Boolean  @default(true)
+  matchRules      Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("dating_configs")
+}
+
+model DatingProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  photos      Json?
+  bio         String?
+  tags        Json?
+  isOpen      Boolean  @default(true)
+  auditStatus String   @default("pending") // pending, approved, rejected
+  auditRemark String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("dating_profiles")
+}
+
+model DatingPackage {
+  id          String    @id @default(cuid())
+  regionId    String?
+  region      Region?   @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  name        String
+  price       Decimal   @db.Decimal(10, 2)
+  matchCount  Int       @default(1)
+  validDays   Int?
+  sortOrder   Int       @default(0)
+  description String?
+  rights      Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  orders DatingOrder[]
+
+  @@map("dating_packages")
+}
+
+model DatingOrder {
+  id            String        @id @default(cuid())
+  orderNo       String        @unique
+  userId        String
+  User          User          @relation(fields: [userId], references: [id])
+  packageId     String
+  package       DatingPackage @relation(fields: [packageId], references: [id])
+  amount        Decimal       @db.Decimal(10, 2)
+  status        String        @default("pending")
+  payChannel    String?
+  payTime       DateTime?
+  refundReason  String?
+  refundTime    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@map("dating_orders")
+}
+
+model DatingReport {
+  id         String    @id @default(cuid())
+  reporterId String
+  reporter   User      @relation("DatingReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetId   String
+  target     User      @relation("DatingReported", fields: [targetId], references: [id], onDelete: Cascade)
+  reason     String
+  detail     String?
+  images     Json?
+  status     String    @default("pending") // pending, resolved, rejected
+  result     String?
+  handlerId  String?
+  handledAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status])
+  @@map("dating_reports")
+}
+
+// ==================== 团购系统 ====================
+
+model GroupBuyCategory {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  icon        String?
+  sortOrder   Int      @default(0)
+  isShow      Boolean  @default(true)
+  status      String   @default("active") // active, inactive
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  packages    GroupBuyPackage[]
+
+  @@map("group_buy_categories")
+}
+
+model GroupBuyPackage {
+  id                  String   @id @default(cuid())
+  regionId            String?
+  categoryId          String?
+  merchantId          String?
+  name                String
+  cover               String?
+  images              Json?
+  description         String?  @db.Text
+  detail              String?  @db.Text
+  buyNotes            String?  @db.Text
+  verifyInfo          String?  @db.Text
+  price               Decimal  @db.Decimal(10, 2)
+  originPrice         Decimal? @db.Decimal(10, 2)
+  stock               Int      @default(0)
+  soldCount           Int      @default(0)
+  startAt             DateTime
+  endAt               DateTime
+  status              String   @default("active") // active, inactive
+  commissionRate      Decimal? @db.Decimal(5, 4)
+  regionCommissionRate Decimal? @db.Decimal(5, 4)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  Category    GroupBuyCategory? @relation(fields: [categoryId], references: [id])
+  Merchant    Merchant?         @relation(fields: [merchantId], references: [id])
+  Reviews     GroupBuyReview[]
+  Orders      GroupBuyOrder[]
+
+  @@map("group_buy_packages")
+}
+
+model GroupBuyOrder {
+  id                   String    @id @default(cuid())
+  orderNo              String    @unique
+  userId               String
+  packageId            String
+  amount               Decimal   @db.Decimal(10, 2)
+  quantity             Int       @default(1)
+  status               String    @default("pending_pay") // pending_pay, paid, completed, refunding, refunded, cancelled
+  payChannel           String?
+  payTime              DateTime?
+  verifyCode           String?
+  verifyStatus         String?   // pending, verified
+  verifyTime           DateTime?
+  refundReason         String?
+  refundAmount         Decimal?  @db.Decimal(10, 2)
+  refundTime           DateTime?
+  commissionAmount     Decimal?  @db.Decimal(10, 2)
+  regionCommissionAmount Decimal? @db.Decimal(10, 2)
+  buyerName            String?
+  buyerPhone           String?
+  remark               String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  User                 User             @relation(fields: [userId], references: [id])
+  Package              GroupBuyPackage  @relation(fields: [packageId], references: [id])
+  Reviews              GroupBuyReview[]
+
+  @@map("group_buy_orders")
+}
+
+model GroupBuyReview {
+  id          String   @id @default(cuid())
+  userId      String
+  packageId   String
+  orderId     String?
+  rating      Float    @default(5)
+  content     String?  @db.Text
+  images      Json?
+  status      String   @default("approved") // approved, rejected, hidden
+  reply       String?  @db.Text
+  replyAt     DateTime?
+  isHidden    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  User        User             @relation(fields: [userId], references: [id])
+  Package     GroupBuyPackage  @relation(fields: [packageId], references: [id])
+  Order       GroupBuyOrder?   @relation(fields: [orderId], references: [id])
+
+  @@map("group_buy_reviews")
+}
+
+// ==================== 独立商城 (api/mall) ====================
+
+model MallMerchant {
+  id            String   @id @default(cuid())
+  userId        String
+  regionId      String?
+  name          String
+  logo          String?
+  cover         String?
+  phone         String?
+  address       String?
+  latitude      Float?
+  longitude     Float?
+  businessHours String?
+  description   String?
+  status        String   @default("pending") // pending, approved, rejected, closed
+  rating        Float    @default(5)
+  saleCount     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("mall_merchants")
+}
+
+model MallCategory {
+  id        String   @id @default(cuid())
+  parentId  String?
+  name      String
+  icon      String?
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("mall_categories")
+}
+
+model MallProduct {
+  id          String   @id @default(cuid())
+  merchantId  String
+  categoryId  String?
+  name        String
+  images      Json
+  detail      String?  @db.Text
+  price       Decimal  @db.Decimal(10, 2)
+  originPrice Decimal? @db.Decimal(10, 2)
+  stock       Int      @default(0)
+  saleCount   Int      @default(0)
+  status      String   @default("on_sale")
+  isHot       Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  carts MallCart[]
+
+  @@map("mall_products")
+}
+
+model MallCart {
+  id        String      @id @default(cuid())
+  userId    String
+  productId String
+  product   MallProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  skuId     String?
+  quantity  Int         @default(1)
+  selected  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([userId, productId, skuId])
+  @@map("mall_carts")
+}
+
+model MallOrder {
+  id              String    @id @default(cuid())
+  orderNo         String    @unique
+  userId          String
+  merchantId      String
+  status          String    @default("pending_pay")
+  totalAmount     Decimal   @db.Decimal(10, 2)
+  discountAmount  Decimal   @default(0) @db.Decimal(10, 2)
+  freightAmount   Decimal   @default(0) @db.Decimal(10, 2)
+  payAmount       Decimal   @db.Decimal(10, 2)
+  payChannel      String?
+  payTime         DateTime?
+  deliverTime     DateTime?
+  receiveTime     DateTime?
+  completeTime    DateTime?
+  cancelTime      DateTime?
+  cancelReason    String?
+  remark          String?
+  receiverName    String
+  receiverPhone   String
+  receiverAddress String
+  trackingNo      String?
+  trackingCompany String?
+  refundStatus    String    @default("none")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  User            User      @relation(fields: [userId], references: [id])
+
+  refunds MallRefund[]
+
+  @@map("mall_orders")
+}
+
+model MallRefund {
+  id        String    @id @default(cuid())
+  orderId   String
+  order     MallOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refundNo  String    @unique
+  amount    Decimal   @db.Decimal(10, 2)
+  reason    String
+  status    String    @default("pending")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("mall_refunds")
+}
+
+model MallReview {
+  id          String    @id @default(cuid())
+  orderId     String
+  userId      String
+  productId   String
+  merchantId  String
+  rating      Int       @default(5)
+  content     String?
+  images      Json?
+  isAnonymous Boolean   @default(false)
+  reply       String?
+  replyAt     DateTime?
+  status      String    @default("active")
+  createdAt   DateTime  @default(now())
+  User        User      @relation(fields: [userId], references: [id])
+
+  @@map("mall_reviews")
+}
+
+model MallPromotion {
+  id         String   @id @default(cuid())
+  merchantId String?
+  name       String
+  type       String // full_reduction, discount
+  rules      Json
+  startAt    DateTime
+  endAt      DateTime
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+
+  @@map("mall_promotions")
+}
+
+model MallFreightTemplate {
+  id         String   @id @default(cuid())
+  merchantId String
+  name       String
+  rules      Json
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@map("mall_freight_templates")
+}
+
+model MallDistributor {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  merchantId       String?
+  levelId          String?
+  parentId         String?
+  realName         String
+  phone            String
+  status           String   @default("pending") // pending, approved, rejected
+  totalEarnings    Decimal  @default(0) @db.Decimal(12, 2)
+  pendingEarnings  Decimal  @default(0) @db.Decimal(12, 2)
+  withdrawnEarnings Decimal @default(0) @db.Decimal(12, 2)
+  totalOrders      Int      @default(0)
+  remark           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  User         User                    @relation(fields: [userId], references: [id])
+  level        DistributorLevel?       @relation(fields: [levelId], references: [id])
+  parent       MallDistributor?        @relation("DistributorHierarchy", fields: [parentId], references: [id])
+  children     MallDistributor[]       @relation("DistributorHierarchy")
+  commissions  DistributorCommission[]
+  withdrawals  DistributorWithdrawal[]
+
+  @@map("mall_distributors")
+}
+
+model DistributorLevel {
+  id                  String   @id @default(cuid())
+  name                String
+  level               Int      @unique
+  commissionRate      Decimal  @db.Decimal(5, 2)
+  conditionOrderCount Int      @default(0)
+  conditionTotalAmount Decimal? @db.Decimal(12, 2)
+  icon                String?
+  sortOrder           Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  distributors        MallDistributor[]
+
+  @@map("distributor_levels")
+}
+
+model DistributorConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("distributor_configs")
+}
+
+model DistributorCommission {
+  id              String          @id @default(cuid())
+  distributorId   String
+  distributor     MallDistributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  orderId         String
+  orderAmount     Decimal         @db.Decimal(12, 2)
+  commissionRate  Decimal         @db.Decimal(5, 2)
+  commissionAmount Decimal        @db.Decimal(12, 2)
+  level           Int             @default(1)
+  sourceUserId    String?
+  status          String          @default("pending") // pending, settled, withdrawn
+  settledAt       DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@map("distributor_commissions")
+}
+
+model DistributorWithdrawal {
+  id            String          @id @default(cuid())
+  distributorId String
+  distributor   MallDistributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  withdrawNo    String          @unique
+  amount        Decimal         @db.Decimal(12, 2)
+  feeAmount     Decimal         @default(0) @db.Decimal(12, 2)
+  actualAmount  Decimal         @db.Decimal(12, 2)
+  status        String          @default("pending") // pending, processing, completed, rejected
+  remark        String?
+  processedAt   DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@map("distributor_withdrawals")
+}
+
+model MallBanner {
+  id        String   @id @default(cuid())
+  regionId  String?
+  title     String?
+  image     String
+  link      String?
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("mall_banners")
+}
+
+// ==================== 通讯录 ====================
+
+model ContactCategory {
+  id        String   @id @default(cuid())
+  regionId  String?
+  name      String
+  icon      String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  contacts Contact[]
+
+  @@map("contact_categories")
+}
+
+model Contact {
+  id         String          @id @default(cuid())
+  categoryId String
+  category   ContactCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name       String
+  phone      String?
+  address    String?
+  remark     String?
+  isPublic   Boolean         @default(true)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@map("contacts")
+}
+
+// ==================== 打印机配置 ====================
+
+model PrinterConfig {
+  id         String   @id @default(cuid())
+  merchantId String
+  name       String
+  brand      String   @default("feie") // feie, yly, etc
+  sn         String // 打印机编号
+  key        String? // 打印机密钥
+  autoPrint  Boolean  @default(true)
+  isDefault  Boolean  @default(false)
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("printer_configs")
+}
+
+// ==================== 区域内容项 ====================
+
+model RegionContentItem {
+  id        String   @id @default(cuid())
+  regionId  String
+  type      String // banner, notice, nav, etc
+  title     String?
+  content   String?
+  image     String?
+  link      String?
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("region_content_items")
+}
+
+// ==================== 区域自定义页面 ====================
+
+model RegionCustomPage {
+  id           String   @id @default(cuid())
+  regionId     String
+  title        String
+  content      String   @db.Text
+  displayScope String   @default("all") // all, home, mine
+  sortOrder    Int      @default(0)
+  isShow       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("region_custom_pages")
+}
+
+// ==================== 笔记设置 ====================
+
+model NoteSettings {
+  id             String   @id @default(cuid())
+  regionId       String   @unique
+  allowVideoNote Boolean  @default(true)
+  allowImageNote Boolean  @default(true)
+  allowTextNote  Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("note_settings")
+}
+
+// ==================== 用户引导页 ====================
+
+model UserGuidancePage {
+  id        String   @id @default(cuid())
+  regionId  String
+  title     String
+  content   String   @db.Text
+  type      String   @default("guide") // guide, popup, banner
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_guidance_pages")
+}
+
+// ==================== 富文本内容 ====================
+
+model RichTextContent {
+  id        String   @id @default(cuid())
+  regionId  String?
+  type      String   @default("article") // article, notice, help
+  title     String
+  content   String   @db.Text
+  cover     String?
+  sortOrder Int      @default(0)
+  isShow    Boolean  @default(true)
+  viewCount Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("rich_text_contents")
+}
+
+// ==================== 微信文章抓取 ====================
+
+model WechatArticle {
+  id        String   @id @default(cuid())
+  url       String
+  title     String?
+  content   String?  @db.Text
+  images    Json?
+  createdAt DateTime @default(now())
+
+  @@map("wechat_articles")
+}
+
+// ==================== 商品规格选项 ====================
+
+model ProductOption {
+  id        String   @id @default(cuid())
+  productId String
+  name      String // 规格名称，如"颜色"
+  values    Json // ["红色", "蓝色"]
+  createdAt DateTime @default(now())
+
+  @@map("product_options")
+}
+
+// ==================== 区域骑手 ====================
+
+model RegionRider {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  regionId          String
+  realName          String
+  idCard            String
+  phone             String
+  status            String    @default("offline") // offline, online, busy
+  verifyStatus      String    @default("pending")
+  rating            Float     @default(5)
+  balance           Decimal   @default(0) @db.Decimal(10, 2)
+  totalOrders       Int       @default(0)
+  todayOrders       Int       @default(0)
+  lat               Float?
+  lng               Float?
+  locationUpdatedAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  User              User      @relation(fields: [userId], references: [id])
+  errandOrders      ErrandOrder[]
+
+  @@map("region_riders")
+}
+
+// ==================== 激励记录 ====================
+
+model IncentiveRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  regionId    String?
+  type        String // rider_reward, merchant_reward, etc
+  ruleType    String?
+  amount      Decimal  @db.Decimal(10, 2)
+  description String?
+  createdAt   DateTime @default(now())
+  User        User     @relation(fields: [userId], references: [id])
+
+  @@map("incentive_records")
+}
+
+// ==================== 跑腿页面配置 ====================
+
+model ErrandPageConfig {
+  id                 String   @id @default(cuid())
+  regionId           String   @unique
+  notice             String?
+  orderTips          String?
+  defaultRiderAvatar String?
+  servicePhone       String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("errand_page_configs")
+}
+
+// ==================== 跑腿奖惩配置 ====================
+
+model ErrandRewardPunish {
+  id                String   @id @default(cuid())
+  regionId          String   @unique
+  timeoutPenalty    Decimal  @default(0) @db.Decimal(10, 2)
+  timeoutMinutes    Int      @default(30)
+  badReviewPenalty  Decimal  @default(0) @db.Decimal(10, 2)
+  goodReviewReward  Decimal  @default(0) @db.Decimal(10, 2)
+  nightReward       Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("errand_reward_punishes")
+}
+
+// ==================== 社区系统 ====================
+
+model Community {
+  id          String   @id @default(cuid())
+  regionId    String?
+  name        String
+  cover       String?
+  description String?
+  memberCount Int      @default(0)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+
+  @@map("communities")
+}
+
+model CommunityPayment {
+  id          String    @id @default(cuid())
+  communityId String
+  userId      String
+  amount      Decimal   @db.Decimal(10, 2)
+  payChannel  String?
+  status      String    @default("pending")
+  payTime     DateTime?
+  createdAt   DateTime  @default(now())
+  User        User      @relation(fields: [userId], references: [id])
+
+  @@map("community_payments")
+}
+
+// ==================== 状态位置 ====================
+
+model StatusLocation {
+  id        String   @id @default(cuid())
+  userId    String?
+  type      String // rider, merchant, etc
+  status    String
+  lat       Float?
+  lng       Float?
+  address   String?
+  createdAt DateTime @default(now())
+
+  @@map("status_locations")
+}
+
+// ==================== 跑腿转单 ====================
+
+model TransferRequest {
+  id          String   @id @default(cuid())
+  orderId     String
+  fromRiderId String
+  toRiderId   String
+  status      String   @default("pending") // pending, accepted, rejected
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User?    @relation(fields: [userId], references: [id])
+  userId      String?
+
+  @@map("transfer_requests")
+}
+
+// ==================== 排行榜 ====================
+
+model Ranking {
+  id        String   @id @default(cuid())
+  regionId  String?
+  type      String // post, user, merchant, rider
+  period    String   @default("week") // day, week, month
+  title     String
+  data      Json // 排名数据
+  createdAt DateTime @default(now())
+
+  @@map("rankings")
+}
+
+// ==================== 城市代理系统 ====================
+
+model CityAgentApplication {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId        String
+  region          Region    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  realName        String
+  phone           String
+  idCard          String?
+  companyName     String?
+  businessLicense String?
+  reason          String?
+  status          String    @default("pending") // pending, approved, rejected
+  rejectReason    String?
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("city_agent_applications")
+}
+
+model CityAgent {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId        String
+  region          Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  realName        String
+  phone           String
+  commissionRate  Decimal  @default(0.05) @db.Decimal(5, 4)
+  totalCommission Decimal  @default(0) @db.Decimal(12, 2)
+  settledAmount   Decimal  @default(0) @db.Decimal(12, 2)
+  pendingAmount   Decimal  @default(0) @db.Decimal(12, 2)
+  status          String   @default("active") // active, frozen, closed
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  settlements CityAgentSettlement[]
+
+  @@map("city_agents")
+}
+
+model CityAgentSettlement {
+  id           String    @id @default(cuid())
+  agentId      String
+  agent        CityAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  settlementNo String    @unique
+  amount       Decimal   @db.Decimal(12, 2)
+  startAt      DateTime
+  endAt        DateTime
+  orderCount   Int       @default(0)
+  status       String    @default("pending") // pending, processing, completed, failed
+  transferNo   String?
+  remark       String?
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("city_agent_settlements")
+}
+
+model OrderLog {
+  id           String   @id @default(cuid())
+  orderId      String
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action       String // PENDING_PAY, PAID, SHIPPED, DELIVERED, RECEIVED, COMPLETED, CANCELLED, REFUNDING, REFUNDED
+  fromStatus   String?
+  toStatus     String?
+  operatorId   String?
+  operatorType String? // admin, user, system
+  remark       String?
+  createdAt    DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@map("order_logs")
+}
+
+// ==================== 平台财务 ====================
+
+model PlatformLedger {
+  id          String   @id @default(cuid())
+  orderNo     String?
+  orderType   String // order, mall_order, delivery_order, errand_order, recharge, topup
+  amount      Decimal  @db.Decimal(12, 2)
+  fee         Decimal  @default(0) @db.Decimal(12, 2)
+  type        String // income, refund, commission, penalty
+  channel     String? // wx_pay, ali_pay, balance
+  status      String   @default("pending") // pending, completed, failed
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([orderType, createdAt])
+  @@index([type, status])
+  @@map("platform_ledgers")
+}
+
+model MerchantSettlement {
+  id           String    @id @default(cuid())
+  merchantId   String
+  merchant     Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  settlementNo String    @unique
+  amount       Decimal   @db.Decimal(12, 2)
+  platformFee  Decimal   @default(0) @db.Decimal(12, 2)
+  startAt      DateTime
+  endAt        DateTime
+  orderCount   Int       @default(0)
+  status       String    @default("pending") // pending, processing, completed, failed
+  transferNo   String?
+  remark       String?
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("merchant_settlements")
+}
+
+// ==================== 商品加价规则 ====================
+
+model ProductPriceAdjustment {
+  id          String               @id @default(cuid())
+  name        String
+  type        PriceAdjustmentType
+  value       Decimal              @db.Decimal(10, 2)
+  scope       PriceAdjustmentScope
+  regionId    String?
+  region      Region?              @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  categoryId  String?
+  category    Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  merchantId  String?
+  merchant    Merchant?            @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  priority    Int                  @default(0)
+  status      String               @default("active") // active, disabled
+  remark      String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@map("product_price_adjustments")
+}
+
+// ==================== 区域商家设置 ====================
+
+model RegionMerchantSettings {
+  id                   String    @id @default(cuid())
+  regionId             String    @unique
+  region               Region    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  autoAuditEnabled     Boolean   @default(false)
+  maxMerchants         Int?
+  commissionRate       Decimal?  @db.Decimal(5, 2)
+  minWithdrawAmount    Decimal?  @db.Decimal(10, 2)
+  withdrawFeeRate      Decimal?  @db.Decimal(5, 2)
+  defaultDeliveryRange Int?
+  allowNegativeStock   Boolean   @default(false)
+  maxProductCount      Int?
+  requireProductAudit  Boolean   @default(true)
+  settlementCycle      String?   @default("weekly") // weekly, monthly, manual
+  settlementDay        Int?      @default(1)
+  isOpen               Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@map("region_merchant_settings")
+}
+
+// ==================== 支付系统（PaymentOrder / PaymentRefund） ====================
+
+model PaymentOrder {
+  id             String    @id @default(cuid())
+  paymentNo      String    @unique
+  bizType        String // order, mall_order, delivery_order, errand_order, recharge, topup, activity, dating, second_hand, group_buy
+  bizId          String
+  orderNo        String
+  userId         String
+  amount         Decimal   @db.Decimal(12, 2)
+  channel        String    @default("wx_pay") // wx_pay, ali_pay, balance
+  status         String    @default("pending") // pending, paying, paid, failed, closed, refunding, refunded
+  wxTransId      String?
+  wxPrepayId     String?
+  payTime        DateTime?
+  expireTime     DateTime?
+  refundedAmount Decimal   @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  refunds PaymentRefund[]
+
+  @@index([bizType, bizId])
+  @@index([orderNo])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("payment_orders")
+}
+
+model PaymentRefund {
+  id         String       @id @default(cuid())
+  refundNo   String       @unique
+  paymentId  String
+  payment    PaymentOrder @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amount     Decimal      @db.Decimal(12, 2)
+  reason     String?
+  wxRefundId String?
+  status     String       @default("pending") // pending, processing, success, failed
+  failReason String?
+  refundedAt DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@index([paymentId])
+  @@map("payment_refunds")
+}
+
+// ==================== 管理员系统（独立建模） ====================
+
+model AdminAccount {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  realName     String
+  avatar       String?
+  phone        String?
+  email        String?
+  status       String    @default("active") // active, disabled, deleted
+  lastLoginAt  DateTime?
+  lastLoginIp  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  roles         AdminAccountRole[]
+  operationLogs AdminOperationLog[]
+  loginLogs     AdminLoginLog[]
+
+  @@map("admin_accounts")
+}
+
+model AdminRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  sortOrder   Int      @default(0)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions AdminRolePermission[]
+  menus       AdminRoleMenu[]
+  accounts    AdminAccountRole[]
+
+  @@map("admin_roles")
+}
+
+model AdminPermission {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles AdminRolePermission[]
+
+  @@map("admin_permissions")
+}
+
+model AdminRolePermission {
+  id           String          @id @default(cuid())
+  roleId       String
+  role         AdminRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   AdminPermission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("admin_role_permissions")
+}
+
+model AdminMenu {
+  id         String      @id @default(cuid())
+  parentId   String?
+  parent     AdminMenu?  @relation("MenuChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children   AdminMenu[] @relation("MenuChildren")
+  name       String
+  icon       String?
+  path       String?
+  component  String?
+  type       String      @default("menu") // menu, button, api
+  permission String?
+  sortOrder  Int         @default(0)
+  isHidden   Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  roles AdminRoleMenu[]
+
+  @@map("admin_menus")
+}
+
+model AdminRoleMenu {
+  id     String    @id @default(cuid())
+  roleId String
+  role   AdminRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menuId String
+  menu   AdminMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, menuId])
+  @@map("admin_role_menus")
+}
+
+model AdminAccountRole {
+  id        String       @id @default(cuid())
+  accountId String
+  account   AdminAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  roleId    String
+  role      AdminRole    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  regionId  String?
+
+  @@unique([accountId, roleId, regionId])
+  @@map("admin_account_roles")
+}
+
+model AdminOperationLog {
+  id         String       @id @default(cuid())
+  accountId  String
+  account    AdminAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  action     String
+  module     String
+  targetId   String?
+  targetType String?
+  detail     Json?
+  ip         String?
+  ua         String?
+  createdAt  DateTime     @default(now())
+
+  @@index([accountId, createdAt])
+  @@index([action, module])
+  @@map("admin_operation_logs")
+}
+
+model AdminLoginLog {
+  id         String       @id @default(cuid())
+  accountId  String
+  account    AdminAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ip         String?
+  ua         String?
+  success    Boolean      @default(true)
+  failReason String?
+  createdAt  DateTime     @default(now())
+
+  @@index([accountId, createdAt])
+  @@map("admin_login_logs")
+}
+
+model Reconciliation {
+  id               String   @id @default(cuid())
+  reconciliationNo String   @unique
+  type             String
+  startAt          DateTime
+  endAt            DateTime
+  totalAmount      Decimal  @db.Decimal(12, 2)
+  platformFee      Decimal  @db.Decimal(12, 2)
+  netAmount        Decimal  @db.Decimal(12, 2)
+  orderCount       Int
+  status           String   @default("pending")
+  detail           Json?
+  remark           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("reconciliations")
+}
+
+// ==================== 帖子蹲守 (PostSquat) ====================
+
+model PostSquat {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId, createdAt])
+  @@map("post_squats")
+}
+
+// ==================== 帖子不感兴趣 (PostDislike) ====================
+
+model PostDislike {
+  id         String   @id @default(cuid())
+  userId     String
+  targetType String   @default("post")
+  targetId   String
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("post_dislikes")
+}
+
+// ==================== 机器人系统 ====================
+
+model BotAccount {
+  id         String      @id @default(cuid())
+  userId     String      @unique
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personaId  String?
+  persona    BotPersona? @relation(fields: [personaId], references: [id], onDelete: SetNull)
+  regionId   String?
+  tags       Json?
+  status     String      @default("active") // active, paused, disabled
+  dailyLimit Int         @default(10)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  tasks      BotPostTask[]
+  actionLogs BotActionLog[]
+
+  @@map("bot_accounts")
+}
+
+model BotPersona {
+  id        String   @id @default(cuid())
+  name      String
+  avatar    String?
+  gender    Gender   @default(UNKNOWN)
+  ageRange  String?
+  style     String?
+  bio       String?  @db.Text
+  prompt    String?  @db.Text
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bots BotAccount[]
+
+  @@map("bot_personas")
+}
+
+model BotPostTask {
+  id              String     @id @default(cuid())
+  botId           String
+  bot             BotAccount @relation(fields: [botId], references: [id], onDelete: Cascade)
+  type            String     @default("post") // post, comment
+  title           String?
+  content         String?    @db.Text
+  regionId        String?
+  circleId        String?
+  topicId         String?
+  targetPostId    String?
+  mediaUrls       Json?
+  status          String     @default("pending") // pending, approved, running, completed, failed
+  publishAt       DateTime?
+  isAiGenerated   Boolean    @default(false)
+  aiPrompt        String?    @db.Text
+  aiResult        String?    @db.Text
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  publishedPostId String?
+  failReason      String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([botId, status])
+  @@map("bot_post_tasks")
+}
+
+model BotActionLog {
+  id         String     @id @default(cuid())
+  botId      String
+  bot        BotAccount @relation(fields: [botId], references: [id], onDelete: Cascade)
+  action     String // create_post, create_comment, login, error
+  targetType String? // post, comment
+  targetId   String?
+  detail     Json?
+  createdAt  DateTime   @default(now())
+
+  @@index([botId, createdAt])
+  @@map("bot_action_logs")
+}
+
+model AiPromptTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  type      String // post_title, post_content, comment, system
+  template  String   @db.Text
+  variables Json?
+  isEnabled Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ai_prompt_templates")
+}
+
+// ==================== 统一审核中心 ====================
+
+model AuditRecord {
+  id          String    @id @default(cuid())
+  targetType  String // post, comment, merchant, withdraw, city_agent, report
+  targetId    String
+  targetTitle String?
+  submitterId String?
+  reviewerId  String?
+  status      String    @default("pending") // pending, approved, rejected
+  reason      String?
+  reviewedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([targetType, status, createdAt])
+  @@index([reviewerId, reviewedAt])
+  @@map("audit_records")
+}
+
+
+// ==================== 运维监控 ====================
+
+model ServerLog {
+  id          String   @id @default(cuid())
+  level       String   @default("info") // info, warn, error
+  module      String   @default("system") // request, payment, upload, admin, bot, ai, task, security, system
+  message     String
+  detail      Json?
+  requestId   String?
+  userId      String?
+  adminId     String?
+  ip          String?
+  userAgent   String?
+  path        String?
+  method      String?
+  statusCode  Int?
+  durationMs  Int?
+  createdAt   DateTime @default(now())
+
+  @@index([level, createdAt])
+  @@index([module, createdAt])
+  @@index([statusCode, createdAt])
+  @@index([path, createdAt])
+  @@map("server_logs")
+}
+
+model SystemHealthSnapshot {
+  id            String   @id @default(cuid())
+  cpuUsage      Float    @default(0)
+  memoryUsage   Float    @default(0)
+  diskUsage     Float    @default(0)
+  uptimeSeconds Int      @default(0)
+  nodeVersion   String?
+  platform      String?
+  processPid    Int?
+  dbStatus      String   @default("unknown") // healthy, degraded, down
+  redisStatus   String   @default("unknown") // healthy, degraded, down
+  status        String   @default("healthy") // healthy, degraded, down
+  detail        Json?
+  createdAt     DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@map("system_health_snapshots")
+}
+
+model ServerActionLog {
+  id          String    @id @default(cuid())
+  adminId     String
+  action      String    // restart_backend, cleanup_logs
+  status      String    @default("pending") // pending, success, failed
+  reason      String?
+  ip          String?
+  userAgent   String?
+  detail      Json?
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  @@index([adminId, createdAt])
+  @@index([action, status])
+  @@map("server_action_logs")
+}
+
+// ==================== 爆照评选 ====================
+
+model PhotoContest {
+  id                  String   @id @default(cuid())
+  regionId            String?
+  title               String
+  description         String?  @db.Text
+  cover               String?
+  rules               Json?
+  status              String   @default("draft") // draft, active, voting, ended
+  startAt             DateTime?
+  endAt               DateTime?
+  voteEndAt           DateTime?
+  circleId            String?
+  createdBy           String?
+  maxVotesPerUser     Int      @default(3)
+  maxVotesPerDay      Int?
+  maxVotesPerPhoto    Int?
+  allowSelfVote       Boolean  @default(false)
+  allowAnonymousVote  Boolean  @default(false)
+  requireCircleMember Boolean  @default(false)
+  rewardEnabled       Boolean  @default(false)
+  rewardType          String?
+  rewardDetails       Json?
+  adminNote           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  entries            PhotoContestEntry[]
+  winners            PhotoContestWinner[]
+  votes              PhotoContestVote[]
+  voteRestrictionLogs VoteRestrictionLog[]
+
+  @@index([regionId, status, createdAt])
+  @@map("photo_contests")
+}
+
+model PhotoContestEntry {
+  id           String       @id @default(cuid())
+  contestId    String
+  contest      PhotoContest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entryNumber  Int?
+  title        String?
+  description  String?      @db.Text
+  imageUrl     String
+  thumbnailUrl String?
+  status       String       @default("pending") // pending, approved, rejected
+  rejectReason String?
+  approvedAt   DateTime?
+  voteCount    Int          @default(0)
+  ratingsAvg   Float        @default(0)
+  createdAt    DateTime     @default(now())
+
+  votes           PhotoContestVote[]
+  ratings         PhotoContestRating[]
+  contestWinners  PhotoContestWinner[]
+
+  @@unique([contestId, userId, imageUrl])
+  @@index([contestId, status, voteCount])
+  @@index([userId, createdAt])
+  @@map("photo_contest_entries")
+}
+
+model PhotoContestVote {
+  id            String            @id @default(cuid())
+  entryId       String
+  entry         PhotoContestEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  competitionId String
+  competition   PhotoContest      @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  userId        String
+  ipAddress     String?
+  createdAt     DateTime          @default(now())
+
+  @@unique([entryId, userId])
+  @@index([competitionId, userId, createdAt])
+  @@index([userId, createdAt])
+  @@map("photo_contest_votes")
+}
+
+model PhotoContestRating {
+  id        String            @id @default(cuid())
+  entryId   String
+  entry     PhotoContestEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  content   String?           @db.Text
+  status    String            @default("approved") // approved, hidden
+  createdAt DateTime          @default(now())
+
+  @@unique([entryId, userId])
+  @@index([entryId, createdAt])
+  @@map("photo_contest_ratings")
+}
+
+model PhotoContestWinner {
+  id               String            @id @default(cuid())
+  competitionId    String
+  competition      PhotoContest      @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  entryId          String
+  entry            PhotoContestEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  userId           String
+  winnerRank       Int
+  prizeName        String?
+  prizeDescription String?           @db.Text
+  prizeValue       String?
+  rewardStatus     String            @default("pending") // pending, issued, failed
+  remark           String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([competitionId, winnerRank])
+  @@map("photo_contest_winners")
+}
+
+model PhotoContestRegionSetting {
+  id                      String   @id @default(cuid())
+  regionId                String   @unique
+  enableContest           Boolean  @default(true)
+  maxCompetitionsPerMonth Int?
+  maxPhotosPerUser        Int      @default(3)
+  requirePhotoApproval    Boolean  @default(true)
+  photoAutoApproval       Boolean  @default(false)
+  maxVotesPerUserDaily    Int      @default(10)
+  maxVotesPerCompetition  Int?
+  maxVotesPerPhoto        Int      @default(1)
+  allowSelfVoting         Boolean  @default(false)
+  votingIntervalHours     Int?
+  watermarkEnabled        Boolean  @default(false)
+  watermarkText           String?
+  watermarkPosition       String?  // top-left, top-right, bottom-left, bottom-right, center
+  enableRating            Boolean  @default(true)
+  enableCommenting        Boolean  @default(true)
+  adminNotificationEmail  String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@map("photo_contest_region_settings")
+}
+
+model VoteRestrictionLog {
+  id            String       @id @default(cuid())
+  userId        String
+  competitionId String
+  competition   PhotoContest @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  voteDate      String
+  votesUsed     Int          @default(0)
+  lastVoteTime  DateTime?
+
+  @@unique([userId, competitionId, voteDate])
+  @@index([userId, competitionId])
+  @@map("vote_restriction_logs")
+}
+
+// ==================== 用户等级 ====================
+
+model UserLevel {
+  id              String   @id @default(cuid())
+  regionId        String?
+  levelNumber     Int
+  levelName       String
+  levelPrefix     String?
+  requiredExp     Int      @default(0)
+  isActive        Boolean  @default(true)
+  backgroundColor String?
+  textColor       String?
+  borderColor     String?
+  borderWidth     Int?
+  borderRadius    Int?
+  fontSize        Int?
+  fontWeight      String?
+  paddingTop      Int?
+  paddingBottom   Int?
+  paddingLeft     Int?
+  paddingRight    Int?
+  prefixFontSize  Int?
+  prefixTextColor String?
+  levelDescription String? @db.Text
+  levelBenefits   String?  @db.Text
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([regionId, levelNumber])
+  @@map("user_levels")
+}
+
+model UserExperience {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changeAmount Int
+  reason       String?
+  beforeLevel  String?
+  afterLevel   String?
+  beforeExp    Int      @default(0)
+  afterExp     Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("user_experiences")
+}
+
+// ==================== 用户标签定义 ====================
+
+model UserTagDefinition {
+  id              String   @id @default(cuid())
+  regionId        String?
+  tagName         String
+  tagLevel        Int      @default(1)
+  tagColor        String?
+  tagDesc         String?
+  isSystem        Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  displayOrder    Int      @default(0)
+  backgroundColor String?
+  textColor       String?
+  borderColor     String?
+  borderWidth     Int?
+  borderRadius    Int?
+  fontSize        Int?
+  fontWeight      String?
+  paddingTop      Int?
+  paddingBottom   Int?
+  paddingLeft     Int?
+  paddingRight    Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([regionId, tagName])
+  @@map("user_tag_definitions")
+}
+
+// ==================== 余额操作日志 ====================
+
+model UserBalanceLog {
+  id          String   @id @default(cuid())
+  operatorId  String
+  action      String   // batch_clear, adjust, batch_add, batch_deduct
+  userIds     Json     // 批量操作的用户ID列表
+  amount      Decimal? @db.Decimal(12, 2)
+  reason      String?
+  userCount   Int      @default(0)
+  totalAmount Decimal? @db.Decimal(12, 2)
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([operatorId, createdAt])
+  @@index([action, createdAt])
+  @@map("user_balance_logs")
+}
+
+// ==================== 邮箱配置 ====================
+
+model EmailConfig {
+  id             String   @id @default(cuid())
+  host           String   @default("smtp.qq.com")
+  port           Int      @default(465)
+  secure         Boolean  @default(true)
+  user           String
+  pass           String
+  fromEmail      String?
+  fromName       String?
+  subjectPrefix  String?
+  emailSignature String?  @db.Text
+  timeout        Int      @default(10000)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("email_configs")
+}
+
+// ==================== 微信模板消息 ====================
+
+model WechatTemplateConfig {
+  id           String   @id @default(cuid())
+  platformType String   @default("miniprogram")
+  templateType String
+  templateId   String
+  defaultPage  String?
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([platformType, templateType])
+  @@map("wechat_template_configs")
+}
+
+// ==================== 小程序页面路径 ====================
+
+model MiniappPage {
+  id          String   @id @default(cuid())
+  packageName String   @default("main")
+  path        String   @unique
+  title       String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("miniapp_pages")
+}
+
+// ==================== 文件上传记录 ====================
+
+model UploadRecord {
+  id        String   @id @default(cuid())
+  userId    String?
+  fileName  String
+  fileSize  Int
+  fileType  String
+  mimeType  String?
+  url       String
+  scene     String?
+  hash      String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([fileType, createdAt])
+  @@index([scene, createdAt])
+  @@map("upload_records")
+}

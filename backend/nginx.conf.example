@@ -1,0 +1,76 @@
+# =============================================================================
+# Nginx 配置示例 — 灵萌生活生产环境
+# 放置路径：/www/server/nginx/conf/vhost/yuntingzhe.cn.conf (宝塔)
+# 或 /etc/nginx/conf.d/yuntingzhe.cn.conf (标准安装)
+# =============================================================================
+
+upstream lingmeng_backend {
+    server 127.0.0.1:3000;
+    keepalive 64;
+}
+
+# HTTP → HTTPS 重定向（备案并配置证书后启用）
+# server {
+#     listen 80;
+#     server_name yuntingzhe.cn www.yuntingzhe.cn;
+#     return 301 https://$server_name$request_uri;
+# }
+
+# 临时 HTTP 方案（备案前可使用 IP:3000 直接访问，或通过 hosts 绑定测试）
+server {
+    listen 80;
+    server_name yuntingzhe.cn www.yuntingzhe.cn;
+
+    # 如果域名未备案，云厂商可能拦截 80/443，此时请使用 IP:3000 直接访问
+    # 或在本地 hosts 文件绑定：8.149.129.71 yuntingzhe.cn
+
+    client_max_body_size 200M;
+
+    location / {
+        proxy_pass http://lingmeng_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket 支持
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # 健康检查
+    location /healthz {
+        proxy_pass http://lingmeng_backend/healthz;
+        access_log off;
+    }
+}
+
+# HTTPS 配置（备案并申请 SSL 证书后启用）
+# server {
+#     listen 443 ssl http2;
+#     server_name yuntingzhe.cn www.yuntingzhe.cn;
+#
+#     ssl_certificate /path/to/yuntingzhe.cn.crt;
+#     ssl_certificate_key /path/to/yuntingzhe.cn.key;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers HIGH:!aNULL:!MD5;
+#
+#     client_max_body_size 200M;
+#
+#     location / {
+#         proxy_pass http://lingmeng_backend;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_set_header Upgrade $http_upgrade;
+#         proxy_set_header Connection "upgrade";
+#     }
+# }

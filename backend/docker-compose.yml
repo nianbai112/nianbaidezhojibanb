@@ -1,0 +1,160 @@
+# =============================================================================
+# docker-compose.yml — Production stack for 灵萌 backend
+# =============================================================================
+#
+# Deployment workflow (first-time and updates):
+#   1. Ensure .env is populated with production values (see .env.example)
+#   2. Build images:       docker compose build
+#   3. Start services:      docker compose up -d
+#   4. Run DB migrations:   docker compose run --rm migration
+#   5. Check health:        docker compose ps
+#   6. View logs:           docker compose logs -f app
+#
+# Updating after code changes:
+#   1. docker compose build app
+#   2. docker compose up -d app
+#   3. docker compose run --rm migration   (if schema.prisma changed)
+#
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # NestJS Application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lingmeng-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - lingmeng-network
+    # Health check at the compose level (in addition to Dockerfile HEALTHCHECK)
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Database Migrations (one-shot service — runs `prisma migrate deploy`)
+  #
+  # Usage:
+  #   docker compose run --rm migration
+  #
+  # This applies pending migrations and exits. Run this BEFORE starting the
+  # app for the first time, and after any schema.prisma change.
+  # ---------------------------------------------------------------------------
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder   # use the builder stage (has devDeps + prisma CLI)
+    container_name: lingmeng-migration
+    env_file:
+      - .env
+    command: sh -c "npx prisma migrate deploy"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - lingmeng-network
+    profiles:
+      - manual    # not started by default — run explicitly with --rm
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: lingmeng-postgres
+    restart: unless-stopped
+
+    # --- Security: do NOT expose 5432 to the host ---
+    # No `ports:` directive — only accessible within the Docker network.
+    # If you MUST expose it temporarily for debugging, uncomment the
+    # line below and bind to 127.0.0.1 only:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+    env_file:
+      - .env
+    environment:
+      # Map .env vars to the names postgres image expects
+      POSTGRES_USER:     ${POSTGRES_USER:-lingmeng}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err: POSTGRES_PASSWORD must be set}
+      POSTGRES_DB:       ${POSTGRES_DB:-lingmeng_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - lingmeng-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lingmeng} -d ${POSTGRES_DB:-lingmeng_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: lingmeng-redis
+    restart: unless-stopped
+
+    # --- Security: do NOT expose 6379 to the host ---
+    # Redis is only reachable within the Docker network.
+    # Uncomment below to temporarily expose (bind to localhost only):
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+
+    env_file:
+      - .env
+    # Require a password for Redis connections (AUTH)
+    # If REDIS_PASSWORD is not set in .env, Redis runs without a password.
+    # You MUST set REDIS_PASSWORD in production.
+    command: >
+      sh -c '
+        if [ -n "$${REDIS_PASSWORD}" ]; then
+          exec redis-server --requirepass "$${REDIS_PASSWORD}";
+        else
+          exec redis-server;
+        fi
+      '
+    volumes:
+      - redis_data:/data
+    networks:
+      - lingmeng-network
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# =============================================================================
+# Named Volumes (persist data across container rebuilds)
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  lingmeng-network:
+    driver: bridge

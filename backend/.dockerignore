@@ -1,0 +1,39 @@
+# Dependencies (re-installed in container)
+node_modules
+
+# Build output (re-built in container)
+dist
+
+# Git repository
+.git
+
+# Environment files — NEVER bundle secrets in the image
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+
+# Test coverage
+coverage
+.nyc_output
+
+# OS junk
+.DS_Store
+
+# Certificates (should be mounted at runtime, not baked into image)
+certs/
+*.pem
+
+# Docker / Compose files
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Documentation
+README.md
+
+# Git ignore
+.gitignore

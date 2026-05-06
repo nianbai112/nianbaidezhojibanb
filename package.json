@@ -1,0 +1,26 @@
+{
+  "name": "lingmeng-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "灵萌 / Xiaoyi 后端服务与运营管理后台一体化工作区",
+  "workspaces": [
+    "backend",
+    "admin"
+  ],
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "dev:backend": "npm --workspace backend run start:dev",
+    "dev:admin": "npm --workspace admin run dev",
+    "build": "npm run build:backend && npm run build:admin",
+    "build:backend": "npm --workspace backend run build",
+    "build:admin": "npm --workspace admin run build",
+    "typecheck:admin": "npm --workspace admin run typecheck",
+    "db:generate": "npm --workspace backend run db:generate",
+    "db:migrate": "npm --workspace backend run db:migrate",
+    "db:seed": "npm --workspace backend run db:seed",
+    "db:studio": "npm --workspace backend run db:studio"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

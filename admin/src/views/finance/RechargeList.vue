@@ -1,0 +1,8 @@
+<template><div class="page-container"><FilterBar @search="onSearch" @reset="onReset"><a-input v-model:value="f.userId" placeholder="用户ID" allow-clear style="width:150px"/><a-range-picker v-model:value="f.dateRange" style="width:240px"/></FilterBar><div class="page-card"><DataTable :columns="cols" :data-source="list" :loading="ld" :total="t" v-model:page="p" v-model:page-size="ps"><template #amount="{r}">{{(r.amount/100).toFixed(2)}}</template><template #giveAmount="{r}">{{(r.giveAmount/100).toFixed(2)}}</template><template #status="{r}"><a-tag :color="r.status==='success'?'green':r.status==='pending'?'orange':'red'">{{r.status==='success'?'成功':r.status==='pending'?'处理中':'失败'}}</a-tag></template></DataTable></div></div></template>
+<script setup lang="ts">import {ref,reactive} from 'vue';import {financeApi} from '@/api/finance';import FilterBar from '@/components/common/FilterBar.vue';import DataTable from '@/components/common/DataTable.vue'
+const ld=ref(false),list=ref<any[]>([]),t=ref(0),p=ref(1),ps=ref(20);const f=reactive({userId:'',dateRange:undefined as any})
+const cols=[{title:'用户',dataIndex:'userNickname',width:100},{title:'充值金额',dataIndex:'amount',width:100,slot:'amount'},{title:'赠送',dataIndex:'giveAmount',width:80,slot:'giveAmount'},{title:'支付方式',dataIndex:'payMethod',width:90},{title:'状态',dataIndex:'status',width:80,slot:'status'},{title:'时间',dataIndex:'createdAt',width:160}]
+async function ft(){ld.value=true;try{const r=await financeApi.getRechargeList({page:p.value,pageSize:ps.value,...f});list.value=r.data.data?.list||r.data?.list||[];t.value=r.data.data?.total||r.data?.total||0}catch{}finally{ld.value=false}}
+function onSearch(){p.value=1;ft()};function onReset(){f.userId='';f.dateRange=undefined;onSearch()}
+ft();
+</script>

@@ -1,0 +1,9 @@
+<template><div class="page-container"><FilterBar @search="onSearch" @reset="onReset"><a-input v-model:value="f.keyword" placeholder="内容关键词" allow-clear style="width:200px"/></FilterBar><div class="page-card"><DataTable :columns="cols" :data-source="list" :loading="ld" :total="t" v-model:page="p" v-model:page-size="ps"><template #content="{r}"><span :title="r.content">{{r.content?.slice(0,30)}}</span></template><template #a="{r}"><a-space><a @click="onDelete(r)" style="color:#ff4d4f">删除</a></a-space></template></DataTable></div></div></template>
+<script setup lang="ts">import {ref,reactive} from 'vue';import {message,Modal} from 'ant-design-vue';import {driftBottleApi} from '@/api/driftBottle';import FilterBar from '@/components/common/FilterBar.vue';import DataTable from '@/components/common/DataTable.vue'
+const ld=ref(false),list=ref<any[]>([]),t=ref(0),p=ref(1),ps=ref(20);const f=reactive({keyword:''})
+const cols=[{title:'ID',dataIndex:'id',width:80},{title:'内容',dataIndex:'content',width:300,slot:'content'},{title:'用户',dataIndex:'user',width:120,format:(v:any)=>v?.nickname||'匿名'},{title:'类型',dataIndex:'voice',width:80,format:(v:any)=>v?'语音':'文字'},{title:'捡起次数',dataIndex:'pickCount',width:80},{title:'回复数',dataIndex:'replyCount',width:80},{title:'时间',dataIndex:'createdAt',width:160},{title:'操作',dataIndex:'action',width:80,slot:'a'}]
+async function ft(){ld.value=true;try{const r=await driftBottleApi.getBottleList({page:p.value,pageSize:ps.value,...f});list.value=r.data.data?.list||r.data?.list||[];t.value=r.data.data?.total||r.data?.total||0}catch{}finally{ld.value=false}}
+function onSearch(){p.value=1;ft()};function onReset(){f.keyword='';onSearch()}
+async function onDelete(r:any){Modal.confirm({title:'确认删除',content:'确定删除该漂流瓶吗？',onOk:async()=>{await driftBottleApi.deleteBottle(r.id);message.success('已删除');ft()}})}
+ft();
+</script>
