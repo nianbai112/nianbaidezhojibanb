@@ -1,10 +1,27 @@
 import { request } from './request'
 
+export type ModuleAction =
+  | 'create' | 'update' | 'delete'
+  | 'enable' | 'disable'
+  | 'approve' | 'reject'
+  | 'complete' | 'cancel'
+  | 'batchEnable' | 'batchDisable'
+  | 'batchApprove' | 'batchReject'
+  | 'batchDelete'
+  | 'export'
+
 export interface PagePayload {
   rows: any[]
   total: number
   stats?: any[]
   sideMetrics?: any[]
+}
+
+export interface ActionPayload {
+  row?: any
+  rows?: any[]
+  data?: Record<string, any>
+  reason?: string
 }
 
 const moduleEndpoint: Record<string, string> = {
@@ -74,11 +91,15 @@ function avatar(name: any, sub?: any, extra?: any) {
   return { name: text(name), sub: text(sub, extra, '') }
 }
 
+function withMeta(moduleKey: string, row: any, mapped: Record<string, any>) {
+  return { __raw: row, __module: moduleKey, ...mapped }
+}
+
 function mapRow(moduleKey: string, row: any) {
   const createdAt = text(row.createdAt, row.createTime, row.updatedAt, row.submitTime)
   switch (moduleKey) {
     case 'regions':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         name: avatar(row.name, row.code || row.regionCode),
         code: text(row.code, row.regionCode, row.id),
@@ -89,10 +110,10 @@ function mapRow(moduleKey: string, row: any) {
         gmv: money(row.gmv, row.totalGmv),
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'users':
     case 'verification':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         user: avatar(row.nickname || row.name || row.username, row.phone || row.openid),
         phone: text(row.phone, row.mobile),
@@ -105,9 +126,9 @@ function mapRow(moduleKey: string, row: any) {
         amount: money(row.consumeAmount, row.totalAmount, row.balance),
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'merchants':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         merchant: avatar(row.name || row.shopName, row.phone || row.address),
         category: text(row.categoryName, row.category?.name),
@@ -118,9 +139,9 @@ function mapRow(moduleKey: string, row: any) {
         sales: row.sales || row.monthSales,
         settle: statusText(row.settleStatus),
         createdAt
-      }
+      })
     case 'products':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         product: avatar(row.name || row.title, row.description),
         merchant: text(row.merchantName, row.merchant?.name),
@@ -130,9 +151,9 @@ function mapRow(moduleKey: string, row: any) {
         sales: row.sales,
         status: statusText(row.status || row.auditStatus),
         createdAt: text(row.updatedAt, createdAt)
-      }
+      })
     case 'orders':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         orderNo: text(row.orderNo, row.no, row.id),
         user: avatar(row.userName || row.user?.nickname, row.userPhone || row.user?.phone),
@@ -145,9 +166,9 @@ function mapRow(moduleKey: string, row: any) {
         status: statusText(row.status),
         deliveryType: text(row.deliveryType, row.shippingType),
         createdAt
-      }
+      })
     case 'refunds':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         orderNo: text(row.refundNo, row.orderNo, row.id),
         user: avatar(row.userName || row.user?.nickname, row.userPhone),
@@ -156,9 +177,9 @@ function mapRow(moduleKey: string, row: any) {
         amount: money(row.amount, row.refundAmount),
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'finance':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         flowNo: text(row.flowNo, row.transactionNo, row.id),
         merchant: text(row.merchantName, row.userName, row.targetName),
@@ -168,9 +189,9 @@ function mapRow(moduleKey: string, row: any) {
         merchantIncome: money(row.merchantIncome, row.settleAmount),
         status: statusText(row.status),
         settledAt: text(row.settledAt, row.createdAt)
-      }
+      })
     case 'contentAudit':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         content: avatar(row.content || row.reason || row.title, row.targetType),
         user: avatar(row.userName || row.reporter?.nickname, row.userPhone),
@@ -180,9 +201,9 @@ function mapRow(moduleKey: string, row: any) {
         heat: row.heat || row.count,
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'posts':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         content: avatar(row.title || row.content, row.summary),
         user: avatar(row.userName || row.user?.nickname, row.user?.phone),
@@ -192,9 +213,9 @@ function mapRow(moduleKey: string, row: any) {
         likes: row.likeCount,
         status: statusText(row.status || row.auditStatus),
         createdAt
-      }
+      })
     case 'marketing':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         activity: avatar(row.name || row.title, row.description),
         activityType: text(row.type, row.couponType),
@@ -204,9 +225,9 @@ function mapRow(moduleKey: string, row: any) {
         conversion: Number(row.conversion || 0),
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'delivery':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         orderNo: text(row.orderNo, row.id),
         user: avatar(row.userName || row.user?.nickname, row.userPhone),
@@ -216,9 +237,9 @@ function mapRow(moduleKey: string, row: any) {
         amount: money(row.amount, row.payAmount),
         status: statusText(row.status),
         createdAt
-      }
+      })
     case 'system':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id || row.key,
         configName: text(row.name, row.key),
         configGroup: text(row.group, row.category),
@@ -226,9 +247,9 @@ function mapRow(moduleKey: string, row: any) {
         updatedBy: avatar(row.updatedBy || row.operator, row.updatedAt),
         status: statusText(row.status ?? 1),
         createdAt: text(row.updatedAt, createdAt)
-      }
+      })
     case 'admins':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         admin: avatar(row.nickname || row.name || row.username, row.phone),
         account: text(row.username, row.account),
@@ -236,9 +257,9 @@ function mapRow(moduleKey: string, row: any) {
         scope: text(row.scope, row.dataScope, '全部数据'),
         lastLogin: text(row.lastLoginAt, row.lastLoginTime),
         status: statusText(row.status)
-      }
+      })
     case 'files':
-      return {
+      return withMeta(moduleKey, row, {
         id: row.id,
         file: avatar(row.originalName || row.filename || row.name, row.url),
         fileType: text(row.mimeType, row.type),
@@ -247,10 +268,104 @@ function mapRow(moduleKey: string, row: any) {
         uploader: avatar(row.uploaderName || row.createdBy, row.uploaderId),
         status: statusText(row.status ?? 1),
         createdAt
-      }
+      })
     default:
-      return row
+      return withMeta(moduleKey, row, row)
   }
+}
+
+function idOf(row: any) {
+  return row?.id || row?.__raw?.id || row?.key || row?.__raw?.key
+}
+
+function rawOf(row: any) {
+  return row?.__raw || row || {}
+}
+
+function cleanData(data: Record<string, any> = {}) {
+  const out: Record<string, any> = {}
+  for (const [key, value] of Object.entries(data)) {
+    if (key.startsWith('__') || value === undefined) continue
+    out[key] = typeof value === 'object' && value && 'name' in value ? (value as any).name : value
+  }
+  return out
+}
+
+function normalizeWriteData(moduleKey: string, data: Record<string, any>) {
+  const normalized = { ...data }
+  const rename = (from: string, to: string) => {
+    if (normalized[from] !== undefined && normalized[to] === undefined) {
+      normalized[to] = normalized[from]
+      delete normalized[from]
+    }
+  }
+  if (moduleKey === 'merchants') {
+    rename('merchant', 'name')
+    rename('contact', 'contactName')
+  }
+  if (moduleKey === 'products') rename('product', 'name')
+  if (moduleKey === 'posts') rename('content', 'title')
+  if (moduleKey === 'marketing') rename('activity', 'name')
+  if (moduleKey === 'admins') {
+    rename('admin', 'name')
+    rename('account', 'username')
+  }
+  if (moduleKey === 'system') {
+    rename('configName', 'name')
+    rename('configGroup', 'group')
+  }
+  return normalized
+}
+
+async function putStatus(moduleKey: string, row: any, status: any) {
+  const id = idOf(row)
+  const endpoint = moduleEndpoint[moduleKey]
+  if (!id || !endpoint) throw new Error('缺少业务 ID，无法更新状态')
+  if (moduleKey === 'regions' || moduleKey === 'admins') return request.put(`${endpoint}/${id}/status`, { status: status === 'enabled' ? 1 : 0 })
+  if (moduleKey === 'users' || moduleKey === 'merchants' || moduleKey === 'products' || moduleKey === 'orders') return request.put(`${endpoint}/${id}/status`, { status })
+  if (moduleKey === 'marketing') return request.put(`${endpoint}/${id}/toggle`)
+  return request.put(`${endpoint}/${id}`, { status })
+}
+
+async function auditOne(moduleKey: string, row: any, approved: boolean, reason?: string) {
+  const id = idOf(row)
+  if (!id) throw new Error('缺少业务 ID，无法审核')
+  const status = approved ? 'approved' : 'rejected'
+  if (moduleKey === 'verification') return request.put(`/admin/users/${id}/cert`, { status, reason })
+  if (moduleKey === 'merchants') return request.put(`/admin/merchants/${id}/audit`, { status, remark: reason })
+  if (moduleKey === 'products') return request.put(`/admin/products/${id}/audit`, { status, reason })
+  if (moduleKey === 'posts') return request.put(`/admin/posts/${id}/audit`, { status, reason })
+  if (moduleKey === 'contentAudit') return request.put(`/admin/reports/${id}/handle`, { status: approved ? 'handled' : 'rejected', result: reason })
+  if (moduleKey === 'refunds') return request.put(`/admin/refunds/${id}/audit`, { status, remark: reason })
+  return putStatus(moduleKey, row, approved ? 'approved' : 'rejected')
+}
+
+async function deleteOne(moduleKey: string, row: any) {
+  const id = idOf(row)
+  const endpoint = moduleEndpoint[moduleKey]
+  if (!id || !endpoint) throw new Error('缺少业务 ID，无法删除')
+  if (['users', 'finance', 'orders', 'refunds', 'delivery'].includes(moduleKey)) return putStatus(moduleKey, row, 'disabled')
+  return request.delete(`${endpoint}/${id}`)
+}
+
+export function exportRows(filename: string, rows: any[]) {
+  const visibleRows = rows.map(row => {
+    const copy: Record<string, any> = {}
+    for (const [key, value] of Object.entries(row)) {
+      if (key.startsWith('__')) continue
+      copy[key] = typeof value === 'object' && value ? (value as any).name || JSON.stringify(value) : value
+    }
+    return copy
+  })
+  const headers = Array.from(new Set(visibleRows.flatMap(row => Object.keys(row))))
+  const csv = [headers.join(','), ...visibleRows.map(row => headers.map(header => `"${String(row[header] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n')
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${filename}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 export async function loginAdmin(data: { username: string; password: string }) {
@@ -293,6 +408,54 @@ export async function fetchModulePage(moduleKey: string, params: Record<string, 
   }
 }
 
+export async function runModuleAction(moduleKey: string, action: ModuleAction, payload: ActionPayload = {}) {
+  const rows = payload.rows?.length ? payload.rows : payload.row ? [payload.row] : []
+  const endpoint = moduleEndpoint[moduleKey]
+  const data = normalizeWriteData(moduleKey, cleanData(payload.data))
+
+  if (action === 'export') {
+    exportRows(moduleKey, rows)
+    return true
+  }
+  if (action === 'create') {
+    if (!endpoint) throw new Error('该模块暂未配置新增接口')
+    if (['verification', 'finance', 'orders', 'refunds', 'delivery', 'files'].includes(moduleKey)) throw new Error('该模块不支持后台直接新增')
+    if (moduleKey === 'system') return request.put('/admin/configs', { configs: [data] })
+    return request.post(endpoint, data)
+  }
+  if (action === 'update') {
+    const row = payload.row
+    const id = idOf(row)
+    if (!id || !endpoint) throw new Error('缺少业务 ID，无法保存')
+    if (moduleKey === 'system') return request.put('/admin/configs', { configs: [{ ...rawOf(row), ...data }] })
+    return request.put(`${endpoint}/${id}`, data)
+  }
+  if (action === 'delete' || action === 'batchDelete') return Promise.all(rows.map(row => deleteOne(moduleKey, row)))
+  if (action === 'enable' || action === 'batchEnable') return Promise.all(rows.map(row => putStatus(moduleKey, row, 'enabled')))
+  if (action === 'disable' || action === 'batchDisable') return Promise.all(rows.map(row => putStatus(moduleKey, row, 'disabled')))
+  if (action === 'approve' || action === 'batchApprove') return Promise.all(rows.map(row => auditOne(moduleKey, row, true, payload.reason)))
+  if (action === 'reject' || action === 'batchReject') return Promise.all(rows.map(row => auditOne(moduleKey, row, false, payload.reason)))
+  if (action === 'complete') {
+    if (moduleKey === 'refunds') return Promise.all(rows.map(row => request.put(`/admin/refunds/${idOf(row)}/complete`)))
+    return Promise.all(rows.map(row => putStatus(moduleKey, row, 'completed')))
+  }
+  if (action === 'cancel') {
+    if (moduleKey === 'orders') return Promise.all(rows.map(row => request.put(`/admin/orders/${idOf(row)}/cancel`, { reason: payload.reason })))
+    if (moduleKey === 'delivery') return Promise.all(rows.map(row => request.put(`/admin/errand/orders/${idOf(row)}/cancel`, { reason: payload.reason })))
+    return Promise.all(rows.map(row => putStatus(moduleKey, row, 'cancelled')))
+  }
+  throw new Error('暂不支持该业务动作')
+}
+
+export async function uploadAdminFile(file: File, scene = 'admin') {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('scene', scene)
+  return request.post('/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
 export async function fetchRegions() {
   const data = await request.get('/admin/regions', { params: { page: 1, pageSize: 100 } })
   return listOf(data)
@@ -300,4 +463,12 @@ export async function fetchRegions() {
 
 export async function updateRegion(id: string | number, data: any) {
   return request.put(`/admin/regions/${id}`, data)
+}
+
+export async function fetchConfigGroup(group: string) {
+  return request.get(`/admin/config-group/${group}`)
+}
+
+export async function saveConfigGroup(group: string, data: Record<string, any>) {
+  return request.put(`/admin/config-group/${group}`, data)
 }
