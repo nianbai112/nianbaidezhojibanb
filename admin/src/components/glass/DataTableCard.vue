@@ -29,6 +29,8 @@
                     <el-dropdown-item command="enable">启用</el-dropdown-item>
                     <el-dropdown-item command="disable">禁用</el-dropdown-item>
                     <el-dropdown-item command="complete">完成</el-dropdown-item>
+                    <el-dropdown-item command="assign">派单</el-dropdown-item>
+                    <el-dropdown-item command="resetPassword">重置密码</el-dropdown-item>
                     <el-dropdown-item command="cancel">取消</el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>

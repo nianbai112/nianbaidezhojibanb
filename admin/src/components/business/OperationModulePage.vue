@@ -44,6 +44,34 @@
         <div class="el-upload__text">拖拽文件到这里，或点击上传</div>
       </el-upload>
     </el-dialog>
+    <el-dialog v-model="specialVisible" :title="specialTitle" width="560px">
+      <el-form :model="specialModel" label-position="top">
+        <el-form-item v-if="specialAction === 'assign'" label="选择骑手">
+          <el-select v-model="specialModel.riderId" filterable placeholder="请选择在线骑手" style="width:100%">
+            <el-option v-for="r in riders" :key="r.id" :label="r.name || r.realName || r.nickname || r.phone || r.id" :value="r.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'batchTag'" label="选择用户标签">
+          <el-select v-model="specialModel.tagIds" multiple filterable placeholder="请选择标签" style="width:100%">
+            <el-option v-for="t in userTags" :key="t.id" :label="t.name || t.tagName || t.title" :value="t.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'complete' && props.moduleKey === 'refunds'" label="退款转账流水号">
+          <el-input v-model="specialModel.transferNo" placeholder="请输入第三方转账/退款流水号" />
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'resetPassword'" label="新密码">
+          <el-input v-model="specialModel.password" type="password" show-password placeholder="请输入新密码" />
+        </el-form-item>
+        <el-form-item v-if="['reject','batchReject','cancel'].includes(specialAction)" label="处理原因">
+          <el-input v-model="specialModel.reason" type="textarea" placeholder="请输入处理原因" />
+        </el-form-item>
+        <div class="muted">将处理 {{ specialRows.length }} 条数据</div>
+      </el-form>
+      <template #footer>
+        <el-button @click="specialVisible=false">取消</el-button>
+        <el-button type="primary" :loading="actionLoading === specialTitle" @click="submitSpecial">确认执行</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 <script setup lang="ts">
@@ -57,7 +85,7 @@ import DataTableCard from '@/components/glass/DataTableCard.vue'
 import SidePanels from '@/components/glass/SidePanels.vue'
 import DetailDrawer from '@/components/glass/DetailDrawer.vue'
 import { moduleConfigs } from '@/data/moduleConfigs'
-import { fetchModulePage, runModuleAction, uploadAdminFile, type ModuleAction } from '@/api/admin'
+import { fetchModulePage, fetchRiders, fetchUserTags, runModuleAction, uploadAdminFile, type ModuleAction } from '@/api/admin'
 const props = defineProps<{ moduleKey:string }>()
 const config = computed(() => moduleConfigs[props.moduleKey])
 const rows = ref<any[]>([])
@@ -71,11 +99,29 @@ const lastQuery = ref<Record<string, any>>({})
 const drawer = ref<InstanceType<typeof DetailDrawer>>()
 const formVisible = ref(false)
 const uploadVisible = ref(false)
+const specialVisible = ref(false)
 const formMode = ref<'create' | 'update'>('create')
 const editingRow = ref<any>(null)
 const formModel = reactive<Record<string, any>>({})
+const specialModel = reactive<Record<string, any>>({})
+const specialAction = ref<ModuleAction>('assign')
+const specialRows = ref<any[]>([])
+const riders = ref<any[]>([])
+const userTags = ref<any[]>([])
 const today = new Date().toISOString().slice(0, 10)
 const formTitle = computed(() => `${formMode.value === 'create' ? '新增' : '编辑'}${config.value.title}`)
+const specialTitle = computed(() => {
+  const label: Record<string, string> = {
+    assign: '跑腿派单',
+    batchTag: '批量设置用户标签',
+    complete: '完成退款处理',
+    resetPassword: '重置管理员密码',
+    reject: '驳回处理',
+    batchReject: '批量驳回',
+    cancel: '取消业务'
+  }
+  return label[specialAction.value] || '业务处理'
+})
 const readonlyProps = new Set(['id', 'createdAt', 'updatedAt', 'posts', 'orders', 'amount', 'gmv', 'userCount', 'merchantCount', 'sales', 'views', 'comments', 'likes', 'settledAt', 'lastLogin'])
 const formFields = computed(() => config.value.columns
   .filter(col => !readonlyProps.has(col.prop) && !['image', 'rating', 'progress'].includes(col.type || ''))
@@ -142,6 +188,8 @@ function rowsForAction(action: ModuleAction, row?: any) {
 }
 function topAction(label: string): ModuleAction | 'createForm' {
   if (/新增|创建|发布/.test(label)) return 'createForm'
+  if (/批量标签/.test(label)) return 'batchTag'
+  if (/派单|改派/.test(label)) return 'assign'
   if (/导出/.test(label)) return 'export'
   if (/批量通过|批量审核|批量同意/.test(label)) return 'batchApprove'
   if (/批量驳回/.test(label)) return 'batchReject'
@@ -154,6 +202,33 @@ async function askReason(action: ModuleAction) {
   if (!['reject', 'batchReject', 'cancel'].includes(action)) return ''
   return ElMessageBox.prompt('请输入处理原因', '业务处理', { inputType: 'textarea', confirmButtonText: '确认', cancelButtonText: '取消' }).then(res => res.value)
 }
+function needsSpecial(action: ModuleAction) {
+  return action === 'assign'
+    || action === 'batchTag'
+    || action === 'resetPassword'
+    || (action === 'complete' && props.moduleKey === 'refunds')
+    || ['reject', 'batchReject', 'cancel'].includes(action)
+}
+async function openSpecial(action: ModuleAction, targetRows: any[]) {
+  specialAction.value = action
+  specialRows.value = targetRows
+  Object.keys(specialModel).forEach(key => delete specialModel[key])
+  if (action === 'assign') riders.value = await fetchRiders()
+  if (action === 'batchTag') userTags.value = await fetchUserTags()
+  if (action === 'batchTag') specialModel.tagIds = []
+  specialVisible.value = true
+}
+async function submitSpecial() {
+  actionLoading.value = specialTitle.value
+  try {
+    await runModuleAction(props.moduleKey, specialAction.value, { rows: specialRows.value, data: specialModel, reason: specialModel.reason })
+    ElMessage.success('操作成功')
+    specialVisible.value = false
+    await load(lastQuery.value)
+  } finally {
+    actionLoading.value = ''
+  }
+}
 async function execute(action: ModuleAction, row?: any, label = '处理') {
   const targetRows = rowsForAction(action, row)
   if (!targetRows.length) {
@@ -162,6 +237,10 @@ async function execute(action: ModuleAction, row?: any, label = '处理') {
   }
   const danger = ['delete', 'batchDelete', 'disable', 'batchDisable', 'reject', 'batchReject', 'cancel'].includes(action)
   if (danger) await ElMessageBox.confirm(`确认对 ${targetRows.length} 条数据执行「${label}」吗？`, '确认操作', { type: 'warning' })
+  if (needsSpecial(action)) {
+    await openSpecial(action, targetRows)
+    return
+  }
   const reason = await askReason(action)
   actionLoading.value = label
   try {

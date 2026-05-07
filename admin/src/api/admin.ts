@@ -5,6 +5,7 @@ export type ModuleAction =
   | 'enable' | 'disable'
   | 'approve' | 'reject'
   | 'complete' | 'cancel'
+  | 'assign' | 'batchTag' | 'resetPassword'
   | 'batchEnable' | 'batchDisable'
   | 'batchApprove' | 'batchReject'
   | 'batchDelete'
@@ -317,6 +318,21 @@ function normalizeWriteData(moduleKey: string, data: Record<string, any>) {
   return normalized
 }
 
+export async function fetchRiders(params: Record<string, any> = {}) {
+  const data = await request.get('/admin/riders', { params: { page: 1, pageSize: 100, status: 'online', ...params } })
+  return listOf(data)
+}
+
+export async function fetchUserTags(params: Record<string, any> = {}) {
+  const data = await request.get('/admin/user-tags', { params })
+  return listOf(data)
+}
+
+export async function fetchRoles() {
+  const data = await request.get('/admin/roles')
+  return listOf(data)
+}
+
 async function putStatus(moduleKey: string, row: any, status: any) {
   const id = idOf(row)
   const endpoint = moduleEndpoint[moduleKey]
@@ -436,8 +452,24 @@ export async function runModuleAction(moduleKey: string, action: ModuleAction, p
   if (action === 'approve' || action === 'batchApprove') return Promise.all(rows.map(row => auditOne(moduleKey, row, true, payload.reason)))
   if (action === 'reject' || action === 'batchReject') return Promise.all(rows.map(row => auditOne(moduleKey, row, false, payload.reason)))
   if (action === 'complete') {
-    if (moduleKey === 'refunds') return Promise.all(rows.map(row => request.put(`/admin/refunds/${idOf(row)}/complete`)))
+    if (moduleKey === 'refunds') return Promise.all(rows.map(row => request.put(`/admin/refunds/${idOf(row)}/complete`, { transferNo: data.transferNo || data.transactionId })))
     return Promise.all(rows.map(row => putStatus(moduleKey, row, 'completed')))
+  }
+  if (action === 'assign') {
+    if (moduleKey !== 'delivery') throw new Error('只有跑腿配送订单支持派单')
+    if (!data.riderId) throw new Error('请选择骑手')
+    return Promise.all(rows.map(row => request.post(`/admin/errand/orders/${idOf(row)}/assign`, { riderId: data.riderId })))
+  }
+  if (action === 'batchTag') {
+    if (moduleKey !== 'users') throw new Error('只有用户管理支持批量标签')
+    const tagIds = Array.isArray(data.tagIds) ? data.tagIds : []
+    if (!tagIds.length) throw new Error('请选择用户标签')
+    return Promise.all(rows.map(row => request.post(`/admin/users/${idOf(row)}/tags`, { tagIds })))
+  }
+  if (action === 'resetPassword') {
+    if (moduleKey !== 'admins') throw new Error('只有管理员账号支持重置密码')
+    if (!data.password) throw new Error('请输入新密码')
+    return Promise.all(rows.map(row => request.put(`/admin/admins/${idOf(row)}/reset-password`, { password: data.password })))
   }
   if (action === 'cancel') {
     if (moduleKey === 'orders') return Promise.all(rows.map(row => request.put(`/admin/orders/${idOf(row)}/cancel`, { reason: payload.reason })))
