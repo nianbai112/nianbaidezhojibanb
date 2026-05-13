@@ -1,16 +1,41 @@
 import * as Joi from 'joi';
 
 // ---------------------------------------------------------------------------
-// Production guard: reject obvious placeholder / example values for secrets.
-// Patterns like "your-secret", "change-me", "your_mchid", etc. are never
+// Production guard: reject obvious placeholder / example / weak values for secrets.
+// Patterns like "your-secret", "change-me", "test123", "demo", etc. are never
 // allowed when NODE_ENV=production.
 // ---------------------------------------------------------------------------
-const PLACEHOLDER_RE = /^(your[-_])|(change[-_]?me)|(super[-_]secret)|(default[-_])|(example[-_])|(test[-_])/i;
+const PLACEHOLDER_RE =
+  /^(your[-_])|(change[-_]?me)|(super[-_]secret)|(default[-_])|(example[-_])|(test[-_])|(demo[-_])|(temp[-_])|(dummy[-_])|(qwerty)|(abc123)|(123456)/i;
 
 const productionPlaceholderCheck = (value: string, helpers: Joi.CustomHelpers) => {
   if (PLACEHOLDER_RE.test(value ?? '')) {
     return helpers.error('any.invalid', {
-      message: `placeholder value "${value}" is not allowed in production — set a real secret`,
+      message: `placeholder/weak value "${value}" is not allowed in production — set a real secret`,
+    });
+  }
+  if (value && value.length < 16) {
+    return helpers.error('string.min', {
+      message: 'production secret must be at least 16 characters',
+    });
+  }
+  return value;
+};
+
+// JWT_SECRET minimum requirements (all environments)
+const validateJwtSecretFormat = (value: string, helpers: Joi.CustomHelpers) => {
+  if (!value || value.length === 0) {
+    return helpers.error('any.required', { message: 'JWT_SECRET is required' });
+  }
+  if (value.length < 32) {
+    return helpers.error('string.min', { message: 'JWT_SECRET must be at least 32 characters' });
+  }
+  if (value.length > 512) {
+    return helpers.error('string.max', { message: 'JWT_SECRET must not exceed 512 characters' });
+  }
+  if (PLACEHOLDER_RE.test(value)) {
+    return helpers.error('any.invalid', {
+      message: `"${value}" is a placeholder — set a real JWT secret`,
     });
   }
   return value;
@@ -19,6 +44,12 @@ const productionPlaceholderCheck = (value: string, helpers: Joi.CustomHelpers) =
 const productionJwtSecret = Joi.string()
   .min(32)
   .custom(productionPlaceholderCheck, 'no-placeholder');
+
+const developmentJwtSecret = Joi.when('NODE_ENV', {
+  is: 'production',
+  then: productionJwtSecret.required(),
+  otherwise: Joi.string().custom(validateJwtSecretFormat, 'jwt-format').required(),
+});
 
 const productionCorsOrigin = Joi.string()
   .required()
@@ -44,6 +75,7 @@ const minimalSchema = Joi.object({
   REDIS_PORT: Joi.number().default(6379),
   REDIS_PASSWORD: Joi.string().optional().allow('').default(''),
   JWT_SECRET: Joi.string().optional().allow(''), // wizard 阶段允许稍后填写
+  JWT_SECRET_ADMIN: Joi.string().optional().allow(''),
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('2h'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
   WX_MINI_APPID: Joi.string().optional().allow(''),
@@ -98,11 +130,8 @@ const fullSchema = Joi.object({
   REDIS_PASSWORD: Joi.string().optional().allow('').default(''),
 
   // JWT
-  JWT_SECRET: Joi.when('NODE_ENV', {
-    is: 'production',
-    then: productionJwtSecret.required(),
-    otherwise: Joi.string().required(),
-  }),
+  JWT_SECRET: developmentJwtSecret,
+  JWT_SECRET_ADMIN: Joi.string().optional().allow(''), // 为管理员 JWT 分离预留，暂可选
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('2h'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
 

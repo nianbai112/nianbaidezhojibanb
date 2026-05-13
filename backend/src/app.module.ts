@@ -25,7 +25,8 @@ import { CouponAdminModule } from './modules/coupon-admin/coupon-admin.module';
 import { DatingAdminModule } from './modules/dating-admin/dating-admin.module';
 import { ErrandAdminModule } from './modules/errand-admin/errand-admin.module';
 import { MessageModule } from './modules/message/message.module';
-import { NotificationModule } from './modules/notification/notification.module';
+import { NotifyModule } from './modules/notify/notify.module';
+import { WechatModule } from './modules/wechat/wechat.module';
 import { OperationModule } from './modules/operation/operation.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PaymentModule } from './modules/payment/payment.module';
@@ -52,6 +53,16 @@ import { SecondHandModule } from './modules/second-hand/second-hand.module';
 import { NetDiskModule } from './modules/netdisk/netdisk.module';
 import { UserAdminModule } from './modules/user-admin/user-admin.module';
 import { SystemAdminModule } from './modules/system-admin/system-admin.module';
+import { OrderCenterModule } from './modules/order-center/order-center.module';
+import { LayoutConfigModule } from './modules/layout-config/layout-config.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { MarketingAdminModule } from './modules/marketing-admin/marketing-admin.module';
+import { AiAdminModule } from './modules/ai-admin/ai-admin.module';
+import { TrackingModule } from './modules/tracking/tracking.module';
+import { RecommendModule } from './modules/recommend/recommend.module';
+import { ABTestModule } from './modules/ab-test/ab-test.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
+import { SchoolModule } from './modules/school/school.module';
 import { RequestLogInterceptor } from './interceptors/request-log.interceptor';
 import { AllExceptionsFilter } from './filters/all-exceptions.filter';
 
@@ -117,7 +128,8 @@ const adminAuthThrottleLimit = parseInt(
     ErrandAdminModule,
     PaymentModule,
     MessageModule,
-    NotificationModule,
+    NotifyModule,
+    WechatModule,
     OperationModule,
     AdminModule,
     AddressModule,
@@ -143,6 +155,16 @@ const adminAuthThrottleLimit = parseInt(
     NetDiskModule,
     UserAdminModule,
     SystemAdminModule,
+    OrderCenterModule,
+    LayoutConfigModule,
+    AnalyticsModule,
+    MarketingAdminModule,
+    AiAdminModule,
+    TrackingModule,
+    RecommendModule,
+    ABTestModule,
+    SchedulerModule,
+    SchoolModule,
   ],
   providers: [
     {

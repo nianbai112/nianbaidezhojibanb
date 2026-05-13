@@ -1,24 +1,31 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
+import { NotifyService } from '../notify/notify.service';
 
 @Injectable()
 export class PostService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly notifyService: NotifyService,
   ) {}
 
   async listByRegion(regionId: string, query: any) {
     const { page = 1, limit = 10, sortBy = 'latest', circle_id, check_in_id, topic_id, topic_ids, type = 'null' } = query;
     const where: any = { regionId, status: 'PUBLISHED', deletedAt: null };
-    if (circle_id) where.circleId = circle_id;
+    // 当前 Post 表没有 circleId 字段；旧小程序会带 circle_id 进入圈子详情页。
+    // 这里先忽略该过滤，避免 Prisma 因未知字段直接 500。
     if (topic_id) where.topics = { some: { topicId: topic_id } };
     if (topic_ids) {
       const ids = Array.isArray(topic_ids) ? topic_ids : topic_ids.split(',');
       where.topics = { some: { topicId: { in: ids } } };
     }
-    if (type && type !== 'null') where.type = type.toUpperCase();
+    const normalizedType = String(type || '').toUpperCase();
+    const allowedTypes = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'VOTE', 'REPOST'];
+    if (normalizedType && !['NULL', 'ALL', 'MIXED'].includes(normalizedType) && allowedTypes.includes(normalizedType)) {
+      where.type = normalizedType;
+    }
 
     const orderBy: any = sortBy === 'hot' ? { viewCount: 'desc' } : { createdAt: 'desc' };
     const [list, total] = await Promise.all([
@@ -31,7 +38,15 @@ export class PostService {
       }),
       this.prisma.post.count({ where }),
     ]);
-    return { list, total, page, limit };
+    return {
+      list,
+      posts: list,
+      data: list,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      pageSize: Number(limit),
+    };
   }
 
   async nearbyFollowed(regionId: string, query: any, userId?: string) {
@@ -130,6 +145,33 @@ export class PostService {
       update: {},
     });
     await this.prisma.post.update({ where: { id: postId }, data: { likeCount: { increment: 1 } } });
+
+    // 发送点赞通知
+    try {
+      const post = await this.prisma.post.findUnique({
+        where: { id: postId },
+        select: { userId: true, title: true, regionId: true },
+      });
+      const liker = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { nickname: true },
+      });
+      if (post && post.userId !== userId) {
+        await this.notifyService.createAndDispatch({
+          userId: post.userId,
+          regionId: post.regionId || undefined,
+          type: 'LIKE',
+          scene: 'post_like',
+          title: '有人点赞了你的帖子',
+          content: `${liker?.nickname || '用户'} 赞了你的帖子`,
+          data: { postId, fromUserId: userId },
+          linkType: 'post',
+          linkValue: postId,
+          channelMask: { inApp: true, websocket: true },
+        });
+      }
+    } catch {}
+
     return { liked: true };
   }
 
@@ -234,7 +276,6 @@ export class PostService {
   // ============ 蹲帖 ============
 
   async squatPost(postId: string, userId: string) {
-    // 确认帖子存在
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException('帖子不存在');
 
@@ -243,6 +284,29 @@ export class PostService {
       create: { postId, userId },
       update: {},
     });
+
+    // 发送蹲帖通知
+    try {
+      const squatter = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { nickname: true },
+      });
+      if (post.userId !== userId) {
+        await this.notifyService.createAndDispatch({
+          userId: post.userId,
+          regionId: post.regionId || undefined,
+          type: 'SQUAT',
+          scene: 'post_squat',
+          title: '有人蹲了你的帖子',
+          content: `${squatter?.nickname || '用户'} 蹲了你的帖子`,
+          data: { postId, fromUserId: userId },
+          linkType: 'post',
+          linkValue: postId,
+          channelMask: { inApp: true, websocket: true },
+        });
+      }
+    } catch {}
+
     return { success: true, isSquatting: true };
   }
 
@@ -251,6 +315,13 @@ export class PostService {
       where: { postId_userId: { postId, userId } },
     });
     return { isSquatting: !!squat };
+  }
+
+  async unsquatPost(postId: string, userId: string) {
+    await this.prisma.postSquat.deleteMany({
+      where: { postId, userId },
+    });
+    return { success: true, isSquatting: false };
   }
 
   async mySquats(userId: string, query: any) {

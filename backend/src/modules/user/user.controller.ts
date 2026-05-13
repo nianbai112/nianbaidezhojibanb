@@ -22,6 +22,14 @@ export class UserController {
     return this.userService.getProfile(targetId || userId);
   }
 
+  @Get('auth/admin/bound-user')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取当前登录账号绑定用户（小程序兼容）' })
+  getAdminBoundUser(@CurrentUser('sub') userId: string) {
+    return this.userService.getProfile(userId);
+  }
+
   @Get('auth/user/nickname-avatar')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

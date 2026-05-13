@@ -13,10 +13,17 @@ import {
 export class PunchInService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizePage(query: { page?: unknown; pageSize?: unknown }) {
+    const page = Math.max(Number(query.page) || 1, 1);
+    const pageSize = Math.min(Math.max(Number(query.pageSize) || 20, 1), 100);
+    return { page, pageSize };
+  }
+
   // ==================== 分类管理 ====================
 
   async getCategories(query: PunchQueryDto) {
-    const { page = 1, pageSize = 20, keyword, status } = query;
+    const { page, pageSize } = this.normalizePage(query);
+    const { keyword, status } = query;
     const where: any = {};
     if (keyword) where.name = { contains: keyword };
     if (status) where.status = status;
@@ -78,7 +85,8 @@ export class PunchInService {
   // ==================== 地点管理 ====================
 
   async getLocations(query: any) {
-    const { page = 1, pageSize = 20, keyword, regionId, categoryId, status } = query;
+    const { page, pageSize } = this.normalizePage(query);
+    const { keyword, regionId, categoryId, status } = query;
     const where: any = {};
     if (keyword) where.name = { contains: keyword };
     if (regionId) where.regionId = regionId;
@@ -161,7 +169,8 @@ export class PunchInService {
   // ==================== 打卡记录 ====================
 
   async getRecords(query: any) {
-    const { page = 1, pageSize = 20, keyword, userId, locationId, regionId, status, startDate, endDate } = query;
+    const { page, pageSize } = this.normalizePage(query);
+    const { userId, locationId, regionId, status, startDate, endDate } = query;
     const where: any = {};
     if (userId) where.userId = userId;
     if (locationId) where.locationId = locationId;
@@ -211,7 +220,8 @@ export class PunchInService {
   // ==================== 评论管理 ====================
 
   async getComments(query: any) {
-    const { page = 1, pageSize = 20, keyword, userId, locationId, status, startDate, endDate } = query;
+    const { page, pageSize } = this.normalizePage(query);
+    const { keyword, userId, locationId, status, startDate, endDate } = query;
     const where: any = { parentId: null }; // only top-level comments
     if (userId) where.userId = userId;
     if (locationId) where.locationId = locationId;
@@ -285,7 +295,8 @@ export class PunchInService {
   // ==================== 区域配置 ====================
 
   async getConfigs(query: any) {
-    const { page = 1, pageSize = 20, isEnabled } = query;
+    const { page, pageSize } = this.normalizePage(query);
+    const { isEnabled } = query;
     const where: any = {};
     if (isEnabled !== undefined) where.isEnabled = isEnabled === 'true' || isEnabled === true;
 

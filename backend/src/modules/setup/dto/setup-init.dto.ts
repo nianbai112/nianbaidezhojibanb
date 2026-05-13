@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, MinLength, Matches, IsUrl } from 'class-validator';
+import { IsNumber, IsOptional, IsString, MinLength, IsUrl } from 'class-validator';
 
 export class SetupInitDto {
   @IsOptional()
@@ -14,8 +14,7 @@ export class SetupInitDto {
   adminUsername: string;
 
   @IsString()
-  @MinLength(8)
-  @Matches(/^(?=.*[a-zA-Z])(?=.*\d).{8,}$/)
+  @MinLength(12, { message: '密码长度至少 12 位' })
   adminPassword: string;
 
   @IsOptional()

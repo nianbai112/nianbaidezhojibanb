@@ -3,6 +3,7 @@ import { BadRequestException, NotFoundException, ForbiddenException } from '@nes
 import { PostService } from './post.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
+import { NotifyService } from '../notify/notify.service';
 
 const makeMockPrisma = () => ({
   post: {
@@ -59,6 +60,10 @@ const makeMockRedis = () => ({
   zrevrange: jest.fn(), zrem: jest.fn(), getClient: jest.fn(),
 });
 
+const makeMockNotify = () => ({
+  createAndDispatch: jest.fn().mockResolvedValue({}),
+});
+
 describe('PostService', () => {
   let service: PostService;
   let prisma: any;
@@ -69,6 +74,7 @@ describe('PostService', () => {
         PostService,
         { provide: PrismaService, useValue: makeMockPrisma() },
         { provide: RedisService, useValue: makeMockRedis() },
+        { provide: NotifyService, useValue: makeMockNotify() },
       ],
     }).compile();
     service = module.get<PostService>(PostService);

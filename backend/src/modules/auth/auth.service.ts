@@ -5,10 +5,22 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import axios from 'axios';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+
+  // ===== Captcha 配置 =====
+  private readonly CAPTCHA_TTL = 300; // 验证码有效期 5 分钟（秒）
+  private readonly CAPTCHA_MAX_ATTEMPTS = 5; // 单 captchaId 最多尝试次数
+
+  // ===== 登录失败锁定配置 =====
+  private readonly LOGIN_FAIL_MAX = 5; // 连续失败 N 次后锁定
+  private readonly LOGIN_LOCK_MINUTES = 15; // 锁定时间（分钟）
+
+  // ===== Captcha 内存回退（非生产环境 Redis 不可用时使用） =====
+  private readonly memoryCaptchaStore = new Map<string, { answer: string; attempts: number; expiresAt: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -17,12 +29,161 @@ export class AuthService {
     private readonly redis: RedisService,
   ) {}
 
+  /** 判断当前环境是否为 production */
+  private get isProduction(): boolean {
+    return this.config.get('NODE_ENV') === 'production';
+  }
+
+  // =============================================================================
+  // 验证码生成与校验（Redis 主存储 + 内存 fallback）
+  // =============================================================================
+
+  async generateCaptcha(): Promise<{ captchaId: string; image: string }> {
+    const captchaId = crypto.randomUUID();
+    const a = Math.floor(Math.random() * 50);
+    const b = Math.floor(Math.random() * 50);
+    const answer = (a + b).toString();
+
+    try {
+      await this.redis.set(`captcha:answer:${captchaId}`, answer, this.CAPTCHA_TTL);
+      await this.redis.set(`captcha:attempts:${captchaId}`, '0', this.CAPTCHA_TTL);
+    } catch (err: any) {
+      if (this.isProduction) {
+        this.logger.error(`生产环境 Redis 不可用，无法生成验证码: ${err.message}`);
+        throw new BadRequestException('验证码服务暂不可用，请稍后重试');
+      }
+      // 非生产环境降级到内存
+      this.logger.warn(`Redis 不可用，验证码降级到内存存储 (captchaId: ${captchaId})`);
+      this.memoryCaptchaStore.set(captchaId, { answer, attempts: 0, expiresAt: Date.now() + this.CAPTCHA_TTL * 1000 });
+    }
+
+    const svg = this.generateCaptchaSvg(`${a} + ${b} = ?`);
+    return { captchaId, image: `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}` };
+  }
+
+  async verifyCaptcha(captchaId: string, captchaCode: string): Promise<boolean> {
+    if (!captchaId || !captchaCode) {
+      throw new BadRequestException('验证码不能为空');
+    }
+
+    // 先尝试 Redis
+    let answer: string | null = null;
+    let attempts = 0;
+    let fromMemory = false;
+
+    try {
+      answer = await this.redis.get(`captcha:answer:${captchaId}`);
+      attempts = parseInt((await this.redis.get(`captcha:attempts:${captchaId}`)) || '0', 10);
+    } catch {
+      // Redis 不可用，尝试内存
+      const stored = this.memoryCaptchaStore.get(captchaId);
+      if (!stored) {
+        throw new BadRequestException('验证码已过期，请刷新验证码');
+      }
+      if (Date.now() > stored.expiresAt) {
+        this.memoryCaptchaStore.delete(captchaId);
+        throw new BadRequestException('验证码已过期，请刷新验证码');
+      }
+      answer = stored.answer;
+      attempts = stored.attempts;
+      fromMemory = true;
+    }
+
+    if (!answer) {
+      throw new BadRequestException('验证码已过期，请刷新验证码');
+    }
+
+    // 检查尝试次数上限
+    if (attempts >= this.CAPTCHA_MAX_ATTEMPTS) {
+      await this.cleanupCaptcha(captchaId, fromMemory);
+      throw new BadRequestException('验证码已过期或尝试次数过多，请刷新验证码');
+    }
+
+    // 增加尝试次数
+    attempts++;
+    if (fromMemory) {
+      const stored = this.memoryCaptchaStore.get(captchaId);
+      if (stored) stored.attempts = attempts;
+    } else {
+      try {
+        await this.redis.incr(`captcha:attempts:${captchaId}`);
+      } catch { /* ignore */ }
+    }
+
+    if (captchaCode !== answer) {
+      return false;
+    }
+
+    // 验证成功，清除（一次性使用）
+    await this.cleanupCaptcha(captchaId, fromMemory);
+    return true;
+  }
+
+  private async cleanupCaptcha(captchaId: string, fromMemory: boolean) {
+    if (fromMemory) {
+      this.memoryCaptchaStore.delete(captchaId);
+    } else {
+      try {
+        await this.redis.del(`captcha:answer:${captchaId}`);
+        await this.redis.del(`captcha:attempts:${captchaId}`);
+      } catch { /* ignore */ }
+    }
+  }
+
+  private generateCaptchaSvg(text: string): string {
+    const width = 160;
+    const height = 50;
+    const fontSize = 22;
+    const noiseLines = 4;
+    const noiseDots = 30;
+
+    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+    svg += `<rect width="${width}" height="${height}" fill="#f0f5ff" rx="4"/>`;
+
+    // 干扰线
+    for (let i = 0; i < noiseLines; i++) {
+      const x1 = Math.random() * width;
+      const y1 = Math.random() * height;
+      const x2 = Math.random() * width;
+      const y2 = Math.random() * height;
+      const color = `hsl(${200 + Math.random() * 40}, 70%, ${60 + Math.random() * 20}%)`;
+      svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="1" opacity="0.5"/>`;
+    }
+
+    // 干扰点
+    for (let i = 0; i < noiseDots; i++) {
+      const cx = Math.random() * width;
+      const cy = Math.random() * height;
+      const r = 0.5 + Math.random() * 1.5;
+      svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#8ba5cc" opacity="0.4"/>`;
+    }
+
+    // 文字（居中，带轻微旋转和偏移）
+    const chars = text.split('');
+    const totalCharsWidth = chars.length * fontSize * 0.65;
+    let startX = (width - totalCharsWidth) / 2;
+    const centerY = height / 2 + fontSize / 3;
+
+    for (const char of chars) {
+      const rotation = (Math.random() - 0.5) * 20;
+      const yOffset = (Math.random() - 0.5) * 8;
+      const charWidth = char === ' ' ? 15 : fontSize * 0.6;
+      const x = startX + charWidth / 2;
+      const y = centerY + yOffset;
+      const color = `hsl(${220 + Math.random() * 30}, ${50 + Math.random() * 30}%, ${30 + Math.random() * 25}%)`;
+      svg += `<text x="${x}" y="${y}" font-size="${fontSize}" font-family="Arial, sans-serif" font-weight="bold" fill="${color}" text-anchor="middle" transform="rotate(${rotation},${x},${y})">${char}</text>`;
+      startX += charWidth;
+    }
+
+    svg += '</svg>';
+    return svg;
+  }
+
   // ============ 小程序微信登录 ============
 
   async wxMiniLogin(dto: { code: string; nickname?: string; avatarUrl?: string }) {
     const { code, nickname, avatarUrl } = dto;
-    const appid = this.config.get('WX_MINI_APPID');
-    const secret = this.config.get('WX_MINI_SECRET');
+    const { appid, secret } = await this.getMiniappCredentials();
 
     const url = `https://api.weixin.qq.com/sns/jscode2session?appid=${appid}&secret=${secret}&js_code=${code}&grant_type=authorization_code`;
     const { data } = await axios.get(url);
@@ -129,10 +290,23 @@ export class AuthService {
     };
   }
 
-  // ============ 后台管理员登录（独立 AdminAccount 模型） ============
+  // =============================================================================
+  // 后台管理员登录（独立 AdminAccount 模型）
+  // =============================================================================
 
-  async adminLogin(dto: { username: string; password: string }, ip?: string, ua?: string) {
-    // 查找管理员账号
+  async adminLogin(dto: { username: string; password: string; captchaId?: string; captcha?: string }, ip?: string, ua?: string) {
+    // 1. 校验验证码（不区分账号是否存在，统一返回"验证码错误"）
+    if (dto.captchaId && !dto.captcha) {
+      throw new BadRequestException('请填写验证码');
+    }
+    if (dto.captchaId) {
+      const captchaValid = await this.verifyCaptcha(dto.captchaId, dto.captcha || '');
+      if (!captchaValid) {
+        throw new BadRequestException('验证码错误');
+      }
+    }
+
+    // 2. 查找管理员（排除已软删除的）
     const account = await this.prisma.adminAccount.findFirst({
       where: {
         OR: [
@@ -140,7 +314,8 @@ export class AuthService {
           { phone: dto.username },
           { email: dto.username },
         ],
-        status: 'active',
+        status: { in: ['active', 'disabled'] },
+        deletedAt: null,
       },
       include: {
         roles: {
@@ -156,24 +331,51 @@ export class AuthService {
       },
     });
 
+    // 3. 账号不存在 → 统一错误消息，不泄露账号存在性
     if (!account) {
       await this.logAdminLogin('', dto.username, false, '账号不存在', ip, ua);
       throw new UnauthorizedException('账号或密码错误');
     }
 
+    // 4. 检查是否被锁定
+    if (account.lockedUntil && new Date(account.lockedUntil) > new Date()) {
+      const remainingMin = Math.ceil((new Date(account.lockedUntil).getTime() - Date.now()) / 60000);
+      await this.logAdminLogin(account.id, dto.username, false, `账号已锁定(剩余${remainingMin}分钟)`, ip, ua);
+      throw new UnauthorizedException(`账号已被临时锁定，请在 ${remainingMin} 分钟后重试`);
+    }
+
+    // 5. MFA 校验（如已启用且未提供 MFA code，返回需要 MFA 的状态）
+    if (account.mfaEnabled) {
+      // MFA 完整接入预留 — 当前仅检查并不拒绝登录
+      this.logger.log(`管理员 ${account.username} 已启用 MFA`);
+    }
+
+    // 6. 校验密码
     const valid = await bcrypt.compare(dto.password, account.passwordHash);
     if (!valid) {
-      await this.logAdminLogin(account.id, dto.username, false, '密码错误', ip, ua);
+      await this.handleLoginFailure(account, dto.username, ip, ua);
       throw new UnauthorizedException('账号或密码错误');
     }
 
-    // 更新登录信息
+    // 7. 检查 status 是否 active
+    if (account.status !== 'active') {
+      await this.logAdminLogin(account.id, dto.username, false, '账号已禁用', ip, ua);
+      throw new UnauthorizedException('账号或密码错误');
+    }
+
+    // 8. 登录成功 — 清空失败计数、锁定、更新登录信息
     await this.prisma.adminAccount.update({
       where: { id: account.id },
-      data: { lastLoginAt: new Date(), lastLoginIp: ip || null },
+      data: {
+        loginFailCount: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+        lastLoginIp: ip || null,
+        lastLoginUserAgent: ua || null,
+      },
     });
 
-    // 收集权限码
+    // 8. 收集权限码和菜单
     const permissionSet = new Set<string>();
     const menus: any[] = [];
     const roles: any[] = [];
@@ -202,10 +404,10 @@ export class AuthService {
 
     const permissions = Array.from(permissionSet);
 
-    // 生成 token（用 admin_ 前缀区分管理员和小程序用户）
+    // 9. 生成 token
     const tokens = await this.generateAdminTokens(account.id, account.username);
 
-    // 记录登录日志
+    // 10. 记录登录成功日志
     await this.logAdminLogin(account.id, dto.username, true, undefined, ip, ua);
 
     return {
@@ -213,8 +415,19 @@ export class AuthService {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
+      adminId: account.id,
+      userId: account.id,
+      username: account.username,
+      nickname: account.realName || account.username,
+      avatar: account.avatar || '',
+      role: roles.some((role) => role.code === 'super_admin' || role.code === 'SUPER_ADMIN')
+        ? 'super_admin'
+        : roles[0]?.code || 'admin',
+      login_method: 'password',
+      login_via_auth_code: false,
       permissions,
       menus,
+      forcePasswordReset: account.passwordResetRequired === true,
       user: {
         id: account.id,
         username: account.username,
@@ -224,8 +437,42 @@ export class AuthService {
         email: account.email || '',
         roles,
         status: account.status === 'active' ? 1 : 0,
+        passwordResetRequired: account.passwordResetRequired,
       },
     };
+  }
+
+  /**
+   * 记录登录失败，超过阈值则锁定账号
+   * 注意：不区分散列失败的原因（密码错误 / 状态异常均计为一次失败）
+   */
+  private async handleLoginFailure(
+    account: { id: string; loginFailCount: number },
+    username: string,
+    ip?: string,
+    ua?: string,
+  ) {
+    const newFailCount = account.loginFailCount + 1;
+    const lockedUntil =
+      newFailCount >= this.LOGIN_FAIL_MAX
+        ? new Date(Date.now() + this.LOGIN_LOCK_MINUTES * 60 * 1000)
+        : undefined;
+
+    await this.prisma.adminAccount.update({
+      where: { id: account.id },
+      data: {
+        loginFailCount: newFailCount,
+        lockedUntil: lockedUntil || null,
+      },
+    });
+
+    const failReason =
+      newFailCount >= this.LOGIN_FAIL_MAX
+        ? `密码错误(连续${newFailCount}次，已锁定${this.LOGIN_LOCK_MINUTES}分钟)`
+        : `密码错误(第${newFailCount}次)`;
+
+    await this.logAdminLogin(account.id, username, false, failReason, ip, ua);
+    this.logger.warn(`管理员登录失败: ${username} (第${newFailCount}次, IP: ${ip || 'unknown'})`);
   }
 
   async adminLogout(accountId: string) {
@@ -344,8 +591,7 @@ export class AuthService {
     const cacheKey = 'wx:access_token';
     const cached = await this.redis.get(cacheKey);
     if (cached) return cached;
-    const appid = this.config.get('WX_MINI_APPID');
-    const secret = this.config.get('WX_MINI_SECRET');
+    const { appid, secret } = await this.getMiniappCredentials();
     const { data } = await axios.get(
       `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${appid}&secret=${secret}`,
     );
@@ -354,5 +600,18 @@ export class AuthService {
       return data.access_token;
     }
     throw new BadRequestException('获取微信 AccessToken 失败');
+  }
+
+  private async getMiniappCredentials(): Promise<{ appid: string; secret: string }> {
+    const saved = await this.prisma.config.findUnique({ where: { key: 'miniapp' } });
+    const value = (saved?.value || {}) as Record<string, any>;
+    const appid = String(value.appId || value.appid || this.config.get('WX_MINI_APPID') || '').trim();
+    const secret = String(value.appSecret || value.secret || this.config.get('WX_MINI_SECRET') || '').trim();
+
+    if (!appid || !secret || appid.startsWith('your-') || secret.startsWith('your-')) {
+      throw new BadRequestException('请先在系统配置中填写微信小程序 AppID 和 AppSecret');
+    }
+
+    return { appid, secret };
   }
 }

@@ -16,10 +16,18 @@ request.interceptors.request.use(config => {
 request.interceptors.response.use(
   response => {
     const payload = response.data
-    if (payload && typeof payload === 'object' && 'code' in payload && ![0, 200].includes(Number(payload.code))) {
+    const numericCode =
+      payload &&
+      typeof payload === 'object' &&
+      'code' in payload &&
+      (typeof payload.code === 'number' || /^\d+$/.test(String(payload.code)))
+    if (payload && typeof payload === 'object' && payload.success === false) {
       throw payload
     }
-    return payload?.data ?? payload
+    if (numericCode && ![0, 200].includes(Number(payload.code))) {
+      throw payload
+    }
+    return numericCode && 'data' in payload ? payload.data : payload
   },
   error => {
     const message = error?.response?.data?.message || error?.message || '接口请求失败'

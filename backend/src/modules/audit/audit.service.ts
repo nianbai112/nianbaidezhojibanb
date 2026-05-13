@@ -56,6 +56,8 @@ export class AuditService {
     const { page = 1, pageSize = 20, targetType } = query;
     const skip = (+page - 1) * +pageSize;
     const take = +pageSize;
+    const sourceSkip = targetType ? skip : 0;
+    const sourceTake = targetType ? take : skip + take;
 
     const items: any[] = [];
     let total = 0;
@@ -63,7 +65,8 @@ export class AuditService {
     if (!targetType || targetType === 'post') {
       const posts = await this.prisma.post.findMany({
         where: { auditStatus: 'pending', status: { not: 'DELETED' }, deletedAt: null },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         include: { user: { select: { id: true, nickname: true, avatar: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -74,7 +77,8 @@ export class AuditService {
     if (!targetType || targetType === 'comment') {
       const comments = await this.prisma.comment.findMany({
         where: { auditStatus: 'pending', status: { not: 'deleted' } },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         include: { user: { select: { id: true, nickname: true, avatar: true } }, post: { select: { id: true, title: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -85,7 +89,8 @@ export class AuditService {
     if (!targetType || targetType === 'merchant') {
       const merchants = await this.prisma.merchant.findMany({
         where: { status: 'pending' },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         orderBy: { createdAt: 'desc' },
       });
       items.push(...merchants.map((m: any) => ({ ...m, targetType: 'merchant', targetTitle: m.name })));
@@ -95,7 +100,8 @@ export class AuditService {
     if (!targetType || targetType === 'withdraw') {
       const withdraws = await this.prisma.withdraw.findMany({
         where: { status: 'PENDING' },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         include: { user: { select: { id: true, nickname: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -106,7 +112,8 @@ export class AuditService {
     if (!targetType || targetType === 'city_agent') {
       const apps = await this.prisma.cityAgentApplication.findMany({
         where: { status: 'pending' },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         orderBy: { createdAt: 'desc' },
       });
       items.push(...apps.map((a: any) => ({ ...a, targetType: 'city_agent', targetTitle: a.name || a.contactName })));
@@ -116,7 +123,8 @@ export class AuditService {
     if (!targetType || targetType === 'report') {
       const reports = await this.prisma.report.findMany({
         where: { status: 'pending' },
-        skip, take,
+        skip: sourceSkip,
+        take: sourceTake,
         include: { reporter: { select: { id: true, nickname: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -124,7 +132,13 @@ export class AuditService {
       total += await this.prisma.report.count({ where: { status: 'pending' } });
     }
 
-    return { list: items, total, page: +page, pageSize: +pageSize };
+    const list = targetType
+      ? items
+      : items
+          .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+          .slice(skip, skip + take);
+
+    return { list, total, page: +page, pageSize: +pageSize };
   }
 
   async createAuditRecord(targetType: string, targetId: string, targetTitle?: string, submitterId?: string) {
@@ -182,7 +196,7 @@ export class AuditService {
     } else if (type === 'report') {
       await this.prisma.report.updateMany({
         where: { id: { in: ids.map(String) } },
-        data: { status: approved ? 'handled' : 'rejected', result: remark, handlerId: reviewerId, handledAt: new Date() },
+        data: { status: approved ? 'resolved' : 'rejected', result: remark, handlerId: reviewerId, handledAt: new Date() },
       });
     } else {
       return { code: 400, message: `不支持的审核类型: ${type}` };

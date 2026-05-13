@@ -1,7 +1,7 @@
-import { Controller, Post, Body, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -43,13 +43,44 @@ export class AuthController {
 
   // ============ 后台管理登录（独立 AdminAccount） ============
 
+  /** 获取验证码 */
+  @Get('captcha')
+  @ApiOperation({ summary: '获取登录验证码' })
+  async getCaptcha() {
+    return this.authService.generateCaptcha();
+  }
+
+  /** 新后台静态 UI 兼容：验证码以图片地址方式加载 */
+  @Get('auth/admin/captcha')
+  @ApiOperation({ summary: '获取登录验证码图片（新后台兼容）' })
+  async getAdminCaptchaImage(@Res({ passthrough: true }) res: Response) {
+    const captcha = await this.authService.generateCaptcha();
+    const svgBase64 = captcha.image.replace(/^data:image\/svg\+xml;base64,/, '');
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('X-Captcha-Id', captcha.captchaId);
+    return Buffer.from(svgBase64, 'base64').toString('utf8');
+  }
+
   /** 后台管理员登录 — 限流防暴力破解（默认 30 次/分钟，可通过 ADMIN_AUTH_THROTTLE_LIMIT 调整） */
   @Post('admin/login')
   @ApiOperation({ summary: '后台管理员登录' })
   @UseGuards(ThrottlerGuard)
   @Throttle({ admin_auth: { ttl: 60000, limit: parseInt(process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30', 10) } })
   async adminLogin(
-    @Body() dto: { username: string; password: string },
+    @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string },
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.adminLogin(dto, ip, ua);
+  }
+
+  @Post('auth/admin/login')
+  @ApiOperation({ summary: '后台管理员登录（新后台兼容路径）' })
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ admin_auth: { ttl: 60000, limit: parseInt(process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30', 10) } })
+  async adminLoginCompat(
+    @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string },
     @Req() req: Request,
   ) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
@@ -63,11 +94,25 @@ export class AuthController {
     return this.authService.adminRefreshToken(dto.refreshToken);
   }
 
+  @Post('auth/admin/refresh')
+  @ApiOperation({ summary: '后台刷新 Token（新后台兼容路径）' })
+  async adminRefreshTokenCompat(@Body() dto: { refreshToken: string }) {
+    return this.authService.adminRefreshToken(dto.refreshToken);
+  }
+
   @Post('admin/logout')
   @ApiOperation({ summary: '后台退出登录' })
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   async adminLogout(@CurrentUser('sub') accountId: string) {
+    return this.authService.adminLogout(accountId);
+  }
+
+  @Post('auth/admin/logout')
+  @ApiOperation({ summary: '后台退出登录（新后台兼容路径）' })
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  async adminLogoutCompat(@CurrentUser('sub') accountId: string) {
     return this.authService.adminLogout(accountId);
   }
 
@@ -77,5 +122,20 @@ export class AuthController {
   @ApiBearerAuth()
   async getAdminProfile(@CurrentUser('sub') accountId: string) {
     return this.authService.getAdminProfile(accountId);
+  }
+
+  @Get('auth/admin/profile')
+  @ApiOperation({ summary: '获取当前管理员信息（新后台兼容路径）' })
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  async getAdminProfileCompat(@CurrentUser('sub') accountId: string) {
+    return this.authService.getAdminProfile(accountId);
+  }
+
+  @Post('auth/admin/reset-password')
+  @ApiOperation({ summary: '管理员重置密码（新后台兼容路径）' })
+  async adminResetPasswordCompat(@Body() dto: { username?: string; email?: string; oldPassword?: string; newPassword?: string }) {
+    // 新 UI 忘记密码功能：当前仅做占位，后续可对接邮件发送重置链接
+    return { success: true, message: '密码重置功能暂未开放，请联系超级管理员' };
   }
 }

@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, NotImplementedException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
+import { NotifyService } from '../notify/notify.service';
 import {
   UpdateProfileDto, UpdateSettingsDto, StudentVerifyDto, ListQueryDto,
 } from './dto/user.dto';
@@ -10,6 +11,7 @@ export class UserService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly notifyService: NotifyService,
   ) {}
 
   async getProfile(userId: string) {
@@ -98,6 +100,17 @@ export class UserService {
     const data = this.normalizeStudentVerifyDto(dto);
     const exists = await this.prisma.studentVerify.findUnique({ where: { userId } });
     if (exists && exists.status === 'APPROVED') throw new BadRequestException('已认证');
+
+    // 验证学校ID（如果传了的话）
+    let schoolRecord: any = null;
+    if (data.schoolId) {
+      schoolRecord = await this.prisma.school.findUnique({ where: { id: data.schoolId } });
+      if (!schoolRecord) throw new BadRequestException('学校不存在');
+      if (!schoolRecord.isEnabled) throw new BadRequestException('学校已停用');
+      // 用学校库的名称覆盖，保持一致性
+      data.schoolName = schoolRecord.name;
+    }
+
     const record = exists
       ? await this.prisma.studentVerify.update({ where: { userId }, data: { ...data, status: 'PENDING' } })
       : await this.prisma.studentVerify.create({ data: { userId, ...data } });
@@ -121,8 +134,18 @@ export class UserService {
   }
 
   async getStudentVerifyInfo(userId: string) {
-    const record = await this.prisma.studentVerify.findUnique({ where: { userId } });
-    return { data: record ? this.toMiniStudentVerify(record) : null };
+    const record = await this.prisma.studentVerify.findUnique({
+      where: { userId },
+      include: { school: { select: { id: true, name: true, shortName: true } } },
+    });
+    if (!record) return { data: null };
+    const result: any = this.toMiniStudentVerify(record);
+    // 如果有学校记录，补充学校信息
+    if ((record as any).school) {
+      result.school_name = (record as any).school.name;
+      result.school_short_name = (record as any).school.shortName || '';
+    }
+    return { data: result };
   }
 
   async getUniversities(name: string, page: number, size: number) {
@@ -151,6 +174,7 @@ export class UserService {
     const realName = String(dto.realName || dto.name || '').trim();
     const studentId = String(dto.studentId || dto.student_id || '').trim();
     const schoolName = String(dto.schoolName || dto.university || '').trim();
+    const schoolId = String(dto.schoolId || dto.school_id || '').trim() || null;
     const cardImage = String(dto.cardImage || dto.photo_url || '').trim();
     const major = dto.major?.trim();
     const grade = dto.grade?.trim();
@@ -160,7 +184,7 @@ export class UserService {
     if (!schoolName) throw new BadRequestException('请选择学校');
     if (!cardImage) throw new BadRequestException('请上传学生证照片');
 
-    return { realName, studentId, schoolName, major, grade, cardImage };
+    return { realName, studentId, schoolName, schoolId, major, grade, cardImage };
   }
 
   private toMiniStudentVerify(record: any) {
@@ -169,6 +193,8 @@ export class UserService {
       student_id: record.studentId,
       name: record.realName,
       university: record.schoolName,
+      school_id: record.schoolId || '',
+      schoolId: record.schoolId || '',
       major: record.major || '',
       grade: record.grade || '',
       photo_url: record.cardImage || '',
@@ -230,6 +256,26 @@ export class UserService {
       create: { followerId: userId, followingId: targetId },
       update: {},
     });
+
+    // 发送关注通知
+    try {
+      const follower = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { nickname: true },
+      });
+      await this.notifyService.createAndDispatch({
+        userId: targetId,
+        type: 'FOLLOW',
+        scene: 'user_follow',
+        title: '你有新粉丝',
+        content: `${follower?.nickname || '用户'} 关注了你`,
+        data: { fromUserId: userId },
+        linkType: 'user',
+        linkValue: userId,
+        channelMask: { inApp: true, websocket: true },
+      });
+    } catch {}
+
     return { success: true };
   }
 

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
@@ -194,13 +194,13 @@ export class NetDiskAdminService {
   // ======================== 收益配置 ========================
 
   async getProfitConfig(regionId: string) {
-    if (!regionId) throw new Error('regionId is required');
+    if (!regionId) throw new BadRequestException('regionId is required');
     const config = await this.prisma.netDiskProfitConfig.findUnique({ where: { regionId } });
     return config || { regionId, platformCommission: 0, regionCommission: 0, authorShare: 1 };
   }
 
   async upsertProfitConfig(regionId: string, dto: any) {
-    if (!regionId) throw new Error('regionId is required');
+    if (!regionId) throw new BadRequestException('regionId is required');
     return this.prisma.netDiskProfitConfig.upsert({
       where: { regionId },
       create: { regionId, ...dto },

@@ -1,66 +1,280 @@
 <template>
   <div class="page-shell">
     <GlassPageHeader title="运营控制台" subtitle="实时掌握平台运营数据，智能决策，驱动业务增长">
-      <template #actions><el-button :icon="Calendar">2025-05-19</el-button><el-button :icon="Refresh">刷新</el-button></template>
+      <template #actions><el-button :icon="Calendar">{{ today }}</el-button><el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button></template>
     </GlassPageHeader>
     <StatGrid :items="stats" />
-    <div class="dashboard-grid">
-      <div class="glass-card span-2"><div class="card-header"><div class="card-title">订单趋势（近7天）</div><el-select model-value="订单数" style="width:110px"><el-option label="订单数" value="订单数" /></el-select></div><div class="card-body"><div class="chart-placeholder"><div class="chart-line"></div><div class="axis">05-13　　05-14　　05-15　　05-16　　05-17　　05-18　　05-19</div></div></div></div>
-      <div class="glass-card"><div class="card-header"><div class="card-title">订单来源分布</div></div><div class="card-body"><div class="donut" data-center="总订单数\A 17,892"></div><div class="legend"><p><i></i>小程序 42.35% 7,574</p><p><i></i>APP 28.41% 5,079</p><p><i></i>H5 15.32% 2,740</p></div></div></div>
-      <div class="glass-card"><div class="card-header"><div class="card-title">待办事项</div><el-button link type="primary">全部(6) →</el-button></div><div class="card-body"><div class="side-list"><div class="side-item" v-for="item in todos" :key="item.title"><div class="side-left"><div class="side-icon"><el-icon><component :is="item.icon" /></el-icon></div><div><div class="name-main">{{ item.title }}</div><div class="name-sub">{{ item.desc }}</div></div></div><div class="side-num">{{ item.value }}</div></div></div></div></div>
-      <div class="glass-card"><div class="card-header"><div class="card-title">区域运营排行</div></div><div class="card-body"><table class="soft-table"><tbody><tr v-for="(r,i) in regionRank" :key="r.name"><td>{{ i+1 }}</td><td><b>{{ r.name }}</b></td><td>{{ r.orders }}</td><td class="money">{{ r.gmv }}</td><td style="color:#16a34a">{{ r.growth }}</td></tr></tbody></table></div></div>
-      <div class="glass-card span-2"><div class="card-header"><div class="card-title">商家销售排行（今日）</div><el-button link type="primary">更多 →</el-button></div><div class="card-body"><table class="soft-table"><tbody><tr v-for="(m,i) in merchantRank" :key="m.name"><td>{{ i+1 }}</td><td><div class="user-line"><div class="avatar store">{{ m.name.slice(0,1) }}</div><b>{{ m.name }}</b></div></td><td>{{ m.orders }} 单</td><td class="money">{{ m.gmv }}</td></tr></tbody></table></div></div>
-      <div class="glass-card"><div class="card-header"><div class="card-title">快捷入口</div></div><div class="card-body"><div class="quick-grid"><button v-for="q in quick" :key="q"><el-icon><Operation /></el-icon>{{ q }}</button></div></div></div>
-    </div>
+
+    <section class="dashboard-primary">
+      <div class="glass-card chart-main">
+        <div class="card-header">
+          <div class="card-title">订单趋势（近7天）</div>
+          <el-tag v-if="trends.length" size="small" effect="plain">真实订单</el-tag>
+        </div>
+        <div class="card-body">
+          <el-empty v-if="!trends.length" description="暂无真实趋势数据" />
+          <div v-else class="trend-chart">
+            <div class="trend-summary">
+              <div>
+                <span>近 7 天订单</span>
+                <b>{{ trendTotal.count }} 单</b>
+              </div>
+              <div>
+                <span>近 7 天 GMV</span>
+                <b>¥{{ trendTotal.amount.toLocaleString() }}</b>
+              </div>
+            </div>
+            <svg class="trend-svg" viewBox="0 0 640 220" preserveAspectRatio="none" role="img">
+              <defs>
+                <linearGradient id="trendFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#2563eb" stop-opacity=".22" />
+                  <stop offset="100%" stop-color="#2563eb" stop-opacity="0" />
+                </linearGradient>
+              </defs>
+              <path :d="trendAreaPath" fill="url(#trendFill)" />
+              <polyline :points="trendPolyline" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+              <g v-for="p in trendPoints" :key="p.date">
+                <circle :cx="p.x" :cy="p.y" r="4.5" fill="#fff" stroke="#2563eb" stroke-width="3" />
+              </g>
+            </svg>
+            <div class="trend-axis">
+              <span v-for="p in trendPoints" :key="p.date">{{ p.label }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="glass-card">
+        <div class="card-header"><div class="card-title">订单来源分布</div></div>
+        <div class="card-body">
+          <el-empty v-if="!orderSources.length" description="暂无真实来源数据" />
+          <div v-else class="source-list">
+            <div v-for="s in orderSources" :key="s.name" class="source-item">
+              <div class="source-row"><b>{{ s.name }}</b><span>{{ s.count }} 单</span></div>
+              <el-progress :percentage="Number(s.percentage || 0)" :show-text="false" :stroke-width="8" />
+              <div class="source-percent">{{ s.percentage }}%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="glass-card">
+        <div class="card-header"><div class="card-title">待办事项</div></div>
+        <div class="card-body">
+          <el-empty v-if="!todoItems.length" description="暂无待办事项" />
+          <div v-else class="side-list">
+            <div class="side-item" v-for="item in todoItems" :key="item.title">
+              <div class="side-left">
+                <div class="side-icon"><el-icon><component :is="item.icon" /></el-icon></div>
+                <div><div class="name-main">{{ item.title }}</div><div class="name-sub">{{ item.desc }}</div></div>
+              </div>
+              <div class="side-num">{{ item.value }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashboard-secondary">
+      <div class="glass-card">
+        <div class="card-header"><div class="card-title">区域运营排行</div></div>
+        <div class="card-body">
+          <el-empty v-if="!regionRank.length" description="暂无区域数据" />
+          <table v-else class="soft-table"><tbody>
+            <tr v-for="(r,i) in regionRank" :key="r.name">
+              <td>{{ i+1 }}</td><td><b>{{ r.name }}</b></td><td>{{ r.orders }}</td><td class="money">{{ r.gmv }}</td><td style="color:#16a34a">{{ r.growth }}</td>
+            </tr>
+          </tbody></table>
+        </div>
+      </div>
+      <div class="glass-card">
+        <div class="card-header"><div class="card-title">商家销售排行（今日）</div></div>
+        <div class="card-body">
+          <el-empty v-if="!merchantRank.length" description="暂无今日销售数据" />
+          <table v-else class="soft-table"><tbody>
+            <tr v-for="(m,i) in merchantRank" :key="m.name">
+              <td>{{ i+1 }}</td><td><div class="user-line"><div class="avatar store">{{ m.name.slice(0,1) }}</div><b>{{ m.name }}</b></div></td>
+              <td>{{ m.orders }} 单</td><td class="money">¥{{ Number(m.gmv||0).toLocaleString() }}</td>
+            </tr>
+          </tbody></table>
+        </div>
+      </div>
+      <div class="glass-card">
+        <div class="card-header"><div class="card-title">快捷入口</div></div>
+        <div class="card-body">
+          <div class="quick-grid">
+            <button v-for="q in quick" :key="q" @click="goQuick(q)"><el-icon><Operation /></el-icon>{{ q }}</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
-import { Calendar, Refresh, Operation } from '@element-plus/icons-vue'
+import { Calendar, Refresh, Operation, Shop, Goods, Warning, ChatDotRound, Money, User, Document } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { fetchDashboard } from '@/api/admin'
 
-const stats = ref<any[]>([
-  {label:'今日订单',value:'2,458',delta:'+12.6%',tone:'blue',icon:'Goods'}, {label:'今日GMV',value:'¥78,945.32',delta:'+18.7%',tone:'purple',icon:'Wallet'}, {label:'活跃用户',value:'12,532',delta:'+8.3%',tone:'green',icon:'User'}, {label:'待审核',value:156,delta:'-5.4%',down:true,tone:'orange',icon:'Document'}, {label:'新增商家',value:23,delta:'+21.1%',tone:'cyan',icon:'Shop'}, {label:'待处理退款',value:38,delta:'-15.2%',down:true,tone:'red',icon:'Money'}
-])
-const todos = [{title:'商家入驻审核',desc:'等待审核的商家申请',value:23,icon:'Shop'},{title:'商品审核',desc:'等待审核的商品',value:45,icon:'Goods'},{title:'订单异常处理',desc:'需要处理的异常订单',value:12,icon:'Warning'},{title:'用户举报',desc:'待处理的用户举报',value:8,icon:'ChatDotRound'},{title:'退款处理',desc:'待处理的退款申请',value:38,icon:'Money'}]
-const regionRank = ref([{name:'东校区',orders:'4,568',gmv:'¥185,432.21',growth:'+12.6%'},{name:'西校区',orders:'3,782',gmv:'¥152,341.32',growth:'+8.3%'},{name:'南校区',orders:'2,945',gmv:'¥118,742.11',growth:'+15.7%'},{name:'北校区',orders:'2,156',gmv:'¥85,654.32',growth:'+2.1%'}])
-const merchantRank = [{name:'蜜雪冰城（东校区店）',orders:256,gmv:'¥6,584.21'},{name:'塔斯汀·中国汉堡',orders:198,gmv:'¥5,432.11'},{name:'瑞幸咖啡（西校区店）',orders:176,gmv:'¥4,321.34'},{name:'杨国福麻辣烫',orders:155,gmv:'¥3,654.21'}]
-const quick = ['发布公告','优惠券管理','创建活动','数据报表','用户管理','商家管理','订单查询','系统设置']
+const router = useRouter()
+const loading = ref(false)
+const today = new Date().toISOString().slice(0, 10)
 
-onMounted(async () => {
+const stats = ref<any[]>([
+  {label:'今日订单',value:0,delta:'-',tone:'blue',icon:'Goods'},
+  {label:'今日GMV',value:'¥0',delta:'-',tone:'purple',icon:'Wallet'},
+  {label:'活跃用户',value:0,delta:'-',tone:'green',icon:'User'},
+  {label:'待审核',value:0,delta:'-',tone:'orange',icon:'Document'},
+  {label:'新增商家',value:0,delta:'-',tone:'cyan',icon:'Shop'},
+  {label:'待处理退款',value:0,delta:'-',tone:'red',icon:'Money'}
+])
+const trends = ref<any[]>([])
+const orderSources = ref<any[]>([])
+const todoItems = ref<any[]>([])
+const regionRank = ref<any[]>([])
+const merchantRank = ref<any[]>([])
+
+const trendTotal = computed(() => ({
+  count: trends.value.reduce((sum, item) => sum + Number(item.count || 0), 0),
+  amount: trends.value.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+}))
+
+const trendPoints = computed(() => {
+  const rows = trends.value.slice(0, 7)
+  const max = Math.max(1, ...rows.map((item) => Number(item.count || 0)))
+  const width = 640
+  const height = 220
+  const paddingX = 24
+  const paddingY = 24
+  const innerW = width - paddingX * 2
+  const innerH = height - paddingY * 2
+  return rows.map((item, index) => {
+    const value = Number(item.count || 0)
+    const x = paddingX + (rows.length === 1 ? innerW / 2 : (innerW / (rows.length - 1)) * index)
+    const y = paddingY + innerH - (value / max) * innerH
+    return {
+      x,
+      y,
+      date: item.date,
+      label: String(item.date || '').slice(5),
+      value
+    }
+  })
+})
+
+const trendPolyline = computed(() => trendPoints.value.map((p) => `${p.x},${p.y}`).join(' '))
+const trendAreaPath = computed(() => {
+  const points = trendPoints.value
+  if (!points.length) return ''
+  const first = points[0]
+  const last = points[points.length - 1]
+  return `M ${first.x} 220 L ${points.map((p) => `${p.x} ${p.y}`).join(' L ')} L ${last.x} 220 Z`
+})
+
+const quick = ['优惠券管理','创建活动','用户管理','商家管理','订单查询','系统设置']
+
+function goQuick(name: string) {
+  const map: Record<string, string> = { '优惠券管理':'/marketing/coupons', '创建活动':'/marketing/activities', '用户管理':'/user/list', '商家管理':'/merchant/list', '订单查询':'/order/center', '系统设置':'/system/settings' }
+  router.push(map[name] || '/dashboard')
+}
+
+async function loadData() {
+  loading.value = true
   try {
     const data: any = await fetchDashboard()
-    const s = data.stats || {}
+    const d = data.stats || {}
     stats.value = [
-      {label:'今日订单', value:s.todayOrders ?? s.orderCount ?? '0', delta:'+0.0%', tone:'blue', icon:'Goods'},
-      {label:'今日GMV', value:`¥${Number(s.todayGmv ?? s.gmv ?? 0).toLocaleString()}`, delta:'+0.0%', tone:'purple', icon:'Wallet'},
-      {label:'活跃用户', value:s.activeUsers ?? s.userCount ?? '0', delta:'+0.0%', tone:'green', icon:'User'},
-      {label:'待审核', value:s.pendingAudit ?? s.pendingCount ?? 0, delta:'待处理', tone:'orange', icon:'Document'},
-      {label:'新增商家', value:s.newMerchants ?? s.merchantCount ?? 0, delta:'+0.0%', tone:'cyan', icon:'Shop'},
-      {label:'待处理退款', value:s.pendingRefunds ?? 0, delta:'待处理', tone:'red', icon:'Money'}
+      {label:'今日订单', value:d.todayOrders ?? 0, delta:'-', tone:'blue', icon:'Goods'},
+      {label:'今日GMV', value:`¥${Number(d.todayGmv ?? 0).toLocaleString()}`, delta:'-', tone:'purple', icon:'Wallet'},
+      {label:'活跃用户', value:d.activeUsers ?? 0, delta:'-', tone:'green', icon:'User'},
+      {label:'待审核', value:d.pendingCount ?? 0, delta:'-', tone:'orange', icon:'Document'},
+      {label:'新增商家', value:d.newMerchants ?? 0, delta:'-', tone:'cyan', icon:'Shop'},
+      {label:'待处理退款', value:d.pendingRefunds ?? 0, delta:'-', tone:'red', icon:'Money'}
     ]
-    if (data.regions?.length) {
-      regionRank.value = data.regions.slice(0, 5).map((r: any) => ({
-        name: r.name || r.regionName || '-',
-        orders: Number(r.orderCount || r.orders || 0).toLocaleString(),
-        gmv: `¥${Number(r.gmv || r.amount || 0).toLocaleString()}`,
-        growth: r.growth || '+0.0%'
-      }))
+    trends.value = (data.trends || []).slice(0, 7)
+    regionRank.value = (data.regions || []).slice(0, 5).map((r: any) => ({
+      name: r.name || r.regionName || '-',
+      orders: Number(r.orderCount || r.orders || 0).toLocaleString(),
+      gmv: `¥${Number(r.gmv || r.amount || 0).toLocaleString()}`,
+      growth: r.growth || '-'
+    }))
+    orderSources.value = (data.orderSources?.sources || []).slice(0, 4)
+    const todos = data.todos
+    if (todos) {
+      const items: any[] = []
+      if (todos.pendingCerts > 0) items.push({ title: '学生认证审核', desc: '等待审核的学生认证', value: todos.pendingCerts, icon: User })
+      if (todos.pendingMerchants > 0) items.push({ title: '商家入驻审核', desc: '等待审核的商家申请', value: todos.pendingMerchants, icon: Shop })
+      if (todos.pendingProducts > 0) items.push({ title: '商品待审核', desc: '等待审核的商品', value: todos.pendingProducts, icon: Goods })
+      if (todos.abnormalOrders > 0) items.push({ title: '异常订单', desc: '需要处理的异常订单', value: todos.abnormalOrders, icon: Warning })
+      if (todos.pendingReports > 0) items.push({ title: '用户举报', desc: '待处理的用户举报', value: todos.pendingReports, icon: ChatDotRound })
+      if (todos.pendingRefunds > 0) items.push({ title: '退款待处理', desc: '待处理的退款申请', value: todos.pendingRefunds, icon: Money })
+      if (todos.pendingWithdraws > 0) items.push({ title: '提现审核', desc: '等待财务审核的提现', value: todos.pendingWithdraws, icon: Money })
+      if (todos.pendingPosts > 0) items.push({ title: '内容待审', desc: '等待审核的帖子内容', value: todos.pendingPosts, icon: Document })
+      if (todos.pendingComments > 0) items.push({ title: '评论待审', desc: '等待审核的评论内容', value: todos.pendingComments, icon: ChatDotRound })
+      todoItems.value = items
     }
-  } catch {
-    // Dashboard keeps its designed preview data when the optional stats endpoint is unavailable.
+    const rank = data.merchantRank?.rank || []
+    merchantRank.value = rank.map((m: any) => ({ name: m.name, orders: m.orders || 0, gmv: m.gmv || 0 }))
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载仪表盘数据失败')
+    stats.value = [
+      {label:'今日订单',value:0,delta:'-',tone:'blue',icon:'Goods'},
+      {label:'今日GMV',value:'¥0',delta:'-',tone:'purple',icon:'Wallet'},
+      {label:'活跃用户',value:0,delta:'-',tone:'green',icon:'User'},
+      {label:'待审核',value:0,delta:'-',tone:'orange',icon:'Document'},
+      {label:'新增商家',value:0,delta:'-',tone:'cyan',icon:'Shop'},
+      {label:'待处理退款',value:0,delta:'-',tone:'red',icon:'Money'}
+    ]
+    trends.value = []
+    regionRank.value = []
+    orderSources.value = []
+    todoItems.value = []
+    merchantRank.value = []
+  } finally {
+    loading.value = false
   }
-})
+}
+
+onMounted(() => loadData())
 </script>
 <style scoped lang="scss">
-.dashboard-grid { display:grid; grid-template-columns:1.3fr 1fr .95fr; gap:18px; align-items:start; }
-.span-2 { grid-column:span 2; }
-.axis { position:absolute; left:30px; bottom:16px; color:#94a3b8; font-size:12px; }
-.legend p { color:#64748b; font-weight:800; font-size:13px; }
-.legend i { display:inline-block; width:8px; height:8px; border-radius:50%; background:#1f6fff; margin-right:8px; }
+.dashboard-primary {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.chart-main { grid-column: span 1; }
+.dashboard-secondary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.trend-chart { min-height: 282px; }
+.trend-summary { display:flex; gap:14px; margin-bottom:12px; }
+.trend-summary div { flex:1; padding:12px 14px; border-radius:14px; background:rgba(248,250,252,.9); border:1px solid rgba(226,232,240,.8); }
+.trend-summary span { display:block; color:#64748b; font-size:12px; font-weight:850; }
+.trend-summary b { display:block; margin-top:6px; color:#0f172a; font-size:22px; font-weight:950; }
+.trend-svg { width:100%; height:220px; display:block; border-radius:16px; background:linear-gradient(180deg,rgba(248,250,252,.9),rgba(255,255,255,.65)); border:1px solid rgba(226,232,240,.8); }
+.trend-axis { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-top:10px; color:#64748b; font-size:12px; font-weight:800; text-align:center; }
+.source-list { display:grid; gap:14px; }
+.source-item { padding:12px; border-radius:14px; background:rgba(248,250,252,.86); border:1px solid rgba(226,232,240,.78); }
+.source-row { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; color:#334155; font-size:13px; }
+.source-row b { color:#0f172a; }
+.source-percent { margin-top:6px; color:#64748b; font-size:12px; font-weight:900; }
 .quick-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-.quick-grid button { border:0; min-height:78px; border-radius:17px; background:rgba(239,246,255,.76); color:#1f6fff; font-weight:900; display:grid; place-items:center; gap:6px; cursor:pointer; }
-@media(max-width:1200px){ .dashboard-grid{ grid-template-columns:1fr; } .span-2{ grid-column:auto; } }
+.quick-grid button { border:0; min-height:68px; border-radius:17px; background:rgba(239,246,255,.76); color:#1f6fff; font-weight:900; display:grid; place-items:center; gap:6px; cursor:pointer; transition:.15s ease; }
+.quick-grid button:hover { background:rgba(219,234,254,.85); }
+@media(max-width:1200px){
+  .dashboard-primary{ grid-template-columns:1fr; }
+  .dashboard-secondary{ grid-template-columns:1fr; }
+}
+@media(min-width:1201px) and (max-width:1400px){
+  .dashboard-primary{ grid-template-columns:1.4fr 1fr; }
+  .dashboard-primary .glass-card:last-child{ grid-column:1/-1; }
+  .dashboard-secondary{ grid-template-columns:1fr 1fr; }
+  .dashboard-secondary .glass-card:last-child{ grid-column:1/-1; }
+}
 </style>

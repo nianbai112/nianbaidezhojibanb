@@ -78,6 +78,10 @@ export class RedisService {
     await this.redis.zrem(key, member);
   }
 
+  async flushdb(): Promise<void> {
+    await this.redis.flushdb();
+  }
+
   getClient(): Redis {
     return this.redis;
   }

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { getProfile, loginAdmin } from '@/api/admin'
+import { getProfile, loginAdmin, logoutAdmin } from '@/api/admin'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -20,7 +20,14 @@ export const useAuthStore = defineStore('auth', {
       this.user.role = profile?.roleName || profile?.role?.name || this.user.role
       return profile
     },
-    logout() {
+    async logout() {
+      try {
+        if (this.token || localStorage.getItem('LM_ADMIN_TOKEN') || localStorage.getItem('admin_token')) {
+          await logoutAdmin()
+        }
+      } catch {
+        // 即使服务端退出接口失败，也必须允许管理员清理本地登录态。
+      }
       this.token = ''
       localStorage.removeItem('LM_ADMIN_TOKEN')
       localStorage.removeItem('admin_token')

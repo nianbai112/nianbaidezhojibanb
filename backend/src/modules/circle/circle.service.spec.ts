@@ -1,5 +1,4 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { NotImplementedException } from "@nestjs/common";
 import { CircleService } from "./circle.service";
 import { PrismaService } from "../../common/services/prisma.service";
 import { MallService } from "../mall/mall.service";
@@ -175,6 +174,7 @@ describe("MallService - 未实现功能抛出异常", () => {
   });
 
   it("addFavorite 应正常落库（非假成功）", async () => {
+    mockPrisma.mallProduct.findUnique.mockResolvedValue({ id: "p-1", name: "商品" });
     mockPrisma.favorite.findFirst.mockResolvedValue(null);
     mockPrisma.favorite.create.mockResolvedValue({
       id: "fav-1",
@@ -185,7 +185,7 @@ describe("MallService - 未实现功能抛出异常", () => {
     });
     expect(result.id).toBe("fav-1");
     expect(mockPrisma.favorite.create).toHaveBeenCalledWith({
-      data: { userId: "user-1", targetType: "product", targetId: "p-1" },
+      data: { userId: "user-1", targetType: "mall_product", targetId: "p-1" },
     });
   });
 
@@ -194,8 +194,8 @@ describe("MallService - 未实现功能抛出异常", () => {
       { id: "fav-1", targetId: "p-1" },
     ]);
     mockPrisma.favorite.count.mockResolvedValue(1);
-    mockPrisma.product.findMany.mockResolvedValue([
-      { id: "p-1", name: "商品" },
+    mockPrisma.mallProduct.findMany.mockResolvedValue([
+      { id: "p-1", name: "商品", skus: [] },
     ]);
     const result = await mallService.getFavorites("user-1", {});
     expect(result.total).toBe(1);

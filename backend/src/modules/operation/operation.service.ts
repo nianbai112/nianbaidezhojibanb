@@ -1,9 +1,160 @@
-import { Injectable, NotFoundException, BadRequestException, NotImplementedException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
 export class OperationService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private getNoteSettingConfigKey(regionId: string) {
+    return `content.note_settings.${regionId}`;
+  }
+
+  private getNoteSettingDefaults(regionId = "") {
+    return {
+      regionId,
+      enable_region_posting: 1,
+      min_length: 1,
+      max_length: 5000,
+      enable_note_title: 0,
+      title_min_length: 0,
+      title_max_length: 50,
+      publish_interval_seconds: 0,
+      allow_images: 1,
+      max_images_per_note: 9,
+      allow_download_image: 0,
+      allow_videos: 1,
+      allow_audio: 1,
+      allow_pure_text_notes: 1,
+      image_compression_ratio: 0.8,
+      enable_qrcode_filter: 0,
+      qrcode_replace_image_url: "",
+      qrcode_whitelist_user_ids: [],
+      enable_topics: 1,
+      max_topics_per_note: 3,
+      allow_anonymous_notes: 0,
+      anonymous_default_name: "匿名用户",
+      enable_note_location: 0,
+      enable_note_group: 0,
+      enable_note_top: 0,
+      enable_co_create_note: 0,
+      enable_vote: 0,
+      note_approval_type: "manual",
+      require_phone_before_publish: 0,
+      require_student_auth_before_publish: 0,
+      daily_publish_limit: 10,
+      default_note_prompt: "",
+      content_declaration: "发布校园生活、经验和新鲜事",
+      allow_comments: 1,
+      max_comments: 100,
+      comment_length_limit: 500,
+      allow_anonymous_comments: 0,
+      allow_author_pin_comment: 0,
+      allow_manager_delete_comment: 1,
+      comment_approval_type: "manual",
+      random_comment_enabled: 0,
+      enable_ads: 0,
+      card_ad_content: "",
+      waterfall_ad_content: "",
+      note_list_style: "waterfall",
+      note_sort_strategy: "latest",
+      allow_edit: 1,
+      editable_hours: 24,
+      allow_delete: 1,
+      deletable_hours: 72,
+      manager_can_edit_note: 1,
+      manager_can_delete_note: 1,
+      show_view_count: 1,
+      view_count_mode: "unlimited",
+      enable_report: 1,
+      allow_friend_share: 1,
+      enable_share_poster: 0,
+      enable_comment_qrcode_filter: 0,
+      enable_squat: 1,
+    };
+  }
+
+  private normalizeNoteSettingPayload(payload: any, regionId: string) {
+    const defaults = this.getNoteSettingDefaults(regionId);
+    const source = { ...(payload || {}) };
+    if (source.allowTextNote !== undefined) source.allow_pure_text_notes = source.allowTextNote ? 1 : 0;
+    if (source.allowImageNote !== undefined) source.allow_images = source.allowImageNote ? 1 : 0;
+    if (source.allowVideoNote !== undefined) source.allow_videos = source.allowVideoNote ? 1 : 0;
+    const aliasPairs: Array<[string, string]> = [
+      ["allow_image_download", "allow_download_image"],
+      ["note_publish_interval_seconds", "publish_interval_seconds"],
+      ["max_notes_per_day", "daily_publish_limit"],
+      ["enable_note_qrcode_filter", "enable_qrcode_filter"],
+      ["blocked_image_replacement_url", "qrcode_replace_image_url"],
+      ["force_bind_phone", "require_phone_before_publish"],
+      ["force_student_auth", "require_student_auth_before_publish"],
+      ["enable_random_comment", "random_comment_enabled"],
+      ["edit_time_limit", "editable_hours"],
+      ["delete_time_limit", "deletable_hours"],
+      ["allow_manager_edit", "manager_can_edit_note"],
+      ["allow_manager_delete_note", "manager_can_delete_note"],
+      ["note_sorting_strategy", "note_sort_strategy"],
+    ];
+    for (const [alias, key] of aliasPairs) {
+      if (source[key] === undefined && source[alias] !== undefined) source[key] = source[alias];
+    }
+    const merged: any = { ...defaults, ...source, regionId };
+    for (const key of [
+      "enable_region_posting", "enable_note_title", "allow_images", "allow_download_image", "allow_videos",
+      "allow_audio", "allow_pure_text_notes", "enable_qrcode_filter", "enable_topics", "allow_anonymous_notes",
+      "enable_note_location", "enable_note_group", "enable_note_top", "enable_co_create_note", "enable_vote",
+      "require_phone_before_publish", "require_student_auth_before_publish", "allow_comments",
+      "allow_anonymous_comments", "allow_author_pin_comment", "allow_manager_delete_comment", "random_comment_enabled",
+      "enable_ads", "allow_edit", "allow_delete", "manager_can_edit_note", "manager_can_delete_note",
+      "show_view_count", "enable_report", "allow_friend_share", "enable_share_poster", "enable_comment_qrcode_filter", "enable_squat",
+    ]) {
+      merged[key] = merged[key] ? 1 : 0;
+    }
+    const numericKeys = [
+      "min_length",
+      "max_length",
+      "title_min_length",
+      "title_max_length",
+      "publish_interval_seconds",
+      "max_images_per_note",
+      "max_topics_per_note",
+      "daily_publish_limit",
+      "max_comments",
+      "comment_length_limit",
+      "editable_hours",
+      "deletable_hours",
+    ];
+    for (const key of numericKeys) {
+      const n = Number(merged[key]);
+      merged[key] = Number.isFinite(n) ? n : defaults[key as keyof typeof defaults];
+    }
+    const ratio = Number(merged.image_compression_ratio);
+    merged.image_compression_ratio = Number.isFinite(ratio) ? Math.min(Math.max(ratio, 0.1), 1) : 0.8;
+    if (typeof merged.qrcode_whitelist_user_ids === "string") {
+      merged.qrcode_whitelist_user_ids = merged.qrcode_whitelist_user_ids
+        .split(/[,\n]/)
+        .map((item: string) => item.trim())
+        .filter(Boolean);
+    }
+    return {
+      ...merged,
+      allow_image_download: !!merged.allow_download_image,
+      note_publish_interval_seconds: merged.publish_interval_seconds,
+      max_notes_per_day: merged.daily_publish_limit,
+      enable_note_qrcode_filter: !!merged.enable_qrcode_filter,
+      blocked_image_replacement_url: merged.qrcode_replace_image_url,
+      force_bind_phone: !!merged.require_phone_before_publish,
+      force_student_auth: !!merged.require_student_auth_before_publish,
+      enable_random_comment: !!merged.random_comment_enabled,
+      edit_time_limit: merged.editable_hours,
+      delete_time_limit: merged.deletable_hours,
+      allow_manager_edit: !!merged.manager_can_edit_note,
+      allow_manager_delete_note: !!merged.manager_can_delete_note,
+      note_sorting_strategy: merged.note_sort_strategy,
+      allowTextNote: !!merged.allow_pure_text_notes,
+      allowImageNote: !!merged.allow_images,
+      allowVideoNote: !!merged.allow_videos,
+    };
+  }
 
   // ========== 优惠券 ==========
   async getAvailableCoupons(userId: string, query: any) {
@@ -137,6 +288,21 @@ export class OperationService {
     return this.prisma.punchInLocation.findUnique({ where: { id: locationId } });
   }
 
+  async updatePunchInLocation(locationId: string, dto: any) {
+    return this.prisma.punchInLocation.update({
+      where: { id: locationId },
+      data: {
+        name: dto.name,
+        description: dto.description || dto.desc,
+        address: dto.address,
+        latitude: dto.latitude === undefined ? undefined : Number(dto.latitude),
+        longitude: dto.longitude === undefined ? undefined : Number(dto.longitude),
+        coverImage: dto.coverImage || dto.cover || dto.cover_url,
+        status: dto.status,
+      },
+    });
+  }
+
   async getPunchInComments(locationId: string, query: any) {
     const { page = 1, limit = 10 } = query;
     return this.prisma.comment.findMany({
@@ -163,6 +329,17 @@ export class OperationService {
 
   async addWishlist(locationId: string, userId: string, dto: any) {
     return this.prisma.punchInWishlist.create({ data: { userId, locationId, content: dto.content } });
+  }
+
+  async addWishlistFromBody(userId: string, dto: any) {
+    const locationId = dto.locationId || dto.location_id;
+    if (!locationId) throw new BadRequestException('缺少打卡点ID');
+    return this.addWishlist(String(locationId), userId, dto);
+  }
+
+  async removeWishlist(locationId: string, userId: string) {
+    await this.prisma.punchInWishlist.deleteMany({ where: { userId, locationId } });
+    return { success: true };
   }
 
   // ========== 评分 ==========
@@ -193,13 +370,44 @@ export class OperationService {
     return this.prisma.userRating.create({ data: { userId, itemId: dto.item_id, score: dto.score, content: dto.content, images: dto.images } });
   }
 
+  async createRatingItem(userId: string, dto: any) {
+    const categoryId = dto.categoryId || dto.category_id;
+    const name = dto.name || dto.title;
+    if (!categoryId) throw new BadRequestException('缺少评分分类ID');
+    if (!name) throw new BadRequestException('缺少评分对象名称');
+    return this.prisma.ratingItem.create({
+      data: {
+        categoryId,
+        regionId: dto.regionId || dto.region_id,
+        name,
+        cover: dto.cover || dto.image || dto.image_url,
+        description: dto.description || dto.desc,
+        status: dto.status || 'enabled',
+      },
+    });
+  }
+
   async getRatingReplies(query: any) {
     const { rating_id, page = 1, limit = 10 } = query;
-    return this.prisma.userRating.findMany({
-      where: { itemId: rating_id },
+    return this.prisma.ratingReply.findMany({
+      where: rating_id ? { ratingId: rating_id } : {},
       skip: (page - 1) * limit,
       take: Number(limit),
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createRatingReply(userId: string, dto: any) {
+    const ratingId = dto.ratingId || dto.rating_id;
+    if (!ratingId) throw new BadRequestException('缺少评分ID');
+    if (!dto.content) throw new BadRequestException('回复内容不能为空');
+    return this.prisma.ratingReply.create({
+      data: {
+        ratingId,
+        userId,
+        content: dto.content,
+        status: dto.status || 'approved',
+      },
     });
   }
 
@@ -226,6 +434,11 @@ export class OperationService {
 
   async favoriteNetDisk(resourceId: string, userId: string) {
     return this.prisma.netDiskFavorite.upsert({ where: { userId_resourceId: { userId, resourceId } }, create: { userId, resourceId }, update: {} });
+  }
+
+  async unfavoriteNetDisk(resourceId: string, userId: string) {
+    await this.prisma.netDiskFavorite.deleteMany({ where: { userId, resourceId } });
+    return { success: true };
   }
 
   async getNetDiskFavorites(userId: string, query: any) {
@@ -277,6 +490,7 @@ export class OperationService {
   // ========== 匿名身份 ==========
   async getRandomAnonymous() {
     const count = await this.prisma.anonymousIdentity.count();
+    if (!count) return null;
     const skip = Math.floor(Math.random() * count);
     return this.prisma.anonymousIdentity.findFirst({ skip });
   }
@@ -332,7 +546,32 @@ export class OperationService {
     return this.prisma.contact.create({ data: dto });
   }
 
+  async updateContact(id: string, userId: string, dto: any) {
+    return this.prisma.contact.update({ where: { id }, data: dto });
+  }
+
+  async deleteContact(id: string, userId: string) {
+    await this.prisma.contact.delete({ where: { id } });
+    return { success: true };
+  }
+
   async getMyContacts(userId: string, query: any) {
+    const { region_id } = query;
+    if (region_id) {
+      const region = await this.prisma.region.findUnique({
+        where: { id: region_id },
+        select: { contactsRequireStudentAuth: true },
+      });
+      if (region && region.contactsRequireStudentAuth) {
+        const studentVerify = await this.prisma.studentVerify.findUnique({
+          where: { userId },
+          select: { status: true },
+        });
+        if (!studentVerify || studentVerify.status !== 'APPROVED') {
+          throw new ForbiddenException('当前区域通讯录需要学生认证，请先完成学生认证');
+        }
+      }
+    }
     return this.prisma.contact.findMany();
   }
 
@@ -365,7 +604,22 @@ export class OperationService {
 
   // ========== 笔记设置 ==========
   async getNoteSettings(regionId: string) {
-    return this.prisma.noteSettings.findUnique({ where: { regionId } });
+    if (!regionId) {
+      return { success: false, message: '区域ID不能为空', data: this.getNoteSettingDefaults() };
+    }
+    const [settings, config, region] = await Promise.all([
+      this.prisma.noteSettings.findUnique({ where: { regionId } }).catch(() => null),
+      this.prisma.config.findUnique({ where: { key: this.getNoteSettingConfigKey(regionId) } }).catch(() => null),
+      this.prisma.region.findUnique({ where: { id: regionId }, select: { settings: true } }).catch(() => null),
+    ]);
+    const regionSettings = (region?.settings || {}) as Record<string, any>;
+    const data = this.normalizeNoteSettingPayload({
+      ...((config?.value || regionSettings.noteConfig || {}) as Record<string, any>),
+      allowTextNote: settings?.allowTextNote,
+      allowImageNote: settings?.allowImageNote,
+      allowVideoNote: settings?.allowVideoNote,
+    }, regionId);
+    return { success: true, data };
   }
 
   // ========== 用户标签 ==========
@@ -401,6 +655,27 @@ export class OperationService {
 
   async getDatingProfile(userId: string) {
     return this.prisma.datingProfile.findUnique({ where: { userId } });
+  }
+
+  async createOrUpdateDatingProfile(userId: string, dto: any) {
+    return this.prisma.datingProfile.upsert({
+      where: { userId },
+      update: {
+        photos: dto.photos,
+        bio: dto.bio || dto.description,
+        tags: dto.tags,
+        isOpen: dto.isOpen ?? dto.is_open,
+        auditStatus: 'pending',
+      },
+      create: {
+        userId,
+        photos: dto.photos,
+        bio: dto.bio || dto.description,
+        tags: dto.tags,
+        isOpen: dto.isOpen ?? dto.is_open ?? true,
+        auditStatus: 'pending',
+      },
+    });
   }
 
   async getDatingProfileList(query: any) {
@@ -494,10 +769,176 @@ export class OperationService {
   // ========== AI ==========
   async getAIConfig() {
     const config = await this.prisma.config.findUnique({ where: { key: 'ai_config' } });
-    return config?.value || { enabled: false, model: '', apiKey: '', prompt: '' };
+    const raw = (config?.value as Record<string, any>) || {};
+    const { apiKey, ...safe } = raw;
+    return { ...safe, enabled: raw.enabled ?? false, hasApiKey: !!apiKey };
   }
 
   async generateAIComments(dto: any) {
-    return { comments: [], message: 'AI评论生成功能尚未接入真实模型' };
+    const { postId, contentType, regionId, count = 5, tone, persona } = dto;
+
+    const config = await this.prisma.config.findUnique({ where: { key: 'ai_config' } });
+    const aiConfig = (config?.value as Record<string, any>) || {};
+
+    if (!aiConfig.enabled || !aiConfig.apiKey) {
+      return {
+        success: false,
+        error: '请先在 AI运营中心 / AI配置 中配置模型（需填写 apiKey 并启用）',
+        comments: [],
+      };
+    }
+
+    const botAccounts = await this.prisma.botAccount.findMany({
+      where: {
+        status: 'active',
+        ...(regionId ? { regionId } : {}),
+      },
+      take: 1,
+    });
+    const botAccount = botAccounts[0];
+    if (!botAccount) {
+      return {
+        success: false,
+        error: regionId ? '当前区域暂无可用机器人账号，请先在 AI运营中心 / 机器人管理 中创建并启用机器人' : '暂无可用机器人账号，请先在 AI运营中心 / 机器人管理 中创建并启用机器人',
+        comments: [],
+      };
+    }
+
+    const task = await this.prisma.botPostTask.create({
+      data: {
+        type: 'comment_generate',
+        title: `AI评论生成 - ${postId || contentType || '通用'}`,
+        content: JSON.stringify({ postId, contentType, regionId, count, tone, persona }),
+        botId: botAccount.id,
+        regionId: regionId || null,
+        status: 'running',
+      },
+    });
+
+    try {
+      const provider = aiConfig.provider || 'openai';
+      const baseURL = aiConfig.baseURL || 'https://api.openai.com/v1';
+      const model = aiConfig.model || 'gpt-3.5-turbo';
+      const temperature = aiConfig.temperature ?? 0.8;
+      const maxTokens = aiConfig.maxTokens ?? 500;
+
+      let postContext = '';
+      if (postId) {
+        const post = await this.prisma.post.findUnique({
+          where: { id: postId },
+          select: { title: true, content: true },
+        });
+        if (post) postContext = `帖子标题: ${post.title || ''}\n帖子内容: ${(post.content || '').slice(0, 500)}`;
+      }
+
+      const systemPrompt = aiConfig.prompt || '你是一个校园社区的活跃用户，负责生成自然、真实的评论。';
+      const userPrompt = `请为以下内容生成 ${count} 条${tone || '友好'}风格的评论。\n${postContext}\n要求：每条评论独立一行，内容真实自然，像真人写的，不要带序号。`;
+
+      const response = await fetch(`${baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${aiConfig.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature,
+          max_tokens: maxTokens,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`AI API 调用失败 (${response.status}): ${errText.slice(0, 200)}`);
+      }
+
+      const result = await response.json();
+      const content = result.choices?.[0]?.message?.content || '';
+      const comments = content.split('\n').map((c: string) => c.trim()).filter((c: string) => c.length > 0);
+
+      const botUserId = botAccount.userId;
+
+      const savedComments: any[] = [];
+      if (postId && comments.length > 0) {
+        for (const commentText of comments) {
+          try {
+            const comment = await this.prisma.comment.create({
+              data: {
+                postId,
+                userId: botUserId || 'system',
+                content: commentText,
+                status: 'active',
+                auditStatus: 'approved',
+              },
+            });
+            savedComments.push(comment);
+          } catch (e: any) {
+            this.prisma.botActionLog.create({
+              data: {
+                botId: botAccount.id,
+                action: 'comment_error',
+                targetType: 'comment',
+                targetId: postId,
+                detail: { error: e.message, content: commentText },
+              },
+            }).catch(() => {});
+          }
+        }
+      }
+
+      await this.prisma.botPostTask.update({
+        where: { id: task.id },
+        data: {
+          status: 'completed',
+        },
+      });
+
+      await this.prisma.botActionLog.create({
+        data: {
+          botId: botAccount.id,
+          action: 'generate_comments',
+          targetType: 'post',
+          targetId: postId || 'general',
+          detail: {
+            taskId: task.id,
+            generated: comments.length,
+            saved: savedComments.length,
+            provider,
+            model,
+          },
+        },
+      }).catch(() => {});
+
+      return {
+        success: true,
+        taskId: task.id,
+        comments: savedComments.length > 0 ? savedComments : comments,
+        generated: comments.length,
+        saved: savedComments.length,
+      };
+    } catch (error: any) {
+      const errorMsg = error?.message || 'AI评论生成失败';
+
+      await this.prisma.botPostTask.update({
+        where: { id: task.id },
+        data: { status: 'failed' },
+      }).catch(() => {});
+
+      await this.prisma.botActionLog.create({
+        data: {
+          botId: botAccount.id,
+          action: 'generate_comments_error',
+          targetType: 'task',
+          targetId: task.id,
+          detail: { error: errorMsg },
+        },
+      }).catch(() => {});
+
+      return { success: false, error: errorMsg, taskId: task.id, comments: [] };
+    }
   }
 }

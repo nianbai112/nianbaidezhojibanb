@@ -4,7 +4,7 @@ export const endpoints = {
   regions: '/region',
   regionConfig: '/region/config',
   users: '/user/list',
-  userTags: '/api/user-management/tags',
+  userTags: '/user-management/tags',
   verifications: '/user/verification',
   merchants: '/merchant/list',
   merchantProducts: '/merchant/products',

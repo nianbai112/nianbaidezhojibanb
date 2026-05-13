@@ -193,9 +193,9 @@ export class PhotoContestService {
 
   // ==================== Winners Management ====================
 
-  async getWinners(contestId: string) {
+  async getWinners(contestId?: string) {
     return this.prisma.photoContestWinner.findMany({
-      where: { competitionId: contestId },
+      where: contestId ? { competitionId: contestId } : {},
       orderBy: { winnerRank: 'asc' },
       include: {
         entry: { select: { id: true, title: true, imageUrl: true, voteCount: true } },

@@ -82,55 +82,18 @@ export class UpdateSettingsDto {
 }
 
 export class StudentVerifyDto {
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  realName?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  studentId?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  schoolName?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：姓名' })
-  @IsOptional()
-  @IsString()
-  name?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学号' })
-  @IsOptional()
-  @IsString()
-  student_id?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学校' })
-  @IsOptional()
-  @IsString()
-  university?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  major?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  grade?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  cardImage?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学生证照片' })
-  @IsOptional()
-  @IsString()
-  photo_url?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() realName?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() studentId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() schoolName?: string;
+  @ApiProperty({ required: false, description: '小程序字段：姓名' }) @IsOptional() @IsString() name?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学号' }) @IsOptional() @IsString() student_id?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学校' }) @IsOptional() @IsString() university?: string;
+  @ApiProperty({ required: false, description: '学校ID' }) @IsOptional() @IsString() school_id?: string;
+  @ApiProperty({ required: false, description: '学校ID(驼峰)' }) @IsOptional() @IsString() schoolId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() major?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() grade?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() cardImage?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学生证照片' }) @IsOptional() @IsString() photo_url?: string;
 }
 
 export class FollowDto {

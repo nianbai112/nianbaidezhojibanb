@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { MessageService } from './message.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -42,11 +42,32 @@ export class MessageController {
     return this.messageService.clearChatHistory(userId, dto);
   }
 
+  @Get('messages/group-messages')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getGroupMessagesByQuery(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.messageService.getGroupMessages(query.group_id, userId, query);
+  }
+
+  @Get('messages/group/:groupId/members')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getGroupMembers(@Param('groupId') groupId: string, @CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.messageService.getGroupMembers(groupId, userId, query);
+  }
+
   @Get('messages/group/:groupId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getGroupMessages(@Param('groupId') groupId: string, @CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.messageService.getGroupMessages(groupId, userId, query);
+  getGroupDetail(@Param('groupId') groupId: string, @CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.messageService.getGroupDetail(groupId, userId, query);
+  }
+
+  @Put('messages/group/:groupId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  updateGroup(@Param('groupId') groupId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.messageService.updateGroup(groupId, userId, dto);
   }
 
   @Post('messages/group/:groupId/leave')

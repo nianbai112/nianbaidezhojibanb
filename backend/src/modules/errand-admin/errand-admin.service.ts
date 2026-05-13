@@ -12,6 +12,11 @@ import {
 export class ErrandAdminService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private resolveConfigRegionId(regionId?: string) {
+    const value = typeof regionId === 'string' ? regionId.trim() : ''
+    return value || 'global'
+  }
+
   // ==================== Rider ====================
 
   async getRiders(query: RiderQueryDto) {
@@ -149,55 +154,61 @@ export class ErrandAdminService {
 
   // ==================== Fee Config ====================
 
-  async getFeeConfig(regionId: string) {
-    let config = await this.prisma.errandConfig.findUnique({ where: { regionId } })
+  async getFeeConfig(regionId?: string) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
+    let config = await this.prisma.errandConfig.findUnique({ where: { regionId: configRegionId } })
     if (!config) {
-      config = await this.prisma.errandConfig.create({ data: { regionId } as any })
+      config = await this.prisma.errandConfig.create({ data: { regionId: configRegionId } as any })
     }
     return config
   }
 
-  async updateFeeConfig(regionId: string, dto: UpdateFeeConfigDto) {
+  async updateFeeConfig(regionId: string | undefined, dto: UpdateFeeConfigDto) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
     return this.prisma.errandConfig.upsert({
-      where: { regionId },
+      where: { regionId: configRegionId },
       update: dto as any,
-      create: { regionId, ...dto } as any,
+      create: { regionId: configRegionId, ...dto } as any,
     })
   }
 
   // ==================== Page Config ====================
 
-  async getPageConfig(regionId: string) {
-    let config = await this.prisma.errandPageConfig.findUnique({ where: { regionId } })
+  async getPageConfig(regionId?: string) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
+    let config = await this.prisma.errandPageConfig.findUnique({ where: { regionId: configRegionId } })
     if (!config) {
-      config = await this.prisma.errandPageConfig.create({ data: { regionId } })
+      config = await this.prisma.errandPageConfig.create({ data: { regionId: configRegionId } })
     }
     return config
   }
 
-  async updatePageConfig(regionId: string, dto: UpdatePageConfigDto) {
+  async updatePageConfig(regionId: string | undefined, dto: UpdatePageConfigDto) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
     return this.prisma.errandPageConfig.upsert({
-      where: { regionId },
+      where: { regionId: configRegionId },
       update: dto as any,
-      create: { regionId, ...dto },
+      create: { regionId: configRegionId, ...dto },
     })
   }
 
   // ==================== Reward/Punish ====================
 
-  async getRewardPunish(regionId: string) {
-    let config = await this.prisma.errandRewardPunish.findUnique({ where: { regionId } })
+  async getRewardPunish(regionId?: string) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
+    let config = await this.prisma.errandRewardPunish.findUnique({ where: { regionId: configRegionId } })
     if (!config) {
-      config = await this.prisma.errandRewardPunish.create({ data: { regionId } })
+      config = await this.prisma.errandRewardPunish.create({ data: { regionId: configRegionId } })
     }
     return config
   }
 
-  async updateRewardPunish(regionId: string, dto: UpdateRewardPunishDto) {
+  async updateRewardPunish(regionId: string | undefined, dto: UpdateRewardPunishDto) {
+    const configRegionId = this.resolveConfigRegionId(regionId)
     return this.prisma.errandRewardPunish.upsert({
-      where: { regionId },
+      where: { regionId: configRegionId },
       update: dto as any,
-      create: { regionId, ...dto },
+      create: { regionId: configRegionId, ...dto },
     })
   }
 }

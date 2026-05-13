@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage 1: Builder — compiles NestJS TypeScript to JavaScript
 # =============================================================================
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ RUN npm run build
 # =============================================================================
 # Stage 2: Production — minimal runtime image
 # =============================================================================
-FROM node:18-alpine AS production
+FROM node:22-alpine AS production
 
 # Create unprivileged user/group (non-root best practice)
 RUN addgroup -g 1001 appgroup && \

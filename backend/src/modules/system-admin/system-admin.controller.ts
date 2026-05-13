@@ -64,6 +64,11 @@ export class SystemAdminController {
   @ApiOperation({ summary: '创建模板消息' })
   createTemplate(@Body() dto: CreateWechatTemplateDto) { return this.svc.createTemplate(dto); }
 
+  @Put('wechat-templates/batch-toggle')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '批量启用/停用' })
+  batchToggleTemplate(@Body() dto: BatchToggleTemplateDto) { return this.svc.batchToggleTemplate(dto); }
+
   @Put('wechat-templates/:id')
   @RequirePermission('system:config')
   @ApiOperation({ summary: '更新模板消息' })
@@ -74,12 +79,12 @@ export class SystemAdminController {
   @ApiOperation({ summary: '删除模板消息' })
   deleteTemplate(@Param('id') id: string) { return this.svc.deleteTemplate(id); }
 
-  @Put('wechat-templates/batch-toggle')
-  @RequirePermission('system:config')
-  @ApiOperation({ summary: '批量启用/停用' })
-  batchToggleTemplate(@Body() dto: BatchToggleTemplateDto) { return this.svc.batchToggleTemplate(dto); }
-
   // ==================== 小程序页面路径 ====================
+
+  @Get('miniapp-pages/source-scan')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '从小程序源码扫描页面路径' })
+  scanMiniappPages() { return this.svc.scanMiniappPagesFromSource(); }
 
   @Get('miniapp-pages')
   @RequirePermission('system:config')
@@ -130,6 +135,13 @@ export class SystemAdminController {
   @ApiOperation({ summary: '按分组保存配置' })
   saveConfigGroup(@Param('group') group: string, @Body() configs: Record<string, any>) {
     return this.svc.saveConfigGroup(group, configs);
+  }
+
+  @Post('config/wechat-token/:platform')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '获取微信 AccessToken' })
+  getWechatAccessToken(@Param('platform') platform: 'miniapp' | 'official', @Body() body: Record<string, any>) {
+    return this.svc.getWechatAccessToken(platform, body);
   }
 
   // ==================== 微信文章图片 ====================

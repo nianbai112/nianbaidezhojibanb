@@ -53,6 +53,13 @@ export class CircleAdminController {
     return this.circleService.getAdminCircles(query);
   }
 
+  @Get('stats')
+  @ApiOperation({ summary: '社群统计' })
+  @RequirePermission('community:view')
+  getAdminCirclesStats() {
+    return this.circleService.getAdminCirclesStats();
+  }
+
   @Post()
   @ApiOperation({ summary: '创建社群' })
   @RequirePermission('community:edit')
@@ -61,6 +68,13 @@ export class CircleAdminController {
   }
 
   // ================= 社群详情/操作（参数化路由） =================
+  @Get(':circleId')
+  @ApiOperation({ summary: '获取社群详情' })
+  @RequirePermission('community:view')
+  getAdminCircleDetail(@Param('circleId') circleId: string) {
+    return this.circleService.getAdminCircleDetail(circleId);
+  }
+
   @Get(':circleId/members')
   @ApiOperation({ summary: '获取社群成员列表' })
   @RequirePermission('community:view')
