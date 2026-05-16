@@ -22,7 +22,11 @@ async function bootstrap() {
   // ===========================================================================
   // 安全
   // ===========================================================================
-  app.use(helmet());
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    }),
+  );
   app.use(compression());
 
   // ---- CORS ----
@@ -63,14 +67,34 @@ async function bootstrap() {
   // ---- 本地上传文件访问 ----
   // 后台运营上传的图片会落到 backend/uploads 下，开发环境和生产反代都需要能直接预览。
   // 注意：外部对象存储不走这里；这里仅兜底本地存储 provider。
-  const uploadDir = process.env.UPLOAD_DIR || "uploads";
-  app.use(
-    "/uploads",
-    express.static(path.resolve(process.cwd(), uploadDir), {
-      maxAge: isProduction ? "7d" : 0,
-      fallthrough: true,
-    }),
+  const uploadDirs = Array.from(
+    new Set(
+      [
+        process.env.UPLOAD_DIR,
+        "uploads",
+        path.join("backend", "uploads"),
+      ]
+        .filter(Boolean)
+        .map((dir) => path.resolve(process.cwd(), dir as string)),
+    ),
   );
+
+  for (const dir of uploadDirs) {
+    app.use(
+      "/uploads",
+      express.static(dir, {
+        maxAge: isProduction ? "7d" : 0,
+        fallthrough: true,
+        setHeaders: (res) => {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+          res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+          // 上传资源本身不执行脚本，移除全局 CSP，避免小程序开发者工具误拦截图片预览。
+          res.removeHeader("Content-Security-Policy");
+        },
+      }),
+    );
+  }
 
   // ---- 旧小程序商城管理端路径兼容 ----
   // 小程序源码中商户后台相关接口使用 /api/mall/...，而新后台管理接口集中在

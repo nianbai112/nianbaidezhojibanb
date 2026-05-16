@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Param,
   Query,
   UseGuards,
   Req,
@@ -88,7 +89,7 @@ export class OpsController {
   @Post("admin/ops/alerts/:id/resolve")
   @ApiOperation({ summary: "处理异常" })
   async resolveAlert(
-    @Query("id") id: string,
+    @Param("id") id: string,
     @CurrentUser("sub") accountId: string,
     @Body() dto: { note?: string },
   ) {
@@ -98,7 +99,7 @@ export class OpsController {
   @Post("admin/ops/alerts/:id/ignore")
   @ApiOperation({ summary: "忽略异常" })
   async ignoreAlert(
-    @Query("id") id: string,
+    @Param("id") id: string,
     @CurrentUser("sub") accountId: string,
     @Body() dto: { reason?: string },
   ) {

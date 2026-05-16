@@ -194,7 +194,7 @@ function formatTime(time: string | Date) {
 
 .eyebrow {
   color: #64748b;
-  font-weight: 900;
+  font-weight: 650;
   font-size: 12px;
   margin-bottom: 4px;
 }
@@ -203,7 +203,9 @@ h1 {
   margin: 0 0 8px;
   font-size: 26px;
   line-height: 1.15;
-  font-weight: 950;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: 0;
 }
 
 .meta-row {
@@ -233,6 +235,7 @@ h1 {
 .completion-label {
   font-size: 12px;
   color: #64748b;
+  font-weight: 500;
   margin-bottom: 4px;
 }
 

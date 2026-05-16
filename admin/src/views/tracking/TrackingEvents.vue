@@ -2,7 +2,7 @@
   <div class="page-container">
     <div class="page-header">
       <h2>埋点事件</h2>
-      <el-button type="primary" @click="loadEvents">刷新</el-button>
+      <el-button type="primary" @click="loadEvents(true)">刷新</el-button>
     </div>
 
     <div class="filter-bar glass-card">
@@ -16,7 +16,7 @@
       </el-select>
       <el-input v-model="filters.pagePath" placeholder="页面路径" clearable style="width: 200px" />
       <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始" end-placeholder="结束" style="width: 240px" />
-      <el-button type="primary" @click="loadEvents">查询</el-button>
+      <el-button type="primary" @click="loadEvents(false)">查询</el-button>
     </div>
 
     <div class="glass-card">
@@ -37,6 +37,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
 
 const loading = ref(false)
@@ -48,8 +49,9 @@ const dateRange = ref([])
 const filters = reactive({ eventName: '', pagePath: '' })
 
 const formatDate = (date: string) => date ? new Date(date).toLocaleString('zh-CN') : '-'
+const unwrapPage = (res: any) => res?.data ?? res ?? {}
 
-const loadEvents = async () => {
+const loadEvents = async (showSuccess = false) => {
   loading.value = true
   try {
     const params: any = { page: page.value, pageSize: pageSize.value, ...filters }
@@ -58,9 +60,15 @@ const loadEvents = async () => {
       params.endDate = dateRange.value[1]?.toISOString()
     }
     const res = await request.get('/admin/tracking/events', { params })
-    events.value = res.data?.list || []
-    total.value = res.data?.total || 0
-  } catch { events.value = [] } finally { loading.value = false }
+    const data = unwrapPage(res)
+    events.value = data.list || []
+    total.value = data.total || 0
+    if (showSuccess) ElMessage.success('埋点事件已刷新')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载埋点事件失败')
+    events.value = []
+    total.value = 0
+  } finally { loading.value = false }
 }
 
 const handlePageChange = (p: number) => { page.value = p; loadEvents() }

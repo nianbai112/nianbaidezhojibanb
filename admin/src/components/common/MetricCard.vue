@@ -57,20 +57,20 @@ const isDown = computed(() => props.delta?.startsWith('-') || props.delta?.start
 .tone-cyan .metric-icon { background: linear-gradient(135deg, #06b6d4, #22d3ee); }
 
 .metric-label {
-  font-size: 12px;
-  color: #64748b;
+  font-size: 13px;
+  color: #526174;
   font-weight: 600;
 }
 
 .metric-value {
   font-size: 24px;
-  font-weight: 800;
-  color: #1e293b;
+  font-weight: 760;
+  color: #0f172a;
   margin-top: 2px;
 }
 
 .metric-delta {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #10b981;
   font-weight: 600;
   margin-top: 2px;

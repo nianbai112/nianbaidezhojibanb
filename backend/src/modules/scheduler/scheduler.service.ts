@@ -22,7 +22,16 @@ export class SchedulerService {
       this.prisma.scheduledJob.count({ where }),
     ]);
 
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    return {
+      list: list.map((job) => ({
+        ...job,
+        executorBound: this.hasRealExecutor(job.type),
+        executorLabel: this.hasRealExecutor(job.type) ? '已接入真实执行器' : '未绑定真实执行器',
+      })),
+      total,
+      page: Number(page),
+      pageSize: Number(pageSize),
+    };
   }
 
   async createJob(data: any, operatorId: string) {
@@ -65,6 +74,9 @@ export class SchedulerService {
   async runJob(id: string, operatorId: string) {
     const job = await this.prisma.scheduledJob.findUnique({ where: { id } });
     if (!job) throw new NotFoundException('任务不存在');
+    if (!this.hasRealExecutor(job.type)) {
+      throw new BadRequestException(`任务类型 ${job.type} 尚未绑定真实执行器，不能标记为执行成功`);
+    }
 
     // Create log entry
     const log = await this.prisma.scheduledJobLog.create({
@@ -92,35 +104,16 @@ export class SchedulerService {
       const job = await this.prisma.scheduledJob.findUnique({ where: { id: jobId } });
       if (!job) return;
 
-      // Execute based on job type
       let result: any = {};
       switch (job.type) {
-        case 'daily_report':
-          result = { message: '日报生成完成' };
-          break;
-        case 'settlement':
-          result = { message: '结算完成' };
-          break;
-        case 'ranking':
-          result = { message: '榜单刷新完成' };
-          break;
-        case 'recommend':
-          result = { message: '推荐池刷新完成' };
-          break;
         case 'cleanup':
-          result = { message: '清理完成' };
-          break;
-        case 'ai_task':
-          result = { message: 'AI任务执行完成' };
-          break;
-        case 'notification':
-          result = { message: '通知发送完成' };
+          result = await this.executeCleanupJob(job.config);
           break;
         case 'monitor':
-          result = { message: '监控检测完成' };
+          result = await this.executeMonitorJob();
           break;
         default:
-          result = { message: '任务执行完成' };
+          throw new BadRequestException(`任务类型 ${job.type} 尚未绑定真实执行器，未执行任何业务动作`);
       }
 
       // Update log
@@ -182,5 +175,38 @@ export class SchedulerService {
     ]);
 
     return { list, total, page: Number(page), pageSize: Number(pageSize) };
+  }
+
+  private hasRealExecutor(type: string) {
+    return ['cleanup', 'monitor'].includes(type);
+  }
+
+  private async executeCleanupJob(config: any) {
+    const beforeDays = Math.max(Number(config?.beforeDays || 30), 7);
+    const beforeDate = new Date(Date.now() - beforeDays * 24 * 60 * 60 * 1000);
+    const [serverLogs, jobLogs] = await Promise.all([
+      this.prisma.serverLog.deleteMany({ where: { createdAt: { lt: beforeDate } } }),
+      this.prisma.scheduledJobLog.deleteMany({ where: { startedAt: { lt: beforeDate }, status: { not: 'running' } } }),
+    ]);
+    return {
+      message: `清理完成，保留最近 ${beforeDays} 天`,
+      deletedServerLogs: serverLogs.count,
+      deletedJobLogs: jobLogs.count,
+    };
+  }
+
+  private async executeMonitorJob() {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const [recentErrors, pendingAlerts, activeJobs] = await Promise.all([
+      this.prisma.serverLog.count({ where: { level: 'error', createdAt: { gte: oneHourAgo } } }),
+      this.prisma.systemAlert.count({ where: { status: 'pending' } }),
+      this.prisma.scheduledJob.count({ where: { isEnabled: true } }),
+    ]);
+    return {
+      message: '监控检测完成',
+      recentErrors,
+      pendingAlerts,
+      activeJobs,
+    };
   }
 }

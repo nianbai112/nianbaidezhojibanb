@@ -2,13 +2,13 @@
   <div class="page-container">
     <div class="page-header">
       <h2>漏斗分析</h2>
-      <el-button type="primary" @click="loadFunnel">刷新</el-button>
+      <el-button type="primary" :loading="loading" @click="loadFunnel(true)">刷新</el-button>
     </div>
 
     <div class="glass-card" style="padding: 20px;">
       <div class="funnel-steps">
         <el-input v-model="stepsInput" placeholder="事件步骤，用逗号分隔，如：page_view,content_click,order_create,order_pay" style="width: 100%; margin-bottom: 16px;" />
-        <el-button type="primary" @click="loadFunnel">分析漏斗</el-button>
+        <el-button type="primary" :loading="loading" @click="loadFunnel(false)">分析漏斗</el-button>
       </div>
 
       <div v-if="funnelData.length" class="funnel-result">
@@ -28,10 +28,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
 
 const stepsInput = ref('page_view,content_click,order_create,order_pay')
 const funnelData = ref([])
+const loading = ref(false)
+const unwrap = (res: any) => res?.data ?? res ?? {}
 
 const maxCount = () => Math.max(...funnelData.value.map((s: any) => s.count), 1)
 const getBarWidth = (count: number) => Math.max(20, (count / maxCount()) * 100)
@@ -42,11 +45,18 @@ const getConversionRate = (index: number) => {
   return ((curr / prev) * 100).toFixed(1)
 }
 
-const loadFunnel = async () => {
+const loadFunnel = async (showSuccess = false) => {
+  loading.value = true
   try {
     const res = await request.get('/admin/tracking/funnel', { params: { steps: stepsInput.value } })
-    funnelData.value = res.data?.funnel || []
-  } catch { funnelData.value = [] }
+    funnelData.value = unwrap(res)?.funnel || []
+    if (showSuccess) ElMessage.success('漏斗分析已刷新')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载漏斗分析失败')
+    funnelData.value = []
+  } finally {
+    loading.value = false
+  }
 }
 
 onMounted(() => loadFunnel())

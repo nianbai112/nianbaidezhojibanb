@@ -1,4 +1,6 @@
 :root {
+  --mx-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
+  --mx-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
   --mx-primary: #2563eb;
   --mx-primary-2: #0ea5e9;
   --mx-cyan: #0891b2;
@@ -6,9 +8,9 @@
   --mx-green: #10b981;
   --mx-orange: #f59e0b;
   --mx-red: #ef4444;
-  --mx-text: #172033;
-  --mx-sub: #64748b;
-  --mx-muted: #94a3b8;
+  --mx-text: #0f172a;
+  --mx-sub: #526174;
+  --mx-muted: #7d8ba3;
   --mx-border: #e3e9f2;
   --mx-border-strong: #d4deeb;
   --mx-bg: #f5f7fb;
@@ -31,13 +33,24 @@ html {
 body {
   margin: 0;
   color: var(--mx-text);
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
-  line-height: 1.55;
+  font-family: var(--mx-font-sans);
+  font-size: 14.5px;
+  font-weight: 400;
+  line-height: 1.62;
   background: var(--mx-bg);
   scrollbar-gutter: stable;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--mx-font-display);
+  letter-spacing: 0;
 }
 
 a {
@@ -47,7 +60,8 @@ a {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font-family: inherit;
 }
 
@@ -115,9 +129,9 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.3;
-  font-weight: 900;
+  font-weight: 760;
   color: var(--mx-text);
 }
 
@@ -213,8 +227,8 @@ textarea {
 }
 
 .kpi-label {
-  color: #64748b;
-  font-weight: 820;
+  color: var(--mx-sub);
+  font-weight: 650;
   font-size: 14px;
   display: flex;
   align-items: center;
@@ -224,7 +238,7 @@ textarea {
 .kpi-value {
   font-size: 28px;
   line-height: 1.1;
-  font-weight: 950;
+  font-weight: 800;
   margin-top: 8px;
   letter-spacing: 0;
 }
@@ -232,8 +246,8 @@ textarea {
 .kpi-delta {
   margin-top: 8px;
   color: #059669;
-  font-size: 12px;
-  font-weight: 850;
+  font-size: 12.5px;
+  font-weight: 700;
 }
 
 .kpi-delta.down {
@@ -262,12 +276,12 @@ textarea {
 
 .muted {
   color: var(--mx-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .money {
   color: var(--mx-red);
-  font-weight: 900;
+  font-weight: 760;
 }
 
 .user-line {
@@ -284,7 +298,7 @@ textarea {
   display: grid;
   place-items: center;
   color: #fff;
-  font-weight: 900;
+  font-weight: 700;
   background: linear-gradient(135deg, #2563eb, #7c3aed);
   flex: 0 0 auto;
 }
@@ -299,7 +313,7 @@ textarea {
 }
 
 .name-main {
-  font-weight: 850;
+  font-weight: 700;
   color: var(--mx-text);
   white-space: nowrap;
   overflow: hidden;
@@ -323,10 +337,10 @@ textarea {
 }
 
 .soft-table th {
-  color: #64748b;
+  color: var(--mx-sub);
   text-align: left;
   font-size: 13px;
-  font-weight: 820;
+  font-weight: 700;
   background: #f8fafc;
   padding: 13px 14px;
   white-space: nowrap;
@@ -353,13 +367,14 @@ textarea {
   --el-table-row-hover-bg-color: #f8fbff;
   --el-table-border-color: var(--mx-border);
   --el-table-text-color: #334155;
-  --el-table-header-text-color: #64748b;
+  --el-table-header-text-color: var(--mx-sub);
   border-radius: 14px;
   overflow: hidden;
+  font-size: 14px;
 }
 
 .el-table th.el-table__cell {
-  font-weight: 850;
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -402,7 +417,7 @@ textarea {
 }
 
 .side-num {
-  font-weight: 950;
+  font-weight: 800;
   color: var(--mx-red);
 }
 
@@ -475,7 +490,7 @@ textarea {
   place-items: center;
   text-align: center;
   color: var(--mx-text);
-  font-weight: 950;
+  font-weight: 800;
   white-space: pre-line;
   box-shadow: inset 0 0 0 1px var(--mx-border);
 }
@@ -495,7 +510,7 @@ textarea {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   padding: 2px 4px 12px;
 }
 
@@ -505,7 +520,7 @@ textarea {
   background: linear-gradient(135deg, #2563eb, #0ea5e9);
   color: #fff;
   padding: 16px;
-  font-weight: 950;
+  font-weight: 800;
   margin: 12px 0;
 }
 
@@ -533,22 +548,69 @@ textarea {
 /* Element Plus tuning */
 .el-button {
   border-radius: 10px !important;
-  font-weight: 780;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background-color .15s ease !important;
+}
+
+.el-button--small {
+  font-size: 13.5px;
+  font-weight: 650;
 }
 
 .el-button:not(.is-disabled):active {
   transform: translateY(1px) scale(.99);
 }
 
-.el-button--primary {
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
   background: linear-gradient(135deg, var(--mx-primary), var(--mx-primary-2)) !important;
   border-color: var(--mx-primary) !important;
+  color: #fff !important;
 }
 
-.el-button--warning {
+.el-button--primary.is-plain {
+  background: #eff6ff !important;
+  border-color: #bfdbfe !important;
+  color: var(--mx-primary) !important;
+}
+
+.el-button--primary.is-plain:not(.is-disabled):hover,
+.el-button--primary.is-plain:not(.is-disabled):focus {
+  background: #dbeafe !important;
+  border-color: #93c5fd !important;
+  color: #1d4ed8 !important;
+}
+
+.el-button--primary.is-plain.is-disabled {
+  background: #eef5ff !important;
+  border-color: #d8e7ff !important;
+  color: #8bb7ff !important;
+}
+
+.el-button--warning:not(.is-plain):not(.is-text):not(.is-link) {
   background: linear-gradient(135deg, var(--mx-orange), #fbbf24) !important;
   border-color: var(--mx-orange) !important;
+  color: #fff !important;
+}
+
+.el-button--warning.is-plain {
+  background: #fff7ed !important;
+  border-color: #fed7aa !important;
+  color: #c2410c !important;
+}
+
+.el-button--warning.is-plain:not(.is-disabled):hover,
+.el-button--warning.is-plain:not(.is-disabled):focus {
+  background: #ffedd5 !important;
+  border-color: #fdba74 !important;
+  color: #9a3412 !important;
+}
+
+.el-button--warning.is-plain.is-disabled {
+  background: #fff7ed !important;
+  border-color: #ffedd5 !important;
+  color: #f6ad55 !important;
 }
 
 .el-input__wrapper,
@@ -572,7 +634,15 @@ textarea {
 .el-input__inner,
 .el-select__placeholder,
 .el-select__selected-item {
-  font-weight: 650;
+  color: var(--mx-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: #9aa8ba;
+  font-weight: 450;
 }
 
 .el-textarea__inner {
@@ -582,14 +652,14 @@ textarea {
 }
 
 .el-form-item__label {
-  font-weight: 820;
-  color: #334155;
+  font-weight: 650;
+  color: #253247;
   font-size: 14px;
 }
 
 .el-tag {
   border-radius: 999px;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .el-switch.is-checked .el-switch__core {
@@ -608,7 +678,7 @@ textarea {
 }
 
 .el-dialog__title {
-  font-weight: 900;
+  font-weight: 760;
   font-size: 17px;
   color: var(--mx-text);
 }
@@ -629,7 +699,7 @@ textarea {
 }
 
 .el-drawer__title {
-  font-weight: 900;
+  font-weight: 760;
   font-size: 17px;
 }
 
@@ -647,7 +717,8 @@ textarea {
 .el-dropdown-menu__item {
   border-radius: 10px !important;
   padding: 8px 14px !important;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .el-dropdown-menu__item:hover {
@@ -656,13 +727,13 @@ textarea {
 }
 
 .el-pagination {
-  --el-pagination-font-size: 13px;
+  --el-pagination-font-size: 14px;
 }
 
 .el-pagination .el-pager li,
 .el-pagination button {
   border-radius: 9px !important;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .el-pagination .el-pager li.is-active {
@@ -691,13 +762,14 @@ textarea {
 }
 
 .el-tabs__item {
-  font-weight: 820;
+  font-size: 14.5px;
+  font-weight: 650;
   color: var(--mx-sub);
 }
 
 .el-tabs__item.is-active {
   color: var(--mx-primary);
-  font-weight: 900;
+  font-weight: 760;
 }
 
 .el-upload-dragger {
@@ -714,6 +786,67 @@ textarea {
 .el-loading-mask {
   background: rgba(255, 255, 255, .7) !important;
   backdrop-filter: blur(4px);
+}
+
+/* Admin-wide typography layer */
+.content,
+.page-shell,
+.glass-card,
+.el-overlay {
+  font-family: var(--mx-font-sans);
+}
+
+.content h1,
+.page-shell h1 {
+  color: var(--mx-text);
+  font-family: var(--mx-font-display);
+  font-weight: 800 !important;
+  letter-spacing: 0;
+}
+
+.content h2,
+.content h3,
+.page-shell h2,
+.page-shell h3,
+.page-shell .card-title,
+.page-shell .section-title h3,
+.page-shell .section-head h3 {
+  color: var(--mx-text);
+  font-family: var(--mx-font-display);
+  font-weight: 760 !important;
+  letter-spacing: 0;
+}
+
+.page-shell p,
+.page-shell small,
+.page-shell .form-tip,
+.page-shell .section-title p,
+.page-shell .field small,
+.page-shell .switch-copy small {
+  color: var(--mx-muted);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.65;
+}
+
+.page-shell label,
+.page-shell .field > label,
+.page-shell .switch-copy label,
+.page-shell .el-form-item__label {
+  color: #253247;
+  font-size: 14px;
+  font-weight: 650 !important;
+}
+
+.page-shell .el-table,
+.page-shell .soft-table,
+.page-shell .el-table .cell {
+  font-size: 14px;
+}
+
+.page-shell .el-table th.el-table__cell,
+.page-shell .soft-table th {
+  font-weight: 700 !important;
 }
 
 @media(max-width: 1400px) {

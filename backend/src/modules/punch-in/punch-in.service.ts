@@ -13,6 +13,17 @@ import {
 export class PunchInService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeNullableString(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    return String(value);
+  }
+
+  private normalizeNullableNumber(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
   private normalizePage(query: { page?: unknown; pageSize?: unknown }) {
     const page = Math.max(Number(query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(query.pageSize) || 20, 1), 100);
@@ -63,13 +74,24 @@ export class PunchInService {
   }
 
   async createCategory(dto: CreatePunchCategoryDto) {
-    return this.prisma.punchInCategory.create({ data: dto as any });
+    const data = {
+      name: dto.name,
+      icon: this.normalizeNullableString(dto.icon),
+      sortOrder: this.normalizeNullableNumber(dto.sortOrder) ?? 0,
+      status: dto.status,
+    };
+    return this.prisma.punchInCategory.create({ data: data as any });
   }
 
   async updateCategory(id: string, dto: UpdatePunchCategoryDto) {
     const cat = await this.prisma.punchInCategory.findUnique({ where: { id } });
     if (!cat) throw new NotFoundException('分类不存在');
-    return this.prisma.punchInCategory.update({ where: { id }, data: dto as any });
+    const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.icon !== undefined) data.icon = this.normalizeNullableString(dto.icon) ?? null;
+    if (dto.sortOrder !== undefined) data.sortOrder = this.normalizeNullableNumber(dto.sortOrder) ?? 0;
+    if (dto.status !== undefined) data.status = dto.status;
+    return this.prisma.punchInCategory.update({ where: { id }, data });
   }
 
   async deleteCategory(id: string) {
@@ -147,13 +169,46 @@ export class PunchInService {
   }
 
   async createLocation(dto: CreatePunchLocationDto) {
-    return this.prisma.punchInLocation.create({ data: dto as any });
+    if (!dto.regionId) throw new BadRequestException('请选择所属区域');
+    if (!dto.name) throw new BadRequestException('地点名称不能为空');
+    const data = this.normalizeLocationPayload(dto, true);
+    return this.prisma.punchInLocation.create({ data });
   }
 
   async updateLocation(id: string, dto: UpdatePunchLocationDto) {
     const loc = await this.prisma.punchInLocation.findUnique({ where: { id } });
     if (!loc) throw new NotFoundException('地点不存在');
-    return this.prisma.punchInLocation.update({ where: { id }, data: dto as any });
+    const data = this.normalizeLocationPayload(dto, false);
+    return this.prisma.punchInLocation.update({ where: { id }, data });
+  }
+
+  private normalizeLocationPayload(dto: CreatePunchLocationDto | UpdatePunchLocationDto, isCreate: boolean) {
+    const data: any = {};
+    const stringFields = ['regionId', 'name', 'description', 'address', 'coverImage', 'status'];
+
+    for (const field of stringFields) {
+      const value = this.normalizeNullableString((dto as any)[field]);
+      if (value !== undefined) data[field] = value;
+    }
+
+    if ((dto as any).categoryId !== undefined) {
+      data.categoryId = this.normalizeNullableString((dto as any).categoryId) ?? null;
+    }
+
+    const latitude = this.normalizeNullableNumber((dto as any).latitude);
+    if (latitude !== undefined) data.latitude = latitude;
+
+    const longitude = this.normalizeNullableNumber((dto as any).longitude);
+    if (longitude !== undefined) data.longitude = longitude;
+
+    if ((dto as any).images !== undefined) data.images = (dto as any).images;
+    if ((dto as any).videos !== undefined) data.videos = (dto as any).videos;
+    if ((dto as any).isShared !== undefined) data.isShared = Boolean((dto as any).isShared);
+
+    if (isCreate && !data.regionId) throw new BadRequestException('请选择所属区域');
+    if (isCreate && !data.name) throw new BadRequestException('地点名称不能为空');
+
+    return data;
   }
 
   async deleteLocation(id: string) {
@@ -170,12 +225,19 @@ export class PunchInService {
 
   async getRecords(query: any) {
     const { page, pageSize } = this.normalizePage(query);
-    const { userId, locationId, regionId, status, startDate, endDate } = query;
+    const { userId, locationId, regionId, status, startDate, endDate, keyword } = query;
     const where: any = {};
     if (userId) where.userId = userId;
     if (locationId) where.locationId = locationId;
     if (regionId) where.regionId = regionId;
     if (status) where.status = status;
+    if (keyword) {
+      where.OR = [
+        { content: { contains: keyword } },
+        { User: { nickname: { contains: keyword } } },
+        { location: { name: { contains: keyword } } },
+      ];
+    }
     if (startDate) where.date = { ...(where.date || {}), gte: startDate };
     if (endDate) where.date = { ...(where.date || {}), lte: endDate };
 

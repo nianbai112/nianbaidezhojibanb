@@ -56,15 +56,17 @@ defineProps<{
 
 .header-text h1 {
   margin: 0;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 23px;
+  font-weight: 760;
   color: #0f172a;
+  letter-spacing: 0;
 }
 
 .header-text p {
   margin: 4px 0 0;
-  font-size: 13px;
-  color: #64748b;
+  font-size: 14px;
+  font-weight: 500;
+  color: #526174;
 }
 
 .header-actions {

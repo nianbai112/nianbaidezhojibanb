@@ -5,6 +5,7 @@ import { NotifyService } from '../notify/notify.service';
 import {
   UpdateProfileDto, UpdateSettingsDto, StudentVerifyDto, ListQueryDto,
 } from './dto/user.dto';
+import { Gender } from '@prisma/client';
 
 @Injectable()
 export class UserService {
@@ -14,13 +15,85 @@ export class UserService {
     private readonly notifyService: NotifyService,
   ) {}
 
-  async getProfile(userId: string) {
+  private normalizeProfileLayoutItems(items: any) {
+    const defaultItems = [
+      { id: 'orders', title: '我的订单', description: '订单、配送和售后', main_image: '/static/logo.jpg', path: 'pagesA/order/order', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0 },
+      { id: 'wallet', title: '我的钱包', description: '余额、提现和流水', main_image: '/static/logo.jpg', path: 'pagesA/withdraw/withdraw', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1 },
+      { id: 'share', title: '分享有礼', description: '邀请同学加入', main_image: '/static/logo.jpg', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2 },
+      { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.jpg', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
+      { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.jpg', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4 },
+    ];
+    const mapItems = (sourceItems: any[]) => sourceItems
+      .filter((item: any) => {
+        if (!item || item.enabled === false) return false;
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || item.mini_program?.path || '').trim();
+        return linkType === 'popup' || !!path;
+      })
+      .map((item: any, index: number) => {
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || '').trim();
+        const query = String(item.query || '').trim().replace(/^\?+/, '');
+        const fullPath = query
+          ? path.includes('?')
+            ? `${path}&${query}`
+            : `${path}?${query}`
+          : path;
+        const appId = item.appId || item.appid || item.mini_program?.appid || '';
+        const type =
+          linkType === 'external_jump' || linkType === 'miniProgram' || linkType === 'miniapp'
+            ? 'external_jump'
+            : linkType === 'web_page' || linkType === 'webview'
+              ? 'web_page'
+              : linkType === 'popup'
+                ? 'popup'
+                : 'internal_jump';
+        return {
+          ...item,
+          id: item.id || `profile_${index}`,
+          title: item.title || item.name || '功能入口',
+          description: item.description || item.subtitle || '',
+          main_image: item.main_image || item.mainImage || item.image || item.iconImage || item.icon || '/static/logo.jpg',
+          image: item.image || item.main_image || item.mainImage || item.iconImage || item.icon || '/static/logo.jpg',
+          type,
+          url: type === 'web_page' ? (item.url || fullPath) : fullPath,
+          mini_program: {
+            ...(item.mini_program || {}),
+            appid: appId,
+            path: item.mini_program?.path || fullPath,
+          },
+          navigation_permission: item.navigation_permission || item.navigationPermission || 'unlimited',
+          enabled: item.enabled !== false,
+          sortOrder: item.sortOrder ?? item.sort_order ?? index,
+        };
+      })
+      .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const normalized = mapItems(Array.isArray(items) && items.length ? items : defaultItems);
+    return normalized.length ? normalized : mapItems(defaultItems);
+  }
+
+  async getProfile(userId: string, regionId?: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { profile: true, settings: true, studentVerify: true, wallet: true },
     });
     if (!user) throw new NotFoundException('用户不存在');
-    return user;
+
+    if (!regionId) return user;
+
+    const region = await this.prisma.region.findUnique({
+      where: { id: regionId },
+      select: {
+        profilePageLayout: true,
+        profileLayoutItems: true,
+      },
+    });
+
+    return {
+      ...user,
+      profile_page_layout: region?.profilePageLayout || 'default',
+      profile_layout_items: this.normalizeProfileLayoutItems(region?.profileLayoutItems),
+    };
   }
 
   async getNicknameAvatar(userId: string) {
@@ -32,25 +105,62 @@ export class UserService {
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.nickname && { nickname: dto.nickname }),
-        ...(dto.avatar && { avatar: dto.avatar }),
-      },
-    });
-    await this.prisma.userProfile.update({
-      where: { userId },
-      data: {
-        ...(dto.gender && { gender: dto.gender }),
-        ...(dto.bio !== undefined && { bio: dto.bio }),
-        ...(dto.school !== undefined && { school: dto.school }),
-        ...(dto.major !== undefined && { major: dto.major }),
-        ...(dto.grade !== undefined && { grade: dto.grade }),
-        ...(dto.dormitory !== undefined && { dormitory: dto.dormitory }),
-      },
-    });
+    const normalizedGender = this.normalizeGender(dto.gender ?? dto.riderGender);
+    const phone = dto.mobile ?? dto.phone;
+    const wechat = dto.wechat_account ?? dto.wechatAccount;
+    const birthday = this.normalizeBirthday(dto.birthday);
+
+    const userData: Record<string, any> = {};
+    if (dto.nickname !== undefined) userData.nickname = dto.nickname;
+    if (dto.avatar !== undefined) userData.avatar = dto.avatar;
+    if (phone !== undefined) userData.phone = phone;
+
+    const profileData: Record<string, any> = {};
+    if (normalizedGender !== undefined) profileData.gender = normalizedGender;
+    if (dto.bio !== undefined) profileData.bio = dto.bio;
+    if (dto.school !== undefined) profileData.school = dto.school;
+    if (dto.major !== undefined) profileData.major = dto.major;
+    if (dto.grade !== undefined) profileData.grade = dto.grade;
+    if (dto.dormitory !== undefined) profileData.dormitory = dto.dormitory;
+    if (dto.email !== undefined) profileData.email = dto.email;
+    if (wechat !== undefined) profileData.wechat = wechat;
+    if (birthday !== undefined) profileData.birthday = birthday;
+
+    if (Object.keys(userData).length > 0) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: userData,
+      });
+    }
+    if (Object.keys(profileData).length > 0) {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        update: profileData,
+        create: { userId, ...profileData },
+      });
+    }
     return this.getProfile(userId);
+  }
+
+  private normalizeGender(value: unknown): Gender | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === Gender.MALE || value === 'MALE' || value === 1 || value === '1' || value === 'male') {
+      return Gender.MALE;
+    }
+    if (value === Gender.FEMALE || value === 'FEMALE' || value === 2 || value === '2' || value === 'female') {
+      return Gender.FEMALE;
+    }
+    if (value === Gender.UNKNOWN || value === 'UNKNOWN' || value === 0 || value === '0' || value === 'unknown') {
+      return Gender.UNKNOWN;
+    }
+    throw new BadRequestException('性别参数不合法');
+  }
+
+  private normalizeBirthday(value?: string): Date | undefined {
+    if (value === undefined || value === '') return undefined;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new BadRequestException('生日格式不合法');
+    return date;
   }
 
   async getPrivacySettings(userId: string) {

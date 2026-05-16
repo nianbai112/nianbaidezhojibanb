@@ -121,7 +121,13 @@ export class OrderCenterService {
     // 跑腿订单
     if (!normalizedOrderType || normalizedOrderType === "errand") {
       const where: any = {};
-      if (keyword) where.title = { contains: keyword };
+      if (keyword) {
+        where.OR = [
+          { orderNo: { contains: keyword } },
+          { title: { contains: keyword } },
+          { description: { contains: keyword } },
+        ];
+      }
       if (status) where.status = status;
       if (userId) where.userId = userId;
       if (startDate || endDate) {

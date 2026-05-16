@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsEnum, IsNumber, IsNotEmpty } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Gender } from '@prisma/client';
 
@@ -15,8 +15,17 @@ export class UpdateProfileDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsEnum(Gender)
-  gender?: Gender;
+  gender?: Gender | number | string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  riderGender?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  riderGenderText?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -42,6 +51,51 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   dormitory?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  mobile?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  wechat_account?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  wechatAccount?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  birthday?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  zodiac?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  background_url?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  backgroundUrl?: string;
 }
 
 export class UpdateSettingsDto {

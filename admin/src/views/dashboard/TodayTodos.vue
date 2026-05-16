@@ -37,7 +37,7 @@ const todos = ref([
   { title: '评论待审', key: 'pendingComments', count: 0, icon: 'ChatDotRound', color: '#14b8a6', route: '/content/audit' },
   { title: '用户举报', key: 'pendingReports', count: 0, icon: 'Warning', color: '#ec4899', route: '/content/audit' },
   { title: '提现审核', key: 'pendingWithdraws', count: 0, icon: 'Wallet', color: '#ef4444', route: '/finance/withdrawals' },
-  { title: '异常订单', key: 'abnormalOrders', count: 0, icon: 'CircleClose', color: '#f97316', route: '/delivery/abnormal' },
+  { title: '异常订单', key: 'abnormalOrders', count: 0, icon: 'CircleClose', color: '#f97316', route: '/errand/abnormal' },
 ])
 
 async function loadTodos() {

@@ -21,6 +21,13 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="执行器" width="130">
+          <template #default="{ row }">
+            <el-tag :type="row.executorBound ? 'success' : 'warning'" size="small">
+              {{ row.executorBound ? '真实接入' : '未接入' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="runCount" label="执行次数" width="90" />
         <el-table-column label="操作" width="200">
           <template #default="{ row }">
@@ -96,9 +103,12 @@ const form = reactive({ name: '', type: 'daily_report', cron: '' })
 const loadJobs = async () => {
   loading.value = true
   try {
-    const res = await request.get('/admin/jobs')
-    jobs.value = res.data?.list || []
-  } catch { jobs.value = [] } finally { loading.value = false }
+    const res: any = await request.get('/admin/jobs')
+    jobs.value = res?.list || res?.data?.list || []
+  } catch (e: any) {
+    jobs.value = []
+    ElMessage.error(e?.message || '加载任务失败')
+  } finally { loading.value = false }
 }
 
 const createJob = async () => {
@@ -130,10 +140,13 @@ const viewLogs = async (row: any) => {
   currentJobId.value = row.id
   loadingLogs.value = true
   try {
-    const res = await request.get(`/admin/jobs/${row.id}/logs`)
-    logs.value = res.data?.list || []
+    const res: any = await request.get(`/admin/jobs/${row.id}/logs`)
+    logs.value = res?.list || res?.data?.list || []
     showLogsDialog.value = true
-  } catch { logs.value = [] } finally { loadingLogs.value = false }
+  } catch (e: any) {
+    logs.value = []
+    ElMessage.error(e?.message || '加载任务日志失败')
+  } finally { loadingLogs.value = false }
 }
 
 onMounted(() => loadJobs())

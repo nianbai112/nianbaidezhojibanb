@@ -13,6 +13,9 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 
+const SECRET_MASK = '******';
+const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|pass$/i;
+
 @Injectable()
 export class SystemAdminService {
   constructor(
@@ -316,16 +319,7 @@ export class SystemAdminService {
     const configs = await this.prisma.config.findMany({ where: { group } });
     const result: Record<string, any> = {};
     for (const c of configs) {
-      let val = c.value;
-      // Mask sensitive keys
-      if (typeof val === 'object' && val !== null) {
-        const masked: any = {};
-        for (const [k, v] of Object.entries(val)) {
-          masked[k] = /secret|key|password|token|private|cert/i.test(k) ? '******' : v;
-        }
-        val = masked;
-      }
-      result[c.key] = val;
+      result[c.key] = this.maskConfigValue(c.value);
     }
     return result;
   }
@@ -338,7 +332,17 @@ export class SystemAdminService {
         if (existing?.value) {
           const merged: any = { ...(existing.value as any) };
           for (const [k, v] of Object.entries(value)) {
-            if (v === '******') continue;
+            if (v === SECRET_MASK) continue;
+            if (
+              v &&
+              typeof v === 'object' &&
+              !Array.isArray(v) &&
+              merged[k] &&
+              typeof merged[k] === 'object'
+            ) {
+              merged[k] = this.mergeMaskedConfigValue(merged[k], v);
+              continue;
+            }
             merged[k] = v;
           }
           await this.prisma.config.upsert({ where: { key }, create: { key, value: merged, group }, update: { value: merged } });
@@ -348,6 +352,38 @@ export class SystemAdminService {
       await this.prisma.config.upsert({ where: { key }, create: { key, value, group }, update: { value } });
     }
     return { success: true };
+  }
+
+  private maskConfigValue(value: any, fieldName = ''): any {
+    if (Array.isArray(value)) return value.map((item) => this.maskConfigValue(item));
+    if (!value || typeof value !== 'object') {
+      if (fieldName && SECRET_FIELD_PATTERN.test(fieldName)) return value ? SECRET_MASK : '';
+      return value;
+    }
+    const result: Record<string, any> = {};
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = SECRET_FIELD_PATTERN.test(key) ? (item ? SECRET_MASK : '') : this.maskConfigValue(item, key);
+    }
+    return result;
+  }
+
+  private mergeMaskedConfigValue(current: Record<string, any>, incoming: Record<string, any>) {
+    const merged: Record<string, any> = { ...current };
+    for (const [key, value] of Object.entries(incoming)) {
+      if (value === SECRET_MASK && SECRET_FIELD_PATTERN.test(key)) continue;
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        merged[key] &&
+        typeof merged[key] === 'object'
+      ) {
+        merged[key] = this.mergeMaskedConfigValue(merged[key], value as Record<string, any>);
+      } else {
+        merged[key] = value;
+      }
+    }
+    return merged;
   }
 
   async getWechatAccessToken(platform: 'miniapp' | 'official', incoming: Record<string, any> = {}) {

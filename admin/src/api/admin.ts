@@ -83,7 +83,16 @@ function statusText(v: any): string {
     paid: '已支付',
     refunded: '已退款',
     cancelled: '已取消',
-    processing: '处理中'
+    processing: '处理中',
+    pending_pay: '待付款',
+    pending_accept: '待接单',
+    accepted: '已接单',
+    in_progress: '进行中',
+    arrived: '已到达',
+    refunding: '退款中',
+    offline: '离线',
+    online: '在线',
+    busy: '忙碌'
   }
   return map[s] || s || '正常'
 }
@@ -246,11 +255,13 @@ function mapRow(moduleKey: string, row: any) {
         createdAt
       })
     case 'delivery':
+      const rowUser = row.user || row.User
+      const rowRider = row.rider || row.RegionRider
       return withMeta(moduleKey, row, {
         id: row.id,
         orderNo: text(row.orderNo, row.id),
-        user: avatar(row.userName || row.user?.nickname, row.userPhone),
-        rider: avatar(row.riderName || row.rider?.name, row.riderPhone),
+        user: avatar(row.userName || rowUser?.nickname, row.userPhone || rowUser?.phone),
+        rider: avatar(row.riderName || rowRider?.realName, row.riderPhone || rowRider?.phone || '未分配'),
         serviceType: text(row.serviceType, row.type),
         distance: text(row.distance ? `${row.distance}km` : ''),
         amount: money(row.amount, row.payAmount),
@@ -338,7 +349,13 @@ function normalizeWriteData(moduleKey: string, data: Record<string, any>) {
 
 export async function fetchRiders(params: Record<string, any> = {}) {
   const data = await request.get('/admin/riders', { params: { page: 1, pageSize: 100, status: 'online', ...params } })
-  return listOf(data)
+  return listOf(data).map((r: any) => ({
+    ...r,
+    id: r.userId || r.id,
+    regionRiderId: r.id,
+    name: r.realName || r.User?.nickname || r.phone || r.userId || r.id,
+    phone: r.phone || r.User?.phone || '',
+  }))
 }
 
 export async function fetchUserTags(params: Record<string, any> = {}) {
@@ -492,6 +509,17 @@ export async function fetchModulePage(moduleKey: string, params: Record<string, 
   if (!endpoint) return { rows: [], total: 0 }
   const query: Record<string, any> = { page: 1, pageSize: 10, ...params }
   if (moduleKey === 'verification') query.studentCertStatus = query.status || 'pending'
+  if (moduleKey === 'delivery') {
+    if (query.keyword && !query.orderNo) {
+      query.orderNo = query.keyword
+      delete query.keyword
+    }
+    if (Array.isArray(query.date)) {
+      query.startDate = query.date[0]
+      query.endDate = query.date[1]
+      delete query.date
+    }
+  }
   const data = await request.get(endpoint, { params: query })
   const sourceRows = listOf(data)
   return {
@@ -647,7 +675,8 @@ export async function fetchUploadFiles(params: Record<string, any> = {}) {
 // ==================== 存储配置 ====================
 
 export async function fetchStorageConfig() {
-  return request.get('/admin/config/storage')
+  const res: any = await request.get('/admin/config/storage')
+  return res?.data || res
 }
 
 export async function saveStorageConfig(data: Record<string, any>) {
@@ -661,7 +690,8 @@ export async function testStorageConfig(data: Record<string, any>) {
 // ==================== AI 配置 ====================
 
 export async function fetchAiConfig() {
-  return request.get('/admin/config/ai')
+  const res: any = await request.get('/admin/config/ai')
+  return res?.data || res
 }
 
 export async function saveAiConfig(data: Record<string, any>) {
@@ -675,7 +705,8 @@ export async function testAiConfig() {
 // ==================== 机器人配置 ====================
 
 export async function fetchRobotConfig() {
-  return request.get('/admin/config/robot')
+  const res: any = await request.get('/admin/config/robot')
+  return res?.data || res
 }
 
 export async function saveRobotConfig(data: Record<string, any>) {
@@ -749,7 +780,8 @@ export async function generateRegionOpsTasks(regionId: string) {
 // ==================== 高德地图配置 ====================
 
 export async function fetchAmapConfig() {
-  return request.get('/admin/config/amap')
+  const res: any = await request.get('/admin/config/amap')
+  return res?.data || res
 }
 
 export async function saveAmapConfig(data: Record<string, any>) {

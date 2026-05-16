@@ -90,6 +90,77 @@ export class CircleService {
     return merged;
   }
 
+  private async resolveAdminConfigRegionId(regionId?: string) {
+    if (regionId) return regionId;
+    const region = await this.prisma.region.findFirst({
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    if (!region) throw new BadRequestException('暂无区域，请先创建区域');
+    return region.id;
+  }
+
+  private normalizeTags(value: any): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+      return value
+        .split(/[,\n，]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  private normalizeJoinType(value: any): 'OPEN' | 'APPLY' | 'INVITE' {
+    const joinTypeMap: Record<string, 'OPEN' | 'APPLY' | 'INVITE'> = {
+      free: 'OPEN',
+      open: 'OPEN',
+      OPEN: 'OPEN',
+      apply: 'APPLY',
+      audit: 'APPLY',
+      APPLY: 'APPLY',
+      invite: 'INVITE',
+      INVITE: 'INVITE',
+    };
+    return joinTypeMap[String(value || 'OPEN')] || 'OPEN';
+  }
+
+  private buildCircleMutationData(dto: any, options: { requireName?: boolean; regionId?: string; defaultMaxMembers?: number } = {}) {
+    const data: any = {};
+    if (dto.name !== undefined) {
+      const name = String(dto.name || '').trim();
+      if (options.requireName && !name) throw new BadRequestException('圈子名称不能为空');
+      if (name) data.name = name;
+    } else if (options.requireName) {
+      throw new BadRequestException('圈子名称不能为空');
+    }
+    const regionId = options.regionId ?? dto.regionId ?? dto.region_id;
+    if (regionId !== undefined) data.regionId = regionId ? String(regionId) : null;
+    if (dto.icon !== undefined) data.icon = String(dto.icon || '');
+    if (dto.cover !== undefined) data.cover = String(dto.cover || '');
+    if (dto.description !== undefined) data.description = String(dto.description || '');
+    if (dto.joinType !== undefined || dto.join_type !== undefined) {
+      data.joinType = this.normalizeJoinType(dto.joinType ?? dto.join_type);
+    }
+    if (dto.isOfficial !== undefined) data.isOfficial = !!dto.isOfficial;
+    if (dto.status !== undefined) data.status = String(dto.status || 'active');
+    if (dto.maxMembers !== undefined || dto.max_members !== undefined || options.defaultMaxMembers !== undefined) {
+      const maxMembers = Number(dto.maxMembers ?? dto.max_members ?? options.defaultMaxMembers);
+      data.maxMembers = Number.isFinite(maxMembers) && maxMembers > 0 ? maxMembers : options.defaultMaxMembers ?? 500;
+    }
+    if (dto.tags !== undefined || dto.tagsInput !== undefined) data.tags = this.normalizeTags(dto.tags ?? dto.tagsInput);
+    if (dto.paidJoin !== undefined || dto.paid_join !== undefined) data.paidJoin = !!(dto.paidJoin ?? dto.paid_join);
+    if (dto.price !== undefined) data.price = dto.price === '' || dto.price === null ? null : Number(dto.price);
+    if (dto.inviteCode !== undefined || dto.invite_code !== undefined) {
+      data.inviteCode = String(dto.inviteCode ?? dto.invite_code ?? '');
+    }
+    if (dto.deadline !== undefined) data.deadline = dto.deadline ? new Date(dto.deadline) : null;
+    return data;
+  }
+
   private async getRegionCircleSettings(regionId: string) {
     if (!regionId) return this.getCircleConfigDefaults();
     const region = await this.prisma.region.findUnique({
@@ -136,7 +207,8 @@ export class CircleService {
       }),
       this.prisma.circle.count({ where }),
     ]);
-    const data = list.map((circle) => this.toMiniCircle(circle, userId));
+    const joinedCircleIds = userId ? new Set(list.map((circle) => circle.id)) : undefined;
+    const data = list.map((circle) => this.toMiniCircle(circle, userId, joinedCircleIds));
 
     return {
       data,
@@ -181,7 +253,8 @@ export class CircleService {
       this.prisma.circle.count({ where }),
       this.getRegionCircleSettings(regionId),
     ]);
-    const data = list.map((circle) => this.toMiniCircle(circle, userId));
+    const joinedCircleIds = userId ? new Set(list.map((circle) => circle.id)) : undefined;
+    const data = list.map((circle) => this.toMiniCircle(circle, userId, joinedCircleIds));
     return {
       data,
       list: data,
@@ -192,12 +265,14 @@ export class CircleService {
     };
   }
 
-  private toMiniCircle(circle: any, userId = '') {
+  private toMiniCircle(circle: any, userId = '', joinedCircleIds?: Set<string>) {
     const members = Array.isArray(circle.members) ? circle.members : [];
     const ownerMember = members.find((member: any) => member.role === 'OWNER') || members[0];
     const memberCount = Number(circle.memberCount ?? circle._count?.members ?? members.length ?? 0);
     const postCount = Number(circle.postCount ?? 0);
     const logo = circle.icon || circle.cover || '/static/logo.jpg';
+    const isJoined = !!userId && (joinedCircleIds?.has(circle.id) || members.some((member: any) => member.userId === userId));
+    const isOwner = !!userId && members.some((member: any) => member.userId === userId && member.role === 'OWNER');
 
     return {
       id: circle.id,
@@ -235,8 +310,11 @@ export class CircleService {
             avatar: ownerMember.user?.avatar || '/static/logo.jpg',
           }
         : null,
-      is_joined: userId ? members.some((member: any) => member.userId === userId) : false,
-      is_owner: userId ? members.some((member: any) => member.userId === userId && member.role === 'OWNER') : false,
+      is_joined: isJoined,
+      isJoined,
+      joined: isJoined,
+      is_owner: isOwner,
+      isOwner,
       audit_info: null,
       tags: circle.tags || [],
       created_at: circle.createdAt,
@@ -246,21 +324,24 @@ export class CircleService {
 
   async getDetail(circleId: string, query: any = {}) {
     const userId = typeof query.user_id === 'string' && query.user_id.trim() ? query.user_id.trim() : '';
-    const circle = await this.prisma.circle.findUnique({
-      where: { id: circleId },
-      include: {
-        members: {
-          take: 12,
-          orderBy: { joinAt: 'asc' },
-          include: { user: { select: { id: true, nickname: true, avatar: true } } },
+    const [circle, membership] = await Promise.all([
+      this.prisma.circle.findUnique({
+        where: { id: circleId },
+        include: {
+          members: {
+            take: 12,
+            orderBy: { joinAt: 'asc' },
+            include: { user: { select: { id: true, nickname: true, avatar: true } } },
+          },
+          channels: true,
+          topicGroups: { include: { topic: true } },
+          _count: { select: { members: true, channels: true } },
         },
-        channels: true,
-        topicGroups: { include: { topic: true } },
-        _count: { select: { members: true, channels: true } },
-      },
-    });
+      }),
+      userId ? this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } }) : null,
+    ]);
     if (!circle) throw new NotFoundException('圈子不存在');
-    const miniCircle = this.toMiniCircle(circle, userId);
+    const miniCircle = this.toMiniCircle(circle, userId, membership ? new Set([circleId]) : undefined);
     return {
       ...miniCircle,
       channels: circle.channels || [],
@@ -534,7 +615,34 @@ export class CircleService {
   }
 
   async getHotKeywords(query: any) {
-    return { keywords: ['校园生活', '二手交易', '兼职', '失物招领', '社团活动'] };
+    const regionId = query.region_id || query.regionId;
+    const where: any = { status: 'active' };
+    if (regionId) where.regionId = String(regionId);
+
+    const circles = await this.prisma.circle.findMany({
+      where,
+      take: 100,
+      orderBy: [{ memberCount: 'desc' }, { postCount: 'desc' }, { createdAt: 'desc' }],
+      select: { name: true, tags: true, memberCount: true, postCount: true },
+    });
+
+    const weights = new Map<string, number>();
+    for (const circle of circles) {
+      const base = Number(circle.memberCount || 0) + Number(circle.postCount || 0);
+      for (const tag of this.normalizeTags(circle.tags)) {
+        weights.set(tag, (weights.get(tag) || 0) + 10 + base);
+      }
+      if (circle.name) {
+        weights.set(circle.name, Math.max(weights.get(circle.name) || 0, 1 + base));
+      }
+    }
+
+    return {
+      keywords: Array.from(weights.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([keyword]) => keyword)
+        .slice(0, 10),
+    };
   }
 
   // ======================== Admin 方法 ========================
@@ -635,7 +743,8 @@ export class CircleService {
   }
 
   async adminUpdateCircle(circleId: string, dto: any) {
-    return this.prisma.circle.update({ where: { id: circleId }, data: dto });
+    const data = this.buildCircleMutationData(dto);
+    return this.prisma.circle.update({ where: { id: circleId }, data });
   }
 
   async adminDissolveCircle(circleId: string) {
@@ -662,17 +771,17 @@ export class CircleService {
 
   async adminRemoveMember(memberId: string) {
     const member = await this.prisma.circleMember.findUnique({ where: { id: memberId } });
-    if (!member) throw new Error('成员不存在');
-    if (member.role === 'OWNER') throw new Error('无法移除群主');
+    if (!member) throw new NotFoundException('成员不存在');
+    if (member.role === 'OWNER') throw new BadRequestException('无法移除群主');
     await this.prisma.circleMember.delete({ where: { id: memberId } });
     await this.prisma.circle.update({ where: { id: member.circleId }, data: { memberCount: { decrement: 1 } } });
     return { success: true };
   }
 
   async getAdminCircleConfig(regionId: string) {
-    if (!regionId) throw new Error('regionId is required');
+    regionId = await this.resolveAdminConfigRegionId(regionId);
     const region = await this.prisma.region.findUnique({ where: { id: regionId } });
-    if (!region) throw new Error('Region not found');
+    if (!region) throw new NotFoundException('区域不存在');
     const settings: any = region.settings || {};
     return {
       ...this.normalizeCircleConfigPayload(settings.circleConfig || {}, regionId),
@@ -681,9 +790,9 @@ export class CircleService {
   }
 
   async updateAdminCircleConfig(regionId: string, dto: any) {
-    if (!regionId) throw new Error('regionId is required');
+    regionId = await this.resolveAdminConfigRegionId(regionId);
     const region = await this.prisma.region.findUnique({ where: { id: regionId } });
-    if (!region) throw new Error('Region not found');
+    if (!region) throw new NotFoundException('区域不存在');
     const settings: any = region.settings || {};
     settings.circleConfig = this.normalizeCircleConfigPayload({ ...settings.circleConfig, ...dto }, regionId);
     await this.prisma.region.update({ where: { id: regionId }, data: { settings } });
@@ -718,12 +827,29 @@ export class CircleService {
   // ======================== Admin 创建社群 ========================
 
   async adminCreateCircle(dto: any) {
-    const { price, paidJoin, inviteCode, deadline, ...rest } = dto;
-    const data: any = { ...rest, memberCount: 0 };
-    if (price !== undefined) data.price = price;
-    if (paidJoin !== undefined) data.paidJoin = paidJoin;
-    if (inviteCode !== undefined) data.inviteCode = inviteCode;
-    if (deadline !== undefined) data.deadline = new Date(deadline);
+    const regionId = dto.regionId || dto.region_id;
+    if (!regionId) throw new BadRequestException('请选择区域');
+    const region = await this.prisma.region.findUnique({
+      where: { id: String(regionId) },
+      select: { id: true, settings: true },
+    });
+    if (!region) throw new NotFoundException('区域不存在');
+
+    const config = this.normalizeCircleConfigPayload((region.settings as any)?.circleConfig || {}, region.id);
+    const maxMembers = Number(dto.maxMembers ?? dto.max_members ?? config.max_members_per_circle ?? 500);
+    const data: any = {
+      ...this.buildCircleMutationData(
+        { ...dto, joinType: dto.joinType || dto.join_type || config.default_join_method },
+        {
+          requireName: true,
+          regionId: region.id,
+          defaultMaxMembers: Number.isFinite(maxMembers) ? maxMembers : Number(config.max_members_per_circle || 500),
+        },
+      ),
+      memberCount: 0,
+      postCount: 0,
+    };
+    if (!data.status) data.status = 'active';
     return this.prisma.circle.create({ data });
   }
 

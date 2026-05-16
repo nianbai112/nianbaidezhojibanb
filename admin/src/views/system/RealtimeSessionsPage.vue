@@ -252,6 +252,10 @@ function avatarText(name?: string) {
   return (name || '?').slice(0, 1)
 }
 
+function refreshHeaderStats() {
+  window.dispatchEvent(new CustomEvent('admin-header-stats-refresh'))
+}
+
 async function loadSessions(showSuccess = false) {
   loading.value = true
   try {
@@ -299,6 +303,7 @@ async function handleTestPush(row: any) {
     ElMessage.success(res?.message || `官方消息已发送到 ${res?.deliveredCount || 0} 个连接`)
     await loadSessions()
     await loadOfficialConversations()
+    refreshHeaderStats()
   } catch (e: any) {
     ElMessage.error(e?.message || '推送失败')
   }
@@ -330,6 +335,7 @@ async function loadOfficialMessages(conversationId: string) {
     const res: any = await fetchOfficialConversationMessages(conversationId, { page: 1, pageSize: 80 })
     officialMessages.value = res?.messages || res?.data?.messages || []
     await loadOfficialConversations()
+    refreshHeaderStats()
   } catch (e: any) {
     ElMessage.error(e?.message || '加载会话消息失败')
   } finally {
@@ -353,6 +359,7 @@ async function sendOfficialReply() {
     ElMessage.success(res?.message || '官方回复已发送')
     replyContent.value = ''
     await loadOfficialMessages(conversationId)
+    refreshHeaderStats()
   } catch (e: any) {
     ElMessage.error(e?.message || '发送失败')
   } finally {

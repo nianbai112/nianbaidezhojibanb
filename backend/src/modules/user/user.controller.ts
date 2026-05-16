@@ -18,8 +18,12 @@ export class UserController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取当前用户信息' })
-  getMe(@CurrentUser('sub') userId: string, @Query('user_id') targetId?: string) {
-    return this.userService.getProfile(targetId || userId);
+  getMe(
+    @CurrentUser('sub') userId: string,
+    @Query('user_id') targetId?: string,
+    @Query('region_id') regionId?: string,
+  ) {
+    return this.userService.getProfile(targetId || userId, regionId);
   }
 
   @Get('auth/admin/bound-user')

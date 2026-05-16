@@ -106,6 +106,65 @@ export class RegionService {
     }));
   }
 
+  private normalizeProfileLayoutItems(items: any) {
+    const defaultItems = [
+      { id: 'orders', title: '我的订单', description: '订单、配送和售后', main_image: '/static/logo.jpg', path: 'pagesA/order/order', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0 },
+      { id: 'wallet', title: '我的钱包', description: '余额、提现和流水', main_image: '/static/logo.jpg', path: 'pagesA/withdraw/withdraw', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1 },
+      { id: 'share', title: '分享有礼', description: '邀请同学加入', main_image: '/static/logo.jpg', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2 },
+      { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.jpg', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
+      { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.jpg', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4 },
+    ];
+    const mapItems = (sourceItems: any[]) => sourceItems
+      .filter((item: any) => {
+        if (!item || item.enabled === false) return false;
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || item.mini_program?.path || '').trim();
+        return linkType === 'popup' || !!path;
+      })
+      .map((item: any, index: number) => {
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || '').trim();
+        const query = String(item.query || '').trim().replace(/^\?+/, '');
+        const fullPath = query
+          ? path.includes('?')
+            ? `${path}&${query}`
+            : `${path}?${query}`
+          : path;
+        const appId = item.appId || item.appid || item.mini_program?.appid || '';
+        const miniPath = item.mini_program?.path || fullPath || '';
+        const type =
+          linkType === 'external_jump' || linkType === 'miniProgram' || linkType === 'miniapp'
+            ? 'external_jump'
+            : linkType === 'web_page' || linkType === 'webview'
+              ? 'web_page'
+              : linkType === 'popup'
+                ? 'popup'
+                : 'internal_jump';
+
+        return {
+          ...item,
+          id: item.id || `profile_${index}`,
+          title: item.title || item.name || '功能入口',
+          description: item.description || item.subtitle || '',
+          main_image: item.main_image || item.mainImage || item.image || item.iconImage || item.icon || '/static/logo.jpg',
+          image: item.image || item.main_image || item.mainImage || item.iconImage || item.icon || '/static/logo.jpg',
+          type,
+          url: type === 'web_page' ? (item.url || fullPath) : fullPath,
+          mini_program: {
+            ...(item.mini_program || {}),
+            appid: appId,
+            path: miniPath,
+          },
+          navigation_permission: item.navigation_permission || item.navigationPermission || 'unlimited',
+          enabled: item.enabled !== false,
+          sortOrder: item.sortOrder ?? item.sort_order ?? index,
+        };
+      })
+      .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const normalized = mapItems(Array.isArray(items) && items.length ? items : defaultItems);
+    return normalized.length ? normalized : mapItems(defaultItems);
+  }
+
   private toHomeContentItem(item: any, index = 0) {
     const type = item.module_type || item.type || 'menu';
     const image = item.image_url || item.image || item.icon || item.cover || '';
@@ -269,7 +328,7 @@ export class RegionService {
       home_leaderboard: raw.homeLeaderboard ?? { enabled: false, items: [] },
       message_icons: raw.messageIcons ?? {},
       message_navigation: raw.messageNavigation ?? { cards: [] },
-      profile_layout_items: raw.profileLayoutItems ?? [],
+      profile_layout_items: this.normalizeProfileLayoutItems(raw.profileLayoutItems),
       home_nav_layout_config: raw.homeNavLayoutConfig ?? {},
       note_list_style: noteConfig.note_list_style || null,
       note_config: noteConfig,

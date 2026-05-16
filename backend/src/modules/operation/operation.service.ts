@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
 @Injectable()
 export class OperationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiRuntime: AiRuntimeService,
+  ) {}
 
   private getNoteSettingConfigKey(regionId: string) {
     return `content.note_settings.${regionId}`;
@@ -768,22 +772,17 @@ export class OperationService {
 
   // ========== AI ==========
   async getAIConfig() {
-    const config = await this.prisma.config.findUnique({ where: { key: 'ai_config' } });
-    const raw = (config?.value as Record<string, any>) || {};
-    const { apiKey, ...safe } = raw;
-    return { ...safe, enabled: raw.enabled ?? false, hasApiKey: !!apiKey };
+    return this.aiRuntime.getSafeConfig();
   }
 
   async generateAIComments(dto: any) {
     const { postId, contentType, regionId, count = 5, tone, persona } = dto;
 
-    const config = await this.prisma.config.findUnique({ where: { key: 'ai_config' } });
-    const aiConfig = (config?.value as Record<string, any>) || {};
-
-    if (!aiConfig.enabled || !aiConfig.apiKey) {
+    const configured = await this.aiRuntime.isConfigured();
+    if (!configured) {
       return {
         success: false,
-        error: '请先在 AI运营中心 / AI配置 中配置模型（需填写 apiKey 并启用）',
+        error: '请先在 AI运营中心 / AI配置 中配置模型密钥和模型名称',
         comments: [],
       };
     }
@@ -816,12 +815,6 @@ export class OperationService {
     });
 
     try {
-      const provider = aiConfig.provider || 'openai';
-      const baseURL = aiConfig.baseURL || 'https://api.openai.com/v1';
-      const model = aiConfig.model || 'gpt-3.5-turbo';
-      const temperature = aiConfig.temperature ?? 0.8;
-      const maxTokens = aiConfig.maxTokens ?? 500;
-
       let postContext = '';
       if (postId) {
         const post = await this.prisma.post.findUnique({
@@ -831,34 +824,15 @@ export class OperationService {
         if (post) postContext = `帖子标题: ${post.title || ''}\n帖子内容: ${(post.content || '').slice(0, 500)}`;
       }
 
-      const systemPrompt = aiConfig.prompt || '你是一个校园社区的活跃用户，负责生成自然、真实的评论。';
       const userPrompt = `请为以下内容生成 ${count} 条${tone || '友好'}风格的评论。\n${postContext}\n要求：每条评论独立一行，内容真实自然，像真人写的，不要带序号。`;
-
-      const response = await fetch(`${baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${aiConfig.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          temperature,
-          max_tokens: maxTokens,
-        }),
+      const content = await this.aiRuntime.generateText(userPrompt, {
+        systemPrompt: persona || '你是一个校园社区的活跃用户，负责生成自然、真实、克制的评论。',
       });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        throw new Error(`AI API 调用失败 (${response.status}): ${errText.slice(0, 200)}`);
-      }
-
-      const result = await response.json();
-      const content = result.choices?.[0]?.message?.content || '';
-      const comments = content.split('\n').map((c: string) => c.trim()).filter((c: string) => c.length > 0);
+      const comments = content
+        .split('\n')
+        .map((c: string) => c.replace(/^[-*\d.、\s]+/, '').trim())
+        .filter((c: string) => c.length > 0)
+        .slice(0, Math.max(1, Number(count) || 5));
 
       const botUserId = botAccount.userId;
 
@@ -907,8 +881,6 @@ export class OperationService {
             taskId: task.id,
             generated: comments.length,
             saved: savedComments.length,
-            provider,
-            model,
           },
         },
       }).catch(() => {});

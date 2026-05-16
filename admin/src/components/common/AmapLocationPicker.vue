@@ -147,9 +147,10 @@ async function initMap() {
       plugins: ['AMap.Scale', 'AMap.ToolBar', 'AMap.AutoComplete', 'AMap.PlaceSearch', 'AMap.Geocoder']
     })
 
-    const center = props.defaultCenter || config.defaultLongitude && config.defaultLatitude
-      ? [config.defaultLongitude, config.defaultLatitude]
-      : [113.264385, 23.129112]
+    const center = props.defaultCenter
+      || (config.defaultLongitude && config.defaultLatitude
+        ? [config.defaultLongitude, config.defaultLatitude]
+        : [113.264385, 23.129112])
 
     map = new AMap.Map(mapContainer.value, {
       zoom: 13,

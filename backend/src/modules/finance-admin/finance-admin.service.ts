@@ -870,42 +870,108 @@ export class FinanceAdminService {
   async getAbnormalOrders(query: any) {
     const { page = 1, pageSize = 20, type } = query;
     const results: any[] = [];
+    const includeType = (value: string) => !type || type === value || type === 'all';
 
     // 长时间未支付订单
-    const unpaidOrders = await this.prisma.order.findMany({
-      where: {
-        status: 'PENDING_PAY',
-        createdAt: { lte: new Date(Date.now() - 30 * 60 * 1000) },
-      },
-      take: 20,
-      orderBy: { createdAt: 'asc' },
-    });
-    results.push(...unpaidOrders.map(o => ({
-      orderId: o.id,
-      orderNo: o.orderNo,
-      type: 'long_unpaid',
-      description: '订单超过30分钟未支付',
-      amount: Number(o.payAmount || 0),
-      createdAt: o.createdAt,
-    })));
+    if (includeType('long_unpaid')) {
+      const unpaidOrders = await this.prisma.order.findMany({
+        where: {
+          status: 'PENDING_PAY',
+          createdAt: { lte: new Date(Date.now() - 30 * 60 * 1000) },
+        },
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+        take: 30,
+        orderBy: { createdAt: 'asc' },
+      });
+      results.push(...unpaidOrders.map(o => ({
+        id: o.id,
+        orderId: o.id,
+        orderNo: o.orderNo,
+        source: 'order',
+        type: 'long_unpaid',
+        title: '普通订单长时间未支付',
+        description: '订单超过30分钟未支付',
+        user: o.user,
+        userId: o.userId,
+        price: Number(o.payAmount || 0),
+        amount: Number(o.payAmount || 0),
+        status: String(o.status),
+        cancelReason: '订单超过30分钟未支付',
+        createdAt: o.createdAt,
+      })));
+    }
 
     // 退款中超过24小时
-    const refundingOrders = await this.prisma.order.findMany({
-      where: {
-        status: 'REFUNDING',
-        updatedAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-      },
-      take: 20,
-      orderBy: { updatedAt: 'asc' },
-    });
-    results.push(...refundingOrders.map(o => ({
-      orderId: o.id,
-      orderNo: o.orderNo,
-      type: 'refund_timeout',
-      description: '退款处理超过24小时',
-      amount: Number(o.payAmount || 0),
-      createdAt: o.updatedAt,
-    })));
+    if (includeType('refund_timeout')) {
+      const refundingOrders = await this.prisma.order.findMany({
+        where: {
+          status: 'REFUNDING',
+          updatedAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        },
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+        take: 30,
+        orderBy: { updatedAt: 'asc' },
+      });
+      results.push(...refundingOrders.map(o => ({
+        id: o.id,
+        orderId: o.id,
+        orderNo: o.orderNo,
+        source: 'order',
+        type: 'refund_timeout',
+        title: '普通订单退款超时',
+        description: '退款处理超过24小时',
+        user: o.user,
+        userId: o.userId,
+        price: Number(o.payAmount || 0),
+        amount: Number(o.payAmount || 0),
+        status: String(o.status),
+        cancelReason: '退款处理超过24小时',
+        createdAt: o.updatedAt,
+      })));
+    }
+
+    // 跑腿待接单/履约/退款异常
+    if (includeType('errand_overdue')) {
+      const errandOrders = await this.prisma.errandOrder.findMany({
+        where: {
+          OR: [
+            { status: 'pending_accept', createdAt: { lte: new Date(Date.now() - 10 * 60 * 1000) } },
+            { status: { in: ['accepted', 'in_progress', 'arrived'] }, updatedAt: { lte: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
+            { status: 'refunding', updatedAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+          ],
+        },
+        include: {
+          User: { select: { id: true, nickname: true, phone: true } },
+          RegionRider: { select: { id: true, userId: true, realName: true, phone: true } },
+        },
+        take: 60,
+        orderBy: { updatedAt: 'asc' },
+      });
+      results.push(...errandOrders.map(o => {
+        const description = o.status === 'pending_accept'
+          ? '跑腿订单超过10分钟无人接单'
+          : o.status === 'refunding'
+            ? '跑腿退款处理超过24小时'
+            : '跑腿履约超过2小时未完成';
+        return {
+          id: o.id,
+          orderId: o.id,
+          orderNo: o.orderNo,
+          source: 'errand',
+          type: 'errand_overdue',
+          title: o.title,
+          description,
+          user: o.User,
+          rider: o.RegionRider,
+          userId: o.userId,
+          price: Number(o.payAmount || o.price || 0),
+          amount: Number(o.payAmount || o.price || 0),
+          status: o.status,
+          cancelReason: description,
+          createdAt: o.updatedAt,
+        };
+      }));
+    }
 
     results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 

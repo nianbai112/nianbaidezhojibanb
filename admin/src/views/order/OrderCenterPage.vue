@@ -43,7 +43,7 @@
       </el-table-column>
       <el-table-column prop="amount" label="金额" width="100">
         <template #default="{ row }">
-          ¥{{ (row.amount / 100).toFixed(2) }}
+          ¥{{ Number(row.amount || 0).toFixed(2) }}
         </template>
       </el-table-column>
       <el-table-column prop="status" label="状态" width="100">
@@ -86,7 +86,7 @@
           <el-descriptions-item label="状态">
             <el-tag :type="getStatusType(selectedOrder.status)">{{ selectedOrder.status }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="金额">¥{{ (selectedOrder.amount / 100).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="金额">¥{{ Number(selectedOrder.amount || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="用户">{{ selectedOrder.user?.nickname || '-' }}</el-descriptions-item>
           <el-descriptions-item label="商户">{{ selectedOrder.merchant?.name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ formatDate(selectedOrder.createdAt) }}</el-descriptions-item>
@@ -154,8 +154,9 @@ const loadOrders = async () => {
         ...filters,
       },
     })
-    orders.value = res.data?.list || []
-    pagination.total = res.data?.total || 0
+    const payload: any = (res as any)?.data || res
+    orders.value = payload?.list || []
+    pagination.total = payload?.total || 0
   } catch (error) {
     ElMessage.error('加载订单列表失败')
   } finally {
@@ -174,10 +175,19 @@ const resetFilters = () => {
 
 const viewDetail = async (order: any) => {
   try {
+    const typeMap: Record<string, string> = {
+      普通订单: 'order',
+      商城订单: 'mall',
+      跑腿订单: 'errand',
+      团购订单: 'groupbuy',
+      活动订单: 'activity',
+      充值订单: 'topup',
+      二手订单: 'secondhand',
+    }
     const res = await request.get(`/admin/order-center/orders/${order.orderId}`, {
-      params: { type: order.orderType === '普通订单' ? 'order' : order.orderType === '商城订单' ? 'mall' : undefined },
+      params: { type: typeMap[order.orderType] },
     })
-    selectedOrder.value = res.data
+    selectedOrder.value = (res as any)?.data || res
     showDetailDialog.value = true
   } catch (error) {
     ElMessage.error('获取订单详情失败')

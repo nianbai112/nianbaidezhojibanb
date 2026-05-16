@@ -46,6 +46,7 @@
 import { ref, computed, onMounted } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
+import { ElMessage } from 'element-plus'
 
 const loading = ref(false)
 const result = ref<any>({ score: 0, status: 'pending', items: [] })
@@ -67,8 +68,13 @@ async function runCheck() {
   try {
     const res: any = await request.get('/admin/ops/launch-check')
     result.value = res
-  } catch {
-    result.value = { score: 0, status: 'failed', items: [] }
+  } catch (e: any) {
+    result.value = {
+      score: 0,
+      status: 'failed',
+      items: [{ key: 'launch_check_api', name: '上线检查接口', status: 'failed', message: e?.message || '接口加载失败', level: 'required' }]
+    }
+    ElMessage.error(e?.message || '上线检查失败')
   } finally {
     loading.value = false
   }

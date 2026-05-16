@@ -52,6 +52,7 @@ const loading = ref(false)
 const data = ref<any>({})
 
 const maxCount = computed(() => Math.max(...(data.value.trend?.map((i: any) => i.count) || [1]), 1))
+const unwrap = (res: any) => res?.data ?? res ?? {}
 
 const loadData = async (showSuccess = false) => {
   loading.value = true
@@ -62,7 +63,7 @@ const loadData = async (showSuccess = false) => {
       params.endDate = dateRange.value[1]?.toISOString()
     }
     const res = await request.get('/admin/analytics/users', { params })
-    data.value = res.data?.data || {}
+    data.value = unwrap(res)
     if (showSuccess === true) ElMessage.success('用户分析已刷新')
   } catch (error: any) {
     ElMessage.error(error?.message || '加载数据失败')

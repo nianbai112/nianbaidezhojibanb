@@ -25,8 +25,11 @@
           <template #header><span>第三方配置状态</span></template>
           <div class="config-list">
             <div v-for="c in configStatus" :key="c.key" class="config-item">
-              <span class="config-name">{{ c.name }}</span>
-              <el-tag :type="c.ok ? 'success' : 'warning'" size="small">{{ c.ok ? '已配置' : '未配置' }}</el-tag>
+              <div>
+                <div class="config-name">{{ c.name }}</div>
+                <div class="config-message">{{ c.message }}</div>
+              </div>
+              <el-tag :type="configTagType(c.status)" size="small">{{ c.label }}</el-tag>
             </div>
           </div>
         </el-card>
@@ -122,15 +125,24 @@ const statusItems = computed(() => [
 ])
 
 const configStatus = computed(() => {
+  const remote = overview.value.configStatus || health.value.configStatus
+  if (Array.isArray(remote) && remote.length) return remote
   const env = health.value.envSecurity || {}
   return [
-    { key: 'wechat', name: '微信小程序', ok: !!overview.value.wxConfigured },
-    { key: 'amap', name: '高德地图', ok: !!overview.value.amapConfigured },
-    { key: 'cos', name: 'COS/OSS 上传', ok: !!env.cosConfigured },
-    { key: 'ai', name: 'AI 配置', ok: !!env.aiConfigured },
-    { key: 'payment', name: '支付配置', ok: !!env.wxPayConfigured },
+    { key: 'miniapp', name: '微信小程序', status: env.wxMiniConfigured ? 'ok' : 'missing', label: env.wxMiniConfigured ? '已配置' : '未配置', message: '后端未返回详细配置状态' },
+    { key: 'amap', name: '高德地图', status: env.amapConfigured ? 'ok' : 'missing', label: env.amapConfigured ? '已配置' : '未配置', message: '后端未返回详细配置状态' },
+    { key: 'storage', name: '存储上传', status: env.storageConfigured ? 'ok' : 'warning', label: env.storageConfigured ? '已配置' : '待确认', message: '后端未返回详细配置状态' },
+    { key: 'ai', name: 'AI 配置', status: env.aiConfigured ? 'ok' : 'disabled', label: env.aiConfigured ? '已配置' : '未启用', message: '后端未返回详细配置状态' },
+    { key: 'payment', name: '支付配置', status: env.wxPayConfigured ? 'ok' : 'missing', label: env.wxPayConfigured ? '已配置' : '未配置', message: '后端未返回详细配置状态' },
   ]
 })
+
+function configTagType(status: string) {
+  if (status === 'ok') return 'success'
+  if (status === 'disabled') return 'info'
+  if (status === 'missing') return 'danger'
+  return 'warning'
+}
 
 function formatUptime(seconds: number) {
   if (!seconds) return '-'
@@ -219,8 +231,9 @@ onMounted(loadAll)
 .status-label { font-size: 12px; color: #666; }
 .status-value { font-size: 18px; font-weight: 700; }
 .config-list { display: flex; flex-direction: column; gap: 12px; }
-.config-item { display: flex; justify-content: space-between; align-items: center; }
-.config-name { font-size: 14px; }
+.config-item { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.config-name { font-size: 14px; font-weight: 800; color: #1f2937; }
+.config-message { margin-top: 4px; color: #64748b; font-size: 12px; line-height: 1.5; }
 .log-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .log-filters { display: flex; gap: 8px; align-items: center; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 12px; }

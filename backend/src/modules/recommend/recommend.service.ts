@@ -9,6 +9,50 @@ export class RecommendService {
     private readonly redis: RedisService,
   ) {}
 
+  private toInt(value: any, fallback: number, min = 1, max = 500) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(parsed)));
+  }
+
+  private toNumber(value: any) {
+    if (value === null || value === undefined) return 0;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private normalizeTargetType(value: any) {
+    const targetType = String(value || 'post');
+    const map: Record<string, string> = {
+      posts: 'post',
+      note: 'post',
+      notes: 'post',
+      merchant: 'merchant',
+      merchants: 'merchant',
+      product: 'product',
+      products: 'product',
+      topic: 'topic',
+      topics: 'topic',
+      activity: 'activity',
+      activities: 'activity',
+      secondhand: 'secondhand',
+      second_hand: 'secondhand',
+    };
+    return map[targetType] || targetType;
+  }
+
+  private targetTypeLabel(type: string) {
+    const map: Record<string, string> = {
+      post: '笔记/帖子',
+      merchant: '商家',
+      product: '商品',
+      topic: '话题',
+      activity: '活动',
+      secondhand: '二手',
+    };
+    return map[type] || type;
+  }
+
   private defaultSlots() {
     return [
       { id: 'home-hot', name: '首页热门推荐', position: 'home', limit: 10, status: 'active' },
@@ -35,6 +79,89 @@ export class RecommendService {
   async getSlots() {
     const list = await this.readSlots();
     return { list, total: list.length };
+  }
+
+  async getDashboard(query: any) {
+    const regionId = query.regionId || undefined;
+    const poolWhere: any = {};
+    if (regionId) poolWhere.regionId = regionId;
+    const activePoolWhere = {
+      ...poolWhere,
+      OR: [{ expireAt: null }, { expireAt: { gt: new Date() } }],
+    };
+    const expiredPoolWhere = {
+      ...poolWhere,
+      expireAt: { lte: new Date() },
+    };
+
+    const [
+      strategiesTotal,
+      strategiesEnabled,
+      poolTotal,
+      activePoolTotal,
+      expiredPoolTotal,
+      manualControls,
+      runningTests,
+      allTests,
+      slots,
+      recentPool,
+      typeRows,
+    ] = await Promise.all([
+      this.prisma.recommendStrategy.count({ where: regionId ? { regionId } : {} }),
+      this.prisma.recommendStrategy.count({ where: { isEnabled: true, ...(regionId ? { regionId } : {}) } }),
+      this.prisma.recommendPool.count({ where: poolWhere }),
+      this.prisma.recommendPool.count({ where: activePoolWhere }),
+      this.prisma.recommendPool.count({ where: expiredPoolWhere }),
+      this.prisma.recommendControl.count(),
+      this.prisma.aBTest.count({ where: { status: 'running', ...(regionId ? { regionId } : {}) } }),
+      this.prisma.aBTest.count({ where: regionId ? { regionId } : {} }),
+      this.readSlots(),
+      this.prisma.recommendPool.findMany({
+        where: poolWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.recommendPool.groupBy({
+        by: ['targetType'],
+        where: poolWhere,
+        _count: { _all: true },
+        _avg: { score: true },
+        _max: { score: true },
+      }),
+    ]);
+
+    const targetCounts = await this.getRecommendTargetCounts(regionId);
+    const enrichedRecent = await this.enrichPoolItems(recentPool);
+    const byType = typeRows.map((row) => ({
+      targetType: row.targetType,
+      label: this.targetTypeLabel(row.targetType),
+      count: row._count._all,
+      avgScore: Number((row._avg.score || 0).toFixed(2)),
+      maxScore: Number((row._max.score || 0).toFixed(2)),
+    }));
+
+    return {
+      summary: {
+        strategiesTotal,
+        strategiesEnabled,
+        poolTotal,
+        activePoolTotal,
+        expiredPoolTotal,
+        manualControls,
+        runningTests,
+        allTests,
+        slotsTotal: slots.length,
+      },
+      byType,
+      targetCounts,
+      recentPool: enrichedRecent,
+      health: {
+        hasStrategy: strategiesEnabled > 0,
+        hasActivePool: activePoolTotal > 0,
+        hasSlots: slots.length > 0,
+        hasRunningExperiment: runningTests > 0,
+      },
+    };
   }
 
   async createSlot(data: any, operatorId?: string) {
@@ -418,7 +545,8 @@ export class RecommendService {
   }
 
   async rebuildPool(data: any, operatorId: string) {
-    const { targetType = 'post', regionId } = data;
+    const targetType = this.normalizeTargetType(data.targetType);
+    const { regionId } = data;
 
     // Clear existing pool
     const deleteWhere: any = { targetType };
@@ -457,6 +585,110 @@ export class RecommendService {
           factors: { heat: heatScore, createdAt: p.createdAt },
         };
       });
+    } else if (targetType === 'merchant') {
+      const where: any = { status: 'approved' };
+      if (regionId) where.regionId = regionId;
+
+      const merchants = await this.prisma.merchant.findMany({
+        where,
+        orderBy: [{ saleCount: 'desc' }, { rating: 'desc' }, { createdAt: 'desc' }],
+        take: 3000,
+      });
+
+      items = merchants.map((merchant) => {
+        const heatScore = this.toNumber(merchant.saleCount) * 2 + this.toNumber(merchant.rating) * 10;
+        const score = this.applyTimeDecay(heatScore, merchant.createdAt, (strategy as any).rankRules?.timeDecay || 168);
+        return {
+          targetType: 'merchant',
+          targetId: merchant.id,
+          regionId: merchant.regionId,
+          score,
+          factors: { saleCount: merchant.saleCount, rating: merchant.rating, createdAt: merchant.createdAt },
+        };
+      });
+    } else if (targetType === 'product') {
+      const where: any = { status: 'on_sale' };
+      if (regionId) where.merchant = { regionId };
+
+      const products = await this.prisma.product.findMany({
+        where,
+        include: { merchant: { select: { regionId: true } } },
+        orderBy: [{ isHot: 'desc' }, { saleCount: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'desc' }],
+        take: 5000,
+      });
+
+      items = products.map((product) => {
+        const heatScore = this.toNumber(product.saleCount) * 2 + (product.isHot ? 50 : 0) + Math.max(0, this.toNumber(product.stock)) * 0.02;
+        const score = this.applyTimeDecay(heatScore, product.createdAt, (strategy as any).rankRules?.timeDecay || 168);
+        return {
+          targetType: 'product',
+          targetId: product.id,
+          regionId: product.merchant?.regionId || null,
+          score,
+          factors: { saleCount: product.saleCount, isHot: product.isHot, stock: product.stock, createdAt: product.createdAt },
+        };
+      });
+    } else if (targetType === 'topic') {
+      const topics = await this.prisma.topic.findMany({
+        where: { status: 'active' },
+        orderBy: [{ isHot: 'desc' }, { postCount: 'desc' }, { followCount: 'desc' }, { createdAt: 'desc' }],
+        take: 3000,
+      });
+
+      items = topics.map((topic) => {
+        const heatScore = this.toNumber(topic.postCount) * 2 + this.toNumber(topic.followCount) + (topic.isHot ? 80 : 0);
+        const score = this.applyTimeDecay(heatScore, topic.createdAt, (strategy as any).rankRules?.timeDecay || 720);
+        return {
+          targetType: 'topic',
+          targetId: topic.id,
+          regionId: regionId || null,
+          score,
+          factors: { postCount: topic.postCount, followCount: topic.followCount, isHot: topic.isHot, createdAt: topic.createdAt },
+        };
+      });
+    } else if (targetType === 'activity') {
+      const where: any = { status: { in: ['upcoming', 'signup', 'ongoing'] } };
+      if (regionId) where.regionId = regionId;
+
+      const activities = await this.prisma.activity.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { joinCount: 'desc' }, { startAt: 'asc' }],
+        take: 3000,
+      });
+
+      items = activities.map((activity) => {
+        const startDistanceHours = activity.startAt ? Math.abs(activity.startAt.getTime() - Date.now()) / (1000 * 60 * 60) : 999;
+        const upcomingBoost = Math.max(0, 120 - startDistanceHours);
+        const score = this.toNumber(activity.joinCount) * 3 + upcomingBoost + Math.max(0, 100 - this.toNumber(activity.sortOrder));
+        return {
+          targetType: 'activity',
+          targetId: activity.id,
+          regionId: activity.regionId,
+          score,
+          factors: { joinCount: activity.joinCount, startAt: activity.startAt, sortOrder: activity.sortOrder },
+        };
+      });
+    } else if (targetType === 'secondhand') {
+      const where: any = { status: 'ON_SALE' as any };
+      if (regionId) where.regionId = regionId;
+
+      const secondhands = await this.prisma.secondHand.findMany({
+        where,
+        orderBy: [{ viewCount: 'desc' }, { createdAt: 'desc' }],
+        take: 3000,
+      });
+
+      items = secondhands.map((item) => {
+        const heatScore = this.toNumber(item.viewCount) + Math.max(0, 500 - this.toNumber(item.price)) * 0.03;
+        const score = this.applyTimeDecay(heatScore, item.createdAt, (strategy as any).rankRules?.timeDecay || 168);
+        return {
+          targetType: 'secondhand',
+          targetId: item.id,
+          regionId: item.regionId,
+          score,
+          factors: { viewCount: item.viewCount, price: item.price, createdAt: item.createdAt },
+        };
+      });
     }
 
     // Sort by score and insert
@@ -476,10 +708,12 @@ export class RecommendService {
   }
 
   async getPool(query: any) {
-    const { targetType, regionId, page = 1, pageSize = 50 } = query;
+    const { targetType, regionId } = query;
+    const page = this.toInt(query.page, 1);
+    const pageSize = this.toInt(query.pageSize, 50, 1, 200);
 
     const where: any = {};
-    if (targetType) where.targetType = targetType;
+    if (targetType) where.targetType = this.normalizeTargetType(targetType);
     if (regionId) where.regionId = regionId;
 
     const [list, total] = await Promise.all([
@@ -492,7 +726,12 @@ export class RecommendService {
       this.prisma.recommendPool.count({ where }),
     ]);
 
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    return {
+      list: await this.enrichPoolItems(list),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async controlRecommend(data: any, operatorId: string) {
@@ -520,5 +759,162 @@ export class RecommendService {
     });
 
     return { success: true };
+  }
+
+  private async getRecommendTargetCounts(regionId?: string) {
+    const [
+      posts,
+      merchants,
+      products,
+      topics,
+      activities,
+      secondhands,
+    ] = await Promise.all([
+      this.prisma.post.count({
+        where: { status: 'PUBLISHED', deletedAt: null, ...(regionId ? { regionId } : {}) },
+      }),
+      this.prisma.merchant.count({
+        where: { status: 'approved', ...(regionId ? { regionId } : {}) },
+      }),
+      this.prisma.product.count({
+        where: { status: 'on_sale', ...(regionId ? { merchant: { regionId } } : {}) },
+      }),
+      this.prisma.topic.count({ where: { status: 'active' } }),
+      this.prisma.activity.count({
+        where: { status: { in: ['upcoming', 'signup', 'ongoing'] }, ...(regionId ? { regionId } : {}) },
+      }),
+      this.prisma.secondHand.count({
+        where: { status: 'ON_SALE' as any, ...(regionId ? { regionId } : {}) },
+      }),
+    ]);
+
+    return [
+      { targetType: 'post', label: '笔记/帖子', count: posts },
+      { targetType: 'merchant', label: '商家', count: merchants },
+      { targetType: 'product', label: '商品', count: products },
+      { targetType: 'topic', label: '话题', count: topics },
+      { targetType: 'activity', label: '活动', count: activities },
+      { targetType: 'secondhand', label: '二手', count: secondhands },
+    ];
+  }
+
+  private async enrichPoolItems(list: any[]) {
+    if (!list.length) return [];
+    const idsByType = list.reduce((acc, item) => {
+      const type = this.normalizeTargetType(item.targetType);
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(item.targetId);
+      return acc;
+    }, {} as Record<string, string[]>);
+
+    const [
+      posts,
+      merchants,
+      products,
+      topics,
+      activities,
+      secondhands,
+      regions,
+    ] = await Promise.all([
+      idsByType.post?.length
+        ? this.prisma.post.findMany({
+          where: { id: { in: idsByType.post } },
+          select: { id: true, title: true, content: true, viewCount: true, likeCount: true, commentCount: true, status: true },
+        })
+        : Promise.resolve([] as any[]),
+      idsByType.merchant?.length
+        ? this.prisma.merchant.findMany({
+          where: { id: { in: idsByType.merchant } },
+          select: { id: true, name: true, logo: true, rating: true, saleCount: true, status: true },
+        })
+        : Promise.resolve([] as any[]),
+      idsByType.product?.length
+        ? this.prisma.product.findMany({
+          where: { id: { in: idsByType.product } },
+          select: { id: true, name: true, images: true, price: true, saleCount: true, status: true, merchant: { select: { name: true } } },
+        })
+        : Promise.resolve([] as any[]),
+      idsByType.topic?.length
+        ? this.prisma.topic.findMany({
+          where: { id: { in: idsByType.topic } },
+          select: { id: true, name: true, cover: true, postCount: true, followCount: true, status: true },
+        })
+        : Promise.resolve([] as any[]),
+      idsByType.activity?.length
+        ? this.prisma.activity.findMany({
+          where: { id: { in: idsByType.activity } },
+          select: { id: true, title: true, cover: true, joinCount: true, status: true, startAt: true },
+        })
+        : Promise.resolve([] as any[]),
+      idsByType.secondhand?.length
+        ? this.prisma.secondHand.findMany({
+          where: { id: { in: idsByType.secondhand } },
+          select: { id: true, title: true, images: true, price: true, viewCount: true, status: true },
+        })
+        : Promise.resolve([] as any[]),
+      this.prisma.region.findMany({
+        where: { id: { in: Array.from(new Set(list.map((item) => item.regionId).filter(Boolean))) as string[] } },
+        select: { id: true, name: true },
+      }),
+    ]) as [any[], any[], any[], any[], any[], any[], any[]];
+
+    const map = new Map<string, any>();
+    posts.forEach((item) => map.set(`post:${item.id}`, {
+      name: item.title || String(item.content || '').slice(0, 32) || '未命名帖子',
+      subtitle: `浏览 ${item.viewCount || 0} / 点赞 ${item.likeCount || 0} / 评论 ${item.commentCount || 0}`,
+      status: item.status,
+    }));
+    merchants.forEach((item) => map.set(`merchant:${item.id}`, {
+      name: item.name,
+      image: item.logo,
+      subtitle: `评分 ${item.rating || 0} / 销量 ${item.saleCount || 0}`,
+      status: item.status,
+    }));
+    products.forEach((item) => {
+      const images = Array.isArray(item.images) ? item.images : [];
+      map.set(`product:${item.id}`, {
+        name: item.name,
+        image: images[0] || '',
+        subtitle: `${item.merchant?.name || '未知商家'} / ￥${this.toNumber(item.price).toFixed(2)} / 销量 ${item.saleCount || 0}`,
+        status: item.status,
+      });
+    });
+    topics.forEach((item) => map.set(`topic:${item.id}`, {
+      name: item.name,
+      image: item.cover,
+      subtitle: `帖子 ${item.postCount || 0} / 关注 ${item.followCount || 0}`,
+      status: item.status,
+    }));
+    activities.forEach((item) => map.set(`activity:${item.id}`, {
+      name: item.title,
+      image: item.cover,
+      subtitle: `报名 ${item.joinCount || 0} / ${item.startAt ? new Date(item.startAt).toLocaleDateString('zh-CN') : '-'}`,
+      status: item.status,
+    }));
+    secondhands.forEach((item) => {
+      const images = Array.isArray(item.images) ? item.images : [];
+      map.set(`secondhand:${item.id}`, {
+        name: item.title,
+        image: images[0] || '',
+        subtitle: `￥${this.toNumber(item.price).toFixed(2)} / 浏览 ${item.viewCount || 0}`,
+        status: item.status,
+      });
+    });
+    const regionMap = new Map(regions.map((item) => [item.id, item.name]));
+
+    return list.map((item) => {
+      const type = this.normalizeTargetType(item.targetType);
+      return {
+        ...item,
+        targetType: type,
+        targetTypeLabel: this.targetTypeLabel(type),
+        regionName: item.regionId ? regionMap.get(item.regionId) || item.regionId : '全局',
+        target: map.get(`${type}:${item.targetId}`) || {
+          name: item.targetId,
+          subtitle: '目标已删除或不可见',
+          status: 'missing',
+        },
+      };
+    });
   }
 }

@@ -690,6 +690,8 @@ model Post {
   user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   regionId      String?
   region        Region?    @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  circleId      String?
+  circle        Circle?     @relation(fields: [circleId], references: [id], onDelete: SetNull)
   type          PostType   @default(TEXT)
   status        PostStatus @default(PENDING)
   title         String?
@@ -724,6 +726,7 @@ model Post {
 
   @@index([userId, createdAt])
   @@index([regionId, status, createdAt])
+  @@index([circleId, status, createdAt])
   @@index([status, isTop, createdAt])
   @@index([type])
   @@map("posts")
@@ -920,6 +923,7 @@ model Circle {
   channels    CircleChannel[]
   topicGroups CircleTopicGroup[]
   payments    CirclePayment[]
+  posts       Post[]
 
   @@map("circles")
 }

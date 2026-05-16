@@ -207,7 +207,7 @@ const quickActions = [
   { label: '商家管理', route: '/merchant/list', icon: Shop },
   { label: '内容审核', route: '/content/audit', icon: Document },
   { label: '用户管理', route: '/user/list', icon: User },
-  { label: '跑腿配置', route: '/delivery/center', icon: Van }
+  { label: '跑腿管理', route: '/errand/dashboard', icon: Van }
 ]
 
 function statusTagType(status: string) {

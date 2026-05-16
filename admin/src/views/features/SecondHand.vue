@@ -164,7 +164,7 @@ async function deleteProduct(id: string) {
 async function loadOrders() {
   orderLoading.value = true
   try {
-    const params = { page: orderPage.value, pageSize: orderPageSize.value, ...orderFilters }
+    const params = { page: orderPage.value, pageSize: orderPageSize.value, orderNo: orderFilters.keyword || undefined }
     const res: any = await request.get('/admin/second-hand/orders', { params })
     orders.value = res.list || res.data?.list || []
     orderTotal.value = res.total || res.data?.total || 0
@@ -183,9 +183,16 @@ async function loadSetting() {
 async function saveSetting() {
   settingSaving.value = true
   try {
-    await request.put(`/admin/second-hand/settings/${settingRegionId.value}`, settingForm)
+    const payload = {
+      enableSecondHand: settingForm.enableSecondHand,
+      maxListings: settingForm.maxListings,
+      requirePhone: settingForm.requirePhone,
+      requireAudit: settingForm.requireAudit,
+    }
+    await request.put(`/admin/second-hand/settings/${settingRegionId.value}`, payload)
     ElMessage.success('保存成功')
-  } finally { settingSaving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { settingSaving.value = false }
 }
 
 function handleTabChange() {

@@ -394,8 +394,8 @@ async function loadMiniapp() {
       const cfg = data.miniapp || data
       Object.assign(miniapp, cfg)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载小程序配置失败')
   }
 }
 
@@ -407,8 +407,8 @@ async function loadOfficial() {
       const cfg = data.wechat_official || data
       Object.assign(official, cfg)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载公众号配置失败')
   }
 }
 
@@ -448,8 +448,8 @@ async function loadWechatPay() {
       const cfg = data.wechat_pay || data
       Object.assign(wechatPay, cfg)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载微信支付配置失败')
   }
 }
 
@@ -459,8 +459,8 @@ async function loadEmail() {
     if (data && typeof data === 'object') {
       Object.assign(email, data)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载邮件配置失败')
   }
 }
 
@@ -471,8 +471,8 @@ async function loadAi() {
     if (data && typeof data === 'object') {
       Object.assign(ai, data)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载 AI 配置失败')
   }
 }
 
@@ -483,8 +483,8 @@ async function loadRobot() {
     if (data && typeof data === 'object') {
       Object.assign(robot, data)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载机器人配置失败')
   }
 }
 
@@ -495,8 +495,8 @@ async function loadAmap() {
     if (data && typeof data === 'object') {
       Object.assign(amap, data)
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载高德地图配置失败')
   }
 }
 

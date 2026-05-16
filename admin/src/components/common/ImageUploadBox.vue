@@ -166,12 +166,12 @@ function previewImage() {
 .upload-text {
   font-size: 14px;
   color: #334155;
-  font-weight: 850;
+  font-weight: 650;
 }
 
 .upload-tip {
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: 13px;
+  color: #7d8ba3;
   margin-top: 4px;
 }
 
@@ -229,8 +229,8 @@ function previewImage() {
 .preview-meta span {
   margin-right: auto;
   color: #16a34a;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 12.5px;
+  font-weight: 650;
 }
 
 .preview-meta button {
@@ -239,8 +239,8 @@ function previewImage() {
   color: #2563eb;
   border-radius: 8px;
   padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 12.5px;
+  font-weight: 650;
   cursor: pointer;
 }
 

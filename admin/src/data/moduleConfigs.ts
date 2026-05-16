@@ -177,14 +177,14 @@ export const moduleConfigs: Record<string, ModuleConfig> = {
     sideTitle:'营销待办', sideMetrics:[{title:'活动审核',value:0,desc:'商家营销申请'},{title:'预算不足',value:0,desc:'活动即将暂停'},{title:'异常核销',value:0,desc:'需风控复核'}], chartTitle:'活动效果分布', detailTabs:['活动配置','优惠规则','参与商家','核销数据','风控记录']
   },
   delivery: {
-    key:'delivery', title:'跑腿配送', subtitle:'管理跑腿订单、骑手、计费规则、配送范围和异常履约。', endpoint:'/delivery/orders',
+    key:'delivery', title:'跑腿配送', subtitle:'管理跑腿订单、骑手、计费规则、配送范围和异常履约。', endpoint:'/admin/errand/orders',
     stats:[
       {label:'今日跑腿',value:0,delta:'-',tone:'blue',icon:'Bicycle',key:'todayOrders'},
       {label:'在线骑手',value:0,delta:'-',tone:'green',icon:'User',key:'onlineRiders'},
       {label:'待接单',value:0,delta:'-',tone:'orange',icon:'Clock',key:'pendingAccept'},
       {label:'超时订单',value:0,delta:'-',tone:'red',icon:'Warning',key:'overdue'}
     ],
-    search:[{key:'keyword',label:'订单号/用户',type:'input'},{key:'rider',label:'骑手',type:'input'},{key:'status',label:'状态',type:'select',options:statusOptions},{key:'date',label:'下单时间',type:'daterange'}], actions:['派单中心','批量改派','骑手排班','导出订单'],
+    search:[{key:'orderNo',label:'订单号/用户',type:'input'},{key:'rider',label:'骑手',type:'input'},{key:'status',label:'状态',type:'select',options:[{label:'全部状态',value:''},{label:'待付款',value:'pending_pay'},{label:'待接单',value:'pending_accept'},{label:'已接单',value:'accepted'},{label:'进行中',value:'in_progress'},{label:'已到达',value:'arrived'},{label:'已完成',value:'completed'},{label:'已取消',value:'cancelled'},{label:'退款中',value:'refunding'},{label:'已退款',value:'refunded'}]},{key:'date',label:'下单时间',type:'daterange'}], actions:['派单中心','批量改派','骑手排班','导出订单'],
     columns:[{prop:'orderNo',label:'跑腿单号',minWidth:170},{prop:'user',label:'下单用户',type:'avatar',minWidth:150},{prop:'rider',label:'骑手',type:'avatar',minWidth:150},{prop:'serviceType',label:'服务类型',type:'tag',minWidth:110},{prop:'distance',label:'距离',minWidth:90},{prop:'amount',label:'费用',type:'money',minWidth:100},{prop:'status',label:'状态',type:'tag',minWidth:100},{prop:'createdAt',label:'下单时间',type:'date',minWidth:160}],
     sideTitle:'调度提醒', sideMetrics:[{title:'待接单',value:0,desc:'超过5分钟'},{title:'骑手低电量',value:0,desc:'定位设备告警'},{title:'异常轨迹',value:0,desc:'轨迹偏离'}], chartTitle:'配送效率趋势', detailTabs:['订单信息','取送地址','骑手轨迹','计费明细','异常处理']
   },

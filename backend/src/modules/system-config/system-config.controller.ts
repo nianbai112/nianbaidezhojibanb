@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Controller,
   Get,
   Post,
@@ -203,7 +202,7 @@ export class SystemConfigController {
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "测试AI内容生成" })
   async testAiOpsGenerate() {
-    throw new BadRequestException("AI内容生成测试尚未绑定到可执行任务，请先在AI配置中完成模型服务配置后再启用该入口");
+    return this.systemConfigService.testAiGenerate();
   }
 
   // ============ 存储配置 ============

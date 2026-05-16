@@ -4,6 +4,7 @@ import { PostService } from './post.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { NotifyService } from '../notify/notify.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
 const makeMockPrisma = () => ({
   post: {
@@ -64,6 +65,15 @@ const makeMockNotify = () => ({
   createAndDispatch: jest.fn().mockResolvedValue({}),
 });
 
+const makeMockAiRuntime = () => ({
+  moderateContent: jest.fn().mockResolvedValue({
+    decision: 'approve',
+    reason: '测试默认通过',
+    labels: [],
+    score: 0,
+  }),
+});
+
 describe('PostService', () => {
   let service: PostService;
   let prisma: any;
@@ -75,6 +85,7 @@ describe('PostService', () => {
         { provide: PrismaService, useValue: makeMockPrisma() },
         { provide: RedisService, useValue: makeMockRedis() },
         { provide: NotifyService, useValue: makeMockNotify() },
+        { provide: AiRuntimeService, useValue: makeMockAiRuntime() },
       ],
     }).compile();
     service = module.get<PostService>(PostService);

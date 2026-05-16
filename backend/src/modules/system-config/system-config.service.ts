@@ -1,11 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
-const SECRET_PATTERN = /key|secret|password|token|cert|private|security/i;
+const SECRET_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|pass$/i;
+const SECRET_MASK = '******';
 
 @Injectable()
 export class SystemConfigService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiRuntime: AiRuntimeService,
+  ) {}
 
   async getConfigs(group?: string, regionId?: string) {
     const where: any = {};
@@ -79,12 +84,24 @@ export class SystemConfigService {
     return { success: true, data: this.maskSecrets(item).value };
   }
 
-  testAiConfig() {
-    const configured = Boolean(process.env.AI_API_KEY || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY);
+  async testAiConfig() {
+    const result = await this.aiRuntime.testConnection().catch((error: any) => ({
+      ok: false,
+      missing: [error?.message || 'AI连接测试失败'],
+    }));
     return {
-      success: configured,
-      message: configured ? 'AI 环境变量已配置' : 'AI_API_KEY/OPENAI_API_KEY/DEEPSEEK_API_KEY 未配置',
+      success: Boolean((result as any).ok),
+      message: (result as any).ok ? 'AI 模型连接正常' : ((result as any).missing || ['AI 配置不可用']).join('；'),
+      data: result,
     };
+  }
+
+  async testAiGenerate() {
+    const text = await this.aiRuntime.generateText(
+      '请生成一句校园本地生活平台的测试文案，不超过20字。',
+      { systemPrompt: '你是校园本地生活平台的运营助手，只输出一句中文。' },
+    );
+    return { success: true, data: { text } };
   }
 
   async sensitiveWordsStats() {
@@ -202,15 +219,22 @@ export class SystemConfigService {
   }
 
   private maskSecrets(config: any) {
-    const value = typeof config.value === 'object' ? { ...config.value } : config.value;
-    if (value && typeof value === 'object') {
-      for (const key of Object.keys(value)) {
-        if (SECRET_PATTERN.test(key)) {
-          value[key] = value[key] ? { isConfigured: true } : { isConfigured: false };
-        }
-      }
+    return { ...config, value: this.maskSecretValue(config.value) };
+  }
+
+  private maskSecretValue(value: any, fieldName = ''): any {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.maskSecretValue(item));
     }
-    return { ...config, value };
+    if (!value || typeof value !== 'object') {
+      if (fieldName && SECRET_PATTERN.test(fieldName)) return value ? SECRET_MASK : '';
+      return value;
+    }
+    const result: Record<string, any> = {};
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = SECRET_PATTERN.test(key) ? (item ? SECRET_MASK : '') : this.maskSecretValue(item, key);
+    }
+    return result;
   }
 
   private mergeSecretValue(current: any, incoming: any) {
@@ -218,8 +242,18 @@ export class SystemConfigService {
     const base = current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
     const next = { ...incoming };
     for (const key of Object.keys(next)) {
-      if (SECRET_PATTERN.test(key) && next[key] && typeof next[key] === 'object' && next[key].isConfigured) {
+      if (SECRET_PATTERN.test(key) && next[key] === SECRET_MASK) {
         next[key] = base[key] ?? '';
+      } else if (SECRET_PATTERN.test(key) && next[key] && typeof next[key] === 'object' && next[key].isConfigured) {
+        next[key] = base[key] ?? '';
+      } else if (
+        next[key] &&
+        typeof next[key] === 'object' &&
+        !Array.isArray(next[key]) &&
+        base[key] &&
+        typeof base[key] === 'object'
+      ) {
+        next[key] = this.mergeSecretValue(base[key], next[key]);
       }
     }
     return next;

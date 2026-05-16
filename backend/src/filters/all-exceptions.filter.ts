@@ -26,10 +26,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const resp = exception.getResponse() as any;
       message = resp.message || exception.message;
+      if (
+        status === HttpStatus.TOO_MANY_REQUESTS &&
+        typeof message === 'string' &&
+        (message.includes('Too Many Requests') || message.includes('ThrottlerException'))
+      ) {
+        message = request.url.startsWith('/upload') || request.url.includes('/upload')
+          ? '上传太频繁，请稍后再试'
+          : '请求太频繁，请稍后再试';
+      }
     } else if (exception instanceof PrismaClientKnownRequestError) {
       message = this.mapPrismaError(exception);
     } else if (exception instanceof PrismaClientValidationError) {
-      message = '请求参数不合法，请检查输入数据';
+      message = '提交内容格式异常，请刷新页面后重试';
     } else {
       message = '服务器内部错误，请稍后重试';
     }

@@ -20,7 +20,7 @@ const shortcuts = [
   { title: '商家管理', icon: 'Shop', color: '#f59e0b', route: '/merchant/list' },
   { title: '内容审核', icon: 'Document', color: '#8b5cf6', route: '/content/audit' },
   { title: '财务中心', icon: 'Money', color: '#ef4444', route: '/finance/overview' },
-  { title: '跑腿配送', icon: 'Van', color: '#06b6d4', route: '/delivery/orders' },
+  { title: '跑腿管理', icon: 'Van', color: '#06b6d4', route: '/errand/dashboard' },
   { title: '系统通知', icon: 'Bell', color: '#ec4899', route: '/marketing/notifications' },
   { title: '系统设置', icon: 'Setting', color: '#64748b', route: '/system/settings' },
 ]

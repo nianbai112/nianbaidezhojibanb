@@ -4,10 +4,10 @@
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索订单号" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
-        <el-option label="待接单" value="PENDING_ACCEPT" />
-        <el-option label="已接单" value="ACCEPTED" />
-        <el-option label="进行中" value="IN_PROGRESS" />
-        <el-option label="已完成" value="COMPLETED" />
+        <el-option label="待接单" value="pending_accept" />
+        <el-option label="已接单" value="accepted" />
+        <el-option label="进行中" value="in_progress" />
+        <el-option label="已完成" value="completed" />
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
@@ -16,10 +16,10 @@
       <el-table-column prop="orderNo" label="订单号" width="200" show-overflow-tooltip />
       <el-table-column prop="title" label="标题" min-width="150" show-overflow-tooltip />
       <el-table-column prop="user.nickname" label="用户" width="100">
-        <template #default="{ row }">{{ row.user?.nickname || row.userId }}</template>
+        <template #default="{ row }">{{ row.user?.nickname || row.User?.nickname || row.userId }}</template>
       </el-table-column>
       <el-table-column prop="rider.realName" label="骑手" width="100">
-        <template #default="{ row }">{{ row.rider?.realName || '未分配' }}</template>
+        <template #default="{ row }">{{ row.rider?.realName || row.RegionRider?.realName || '未分配' }}</template>
       </el-table-column>
       <el-table-column prop="price" label="金额" width="100">
         <template #default="{ row }">¥{{ Number(row.price).toFixed(2) }}</template>
@@ -34,7 +34,7 @@
       </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.status === 'PENDING_ACCEPT'" size="small" type="warning" @click="cancelOrder(row)">取消</el-button>
+          <el-button v-if="row.status === 'pending_accept'" size="small" type="warning" @click="cancelOrder(row)">取消</el-button>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -51,8 +51,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const statusMap: Record<string, string> = { PENDING_PAY: '待付款', PENDING_ACCEPT: '待接单', ACCEPTED: '已接单', IN_PROGRESS: '进行中', ARRIVED: '已到达', COMPLETED: '已完成', CANCELLED: '已取消' }
-const statusTypeMap: Record<string, string> = { PENDING_PAY: 'warning', PENDING_ACCEPT: 'warning', ACCEPTED: 'primary', IN_PROGRESS: 'primary', COMPLETED: 'success', CANCELLED: 'info' }
+const statusMap: Record<string, string> = { pending_pay: '待付款', pending_accept: '待接单', accepted: '已接单', in_progress: '进行中', arrived: '已到达', completed: '已完成', cancelled: '已取消', refunding: '退款中', refunded: '已退款' }
+const statusTypeMap: Record<string, string> = { pending_pay: 'warning', pending_accept: 'warning', accepted: 'primary', in_progress: 'primary', completed: 'success', cancelled: 'info', refunding: 'danger', refunded: 'success' }
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)

@@ -27,7 +27,7 @@
 
       <el-tab-pane label="资料审核" name="profiles">
         <div class="tab-toolbar">
-          <el-select v-model="profileFilters.status" clearable placeholder="审核状态" style="width:140px" @change="loadProfiles">
+          <el-select v-model="profileFilters.auditStatus" clearable placeholder="审核状态" style="width:140px" @change="loadProfiles">
             <el-option label="待审核" value="pending" />
             <el-option label="已通过" value="approved" />
             <el-option label="已拒绝" value="rejected" />
@@ -167,7 +167,8 @@
         <div class="tab-toolbar">
           <el-select v-model="reportFilters.status" clearable placeholder="状态" style="width:140px" @change="loadReports">
             <el-option label="待处理" value="pending" />
-            <el-option label="已处理" value="handled" />
+            <el-option label="已处理" value="resolved" />
+            <el-option label="已忽略" value="rejected" />
           </el-select>
           <el-button @click="loadReports" :loading="reportLoading">刷新</el-button>
         </div>
@@ -182,7 +183,7 @@
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="row.status === 'pending' ? 'warning' : 'success'" size="small">
-                {{ row.status === 'pending' ? '待处理' : '已处理' }}
+                {{ reportStatusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -265,7 +266,7 @@ const profileLoading = ref(false)
 const profilePage = ref(1)
 const profilePageSize = ref(20)
 const profileTotal = ref(0)
-const profileFilters = reactive({ status: '' })
+const profileFilters = reactive({ auditStatus: '' })
 
 // matches
 const matches = ref<any[]>([])
@@ -317,11 +318,18 @@ function editConfig(row: any) {
 async function saveConfig() {
   saving.value = true
   try {
-    await request.put(`/admin/dating/configs/${configForm.id}`, configForm)
+    const payload = {
+      isOpen: configForm.isOpen,
+      price: configForm.price,
+      dailyMatchLimit: configForm.dailyMatchLimit,
+      requireAudit: configForm.requireAudit,
+    }
+    await request.put(`/admin/dating/configs/${configForm.id}`, payload)
     ElMessage.success('保存成功')
     showConfigDialog.value = false
     loadConfigs()
-  } finally { saving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { saving.value = false }
 }
 
 async function loadProfiles() {
@@ -337,7 +345,7 @@ async function loadProfiles() {
 
 async function auditProfile(id: string, status: string) {
   try {
-    await request.put(`/admin/dating/profiles/${id}/audit`, { status })
+    await request.put(`/admin/dating/profiles/${id}/audit`, { auditStatus: status })
     ElMessage.success('审核成功')
     loadProfiles()
   } catch (e: any) { ElMessage.error(e?.message || '操作失败') }
@@ -376,15 +384,23 @@ function openPackageDialog(row?: any) {
 async function savePackage() {
   saving.value = true
   try {
+    const payload = {
+      name: pkgForm.name,
+      price: pkgForm.price,
+      validDays: pkgForm.validDays,
+      matchCount: pkgForm.matchCount,
+      description: pkgForm.description || undefined,
+    }
     if (editingPkg.value) {
-      await request.put(`/admin/dating/packages/${editingPkg.value.id}`, pkgForm)
+      await request.put(`/admin/dating/packages/${editingPkg.value.id}`, payload)
     } else {
-      await request.post('/admin/dating/packages', pkgForm)
+      await request.post('/admin/dating/packages', payload)
     }
     ElMessage.success('保存成功')
     showPackageDialog.value = false
     loadPackages()
-  } finally { saving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { saving.value = false }
 }
 
 async function deletePackage(id: string) {
@@ -428,10 +444,16 @@ async function loadReports() {
 async function handleReport(row: any) {
   try {
     await ElMessageBox.confirm('确定已处理此举报？', '处理举报')
-    await request.post(`/admin/dating/reports/${row.id}/handle`, { action: 'resolved' })
+    await request.post(`/admin/dating/reports/${row.id}/handle`, { status: 'resolved', result: '后台已处理' })
     ElMessage.success('已处理')
     loadReports()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
+}
+
+function reportStatusText(status: string) {
+  if (status === 'pending') return '待处理'
+  if (status === 'rejected') return '已忽略'
+  return '已处理'
 }
 
 async function loadCache() {

@@ -9,12 +9,12 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json --incremental false",
+    "build": "nest build && if [ -d \"dist/src 2\" ]; then mkdir -p dist/src && cp -R \"dist/src 2\"/. dist/src/ && rm -rf \"dist/src 2\"; fi && if [ -d \"dist/src/modules 2\" ]; then mkdir -p dist/src/modules && cp -R \"dist/src/modules 2\"/. dist/src/modules/ && rm -rf \"dist/src/modules 2\"; fi && rm -rf \"dist 2\"",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/src/main",
+    "start:prod": "if [ -d \"dist/src 2\" ]; then mkdir -p dist/src && cp -R \"dist/src 2\"/. dist/src/ && rm -rf \"dist/src 2\"; fi && if [ -d \"dist/src/modules 2\" ]; then mkdir -p dist/src/modules && cp -R \"dist/src/modules 2\"/. dist/src/modules/ && rm -rf \"dist/src/modules 2\"; fi && node dist/src/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",

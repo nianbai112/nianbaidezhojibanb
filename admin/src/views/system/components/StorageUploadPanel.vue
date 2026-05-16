@@ -384,8 +384,8 @@ async function load() {
         }
       }
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载存储配置失败')
   } finally {
     loading.value = false
   }
@@ -396,8 +396,8 @@ async function loadFiles() {
   try {
     const res: any = await fetchUploadFiles({ pageSize: 10 })
     files.value = res?.list || res?.data?.list || res?.data || []
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载上传文件失败')
   } finally {
     loadingFiles.value = false
   }

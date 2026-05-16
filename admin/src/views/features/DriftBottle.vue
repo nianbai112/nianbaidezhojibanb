@@ -37,7 +37,8 @@
         <div class="tab-toolbar">
           <el-select v-model="reportFilters.status" clearable placeholder="状态" style="width:140px" @change="loadReports">
             <el-option label="待处理" value="pending" />
-            <el-option label="已处理" value="handled" />
+            <el-option label="已处理" value="resolved" />
+            <el-option label="已忽略" value="rejected" />
           </el-select>
           <el-button @click="loadReports" :loading="reportLoading">刷新</el-button>
         </div>
@@ -50,7 +51,7 @@
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="row.status === 'pending' ? 'warning' : 'success'" size="small">
-                {{ row.status === 'pending' ? '待处理' : '已处理' }}
+                {{ reportStatusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -134,6 +135,12 @@ async function handleReport(id: string, action: string) {
     ElMessage.success('已处理')
     loadReports()
   } catch (e: any) { ElMessage.error(e?.message || '操作失败') }
+}
+
+function reportStatusText(status: string) {
+  if (status === 'pending') return '待处理'
+  if (status === 'rejected') return '已忽略'
+  return '已处理'
 }
 
 function handleTabChange() {

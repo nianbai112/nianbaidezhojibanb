@@ -9,10 +9,12 @@ import {
   Body,
   UseGuards,
   Req,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiConsumes, ApiOperation } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { SkipThrottle, Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request } from 'express';
 import { UploadService, UploadScene } from './upload.service';
 import { PrismaService } from '../../common/services/prisma.service';
@@ -20,6 +22,68 @@ import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { RequirePermission } from '../../decorators/require-permission.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+
+const uploadUserLimit = parseInt(process.env.UPLOAD_USER_THROTTLE_LIMIT || '180', 10);
+const uploadBatchLimit = parseInt(process.env.UPLOAD_BATCH_THROTTLE_LIMIT || '30', 10);
+const uploadVideoLimit = parseInt(process.env.UPLOAD_VIDEO_THROTTLE_LIMIT || '20', 10);
+const uploadAdminImageLimit = parseInt(process.env.UPLOAD_ADMIN_IMAGE_THROTTLE_LIMIT || '180', 10);
+const uploadAdminVideoLimit = parseInt(process.env.UPLOAD_ADMIN_VIDEO_THROTTLE_LIMIT || '20', 10);
+const uploadQrcodeLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || '60', 10);
+
+const skipExceptUserUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user_batch: true,
+  upload_video: true,
+  upload_admin_image: true,
+  upload_admin_video: true,
+  upload_qrcode: true,
+};
+const skipExceptBatchUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user: true,
+  upload_video: true,
+  upload_admin_image: true,
+  upload_admin_video: true,
+  upload_qrcode: true,
+};
+const skipExceptVideoUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user: true,
+  upload_user_batch: true,
+  upload_admin_image: true,
+  upload_admin_video: true,
+  upload_qrcode: true,
+};
+const skipExceptAdminImageUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user: true,
+  upload_user_batch: true,
+  upload_video: true,
+  upload_admin_video: true,
+  upload_qrcode: true,
+};
+const skipExceptAdminVideoUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user: true,
+  upload_user_batch: true,
+  upload_video: true,
+  upload_admin_image: true,
+  upload_qrcode: true,
+};
+const skipExceptQrcodeUpload = {
+  auth: true,
+  admin_auth: true,
+  upload_user: true,
+  upload_user_batch: true,
+  upload_video: true,
+  upload_admin_image: true,
+  upload_admin_video: true,
+};
 
 @ApiTags('文件上传')
 @Controller()
@@ -38,8 +102,10 @@ export class UploadController {
    * scene: avatar(2MB) | post(10MB)
    */
   @Post('upload')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, ThrottlerGuard)
-  @Throttle({ upload_user: { ttl: 60000, limit: 30 } })
+  @SkipThrottle(skipExceptUserUpload)
+  @Throttle({ upload_user: { ttl: 60000, limit: uploadUserLimit } })
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -64,8 +130,10 @@ export class UploadController {
 
   /** 用户批量上传图片 */
   @Post('upload/batch')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, ThrottlerGuard)
-  @Throttle({ upload_user_batch: { ttl: 60000, limit: 5 } })
+  @SkipThrottle(skipExceptBatchUpload)
+  @Throttle({ upload_user_batch: { ttl: 60000, limit: uploadBatchLimit } })
   @ApiBearerAuth()
   @UseInterceptors(FilesInterceptor('files', 20))
   @ApiConsumes('multipart/form-data')
@@ -92,8 +160,10 @@ export class UploadController {
 
   /** 用户上传视频 */
   @Post('upload/upload-video-with-thumbnail')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, ThrottlerGuard)
-  @Throttle({ upload_video: { ttl: 60000, limit: 5 } })
+  @SkipThrottle(skipExceptVideoUpload)
+  @Throttle({ upload_video: { ttl: 60000, limit: uploadVideoLimit } })
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -117,9 +187,11 @@ export class UploadController {
    * 管理端上传图片（banner、广告、配置等）
    */
   @Post('admin/upload/image')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
   @RequirePermission('upload:admin:image')
-  @Throttle({ upload_admin_image: { ttl: 60000, limit: 20 } })
+  @SkipThrottle(skipExceptAdminImageUpload)
+  @Throttle({ upload_admin_image: { ttl: 60000, limit: uploadAdminImageLimit } })
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -150,9 +222,11 @@ export class UploadController {
 
   /** 管理端上传视频 */
   @Post('admin/upload/video')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
   @RequirePermission('upload:admin:video')
-  @Throttle({ upload_admin_video: { ttl: 60000, limit: 5 } })
+  @SkipThrottle(skipExceptAdminVideoUpload)
+  @Throttle({ upload_admin_video: { ttl: 60000, limit: uploadAdminVideoLimit } })
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -170,9 +244,11 @@ export class UploadController {
 
   /** 生成小程序码（仅管理员） */
   @Post('admin/upload/qrcode')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
   @RequirePermission('upload:admin:qrcode')
-  @Throttle({ upload_qrcode: { ttl: 60000, limit: 10 } })
+  @SkipThrottle(skipExceptQrcodeUpload)
+  @Throttle({ upload_qrcode: { ttl: 60000, limit: uploadQrcodeLimit } })
   @ApiBearerAuth()
   @ApiOperation({ summary: '生成微信小程序码' })
   async generateQrcode(@Body() dto: any, @CurrentUser('sub') adminId: string, @Req() req?: Request) {
@@ -224,6 +300,7 @@ export class UploadController {
   }
 
   @Post('upload/unlimited-qrcode')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('upload:admin:qrcode')
   @ApiBearerAuth()

@@ -71,7 +71,7 @@
         </div>
 
         <div class="top-spacer"></div>
-        <el-button class="top-pill" :icon="ChatDotRound" @click="router.push('/system/realtime-sessions')">消息 <sup v-if="unreadMessages > 0">{{ unreadMessages }}</sup></el-button>
+        <el-button class="top-pill" :icon="ChatDotRound" title="官方消息会话" @click="openMessages">消息 <sup v-if="unreadMessages > 0">{{ unreadMessages }}</sup></el-button>
         <el-button class="top-pill" :icon="Bell" @click="router.push('/system/notification-center')">通知 <sup v-if="unreadNotices > 0">{{ unreadNotices }}</sup></el-button>
         <el-button class="top-pill" :icon="QuestionFilled" @click="router.push('/system/launch-check')">帮助</el-button>
         <el-dropdown @command="handleUserCommand">
@@ -108,16 +108,37 @@ const unreadNotices = ref(0)
 const sidebarCollapsed = ref(false)
 const pageSwitching = ref(false)
 let switchingTimer: number | undefined
+let headerStatsTimer: number | undefined
 
 async function fetchHeaderStats() {
   try {
-    const msg: any = await request.get('/admin/messages/unread-stats').catch(() => ({}))
-    unreadMessages.value = Number(msg?.unreadMessages || msg?.totalUnread || 0)
-  } catch { unreadMessages.value = 0 }
+    const msg: any = await request.get('/admin/messages/unread-stats')
+    unreadMessages.value = Number(
+      msg?.officialUnreadMessages
+      ?? msg?.totalUnread
+      ?? msg?.officialUnreadConversations
+      ?? msg?.privateUnread
+      ?? msg?.unreadMessages
+      ?? 0
+    )
+  } catch {
+    unreadMessages.value = 0
+  }
   try {
-    const ntf: any = await request.get('/admin/notifications/stats').catch(() => ({}))
+    const ntf: any = await request.get('/admin/notifications/stats')
     unreadNotices.value = Number(ntf?.unread || ntf?.totalUnread || 0)
-  } catch { unreadNotices.value = 0 }
+  } catch {
+    unreadNotices.value = 0
+  }
+}
+
+function openMessages() {
+  router.push({ path: '/system/realtime-sessions', query: { official: '1' } })
+  window.setTimeout(fetchHeaderStats, 800)
+}
+
+function handleHeaderStatsRefresh() {
+  fetchHeaderStats()
 }
 
 // ── 分组折叠 ──
@@ -244,12 +265,16 @@ onMounted(() => {
   document.addEventListener('click', handleOutsideClick)
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleRefreshFeedback, true)
+  window.addEventListener('admin-header-stats-refresh', handleHeaderStatsRefresh)
   fetchHeaderStats()
+  headerStatsTimer = window.setInterval(fetchHeaderStats, 30000)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleOutsideClick)
   document.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('click', handleRefreshFeedback, true)
+  window.removeEventListener('admin-header-stats-refresh', handleHeaderStatsRefresh)
+  window.clearInterval(headerStatsTimer)
 })
 
 function handleRefreshFeedback(e: MouseEvent) {
@@ -334,8 +359,8 @@ async function handleUserCommand(command: string) {
 .brand-title {
   font-size: 18px;
   line-height: 1.15;
-  font-weight: 950;
-  color: #172033;
+  font-weight: 800;
+  color: #0f172a;
   letter-spacing: 0;
 }
 
@@ -343,7 +368,7 @@ async function handleUserCommand(command: string) {
   font-size: 12px;
   color: #7a869b;
   margin-top: 4px;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .admin-shell.is-collapsed .brand {
@@ -370,9 +395,9 @@ async function handleUserCommand(command: string) {
   margin: 2px 0;
   cursor: pointer;
   user-select: none;
-  color: #475569;
-  font-size: 14px;
-  font-weight: 850;
+  color: #3f4d63;
+  font-size: 14.5px;
+  font-weight: 650;
   border-radius: 11px;
   transition: color .16s ease, background-color .16s ease, border-color .16s ease;
   border: 1px solid transparent;
@@ -385,7 +410,7 @@ async function handleUserCommand(command: string) {
 
 .nav-group-header.active,
 .nav-group-header.open {
-  color: #172033;
+  color: #0f172a;
   background: #f0f6ff;
   border-color: #d8e7ff;
 }
@@ -424,7 +449,7 @@ async function handleUserCommand(command: string) {
   gap: 6px;
   color: #94a3b8;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 650;
   flex: 0 0 auto;
   margin-left: 8px;
 }
@@ -456,9 +481,9 @@ async function handleUserCommand(command: string) {
   padding: 0 11px;
   margin: 2px 0;
   border-radius: 10px;
-  font-weight: 780;
-  font-size: 14px;
-  color: #475569;
+  font-weight: 620;
+  font-size: 14.5px;
+  color: #3f4d63;
   transition: color .16s ease, background-color .16s ease, box-shadow .16s ease;
   text-decoration: none;
 }
@@ -593,15 +618,15 @@ async function handleUserCommand(command: string) {
   border: 0;
   outline: none;
   background: transparent;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 14.5px;
+  font-weight: 500;
   color: #334155;
   min-width: 0;
 }
 
 .global-search input::placeholder {
   color: #94a3b8;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 kbd {
@@ -648,8 +673,8 @@ kbd {
 
 .search-item-title {
   font-size: 14px;
-  font-weight: 850;
-  color: #172033;
+  font-weight: 650;
+  color: #0f172a;
   line-height: 1.2;
 }
 
@@ -662,7 +687,7 @@ kbd {
 .search-item-group {
   font-size: 12px;
   color: var(--mx-primary);
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .search-item-path {
@@ -676,7 +701,7 @@ kbd {
   place-items: center;
   color: #94a3b8;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .top-spacer {

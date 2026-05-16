@@ -18,7 +18,9 @@
           <el-tag type="danger" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="cancelReason" label="异常原因" width="150" show-overflow-tooltip />
+      <el-table-column prop="description" label="异常原因" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.description || row.cancelReason || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="createdAt" label="下单时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN') }}</template>
       </el-table-column>
@@ -35,7 +37,20 @@ import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 
-const statusMap: Record<string, string> = { CANCELLED: '已取消', REFUNDING: '退款中', REFUNDED: '已退款' }
+const statusMap: Record<string, string> = {
+  CANCELLED: '已取消',
+  REFUNDING: '退款中',
+  REFUNDED: '已退款',
+  PENDING_PAY: '待付款',
+  pending_pay: '待付款',
+  pending_accept: '待接单',
+  accepted: '已接单',
+  in_progress: '进行中',
+  arrived: '已到达',
+  refunding: '退款中',
+  refunded: '已退款',
+  cancelled: '已取消',
+}
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)

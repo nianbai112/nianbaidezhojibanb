@@ -67,6 +67,7 @@ const userTrend = ref<any[]>([])
 const regionData = ref<any[]>([])
 
 const maxTrend = computed(() => Math.max(...userTrend.value.map(i => i.count), 1))
+const unwrap = (res: any) => res?.data ?? res ?? {}
 
 const loadData = async (showSuccess = false) => {
   loading.value = true
@@ -83,19 +84,19 @@ const loadData = async (showSuccess = false) => {
       request.get('/admin/analytics/regions', { params }),
     ])
 
-    const data = overview.data?.data || {}
+    const data = unwrap(overview)
     const gmvData = data.gmv || {}
     stats.value = [
       { label: '总用户', value: data.users?.total || 0, icon: 'User', color: '#409eff', trend: data.users?.trend ?? 0 },
       { label: '新增用户', value: data.users?.new || 0, icon: 'User', color: '#67c23a', trend: data.users?.trend ?? 0 },
       { label: '总帖子', value: data.content?.totalPosts || 0, icon: 'Document', color: '#e6a23c', trend: data.content?.trend ?? 0 },
       { label: '总订单', value: data.orders?.total || 0, icon: 'Tickets', color: '#f56c6c', trend: data.orders?.trend ?? 0 },
-      { label: '商家数', value: data.merchants?.total || 0, icon: 'Shop', color: '#909399', trend: 0 },
+      { label: '总GMV', value: `¥${formatMoney(gmvData.total)}`, icon: 'Wallet', color: '#7c3aed', trend: data.orders?.trend ?? 0 },
       { label: '活跃商家', value: data.merchants?.active || 0, icon: 'Shop', color: '#67c23a', trend: 0 },
     ]
 
-    userTrend.value = users.data?.data?.trend || []
-    regionData.value = regions.data?.data || []
+    userTrend.value = unwrap(users)?.trend || []
+    regionData.value = Array.isArray(unwrap(regions)) ? unwrap(regions) : []
     if (showSuccess === true) ElMessage.success('数据概览已刷新')
   } catch (error: any) {
     ElMessage.error(error?.message || '加载数据失败')
@@ -104,7 +105,7 @@ const loadData = async (showSuccess = false) => {
       { label: '新增用户', value: 0, icon: 'User', color: '#67c23a', trend: 0 },
       { label: '总帖子', value: 0, icon: 'Document', color: '#e6a23c', trend: 0 },
       { label: '总订单', value: 0, icon: 'Tickets', color: '#f56c6c', trend: 0 },
-      { label: '商家数', value: 0, icon: 'Shop', color: '#909399', trend: 0 },
+      { label: '总GMV', value: '¥0.00', icon: 'Wallet', color: '#7c3aed', trend: 0 },
       { label: '活跃商家', value: 0, icon: 'Shop', color: '#67c23a', trend: 0 },
     ]
     userTrend.value = []
@@ -117,6 +118,8 @@ const loadData = async (showSuccess = false) => {
 onMounted(() => {
   loadData()
 })
+
+const formatMoney = (amount: number) => Number(amount || 0).toFixed(2)
 </script>
 
 <style scoped>

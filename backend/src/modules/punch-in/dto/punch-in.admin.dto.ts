@@ -114,6 +114,11 @@ export class CreatePunchLocationDto {
 }
 
 export class UpdatePunchLocationDto {
+  @ApiPropertyOptional({ description: '区域ID' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
   @ApiPropertyOptional({ description: '分类ID' })
   @IsOptional()
   @IsString()

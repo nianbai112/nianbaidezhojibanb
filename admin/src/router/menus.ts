@@ -76,14 +76,22 @@ export const menuGroups = [
     ]
   },
   {
+    title: '跑腿管理',
+    children: [
+      { path: '/errand/dashboard', title: '跑腿工作台', icon: 'Van' },
+      { path: '/errand/orders', title: '跑腿订单', icon: 'Tickets' },
+      { path: '/errand/pickup-points', title: '取件点管理', icon: 'Location' },
+      { path: '/errand/item-sizes', title: '物品大小', icon: 'Box' },
+      { path: '/errand/riders', title: '骑手管理', icon: 'User' },
+      { path: '/errand/dispatch', title: '调度中心', icon: 'Position' },
+      { path: '/errand/config', title: '跑腿配置', icon: 'Tools' },
+      { path: '/errand/abnormal', title: '异常订单', icon: 'Warning' }
+    ]
+  },
+  {
     title: '订单履约中心',
     children: [
-      { path: '/order/center', title: '统一订单', icon: 'List' },
-      { path: '/delivery/orders', title: '跑腿订单', icon: 'Van' },
-      { path: '/delivery/riders', title: '骑手管理', icon: 'User' },
-      { path: '/delivery/dispatch', title: '调度中心', icon: 'Position' },
-      { path: '/delivery/pricing', title: '计费规则', icon: 'Money' },
-      { path: '/delivery/abnormal', title: '异常订单', icon: 'Warning' }
+      { path: '/order/center', title: '统一订单', icon: 'List' }
     ]
   },
   {

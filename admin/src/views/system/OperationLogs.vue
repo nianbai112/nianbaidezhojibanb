@@ -75,6 +75,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { request } from '@/api/request'
+import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchPanel from '@/components/common/SearchPanel.vue'
 import TimeText from '@/components/common/TimeText.vue'
@@ -148,11 +149,13 @@ const loadLogs = async () => {
       params.startDate = dateRange.value[0]?.toISOString()
       params.endDate = dateRange.value[1]?.toISOString()
     }
-    const res = await request.get('/admin/operation-logs', { params })
-    logs.value = res.data?.list || []
-    total.value = res.data?.total || 0
-  } catch {
+    const res: any = await request.get('/admin/operation-logs', { params })
+    logs.value = res?.list || res?.data?.list || []
+    total.value = res?.total || res?.data?.total || 0
+  } catch (e: any) {
     logs.value = []
+    total.value = 0
+    ElMessage.error(e?.message || '加载操作日志失败')
   } finally {
     loading.value = false
   }

@@ -81,6 +81,15 @@ export class RecommendController {
     return this.recommendService.getStrategy(query);
   }
 
+  @Get('admin/recommend/dashboard')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @ApiBearerAuth()
+  @RequirePermission('recommend:view')
+  @ApiOperation({ summary: '推荐中心运营总览' })
+  getDashboard(@Query() query: any) {
+    return this.recommendService.getDashboard(query);
+  }
+
   @Put('admin/recommend/strategy')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @ApiBearerAuth()

@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { MediaType, PostStatus, PostType } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { NotifyService } from '../notify/notify.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
 @Injectable()
 export class PostService {
@@ -9,13 +11,275 @@ export class PostService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly notifyService: NotifyService,
+    private readonly aiRuntime: AiRuntimeService,
   ) {}
+
+  private normalizePostType(value: any): PostType {
+    if (value === 0 || value === '0') return PostType.IMAGE;
+    if (value === 1 || value === '1') return PostType.VIDEO;
+    if (value === 2 || value === '2') return PostType.AUDIO;
+    const normalized = String(value || 'TEXT').toUpperCase();
+    return (Object.values(PostType) as string[]).includes(normalized)
+      ? (normalized as PostType)
+      : PostType.TEXT;
+  }
+
+  private normalizeTopicIds(dto: any): string[] {
+    const raw = dto.topics ?? dto.topic_ids ?? (dto.topic_id ? [dto.topic_id] : []);
+    const list = Array.isArray(raw) ? raw : String(raw || '').split(',');
+    return list.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  private toInt(value: any): number | undefined {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.round(n) : undefined;
+  }
+
+  private toFloat(value: any): number | undefined {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  private toArray(value: any): any[] {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    return [value];
+  }
+
+  private publicAssetUrl(value: any): string {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^(https?:|wxfile:|cloud:|data:|blob:)/i.test(raw)) return raw;
+
+    const normalized = raw.startsWith('uploads/') ? `/${raw}` : raw;
+    if (!normalized.startsWith('/uploads/')) return normalized;
+
+    const base =
+      process.env.PUBLIC_BASE_URL ||
+      process.env.PUBLIC_API_URL ||
+      process.env.APP_URL ||
+      (process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:3000');
+
+    return base ? `${base.replace(/\/+$/, '')}${normalized}` : normalized;
+  }
+
+  private normalizeOptionalString(value: any): string | undefined {
+    const raw = String(value ?? '').trim();
+    if (!raw || ['null', 'undefined', 'all'].includes(raw.toLowerCase())) return undefined;
+    return raw;
+  }
+
+  private toPositiveInt(value: any, fallback: number): number {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  }
+
+  private toMiniPostType(type: any): number {
+    const normalized = String(type || '').toUpperCase();
+    if (normalized === PostType.VIDEO) return 1;
+    if (normalized === PostType.AUDIO) return 2;
+    return 0;
+  }
+
+  private toMiniPostStatus(status: any): number {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized === PostStatus.PENDING || normalized === PostStatus.DRAFT) return 2;
+    if (normalized === PostStatus.REJECTED) return 3;
+    if (normalized === PostStatus.DELETED) return 4;
+    return 0;
+  }
+
+  private miniPostInclude() {
+    return {
+      user: { select: { id: true, nickname: true, avatar: true } },
+      media: true,
+      topics: true,
+      _count: { select: { likes: true, comments: true, favorites: true } },
+    } as const;
+  }
+
+  private normalizeMedia(dto: any): Array<{
+    type: MediaType;
+    url: string;
+    thumb?: string;
+    width?: number;
+    height?: number;
+    duration?: number;
+    sortOrder: number;
+  }> {
+    const media: Array<{ type: MediaType; url: string; thumb?: string; width?: number; height?: number; duration?: number; sortOrder: number }> = [];
+
+    for (const [index, item] of this.toArray(dto.media).entries()) {
+      const url = typeof item === 'string' ? item : item?.url;
+      if (!url) continue;
+      const type = String(item?.type || dto.type || 'IMAGE').toUpperCase();
+      media.push({
+        type: type === 'VIDEO' ? MediaType.VIDEO : type === 'AUDIO' ? MediaType.AUDIO : MediaType.IMAGE,
+        url: String(url),
+        thumb: item?.thumb || item?.thumbnailUrl,
+        width: this.toInt(item?.width),
+        height: this.toInt(item?.height),
+        duration: this.toInt(item?.duration),
+        sortOrder: index,
+      });
+    }
+
+    const dimensions = Array.isArray(dto.images_dimensions) ? dto.images_dimensions : [];
+    for (const [index, url] of this.toArray(dto.images).entries()) {
+      if (!url) continue;
+      media.push({
+        type: MediaType.IMAGE,
+        url: String(url),
+        width: this.toInt(dimensions[index]?.width ?? dto.cover_width),
+        height: this.toInt(dimensions[index]?.height ?? dto.cover_height),
+        sortOrder: media.length,
+      });
+    }
+
+    for (const url of this.toArray(dto.video)) {
+      if (!url) continue;
+      media.push({
+        type: MediaType.VIDEO,
+        url: String(url),
+        thumb: dto.thumbnail_url || dto.cover_url,
+        width: this.toInt(dto.cover_width),
+        height: this.toInt(dto.cover_height),
+        sortOrder: media.length,
+      });
+    }
+
+    for (const url of this.toArray(dto.audio)) {
+      if (!url) continue;
+      media.push({
+        type: MediaType.AUDIO,
+        url: String(url),
+        thumb: dto.cover_url,
+        duration: this.toInt(dto.audio_duration),
+        sortOrder: media.length,
+      });
+    }
+
+    return media.filter((item) => item.url);
+  }
+
+  private async getNoteApprovalType(regionId?: string): Promise<string> {
+    if (!regionId) return 'manual';
+    const config = await this.prisma.config.findUnique({
+      where: { key: `content.note_settings.${regionId}` },
+      select: { value: true },
+    });
+    return String((config?.value as any)?.note_approval_type || 'manual').toLowerCase();
+  }
+
+  private async resolveInitialReview(data: any): Promise<{
+    status: PostStatus;
+    auditStatus: string;
+    auditReason?: string;
+  }> {
+    const approvalType = await this.getNoteApprovalType(data.regionId);
+    if (['none', 'auto', 'pass', 'published', 'approved'].includes(approvalType)) {
+      return { status: PostStatus.PUBLISHED, auditStatus: 'approved', auditReason: '无需审核' };
+    }
+    if (['ai', 'llm', 'model'].includes(approvalType)) {
+      const result = await this.aiRuntime.moderateContent({
+        type: 'post',
+        title: data.title,
+        content: data.content,
+        regionId: data.regionId,
+        approvalType,
+      });
+      if (result.decision === 'approve') {
+        return { status: PostStatus.PUBLISHED, auditStatus: 'approved', auditReason: result.reason || 'AI审核通过' };
+      }
+      if (result.decision === 'reject') {
+        return { status: PostStatus.REJECTED, auditStatus: 'rejected', auditReason: result.reason || 'AI审核不通过' };
+      }
+      return { status: PostStatus.PENDING, auditStatus: 'pending', auditReason: result.reason || 'AI建议人工复核' };
+    }
+    return { status: PostStatus.PENDING, auditStatus: 'pending', auditReason: '等待人工审核' };
+  }
+
+  private async normalizePostPayload(dto: any, options: { partial?: boolean } = {}) {
+    const regionId = dto.regionId ?? dto.region_id;
+    const circleId = dto.circleId ?? dto.circle_id;
+    const content = typeof dto.content === 'string' ? dto.content.trim() : dto.content;
+    const media = this.normalizeMedia(dto);
+    if (!options.partial && !content && media.length === 0) {
+      throw new BadRequestException('请输入内容或上传图片/视频/音频');
+    }
+
+    const data: any = {};
+    if (regionId !== undefined && regionId !== null && regionId !== '') data.regionId = String(regionId);
+    if (circleId !== undefined && circleId !== null && circleId !== '') data.circleId = String(circleId);
+    if (dto.type !== undefined) data.type = this.normalizePostType(dto.type);
+    if (dto.title !== undefined) data.title = String(dto.title || '').trim() || null;
+    if (content !== undefined) data.content = String(content || '');
+    if (dto.location !== undefined || dto.location_name !== undefined || dto.location_address !== undefined) {
+      data.location = String(dto.location ?? dto.location_name ?? dto.location_address ?? '').trim() || null;
+    }
+    if (dto.latitude !== undefined) data.latitude = this.toFloat(dto.latitude);
+    if (dto.longitude !== undefined) data.longitude = this.toFloat(dto.longitude);
+    if (dto.enable_pin !== undefined || dto.is_pinned !== undefined) data.isTop = !!(dto.enable_pin ?? dto.is_pinned);
+
+    return {
+      data,
+      media,
+      topicIds: this.normalizeTopicIds(dto),
+    };
+  }
+
+  private formatMiniPost(post: any) {
+    const media = (Array.isArray(post.media) ? post.media : []).map((item: any) => ({
+      ...item,
+      url: this.publicAssetUrl(item.url),
+      thumb: this.publicAssetUrl(item.thumb),
+    }));
+    const user = post.user
+      ? {
+          ...post.user,
+          avatar: this.publicAssetUrl(post.user.avatar),
+        }
+      : post.user;
+    const images = media.filter((item: any) => item.type === MediaType.IMAGE).map((item: any) => item.url);
+    const firstVideo = media.find((item: any) => item.type === MediaType.VIDEO);
+    const firstAudio = media.find((item: any) => item.type === MediaType.AUDIO);
+    const cover = images[0] || firstVideo?.thumb || firstAudio?.thumb || '';
+    return {
+      ...post,
+      raw_type: post.type,
+      post_type: post.type,
+      type: this.toMiniPostType(post.type),
+      raw_status: post.status,
+      approval_status: post.status,
+      status: this.toMiniPostStatus(post.status),
+      media,
+      user,
+      user_id: post.userId,
+      region_id: post.regionId,
+      circle_id: post.circleId,
+      author: user,
+      user_info: user,
+      images,
+      images_dimensions: media.filter((item: any) => item.type === MediaType.IMAGE).map((item: any) => ({ width: item.width || 0, height: item.height || 0 })),
+      video: firstVideo?.url || '',
+      audio: firstAudio?.url || '',
+      cover_url: cover,
+      cover_width: media[0]?.width || 0,
+      cover_height: media[0]?.height || 0,
+      topic_ids: (post.topics || []).map((item: any) => item.topicId),
+      like_count: post.likeCount,
+      comment_count: post.commentCount,
+      favorite_count: post.favoriteCount,
+      view_count: post.viewCount,
+      created_at: post.createdAt,
+      updated_at: post.updatedAt,
+    };
+  }
 
   async listByRegion(regionId: string, query: any) {
     const { page = 1, limit = 10, sortBy = 'latest', circle_id, check_in_id, topic_id, topic_ids, type = 'null' } = query;
     const where: any = { regionId, status: 'PUBLISHED', deletedAt: null };
-    // 当前 Post 表没有 circleId 字段；旧小程序会带 circle_id 进入圈子详情页。
-    // 这里先忽略该过滤，避免 Prisma 因未知字段直接 500。
+    if (circle_id) where.circleId = String(circle_id);
     if (topic_id) where.topics = { some: { topicId: topic_id } };
     if (topic_ids) {
       const ids = Array.isArray(topic_ids) ? topic_ids : topic_ids.split(',');
@@ -31,7 +295,7 @@ export class PostService {
     const [list, total] = await Promise.all([
       this.prisma.post.findMany({
         where,
-        include: { user: { select: { id: true, nickname: true, avatar: true } }, media: true, _count: { select: { likes: true, comments: true } } },
+        include: { user: { select: { id: true, nickname: true, avatar: true } }, media: true, topics: true, _count: { select: { likes: true, comments: true } } },
         skip: (page - 1) * limit,
         take: Number(limit),
         orderBy: [{ isTop: 'desc' }, orderBy],
@@ -39,9 +303,9 @@ export class PostService {
       this.prisma.post.count({ where }),
     ]);
     return {
-      list,
-      posts: list,
-      data: list,
+      list: list.map((post) => this.formatMiniPost(post)),
+      posts: list.map((post) => this.formatMiniPost(post)),
+      data: list.map((post) => this.formatMiniPost(post)),
       total,
       page: Number(page),
       limit: Number(limit),
@@ -58,21 +322,113 @@ export class PostService {
   }
 
   async myPosts(userId: string, query: any) {
-    const { page = 1, pageSize = 20, type = 'all', region_id } = query;
-    const where: any = { userId, deletedAt: null };
-    if (type !== 'all') where.type = type.toUpperCase();
-    if (region_id) where.regionId = region_id;
+    const page = this.toPositiveInt(query.page, 1);
+    const pageSize = this.toPositiveInt(query.pageSize ?? query.limit, 20);
+    const timelineType = String(query.type || 'all').toLowerCase();
+    const targetUserId = this.normalizeOptionalString(query.user_id ?? query.userId) || userId;
+    const regionId = this.normalizeOptionalString(query.region_id ?? query.regionId);
+    const basePostWhere: any = { deletedAt: null };
+    if (regionId) basePostWhere.regionId = regionId;
+    if (targetUserId !== userId) basePostWhere.status = PostStatus.PUBLISHED;
+
+    const buildResponse = (posts: any[], total: number) => {
+      const formatted = posts.map((post) => this.formatMiniPost(post));
+      return {
+        success: true,
+        list: formatted,
+        posts: formatted,
+        data: formatted,
+        total,
+        page,
+        pageSize,
+        pagination: {
+          page,
+          pageSize,
+          limit: pageSize,
+          total,
+          total_pages: Math.ceil(total / pageSize),
+          totalPages: Math.ceil(total / pageSize),
+        },
+      };
+    };
+
+    if (timelineType === 'liked') {
+      const likeWhere = { userId: targetUserId, targetType: 'post' };
+      const [likes, total] = await Promise.all([
+        this.prisma.like.findMany({
+          where: likeWhere,
+          include: { post: { include: this.miniPostInclude() } },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.like.count({ where: likeWhere }),
+      ]);
+      const posts = likes
+        .map((item) => item.post)
+        .filter((post) => post && !post.deletedAt && (!regionId || post.regionId === regionId));
+      return buildResponse(posts, regionId ? posts.length : total);
+    }
+
+    if (timelineType === 'viewed') {
+      const historyWhere = { userId: targetUserId, targetType: 'post' };
+      const histories = await this.prisma.browseHistory.findMany({
+        where: historyWhere,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { createdAt: 'desc' },
+      });
+      const orderedIds = [...new Set(histories.map((item) => item.targetId).filter(Boolean))];
+      const posts = orderedIds.length
+        ? await this.prisma.post.findMany({
+            where: { ...basePostWhere, id: { in: orderedIds } },
+            include: this.miniPostInclude(),
+          })
+        : [];
+      const byId = new Map(posts.map((post) => [post.id, post]));
+      const orderedPosts = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+      const total = await this.prisma.browseHistory.count({ where: historyWhere });
+      return buildResponse(orderedPosts, total);
+    }
+
+    if (timelineType === 'commented') {
+      const commentWhere = { userId: targetUserId, deletedAt: null };
+      const comments = await this.prisma.comment.findMany({
+        where: commentWhere,
+        select: { postId: true },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { createdAt: 'desc' },
+      });
+      const orderedIds = [...new Set(comments.map((item) => item.postId).filter(Boolean))];
+      const posts = orderedIds.length
+        ? await this.prisma.post.findMany({
+            where: { ...basePostWhere, id: { in: orderedIds } },
+            include: this.miniPostInclude(),
+          })
+        : [];
+      const byId = new Map(posts.map((post) => [post.id, post]));
+      const orderedPosts = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+      const total = await this.prisma.comment.count({ where: commentWhere });
+      return buildResponse(orderedPosts, total);
+    }
+
+    const mediaType = (Object.values(PostType) as string[]).includes(timelineType.toUpperCase())
+      ? (timelineType.toUpperCase() as PostType)
+      : undefined;
+    const where: any = { ...basePostWhere, userId: targetUserId };
+    if (mediaType) where.type = mediaType;
     const [list, total] = await Promise.all([
       this.prisma.post.findMany({
         where,
-        include: { media: true, _count: { select: { likes: true, comments: true } } },
+        include: this.miniPostInclude(),
         skip: (page - 1) * pageSize,
-        take: Number(pageSize),
+        take: pageSize,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.post.count({ where }),
     ]);
-    return { list, total, page, pageSize };
+    return buildResponse(list, total);
   }
 
   async detail(id: string, userId?: string) {
@@ -99,27 +455,61 @@ export class PostService {
       isLiked = !!like;
       isFavorited = !!fav;
     }
-    return { ...post, isLiked, isFavorited };
+    return { ...this.formatMiniPost(post), isLiked, isFavorited };
   }
 
   async create(userId: string, dto: any) {
-    const { media, topics, ...postData } = dto;
-    return this.prisma.post.create({
+    const { data, media, topicIds } = await this.normalizePostPayload(dto);
+    if (data.circleId) {
+      const member = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId: data.circleId, userId } } });
+      if (!member) throw new BadRequestException('请先加入圈子，再发布圈子笔记');
+    }
+    const review = await this.resolveInitialReview(data);
+    const post = await this.prisma.post.create({
       data: {
+        ...data,
         userId,
-        ...postData,
-        status: 'PENDING',
-        media: media ? { createMany: { data: media.map((m: any, i: number) => ({ type: m.type as any, url: m.url, thumb: m.thumb, width: m.width, height: m.height, duration: m.duration, sortOrder: i })) } } : undefined,
-        topics: topics ? { create: topics.map((tid: string) => ({ topicId: tid })) } : undefined,
+        status: review.status,
+        auditStatus: review.auditStatus,
+        auditReason: review.auditReason,
+        media: media.length ? { createMany: { data: media } } : undefined,
+        topics: topicIds.length ? { create: topicIds.map((topicId: string) => ({ topicId })) } : undefined,
       },
+      include: { user: { select: { id: true, nickname: true, avatar: true } }, media: true, topics: true },
     });
+    if (data.circleId) {
+      await this.prisma.circle.update({ where: { id: data.circleId }, data: { postCount: { increment: 1 } } }).catch(() => undefined);
+    }
+    return {
+      ...this.formatMiniPost(post),
+      post_id: post.id,
+      approval_status: review.status,
+      audit_status: review.auditStatus,
+      audit_reason: review.auditReason,
+    };
   }
 
   async update(postId: string, userId: string, dto: any) {
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException('帖子不存在');
     if (post.userId !== userId) throw new ForbiddenException('无权修改');
-    return this.prisma.post.update({ where: { id: postId }, data: dto });
+    const { data, media, topicIds } = await this.normalizePostPayload(dto, { partial: true });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (media.length) {
+        await tx.postMedia.deleteMany({ where: { postId } });
+      }
+      await tx.postTopic.deleteMany({ where: { postId } });
+      return tx.post.update({
+        where: { id: postId },
+        data: {
+          ...data,
+          media: media.length ? { createMany: { data: media } } : undefined,
+          topics: topicIds.length ? { create: topicIds.map((topicId: string) => ({ topicId })) } : undefined,
+        },
+        include: { user: { select: { id: true, nickname: true, avatar: true } }, media: true, topics: true },
+      });
+    });
+    return this.formatMiniPost(updated);
   }
 
   async remove(postId: string, userId: string) {
@@ -131,7 +521,16 @@ export class PostService {
   }
 
   async incrementView(postId: string, userId: string) {
-    await this.prisma.post.update({ where: { id: postId }, data: { viewCount: { increment: 1 } } });
+    const post = await this.prisma.post.update({ where: { id: postId }, data: { viewCount: { increment: 1 } } });
+    await this.prisma.browseHistory.create({
+      data: {
+        userId,
+        targetType: 'post',
+        targetId: postId,
+        title: post.title || post.content?.slice(0, 40) || '笔记',
+        image: '',
+      },
+    }).catch(() => undefined);
     await this.redis.zincrby('post:hot', 1, postId);
     return { viewed: true, message: '浏览成功', reward_info: { reward_applied_this_time: '0.00', current_user_total_score: '0.00', today_rewarded_view_count: 0, potential_daily_view_reward: '0.00', rule_found: false } };
   }

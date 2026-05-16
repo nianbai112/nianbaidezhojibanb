@@ -19,6 +19,15 @@ const ALLOWED_RESTART_COMMANDS = [
   "systemctl restart lingmeng-backend",
 ];
 
+type OpsConfigStatus = {
+  key: string;
+  name: string;
+  status: "ok" | "warning" | "missing" | "disabled";
+  label: string;
+  message: string;
+  configured: boolean;
+};
+
 @Injectable()
 export class OpsService {
   private readonly startTime = Date.now();
@@ -28,6 +37,175 @@ export class OpsService {
     private readonly configService: ConfigService,
     private readonly redis: RedisService,
   ) {}
+
+  private hasConfigValue(value: any): boolean {
+    if (value === undefined || value === null) return false;
+    if (typeof value === "string") {
+      const v = value.trim();
+      return !!v && v !== "******" && v !== "********";
+    }
+    if (typeof value === "object") {
+      if ("isConfigured" in value) return Boolean(value.isConfigured);
+      return Object.values(value).some((item) => this.hasConfigValue(item));
+    }
+    return Boolean(value);
+  }
+
+  private async getConfigValues(keys: string[]) {
+    const rows = await this.prisma.config.findMany({
+      where: { key: { in: keys } },
+      select: { key: true, value: true },
+    });
+    return rows.reduce((acc, row) => {
+      acc[row.key] = row.value as any;
+      return acc;
+    }, {} as Record<string, any>);
+  }
+
+  private async getThirdPartyConfigStatus(): Promise<OpsConfigStatus[]> {
+    const configs = await this.getConfigValues([
+      "miniapp",
+      "wechat_official",
+      "official",
+      "wechat_pay",
+      "amap",
+      "storage",
+      "ai",
+      "ai_ops_config",
+    ]);
+
+    const miniapp = configs.miniapp || {};
+    const miniAppId =
+      miniapp.appId ||
+      this.configService.get("WX_MINI_APPID") ||
+      this.configService.get("WX_APPID");
+    const miniSecret =
+      miniapp.appSecret ||
+      miniapp.secret ||
+      this.configService.get("WX_MINI_SECRET") ||
+      this.configService.get("WX_SECRET");
+    const miniOk = this.hasConfigValue(miniAppId) && this.hasConfigValue(miniSecret);
+
+    const official = configs.wechat_official || configs.official || {};
+    const officialOk =
+      this.hasConfigValue(official.appId) &&
+      this.hasConfigValue(official.appSecret || official.secret);
+
+    const pay = configs.wechat_pay || {};
+    const payOk =
+      this.hasConfigValue(pay.mchId || this.configService.get("WX_PAY_MCHID")) &&
+      this.hasConfigValue(pay.apiV3Key || this.configService.get("WX_PAY_API_V3_KEY"));
+
+    const amap = configs.amap || {};
+    const amapOk =
+      this.hasConfigValue(amap.webServiceKey) && this.hasConfigValue(amap.jsApiKey);
+
+    const storage = configs.storage || null;
+    const provider = storage?.provider || "local";
+    let storageStatus: OpsConfigStatus;
+    if (!storage) {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: "warning",
+        label: "默认本地",
+        message: "未保存存储配置，当前会使用默认本地 uploads 目录，建议确认访问域名和上传限制",
+        configured: false,
+      };
+    } else if (provider === "local") {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: this.hasConfigValue(storage.local?.uploadDir) ? "ok" : "warning",
+        label: this.hasConfigValue(storage.local?.uploadDir) ? "本地可用" : "待确认",
+        message: this.hasConfigValue(storage.local?.uploadDir)
+          ? `本地目录：${storage.local.uploadDir}`
+          : "本地存储缺少上传目录",
+        configured: this.hasConfigValue(storage.local?.uploadDir),
+      };
+    } else if (provider === "cos") {
+      const cos = storage.cos || {};
+      const ok =
+        this.hasConfigValue(cos.secretId) &&
+        this.hasConfigValue(cos.secretKey) &&
+        this.hasConfigValue(cos.bucket) &&
+        this.hasConfigValue(cos.region);
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: ok ? "ok" : "warning",
+        label: ok ? "COS 已配置" : "COS 未完整",
+        message: ok ? `COS Bucket：${cos.bucket}` : "COS 需要 SecretId、SecretKey、Bucket、Region 都配置",
+        configured: ok,
+      };
+    } else {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: "warning",
+        label: "未接通",
+        message: `${provider} 已选择，但当前后端仅提供本地存储和 COS 的真实连接测试`,
+        configured: false,
+      };
+    }
+
+    const ai = configs.ai_ops_config || configs.ai || {};
+    const aiEnabled = Boolean(ai.enabled);
+    const aiKey =
+      ai.apiKey ||
+      this.configService.get("AI_API_KEY") ||
+      this.configService.get("OPENAI_API_KEY") ||
+      this.configService.get("DEEPSEEK_API_KEY");
+    const aiOk = aiEnabled && this.hasConfigValue(aiKey);
+
+    return [
+      {
+        key: "miniapp",
+        name: "微信小程序",
+        status: miniOk ? "ok" : "missing",
+        label: miniOk ? "已配置" : "未配置",
+        message: miniOk ? "AppID 与 AppSecret 已检测到" : "缺少小程序 AppID 或 AppSecret",
+        configured: miniOk,
+      },
+      {
+        key: "official",
+        name: "微信公众号",
+        status: officialOk ? "ok" : "missing",
+        label: officialOk ? "已配置" : "未配置",
+        message: officialOk ? "公众号 AppID 与 AppSecret 已检测到" : "未配置公众号 AppID/AppSecret",
+        configured: officialOk,
+      },
+      {
+        key: "amap",
+        name: "高德地图",
+        status: amapOk ? "ok" : "missing",
+        label: amapOk ? "已配置" : "未配置",
+        message: amapOk ? "Web服务 Key 与 JS API Key 已检测到" : "缺少高德 Web服务 Key 或 JS API Key",
+        configured: amapOk,
+      },
+      storageStatus,
+      {
+        key: "payment",
+        name: "微信支付",
+        status: payOk ? "ok" : "missing",
+        label: payOk ? "已配置" : "未配置",
+        message: payOk ? "商户号与 APIv3 密钥已检测到" : "缺少微信支付商户号或 APIv3 密钥",
+        configured: payOk,
+      },
+      {
+        key: "ai",
+        name: "AI 模型",
+        status: aiOk ? "ok" : aiEnabled ? "warning" : "disabled",
+        label: aiOk ? "已启用" : aiEnabled ? "缺少密钥" : "未启用",
+        message: aiOk
+          ? "AI 开关和密钥已检测到"
+          : aiEnabled
+            ? "AI 已启用但缺少 API Key"
+            : "AI 功能未启用，不会执行真实模型调用",
+        configured: aiOk,
+      },
+    ];
+  }
 
   /** 严格校验：仅 super_admin 角色可通过 */
   async ensureSuperAdmin(accountId: string): Promise<void> {
@@ -92,6 +270,9 @@ export class OpsService {
 
     const health = await this.getHealth();
 
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const statusMap = Object.fromEntries(configStatus.map((item) => [item.key, item]));
+
     return {
       backendStatus: "running",
       uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
@@ -108,6 +289,13 @@ export class OpsService {
       version: "1.0.0",
       nodeVersion: process.version,
       environment: this.configService.get("NODE_ENV") || "development",
+      configStatus,
+      wxConfigured: Boolean(statusMap.miniapp?.configured),
+      wxOfficialConfigured: Boolean(statusMap.official?.configured),
+      amapConfigured: Boolean(statusMap.amap?.configured),
+      storageConfigured: Boolean(statusMap.storage?.configured),
+      aiConfigured: Boolean(statusMap.ai?.configured),
+      wxPayConfigured: Boolean(statusMap.payment?.configured),
     };
   }
 
@@ -151,6 +339,9 @@ export class OpsService {
         ? "healthy"
         : "degraded";
 
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const statusMap = Object.fromEntries(configStatus.map((item) => [item.key, item]));
+
     return {
       cpuUsage: Math.round(cpuUsage * 10000) / 100,
       memoryUsage: Math.round(memoryUsage * 10000) / 100,
@@ -163,10 +354,15 @@ export class OpsService {
       redisStatus,
       status,
       envSecurity: {
-        cosConfigured: !!this.configService.get("COS_SECRET_ID"),
-        wxPayConfigured: !!this.configService.get("WX_PAY_MCHID"),
-        aiConfigured: !!this.configService.get("AI_API_KEY"),
+        storageConfigured: Boolean(statusMap.storage?.configured),
+        cosConfigured: Boolean(statusMap.storage?.configured),
+        wxMiniConfigured: Boolean(statusMap.miniapp?.configured),
+        wxOfficialConfigured: Boolean(statusMap.official?.configured),
+        amapConfigured: Boolean(statusMap.amap?.configured),
+        wxPayConfigured: Boolean(statusMap.payment?.configured),
+        aiConfigured: Boolean(statusMap.ai?.configured),
       },
+      configStatus,
     };
   }
 
@@ -455,47 +651,25 @@ export class OpsService {
       items.push({ key: "redis", name: "Redis 连接", status: "failed", message: "连接失败", level: "required" });
     }
 
-    // 4. 上传配置
-    const cosConfigured = !!this.configService.get("COS_SECRET_ID");
-    items.push({
-      key: "upload", name: "上传配置", status: cosConfigured ? "pass" : "warning",
-      message: cosConfigured ? "已配置" : "未配置 COS", level: "recommended",
-    });
-
-    // 5. 微信小程序
-    const wxAppId = this.configService.get("WX_APPID");
-    const wxSecret = this.configService.get("WX_SECRET");
-    const wxOk = !!(wxAppId && wxSecret);
-    items.push({
-      key: "wechat", name: "微信小程序配置", status: wxOk ? "pass" : "warning",
-      message: wxOk ? "已配置" : "AppID 或 Secret 未配置", level: "recommended",
-    });
-
-    // 6. 高德地图
-    let amapOk = false;
-    try {
-      const amapConfig = await this.prisma.config.findUnique({ where: { key: "amap" } });
-      const val = amapConfig?.value as any;
-      amapOk = !!(val?.webServiceKey && val?.jsApiKey);
-    } catch {}
-    items.push({
-      key: "amap", name: "高德地图配置", status: amapOk ? "pass" : "warning",
-      message: amapOk ? "已配置" : "Key 未配置", level: "optional",
-    });
-
-    // 7. 支付配置
-    const payConfigured = !!this.configService.get("WX_PAY_MCHID");
-    items.push({
-      key: "payment", name: "支付配置", status: payConfigured ? "pass" : "warning",
-      message: payConfigured ? "已配置" : "未配置", level: "optional",
-    });
-
-    // 8. AI 配置
-    const aiConfigured = !!this.configService.get("AI_API_KEY");
-    items.push({
-      key: "ai", name: "AI 配置", status: aiConfigured ? "pass" : "warning",
-      message: aiConfigured ? "已配置" : "未配置", level: "optional",
-    });
+    // 4. 第三方/业务配置：从真实 Config 表和环境变量判断，不再用硬编码状态。
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const levelMap: Record<string, string> = {
+      miniapp: "recommended",
+      official: "optional",
+      amap: "optional",
+      storage: "recommended",
+      payment: "optional",
+      ai: "optional",
+    };
+    for (const item of configStatus) {
+      items.push({
+        key: `config_${item.key}`,
+        name: `${item.name}配置`,
+        status: item.status === "ok" || item.status === "disabled" ? "pass" : "warning",
+        message: item.message,
+        level: levelMap[item.key] || "optional",
+      });
+    }
 
     // 9. 管理员账号
     const adminCount = await this.prisma.adminAccount.count();

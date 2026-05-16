@@ -23,23 +23,23 @@ defineProps<{ title:string; subtitle?:string }>()
 .breadcrumb {
   color: #64748b;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 650;
   margin-bottom: 8px;
 }
 
 h1 {
   margin: 0;
-  font-size: 30px;
-  line-height: 1.16;
+  font-size: 31px;
+  line-height: 1.14;
   letter-spacing: 0;
-  font-weight: 950;
-  color: #172033;
+  font-weight: 800;
+  color: #0f172a;
 }
 
 p {
   margin: 8px 0 0;
-  color: #64748b;
-  font-weight: 680;
+  color: #526174;
+  font-weight: 520;
   font-size: 15px;
 }
 

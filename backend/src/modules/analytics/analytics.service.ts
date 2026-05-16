@@ -5,11 +5,48 @@ import { PrismaService } from '../../common/services/prisma.service';
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private toNumber(value: any): number {
+    if (value === null || value === undefined) return 0;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private parseDate(value: any, endOfDay = false): Date | undefined {
+    if (!value) return undefined;
+    const raw = String(value);
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+    const date = new Date(dateOnly ? `${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}` : raw);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  }
+
   private getDateRange(query: any) {
     const now = new Date();
-    const startDate = query.startDate ? new Date(query.startDate) : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const endDate = query.endDate ? new Date(query.endDate + 'T23:59:59.999Z') : now;
+    const startDate = this.parseDate(query.startDate) || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const endDate = this.parseDate(query.endDate, true) || now;
+    if (startDate > endDate) return { startDate: endDate, endDate: startDate };
     return { startDate, endDate };
+  }
+
+  private userRegionWhere(regionId?: string) {
+    if (!regionId) return {};
+    return {
+      OR: [
+        { profile: { is: { region: regionId } } },
+        { addresses: { some: { regionId } } },
+      ],
+    };
+  }
+
+  private orderRegionWhere(regionId?: string) {
+    return regionId ? { merchant: { regionId } } : {};
+  }
+
+  private commentRegionWhere(regionId?: string) {
+    return regionId ? { post: { regionId } } : {};
+  }
+
+  private likeRegionWhere(regionId?: string) {
+    return regionId ? { targetType: 'post', post: { regionId } } : {};
   }
 
   private async getDailyTrend(model: string, dateField: string, startDate: Date, endDate: Date, where: any = {}) {
@@ -76,6 +113,10 @@ export class AnalyticsService {
     const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
     const prevStart = new Date(startDate.getTime() - (endDate.getTime() - startDate.getTime()));
     const prevEnd = startDate;
+    const userWhere = this.userRegionWhere(regionId);
+    const postWhere = regionId ? { regionId } : {};
+    const orderWhere = this.orderRegionWhere(regionId);
+    const merchantWhere = regionId ? { regionId } : {};
 
     const [
       totalUsers, newUsers, prevNewUsers,
@@ -86,23 +127,23 @@ export class AnalyticsService {
       todayGmv, yesterdayGmv,
       totalGmv,
     ] = await Promise.all([
-      this.prisma.user.count(),
-      this.prisma.user.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.user.count({ where: { createdAt: { gte: prevStart, lte: prevEnd } } }),
-      this.prisma.post.count(),
-      this.prisma.post.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.post.count({ where: { createdAt: { gte: prevStart, lte: prevEnd } } }),
-      this.prisma.order.count(),
-      this.prisma.order.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.order.count({ where: { createdAt: { gte: prevStart, lte: prevEnd } } }),
-      this.prisma.merchant.count(),
-      this.prisma.merchant.count({ where: { status: 'approved' } }),
-      this.prisma.merchant.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.order.count({ where: { createdAt: { gte: today } } }),
-      this.prisma.order.count({ where: { createdAt: { gte: yesterday, lt: today } } }),
-      this.prisma.paymentOrder.aggregate({ where: { status: 'paid', createdAt: { gte: today } }, _sum: { amount: true } }),
-      this.prisma.paymentOrder.aggregate({ where: { status: 'paid', createdAt: { gte: yesterday, lt: today } }, _sum: { amount: true } }),
-      this.prisma.paymentOrder.aggregate({ where: { status: 'paid' }, _sum: { amount: true } }),
+      this.prisma.user.count({ where: userWhere }),
+      this.prisma.user.count({ where: { ...userWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.user.count({ where: { ...userWhere, createdAt: { gte: prevStart, lte: prevEnd } } as any }),
+      this.prisma.post.count({ where: postWhere }),
+      this.prisma.post.count({ where: { ...postWhere, createdAt: { gte: startDate, lte: endDate } } }),
+      this.prisma.post.count({ where: { ...postWhere, createdAt: { gte: prevStart, lte: prevEnd } } }),
+      this.prisma.order.count({ where: orderWhere }),
+      this.prisma.order.count({ where: { ...orderWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.order.count({ where: { ...orderWhere, createdAt: { gte: prevStart, lte: prevEnd } } as any }),
+      this.prisma.merchant.count({ where: merchantWhere }),
+      this.prisma.merchant.count({ where: { ...merchantWhere, status: 'approved' } }),
+      this.prisma.merchant.count({ where: { ...merchantWhere, createdAt: { gte: startDate, lte: endDate } } }),
+      this.prisma.order.count({ where: { ...orderWhere, createdAt: { gte: today } } as any }),
+      this.prisma.order.count({ where: { ...orderWhere, createdAt: { gte: yesterday, lt: today } } as any }),
+      this.prisma.order.aggregate({ where: { ...orderWhere, status: 'COMPLETED', createdAt: { gte: today } } as any, _sum: { payAmount: true } }),
+      this.prisma.order.aggregate({ where: { ...orderWhere, status: 'COMPLETED', createdAt: { gte: yesterday, lt: today } } as any, _sum: { payAmount: true } }),
+      this.prisma.order.aggregate({ where: { ...orderWhere, status: 'COMPLETED' } as any, _sum: { payAmount: true } }),
     ]);
 
     return {
@@ -113,9 +154,9 @@ export class AnalyticsService {
         orders: { total: totalOrders, new: newOrders, today: todayOrders, yesterday: yesterdayOrders, trend: this.calcGrowth(newOrders, prevNewOrders) },
         merchants: { total: totalMerchants, active: activeMerchants, new: newMerchants },
         gmv: {
-          today: Number(todayGmv._sum.amount || 0),
-          yesterday: Number(yesterdayGmv._sum.amount || 0),
-          total: Number(totalGmv._sum.amount || 0),
+          today: this.toNumber(todayGmv._sum.payAmount),
+          yesterday: this.toNumber(yesterdayGmv._sum.payAmount),
+          total: this.toNumber(totalGmv._sum.payAmount),
         },
       },
     };
@@ -125,16 +166,16 @@ export class AnalyticsService {
     const { startDate, endDate } = this.getDateRange(query);
     const regionId = query.regionId;
 
-    const where: any = {};
-    if (regionId) where.profile = { region: regionId };
+    const where: any = this.userRegionWhere(regionId);
 
-    const [totalUsers, newUsers, activeUsers, certifiedUsers, pendingCerts, rejectedCerts] = await Promise.all([
+    const [totalUsers, newUsers, activeUsers, certifiedUsers, pendingCerts, rejectedCerts, botUsers] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.count({ where: { ...where, createdAt: { gte: startDate, lte: endDate } } }),
       this.prisma.user.count({ where: { ...where, lastLoginAt: { gte: startDate } } }),
       this.prisma.user.count({ where: { ...where, studentVerify: { status: 'APPROVED' } } }),
-      this.prisma.studentVerify.count({ where: { status: 'PENDING' } }),
-      this.prisma.studentVerify.count({ where: { status: 'REJECTED' } }),
+      this.prisma.studentVerify.count({ where: { status: 'PENDING', ...(regionId ? { user: where } : {}) } as any }),
+      this.prisma.studentVerify.count({ where: { status: 'REJECTED', ...(regionId ? { user: where } : {}) } as any }),
+      this.prisma.user.count({ where: { ...where, userType: 4 } }),
     ]);
 
     const trend = await this.getDailyTrend('user', 'createdAt', startDate, endDate, where);
@@ -148,6 +189,8 @@ export class AnalyticsService {
         certified: certifiedUsers,
         pendingCerts,
         rejectedCerts,
+        botUsers,
+        realUsers: Math.max(0, totalUsers - botUsers),
         certRate: totalUsers > 0 ? Math.round(certifiedUsers / totalUsers * 10000) / 100 : 0,
         trend,
       },
@@ -161,20 +204,24 @@ export class AnalyticsService {
     const where: any = {};
     if (regionId) where.regionId = regionId;
 
+    const commentWhere = this.commentRegionWhere(regionId);
+    const likeWhere = this.likeRegionWhere(regionId);
+    const reportWhere = regionId ? { post: { regionId } } : {};
+
     const [totalPosts, newPosts, totalComments, newComments, totalLikes, newLikes, pendingReports, totalReports] = await Promise.all([
       this.prisma.post.count({ where }),
       this.prisma.post.count({ where: { ...where, createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.comment.count(),
-      this.prisma.comment.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.like.count(),
-      this.prisma.like.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.report.count({ where: { status: 'pending' } }),
-      this.prisma.report.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
+      this.prisma.comment.count({ where: commentWhere as any }),
+      this.prisma.comment.count({ where: { ...commentWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.like.count({ where: likeWhere as any }),
+      this.prisma.like.count({ where: { ...likeWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.report.count({ where: { ...reportWhere, status: 'pending' } as any }),
+      this.prisma.report.count({ where: { ...reportWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
     ]);
 
     const postTrend = await this.getDailyTrend('post', 'createdAt', startDate, endDate, where);
-    const commentTrend = await this.getDailyTrend('comment', 'createdAt', startDate, endDate);
-    const likeTrend = await this.getDailyTrend('like', 'createdAt', startDate, endDate);
+    const commentTrend = await this.getDailyTrend('comment', 'createdAt', startDate, endDate, commentWhere);
+    const likeTrend = await this.getDailyTrend('like', 'createdAt', startDate, endDate, likeWhere);
 
     return {
       success: true,
@@ -194,35 +241,34 @@ export class AnalyticsService {
     const { startDate, endDate } = this.getDateRange(query);
     const regionId = query.regionId;
 
-    const where: any = {};
-    if (regionId) where.merchant = { regionId };
+    const where: any = this.orderRegionWhere(regionId);
 
     const [totalOrders, newOrders, completedOrders, cancelledOrders, refundingOrders] = await Promise.all([
-      this.prisma.order.count(),
-      this.prisma.order.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.order.count({ where: { status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.order.count({ where: { status: 'CANCELLED', createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.order.count({ where: { status: 'REFUNDING' } }),
+      this.prisma.order.count({ where }),
+      this.prisma.order.count({ where: { ...where, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.order.count({ where: { ...where, status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.order.count({ where: { ...where, status: 'CANCELLED', createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.order.count({ where: { ...where, refundStatus: { in: ['refunding', 'refunded'] } } as any }),
     ]);
 
     const [gmv, refundAgg] = await Promise.all([
       this.prisma.order.aggregate({
-        where: { status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } },
-        _sum: { totalAmount: true },
+        where: { ...where, status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } as any,
+        _sum: { payAmount: true },
       }),
       this.prisma.refund.aggregate({
-        where: { status: 'completed', createdAt: { gte: startDate, lte: endDate } },
+        where: { status: 'completed', createdAt: { gte: startDate, lte: endDate }, ...(regionId ? { order: where } : {}) } as any,
         _sum: { amount: true },
         _count: true,
       }),
     ]);
 
-    const gmvAmount = Number(gmv?._sum?.totalAmount || 0);
-    const refundAmount = Number(refundAgg._sum?.amount || 0);
+    const gmvAmount = this.toNumber(gmv?._sum?.payAmount);
+    const refundAmount = this.toNumber(refundAgg._sum?.amount);
     const refundRate = gmvAmount > 0 ? Math.round(refundAmount / gmvAmount * 10000) / 100 : 0;
 
-    const orderTrend = await this.getDailyTrend('order', 'createdAt', startDate, endDate);
-    const gmvTrend = await this.getDailyAmountTrend('order', 'createdAt', 'totalAmount', startDate, endDate, { status: 'COMPLETED' });
+    const orderTrend = await this.getDailyTrend('order', 'createdAt', startDate, endDate, where);
+    const gmvTrend = await this.getDailyAmountTrend('order', 'createdAt', 'payAmount', startDate, endDate, { ...where, status: 'COMPLETED' });
 
     return {
       success: true,
@@ -293,9 +339,9 @@ export class AnalyticsService {
           this.prisma.post.count({ where: { regionId: region.id } }),
           this.prisma.order.count({ where: { merchant: { regionId: region.id } } }),
           this.prisma.merchant.count({ where: { regionId: region.id } }),
-          this.prisma.paymentOrder.aggregate({
-            where: { status: 'paid' },
-            _sum: { amount: true },
+          this.prisma.order.aggregate({
+            where: { merchant: { regionId: region.id }, status: 'COMPLETED' },
+            _sum: { payAmount: true },
           }),
         ]);
 
@@ -306,6 +352,7 @@ export class AnalyticsService {
           posts: postCount,
           orders: orderCount,
           merchants: merchantCount,
+          gmv: this.toNumber(gmvAgg._sum.payAmount),
         };
       }),
     );
@@ -321,15 +368,18 @@ export class AnalyticsService {
   async getMerchantAnalytics(query: any) {
     const { startDate, endDate } = this.getDateRange(query);
 
+    const regionId = query.regionId;
+    const merchantWhere = regionId ? { regionId } : {};
+
     const [totalMerchants, newMerchants, activeMerchants, pendingMerchants] = await Promise.all([
-      this.prisma.merchant.count(),
-      this.prisma.merchant.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.merchant.count({ where: { status: 'approved' } }),
-      this.prisma.merchant.count({ where: { status: 'pending' } }),
+      this.prisma.merchant.count({ where: merchantWhere }),
+      this.prisma.merchant.count({ where: { ...merchantWhere, createdAt: { gte: startDate, lte: endDate } } }),
+      this.prisma.merchant.count({ where: { ...merchantWhere, status: 'approved' } }),
+      this.prisma.merchant.count({ where: { ...merchantWhere, status: 'pending' } }),
     ]);
 
     const merchants = await this.prisma.merchant.findMany({
-      where: { status: 'approved' },
+      where: { ...merchantWhere, status: 'approved' },
       select: { id: true, name: true, logo: true },
       take: 20,
     });
@@ -340,14 +390,14 @@ export class AnalyticsService {
           this.prisma.order.count({ where: { merchantId: m.id, createdAt: { gte: startDate, lte: endDate } } }),
           this.prisma.order.aggregate({
             where: { merchantId: m.id, status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } },
-            _sum: { totalAmount: true },
+            _sum: { payAmount: true },
           }),
         ]);
         return {
           id: m.id,
           name: m.name,
           orderCount,
-          totalSales: Number(gmvAgg._sum.totalAmount || 0),
+          totalSales: this.toNumber(gmvAgg._sum.payAmount),
         };
       }),
     );
@@ -368,6 +418,8 @@ export class AnalyticsService {
 
   async getRiderAnalytics(query: any) {
     const { startDate, endDate } = this.getDateRange(query);
+    const regionId = query.regionId;
+    const orderWhere = regionId ? { regionId } : {};
 
     const [totalRiders, onlineRiders, busyRiders] = await Promise.all([
       this.prisma.rider.count(),
@@ -376,10 +428,10 @@ export class AnalyticsService {
     ]);
 
     const [deliveryOrders, completedDeliveries, totalDeliveryGmv] = await Promise.all([
-      this.prisma.deliveryOrder.count({ where: { createdAt: { gte: startDate, lte: endDate } } }),
-      this.prisma.deliveryOrder.count({ where: { status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } }),
+      this.prisma.deliveryOrder.count({ where: { ...orderWhere, createdAt: { gte: startDate, lte: endDate } } as any }),
+      this.prisma.deliveryOrder.count({ where: { ...orderWhere, status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } as any }),
       this.prisma.deliveryOrder.aggregate({
-        where: { status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } },
+        where: { ...orderWhere, status: 'COMPLETED', createdAt: { gte: startDate, lte: endDate } } as any,
         _sum: { price: true, tip: true },
       }),
     ]);
@@ -395,7 +447,7 @@ export class AnalyticsService {
         deliveryOrders,
         completedDeliveries,
         completionRate,
-        totalEarnings: Number(totalDeliveryGmv._sum?.price || 0) + Number(totalDeliveryGmv._sum?.tip || 0),
+        totalEarnings: this.toNumber(totalDeliveryGmv._sum?.price) + this.toNumber(totalDeliveryGmv._sum?.tip),
       },
     };
   }

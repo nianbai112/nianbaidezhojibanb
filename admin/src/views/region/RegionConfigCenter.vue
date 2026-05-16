@@ -561,12 +561,11 @@ const DEFAULT_MSG_NAV_CARDS = [
   { id: 'notice', title: '系统通知', subtitle: '平台消息与审核通知', icon: 'notice', path: '/pages/tabbar/news/news', enabled: true, sortOrder: 0 }
 ]
 const DEFAULT_PROFILE_ITEMS = [
-  { id: 'orders', title: '我的订单', icon: 'icon-dingdan', path: '/pagesA/order/order', enabled: true, sortOrder: 0, requireLogin: true },
-  { id: 'wallet', title: '我的钱包', icon: 'icon-qianbao', path: '/pagesA/withdraw/withdraw', enabled: true, sortOrder: 1, requireLogin: true },
-  { id: 'share', title: '分享赚赏', icon: 'icon-fenxiang', path: '/pagesA/news/SharingCourtesy/SharingCourtesy', enabled: true, sortOrder: 2, requireLogin: true },
-  { id: 'rider', title: '骑手中心', icon: 'icon-qishou', path: '/pagesA/Rider/Rider', enabled: true, sortOrder: 3, requireLogin: true },
-  { id: 'merchant', title: '商家管理', icon: 'icon-shangjia', path: '/pagesA/MerchantManagement/managerial', enabled: true, sortOrder: 4, requireLogin: true },
-  { id: 'settings', title: '设置', icon: 'icon-shezhi', path: '/pages/auth/settings/settings', enabled: true, sortOrder: 5, requireLogin: false }
+  { id: 'orders', title: '我的订单', description: '查看订单、配送和售后', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/order/order', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0, requireLogin: true },
+  { id: 'wallet', title: '我的钱包', description: '余额、提现和交易流水', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/withdraw/withdraw', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1, requireLogin: true },
+  { id: 'share', title: '分享有礼', description: '邀请同学加入本地生活圈', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/news/SharingCourtesy/SharingCourtesy', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2, requireLogin: true },
+  { id: 'merchant', title: '商家中心', description: '商家入驻与店铺管理', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/MerchantManagement/managerial', query: '', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3, requireLogin: true },
+  { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4, requireLogin: false }
 ]
 const DEFAULT_TABBAR = [
   { id: 'home', name: '首页', pagePath: 'pages/tabbar/index/index', action: '', iconPath: '/static/tabbar/home.png', selectedIconPath: '/static/tabbar/home-active.png', color: '#8A8A8A', selectedColor: '#1677ff', width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 0, navType: 'bottom' },
@@ -1117,8 +1116,17 @@ onMounted(loadRegions)
 
 .quiet-tabs :deep(.el-tabs__header) { margin: 0 0 20px; }
 .quiet-tabs :deep(.el-tabs__nav-wrap::after) { height: 0; }
-.quiet-tabs :deep(.el-tabs__item) { height: 42px; padding: 0 18px; font-weight: 900; color: #64748b; }
-.quiet-tabs :deep(.el-tabs__item.is-active) { color: #1f6fff; }
+.quiet-tabs :deep(.el-tabs__item) {
+  height: 42px;
+  padding: 0 18px;
+  font-size: 14.5px;
+  font-weight: 650;
+  color: #526174;
+}
+.quiet-tabs :deep(.el-tabs__item.is-active) {
+  color: #1f6fff;
+  font-weight: 760;
+}
 
 .section-grid {
   display: grid;
@@ -1152,7 +1160,7 @@ onMounted(loadRegions)
 .create-next b {
   color: #0f172a;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
 }
 .create-next p {
   margin: 5px 0 0;

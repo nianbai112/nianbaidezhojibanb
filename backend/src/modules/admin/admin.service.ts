@@ -1359,9 +1359,16 @@ export class AdminService {
         { name: "二手", subtitle: "", icon: "", page: "pagesA/SecondHand/Second-hand-selease/Second-hand-selease", path: "pagesA/SecondHand/Second-hand-selease/Second-hand-selease", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 2 },
         { name: "活动", subtitle: "", icon: "", page: "pagesA/news/SharingCourtesy/SharingCourtesy", path: "pagesA/news/SharingCourtesy/SharingCourtesy", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 3 },
       ];
+      const defaultProfileItems = [
+        { id: "orders", title: "我的订单", description: "查看订单、配送和售后", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/order/order", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 0, requireLogin: true },
+        { id: "wallet", title: "我的钱包", description: "余额、提现和交易流水", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/withdraw/withdraw", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 1, requireLogin: true },
+        { id: "share", title: "分享有礼", description: "邀请同学加入本地生活圈", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/news/SharingCourtesy/SharingCourtesy", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 2, requireLogin: true },
+        { id: "merchant", title: "商家中心", description: "商家入驻与店铺管理", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/MerchantManagement/managerial", query: "", type: "internal_jump", navigation_permission: "merchant", enabled: true, sortOrder: 3, requireLogin: true },
+        { id: "settings", title: "账号设置", description: "资料、隐私和系统设置", icon: "", main_image: "/static/logo.jpg", path: "/pages/auth/settings/settings", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 4, requireLogin: false },
+      ];
       const region = await this.prisma.region.findUnique({
         where: { id: regionId },
-        select: { regionTabs: true, homeNavLayoutConfig: true },
+        select: { regionTabs: true, homeNavLayoutConfig: true, profileLayoutItems: true },
       });
       const regionUpdate: any = {};
       if (!Array.isArray(region?.regionTabs) || !region.regionTabs.length) {
@@ -1369,6 +1376,9 @@ export class AdminService {
       }
       if (!Array.isArray(region?.homeNavLayoutConfig) || !region.homeNavLayoutConfig.length) {
         regionUpdate.homeNavLayoutConfig = defaultHomeNav;
+      }
+      if (!Array.isArray(region?.profileLayoutItems) || !region.profileLayoutItems.length) {
+        regionUpdate.profileLayoutItems = defaultProfileItems;
       }
 
       const operations: any[] = [
@@ -3565,20 +3575,49 @@ export class AdminService {
   }
 
   async unreadStats() {
-    const [reportsCount, withdrawsCount, pendingPosts, pendingMerchants] =
-      await Promise.all([
-        this.prisma.report.count({ where: { status: "pending" } }),
-        this.prisma.withdraw.count({ where: { status: "PENDING" } }),
-        this.prisma.post.count({ where: { auditStatus: "pending" } }),
-        this.prisma.merchant.count({ where: { status: "pending" } }),
-      ]);
+    const official = await this.prisma.user.findUnique({
+      where: { openid: "lingmeng_official_message_account" },
+      select: { id: true },
+    });
+
+    if (!official) {
+      return {
+        privateUnread: 0,
+        groupUnread: 0,
+        systemUnread: 0,
+        officialUnreadConversations: 0,
+        officialUnreadMessages: 0,
+        totalUnread: 0,
+      };
+    }
+
+    const [officialUnreadConversations, officialUnreadMessages] = await Promise.all([
+      this.prisma.conversationMember.count({
+        where: {
+          userId: official.id,
+          unreadCount: { gt: 0 },
+          conversation: { type: "private" },
+        },
+      }),
+      this.prisma.conversationMember.aggregate({
+        where: {
+          userId: official.id,
+          unreadCount: { gt: 0 },
+          conversation: { type: "private" },
+        },
+        _sum: { unreadCount: true },
+      }),
+    ]);
+
+    const unreadMessageCount = officialUnreadMessages._sum.unreadCount || 0;
+
     return {
-      privateUnread: 0,
+      privateUnread: officialUnreadConversations,
       groupUnread: 0,
-      systemUnread:
-        reportsCount + withdrawsCount + pendingPosts + pendingMerchants,
-      totalUnread:
-        reportsCount + withdrawsCount + pendingPosts + pendingMerchants,
+      systemUnread: 0,
+      officialUnreadConversations,
+      officialUnreadMessages: unreadMessageCount,
+      totalUnread: unreadMessageCount,
     };
   }
 
@@ -3773,11 +3812,26 @@ export class AdminService {
   }
 
   async auditLogs(query: any) {
-    const { page = 1, pageSize = 20, accountId, module, action } = query;
+    const { page = 1, pageSize = 20, accountId, module, action, keyword, startDate, endDate, startTime, endTime } = query;
     const where: any = {};
     if (accountId) where.accountId = accountId;
     if (module) where.module = module;
     if (action) where.action = action;
+    if (keyword) {
+      where.OR = [
+        { action: { contains: keyword } },
+        { module: { contains: keyword } },
+        { targetId: { contains: keyword } },
+        { targetType: { contains: keyword } },
+      ];
+    }
+    const from = startDate || startTime;
+    const to = endDate || endTime;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
 
     const [list, total] = await Promise.all([
       this.prisma.adminOperationLog.findMany({
@@ -3795,6 +3849,7 @@ export class AdminService {
       list: list.map((l) => ({
         id: l.id,
         accountId: l.accountId,
+        adminName: l.account?.realName || l.account?.username,
         username: l.account?.realName || l.account?.username,
         action: l.action,
         module: l.module,
@@ -3811,7 +3866,7 @@ export class AdminService {
   }
 
   async loginLogs(query: any) {
-    const { page = 1, pageSize = 20, keyword, success } = query;
+    const { page = 1, pageSize = 20, keyword, success, startDate, endDate, startTime, endTime } = query;
     const where: any = {};
     if (keyword) {
       where.OR = [
@@ -3819,7 +3874,16 @@ export class AdminService {
         { ip: { contains: keyword } },
       ];
     }
-    if (success !== undefined) where.success = success;
+    if (success !== undefined && success !== '') {
+      where.success = success === true || success === 'true' || success === '1';
+    }
+    const from = startDate || startTime;
+    const to = endDate || endTime;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
 
     const [list, total] = await Promise.all([
       this.prisma.adminLoginLog.findMany({
@@ -4888,10 +4952,14 @@ export class AdminService {
   // ==================== 角色/菜单管理 ====================
   async createRole(dto: any) {
     const { name, code, description, permissions = [] } = dto;
+    if (!name || !code) throw new BadRequestException("角色名称和角色编码不能为空");
+    const exists = await this.prisma.adminRole.findUnique({ where: { code } });
+    if (exists) throw new ConflictException("角色编码已存在");
     const role = await this.prisma.adminRole.create({
       data: { name, code, description },
     });
     if (permissions.length > 0) {
+      await this.assertPermissionsExist(permissions);
       await this.prisma.adminRolePermission.createMany({
         data: permissions.map((pid: string) => ({
           roleId: role.id,
@@ -4904,12 +4972,20 @@ export class AdminService {
 
   async updateRole(id: string, dto: any) {
     const { name, code, description, permissions } = dto;
+    const current = await this.prisma.adminRole.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException("角色不存在");
     const data: any = {};
     if (name !== undefined) data.name = name;
-    if (code !== undefined) data.code = code;
+    if (code !== undefined && code !== current.code) {
+      if (current.isSystem) throw new BadRequestException("系统内置角色不允许修改角色编码");
+      const exists = await this.prisma.adminRole.findUnique({ where: { code } });
+      if (exists) throw new ConflictException("角色编码已存在");
+      data.code = code;
+    }
     if (description !== undefined) data.description = description;
     const role = await this.prisma.adminRole.update({ where: { id }, data });
     if (permissions && Array.isArray(permissions)) {
+      await this.assertPermissionsExist(permissions);
       await this.prisma.adminRolePermission.deleteMany({
         where: { roleId: id },
       });
@@ -4926,8 +5002,18 @@ export class AdminService {
   }
 
   async deleteRole(id: string) {
+    const role = await this.prisma.adminRole.findUnique({ where: { id } });
+    if (!role) throw new NotFoundException("角色不存在");
+    if (role.isSystem) throw new BadRequestException("系统内置角色不允许删除");
     await this.prisma.adminRole.delete({ where: { id } });
     return { success: true };
+  }
+
+  private async assertPermissionsExist(permissionIds: string[]) {
+    const ids = Array.from(new Set((permissionIds || []).filter(Boolean)));
+    if (!ids.length) return;
+    const count = await this.prisma.adminPermission.count({ where: { id: { in: ids } } });
+    if (count !== ids.length) throw new BadRequestException("存在无效权限点，请刷新后重试");
   }
 
   async createMenu(dto: any) {
@@ -6544,16 +6630,28 @@ export class AdminService {
   async getDeliveryOrdersStats() {
     try {
       const today = this.getTodayStart();
-      const [totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled] = await Promise.all([
+      const overduePendingTime = new Date(Date.now() - 10 * 60 * 1000);
+      const overdueRunningTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const [totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled, onlineRiders, overdue] = await Promise.all([
         this.prisma.errandOrder.count().catch(() => 0),
         this.prisma.errandOrder.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
         this.prisma.errandOrder.count({ where: { status: "pending_accept" } }).catch(() => 0),
         this.prisma.errandOrder.count({ where: { status: { in: ["accepted", "in_progress", "arrived"] } } }).catch(() => 0),
         this.prisma.errandOrder.count({ where: { status: "completed" } }).catch(() => 0),
         this.prisma.errandOrder.count({ where: { status: "cancelled" } }).catch(() => 0),
+        this.prisma.regionRider.count({ where: { status: "online", verifyStatus: "approved" } }).catch(() => 0),
+        this.prisma.errandOrder.count({
+          where: {
+            OR: [
+              { status: "pending_accept", createdAt: { lte: overduePendingTime } },
+              { status: { in: ["accepted", "in_progress", "arrived"] }, updatedAt: { lte: overdueRunningTime } },
+              { status: "refunding", updatedAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+            ],
+          },
+        }).catch(() => 0),
       ]);
-      return { totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled };
-    } catch { return { totalOrders: 0, todayOrders: 0, pendingAccept: 0, inProgress: 0, completed: 0, cancelled: 0 }; }
+      return { totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled, onlineRiders, overdue };
+    } catch { return { totalOrders: 0, todayOrders: 0, pendingAccept: 0, inProgress: 0, completed: 0, cancelled: 0, onlineRiders: 0, overdue: 0 }; }
   }
 
   /** 文件上传统计 — Model: uploadRecord */

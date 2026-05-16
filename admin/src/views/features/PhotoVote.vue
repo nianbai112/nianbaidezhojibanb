@@ -5,13 +5,23 @@
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
       <el-tab-pane label="活动管理" name="contests">
         <div class="tab-toolbar">
+          <el-select v-model="contestFilters.regionId" clearable filterable placeholder="区域" style="width: 180px" @change="loadContests">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+          <el-select v-model="contestFilters.status" clearable placeholder="状态" style="width: 120px" @change="loadContests">
+            <el-option label="草稿" value="draft" />
+            <el-option label="进行中" value="active" />
+            <el-option label="投票中" value="voting" />
+            <el-option label="已结束" value="ended" />
+          </el-select>
+          <el-input v-model="contestFilters.keyword" clearable placeholder="搜索活动标题" style="width: 200px" @keyup.enter="loadContests" />
           <el-button type="primary" @click="openContestDialog()">新建活动</el-button>
           <el-button @click="loadContests" :loading="contestLoading">刷新</el-button>
         </div>
         <el-table :data="contests" v-loading="contestLoading" stripe>
           <el-table-column prop="title" label="活动标题" min-width="200" show-overflow-tooltip />
-          <el-table-column prop="regionId" label="区域ID" width="120">
-            <template #default="{ row }">{{ row.regionId || '-' }}</template>
+          <el-table-column prop="regionId" label="区域" width="150">
+            <template #default="{ row }">{{ row.region?.name || row.regionId || '全部区域' }}</template>
           </el-table-column>
           <el-table-column prop="status" label="状态" width="100">
             <template #default="{ row }">
@@ -162,24 +172,47 @@
 
       <el-tab-pane label="区域配置" name="settings">
         <div class="tab-toolbar">
-          <el-button type="primary" @click="saveRegionSettings" :loading="settingSaving">保存配置</el-button>
+          <el-select v-model="settingRegionId" filterable placeholder="选择区域" style="width:220px" @change="loadRegionSettings">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+          <el-button type="primary" @click="saveRegionSettings" :loading="settingSaving" :disabled="!settingRegionId">保存配置</el-button>
         </div>
-        <el-form :model="regionSettingForm" label-width="140px" style="max-width:600px">
+        <el-form v-if="settingRegionId" :model="regionSettingForm" label-width="160px" style="max-width:760px">
           <el-form-item label="启用爆照评选"><el-switch v-model="regionSettingForm.enableContest" /></el-form-item>
           <el-form-item label="每人最大参赛作品数"><el-input-number v-model="regionSettingForm.maxPhotosPerUser" :min="1" /></el-form-item>
           <el-form-item label="每人每天投票上限"><el-input-number v-model="regionSettingForm.maxVotesPerUserDaily" :min="1" /></el-form-item>
           <el-form-item label="需要审核"><el-switch v-model="regionSettingForm.requirePhotoApproval" /></el-form-item>
         </el-form>
+        <el-empty v-else description="请先选择要配置的区域" />
       </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="showContestDialog" :title="editingContest ? '编辑活动' : '新建活动'" width="600px" destroy-on-close>
       <el-form :model="contestForm" label-width="100px">
         <el-form-item label="活动标题" required><el-input v-model="contestForm.title" /></el-form-item>
+        <el-form-item label="所属区域">
+          <el-select v-model="contestForm.regionId" clearable filterable placeholder="不选则为全部区域" style="width:100%">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="contestForm.status" style="width:100%">
+            <el-option label="草稿" value="draft" />
+            <el-option label="进行中" value="active" />
+            <el-option label="投票中" value="voting" />
+            <el-option label="已结束" value="ended" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="描述"><el-input v-model="contestForm.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="开始时间"><el-date-picker v-model="contestForm.startAt" type="datetime" style="width:100%" /></el-form-item>
         <el-form-item label="结束时间"><el-date-picker v-model="contestForm.endAt" type="datetime" style="width:100%" /></el-form-item>
-        <el-form-item label="封面图"><el-input v-model="contestForm.cover" /></el-form-item>
+        <el-form-item label="封面图">
+          <ImageUploadBox v-model="contestForm.cover" scene="photo-contest-cover" shape="wide" placeholder="上传活动封面" tip="建议 750x350，用于小程序活动入口展示" />
+        </el-form-item>
+        <el-form-item label="投票规则">
+          <el-input-number v-model="contestForm.maxVotesPerUser" :min="1" />
+          <span class="form-hint">每个用户最多投票次数</span>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showContestDialog = false">取消</el-button>
@@ -194,16 +227,29 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const activeTab = ref('contests')
 const saving = ref(false)
 const formatDate = (d: string) => d ? new Date(d).toLocaleString('zh-CN') : '-'
 
+const regions = ref<any[]>([])
+
 const contests = ref<any[]>([])
 const contestLoading = ref(false)
 const showContestDialog = ref(false)
 const editingContest = ref<any>(null)
-const contestForm = reactive({ title: '', description: '', startAt: '', endAt: '', cover: '' })
+const contestFilters = reactive({ regionId: '', status: '', keyword: '' })
+const contestForm = reactive({
+  title: '',
+  regionId: '',
+  status: 'draft',
+  description: '',
+  startAt: '',
+  endAt: '',
+  cover: '',
+  maxVotesPerUser: 3,
+})
 
 const entries = ref<any[]>([])
 const entryLoading = ref(false)
@@ -222,13 +268,31 @@ const winners = ref<any[]>([])
 const winnerLoading = ref(false)
 const winnerContestId = ref('')
 
+const settingRegionId = ref('')
 const regionSettingForm = reactive({ enableContest: true, maxPhotosPerUser: 3, maxVotesPerUserDaily: 10, requirePhotoApproval: true })
 const settingSaving = ref(false)
+
+async function loadRegions() {
+  try {
+    const res: any = await request.get('/admin/regions')
+    regions.value = res.list || res.data?.list || (Array.isArray(res) ? res : [])
+    if (!settingRegionId.value && regions.value.length) settingRegionId.value = regions.value[0].id
+  } catch (e: any) {
+    ElMessage.error(e?.message || '区域加载失败')
+    regions.value = []
+  }
+}
+
+function cleanPayload(payload: Record<string, any>) {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== '' && value !== null && value !== undefined),
+  )
+}
 
 async function loadContests() {
   contestLoading.value = true
   try {
-    const res: any = await request.get('/admin/photo-contests')
+    const res: any = await request.get('/admin/photo-contests', { params: cleanPayload(contestFilters) })
     contests.value = Array.isArray(res) ? res : res.list || res.data?.list || res.data || []
   } catch (e: any) { ElMessage.error(e?.message || '加载失败'); contests.value = [] }
   finally { contestLoading.value = false }
@@ -237,9 +301,27 @@ async function loadContests() {
 function openContestDialog(row?: any) {
   editingContest.value = row || null
   if (row) {
-    Object.assign(contestForm, { title: row.title, description: row.description || '', startAt: row.startAt, endAt: row.endAt, cover: row.cover || '' })
+    Object.assign(contestForm, {
+      title: row.title,
+      regionId: row.regionId || '',
+      status: row.status || 'draft',
+      description: row.description || '',
+      startAt: row.startAt || '',
+      endAt: row.endAt || '',
+      cover: row.cover || '',
+      maxVotesPerUser: row.maxVotesPerUser || 3,
+    })
   } else {
-    Object.assign(contestForm, { title: '', description: '', startAt: '', endAt: '', cover: '' })
+    Object.assign(contestForm, {
+      title: '',
+      regionId: contestFilters.regionId || '',
+      status: 'draft',
+      description: '',
+      startAt: '',
+      endAt: '',
+      cover: '',
+      maxVotesPerUser: 3,
+    })
   }
   showContestDialog.value = true
 }
@@ -247,15 +329,17 @@ function openContestDialog(row?: any) {
 async function saveContest() {
   saving.value = true
   try {
+    const payload = cleanPayload(contestForm)
     if (editingContest.value) {
-      await request.put(`/admin/photo-contests/${editingContest.value.id}`, contestForm)
+      await request.put(`/admin/photo-contests/${editingContest.value.id}`, payload)
     } else {
-      await request.post('/admin/photo-contests', contestForm)
+      await request.post('/admin/photo-contests', payload)
     }
     ElMessage.success('保存成功')
     showContestDialog.value = false
     loadContests()
-  } finally { saving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { saving.value = false }
 }
 
 async function deleteContest(id: string) {
@@ -275,7 +359,7 @@ async function viewWinners(row: any) {
 async function loadEntries() {
   entryLoading.value = true
   try {
-    const params = { page: entryPage.value, pageSize: entryPageSize.value, ...entryFilters }
+    const params = { page: entryPage.value, limit: entryPageSize.value, ...entryFilters }
     const res: any = await request.get('/admin/photo-contests/entries', { params })
     entries.value = res.list || res.data?.list || []
     entryTotal.value = res.total || res.data?.total || 0
@@ -312,7 +396,7 @@ async function deleteEntry(id: string) {
 async function loadRatings() {
   ratingLoading.value = true
   try {
-    const params = { page: ratingPage.value, pageSize: ratingPageSize.value }
+    const params = { page: ratingPage.value, limit: ratingPageSize.value }
     const res: any = await request.get('/admin/photo-contests/ratings', { params })
     ratings.value = res.list || res.data?.list || []
     ratingTotal.value = res.total || res.data?.total || 0
@@ -347,8 +431,9 @@ async function deleteWinner(id: string) {
 }
 
 async function loadRegionSettings() {
+  if (!settingRegionId.value) return
   try {
-    const res: any = await request.get('/admin/photo-contests/region-settings')
+    const res: any = await request.get('/admin/photo-contests/region-settings', { params: { regionId: settingRegionId.value } })
     if (res) Object.assign(regionSettingForm, res)
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
 }
@@ -356,9 +441,16 @@ async function loadRegionSettings() {
 async function saveRegionSettings() {
   settingSaving.value = true
   try {
-    await request.put('/admin/photo-contests/region-settings', regionSettingForm)
+    const payload = {
+      enableContest: regionSettingForm.enableContest,
+      maxPhotosPerUser: regionSettingForm.maxPhotosPerUser,
+      maxVotesPerUserDaily: regionSettingForm.maxVotesPerUserDaily,
+      requirePhotoApproval: regionSettingForm.requirePhotoApproval,
+    }
+    await request.put('/admin/photo-contests/region-settings', payload, { params: { regionId: settingRegionId.value } })
     ElMessage.success('保存成功')
-  } finally { settingSaving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { settingSaving.value = false }
 }
 
 function handleTabChange() {
@@ -369,7 +461,10 @@ function handleTabChange() {
   loaders[activeTab.value]?.()
 }
 
-onMounted(() => { loadContests() })
+onMounted(async () => {
+  await loadRegions()
+  loadContests()
+})
 </script>
 
 <style scoped>

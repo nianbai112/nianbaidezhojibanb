@@ -81,9 +81,9 @@ const loadLogs = async (showSuccess = false) => {
       params.startDate = dateRange.value[0]?.toISOString()
       params.endDate = dateRange.value[1]?.toISOString()
     }
-    const res = await request.get('/admin/login-logs', { params })
-    logs.value = res.data?.list || []
-    total.value = res.data?.total || 0
+    const res: any = await request.get('/admin/login-logs', { params })
+    logs.value = res?.list || res?.data?.list || []
+    total.value = res?.total || res?.data?.total || 0
     if (showSuccess === true) ElMessage.success('登录日志已刷新')
   } catch {
     logs.value = []

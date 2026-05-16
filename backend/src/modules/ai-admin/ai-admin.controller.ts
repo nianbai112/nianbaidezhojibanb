@@ -24,6 +24,15 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class AiAdminController {
   constructor(private readonly aiAdminService: AiAdminService) {}
 
+  // ==================== 运营工作台 ====================
+
+  @Get('dashboard')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI运营工作台' })
+  getDashboard() {
+    return this.aiAdminService.getDashboard();
+  }
+
   // ==================== 机器人管理 ====================
 
   @Get('bots')
@@ -114,6 +123,26 @@ export class AiAdminController {
     return this.aiAdminService.updateTaskStatus(id, body.status, operatorId);
   }
 
+  @Post('tasks/:id/generate-draft')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '为AI任务生成草稿' })
+  generateTaskDraft(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.generateTaskDraft(id, operatorId);
+  }
+
+  @Post('tasks/:id/run')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '立即执行AI任务' })
+  runTask(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.runTask(id, operatorId);
+  }
+
   // ==================== 日志管理 ====================
 
   @Get('logs')
@@ -142,6 +171,20 @@ export class AiAdminController {
   ) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     return this.aiAdminService.saveConfig(body, operatorId, ip);
+  }
+
+  @Post('config/test')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: '诊断AI配置' })
+  testConfig() {
+    return this.aiAdminService.testConfig();
+  }
+
+  @Post('config/test-generate')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: '测试AI内容生成' })
+  testGenerate() {
+    return this.aiAdminService.testGenerate();
   }
 
   // ==================== 人设管理 ====================

@@ -58,6 +58,7 @@ import { LayoutConfigModule } from './modules/layout-config/layout-config.module
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { MarketingAdminModule } from './modules/marketing-admin/marketing-admin.module';
 import { AiAdminModule } from './modules/ai-admin/ai-admin.module';
+import { AiRuntimeModule } from './modules/ai-runtime/ai-runtime.module';
 import { TrackingModule } from './modules/tracking/tracking.module';
 import { RecommendModule } from './modules/recommend/recommend.module';
 import { ABTestModule } from './modules/ab-test/ab-test.module';
@@ -81,6 +82,18 @@ const adminAuthThrottleLimit = parseInt(
   process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30',
   10,
 );
+const uploadUserThrottleLimit = parseInt(process.env.UPLOAD_USER_THROTTLE_LIMIT || '180', 10);
+const uploadBatchThrottleLimit = parseInt(process.env.UPLOAD_BATCH_THROTTLE_LIMIT || '30', 10);
+const uploadVideoThrottleLimit = parseInt(process.env.UPLOAD_VIDEO_THROTTLE_LIMIT || '20', 10);
+const uploadAdminImageThrottleLimit = parseInt(
+  process.env.UPLOAD_ADMIN_IMAGE_THROTTLE_LIMIT || '180',
+  10,
+);
+const uploadAdminVideoThrottleLimit = parseInt(
+  process.env.UPLOAD_ADMIN_VIDEO_THROTTLE_LIMIT || '20',
+  10,
+);
+const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || '60', 10);
 
 @Module({
   imports: [
@@ -103,6 +116,36 @@ const adminAuthThrottleLimit = parseInt(
             name: 'admin_auth',
             ttl: throttleTtl * 1000,
             limit: adminAuthThrottleLimit,
+          },
+          {
+            name: 'upload_user',
+            ttl: throttleTtl * 1000,
+            limit: uploadUserThrottleLimit,
+          },
+          {
+            name: 'upload_user_batch',
+            ttl: throttleTtl * 1000,
+            limit: uploadBatchThrottleLimit,
+          },
+          {
+            name: 'upload_video',
+            ttl: throttleTtl * 1000,
+            limit: uploadVideoThrottleLimit,
+          },
+          {
+            name: 'upload_admin_image',
+            ttl: throttleTtl * 1000,
+            limit: uploadAdminImageThrottleLimit,
+          },
+          {
+            name: 'upload_admin_video',
+            ttl: throttleTtl * 1000,
+            limit: uploadAdminVideoThrottleLimit,
+          },
+          {
+            name: 'upload_qrcode',
+            ttl: throttleTtl * 1000,
+            limit: uploadQrcodeThrottleLimit,
           },
         ],
       }),
@@ -159,6 +202,7 @@ const adminAuthThrottleLimit = parseInt(
     LayoutConfigModule,
     AnalyticsModule,
     MarketingAdminModule,
+    AiRuntimeModule,
     AiAdminModule,
     TrackingModule,
     RecommendModule,

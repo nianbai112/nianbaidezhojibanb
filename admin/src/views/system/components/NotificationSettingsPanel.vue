@@ -235,8 +235,8 @@ async function load() {
         }
       }
     }
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载消息通知配置失败')
   } finally {
     loading.value = false
   }
@@ -247,8 +247,8 @@ async function loadTemplates() {
   try {
     const res: any = await fetchWechatTemplates()
     templates.value = res?.list || res?.data?.list || res || []
-  } catch {
-    // ignore
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载微信模板失败')
   } finally {
     loadingTemplates.value = false
   }

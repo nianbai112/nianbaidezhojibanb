@@ -13,6 +13,21 @@ request.interceptors.request.use(config => {
   return config
 })
 
+function withDataAlias<T>(value: T): T {
+  if (value && typeof value === 'object' && !('data' in (value as any))) {
+    try {
+      Object.defineProperty(value as any, 'data', {
+        value,
+        enumerable: false,
+        configurable: true
+      })
+    } catch {
+      // Some readonly objects cannot be decorated; keep the original payload.
+    }
+  }
+  return value
+}
+
 request.interceptors.response.use(
   response => {
     const payload = response.data
@@ -27,7 +42,7 @@ request.interceptors.response.use(
     if (numericCode && ![0, 200].includes(Number(payload.code))) {
       throw payload
     }
-    return numericCode && 'data' in payload ? payload.data : payload
+    return numericCode && 'data' in payload ? withDataAlias(payload.data) : withDataAlias(payload)
   },
   error => {
     const message = error?.response?.data?.message || error?.message || '接口请求失败'

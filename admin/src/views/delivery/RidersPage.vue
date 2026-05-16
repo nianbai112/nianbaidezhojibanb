@@ -3,10 +3,15 @@
     <PageHeader title="骑手管理" subtitle="管理骑手信息" icon="User" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索姓名/手机号" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
-      <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
+      <el-select v-model="filters.auditStatus" placeholder="审核状态" clearable style="width: 120px" @change="loadData">
         <el-option label="待审核" value="pending" />
         <el-option label="已通过" value="approved" />
         <el-option label="已拒绝" value="rejected" />
+      </el-select>
+      <el-select v-model="filters.status" placeholder="在线状态" clearable style="width: 120px" @change="loadData">
+        <el-option label="离线" value="offline" />
+        <el-option label="在线" value="online" />
+        <el-option label="忙碌" value="busy" />
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
@@ -14,7 +19,12 @@
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="realName" label="姓名" width="100" />
       <el-table-column prop="phone" label="手机号" width="120" />
-      <el-table-column prop="status" label="状态" width="80">
+      <el-table-column prop="verifyStatus" label="审核" width="90">
+        <template #default="{ row }">
+          <el-tag :type="auditTypeMap[row.verifyStatus]" size="small">{{ auditMap[row.verifyStatus] || row.verifyStatus }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="status" label="在线状态" width="90">
         <template #default="{ row }">
           <el-tag :type="statusTypeMap[row.status]" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
         </template>
@@ -27,13 +37,13 @@
       </el-table-column>
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
-          <template v-if="row.status === 'pending'">
+          <template v-if="row.verifyStatus === 'pending'">
             <el-button size="small" type="success" @click="audit(row, 'approved')">通过</el-button>
             <el-button size="small" type="danger" @click="audit(row, 'rejected')">拒绝</el-button>
           </template>
           <template v-else>
-            <el-button v-if="row.status === 'approved'" size="small" type="warning" @click="updateStatus(row, 'OFFLINE')">下线</el-button>
-            <el-button v-if="row.status === 'approved'" size="small" type="success" @click="updateStatus(row, 'ONLINE')">上线</el-button>
+            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'offline'" size="small" type="warning" @click="updateStatus(row, 'offline')">下线</el-button>
+            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'online'" size="small" type="success" @click="updateStatus(row, 'online')">上线</el-button>
           </template>
         </template>
       </el-table-column>
@@ -50,14 +60,16 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const statusMap: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝' }
-const statusTypeMap: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger' }
+const auditMap: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝' }
+const auditTypeMap: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger' }
+const statusMap: Record<string, string> = { offline: '离线', online: '在线', busy: '忙碌' }
+const statusTypeMap: Record<string, string> = { offline: 'info', online: 'success', busy: 'warning' }
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = reactive({ keyword: '', status: '' })
+const filters = reactive({ keyword: '', auditStatus: '', status: '' })
 
 const loadData = async () => {
   loading.value = true
@@ -69,7 +81,7 @@ const loadData = async () => {
 }
 
 const resetFilters = () => {
-  Object.assign(filters, { keyword: '', status: '' })
+  Object.assign(filters, { keyword: '', auditStatus: '', status: '' })
   loadData()
 }
 

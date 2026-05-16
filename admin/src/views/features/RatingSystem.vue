@@ -29,10 +29,19 @@
 
       <el-tab-pane label="分类管理" name="categories">
         <div class="tab-toolbar">
+          <el-select v-model="catFilters.regionId" clearable filterable placeholder="区域" style="width:180px" @change="loadCategories">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
           <el-button type="primary" @click="openCategoryDialog()">新增分类</el-button>
           <el-button @click="loadCategories" :loading="catLoading">刷新</el-button>
         </div>
         <el-table :data="categories" v-loading="catLoading" stripe>
+          <el-table-column prop="icon" label="图标" width="80">
+            <template #default="{ row }">
+              <el-image v-if="row.icon" :src="row.icon" style="width:36px;height:36px;border-radius:8px" fit="cover" />
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="name" label="分类名称" width="200" />
           <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
           <el-table-column prop="sortOrder" label="排序" width="80" />
@@ -52,10 +61,27 @@
 
       <el-tab-pane label="评分项目" name="items">
         <div class="tab-toolbar">
+          <el-input v-model="itemFilters.keyword" clearable placeholder="搜索项目" style="width:180px" @keyup.enter="loadItems" />
+          <el-select v-model="itemFilters.regionId" clearable filterable placeholder="区域" style="width:180px" @change="loadItems">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+          <el-select v-model="itemFilters.categoryId" clearable filterable placeholder="分类" style="width:180px" @change="loadItems">
+            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+          <el-select v-model="itemFilters.status" clearable placeholder="状态" style="width:120px" @change="loadItems">
+            <el-option label="启用" value="enabled" />
+            <el-option label="禁用" value="disabled" />
+          </el-select>
           <el-button type="primary" @click="openItemDialog()">新增项目</el-button>
           <el-button @click="loadItems" :loading="itemLoading">刷新</el-button>
         </div>
         <el-table :data="items" v-loading="itemLoading" stripe>
+          <el-table-column prop="cover" label="封面" width="80">
+            <template #default="{ row }">
+              <el-image v-if="row.cover" :src="row.cover" style="width:42px;height:42px;border-radius:8px" fit="cover" />
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="name" label="项目名称" width="180" />
           <el-table-column prop="category.name" label="分类" width="120">
             <template #default="{ row }">{{ row.category?.name || '-' }}</template>
@@ -63,9 +89,9 @@
           <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
           <el-table-column prop="avgScore" label="均分" width="80" />
           <el-table-column prop="ratingCount" label="评分数" width="80" />
-          <el-table-column prop="isEnabled" label="状态" width="80">
+          <el-table-column prop="status" label="状态" width="80">
             <template #default="{ row }">
-              <el-tag :type="row.isEnabled ? 'success' : 'info'" size="small">{{ row.isEnabled ? '启用' : '禁用' }}</el-tag>
+              <el-tag :type="row.status !== 'disabled' ? 'success' : 'info'" size="small">{{ row.status !== 'disabled' ? '启用' : '禁用' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="150">
@@ -163,8 +189,17 @@
     <el-dialog v-model="showCatDialog" :title="editingCat ? '编辑分类' : '新增分类'" width="500px" destroy-on-close>
       <el-form :model="catForm" label-width="80px">
         <el-form-item label="名称" required><el-input v-model="catForm.name" /></el-form-item>
+        <el-form-item label="区域">
+          <el-select v-model="catForm.regionId" clearable filterable placeholder="不选则为全部区域" style="width:100%">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="图标">
+          <ImageUploadBox v-model="catForm.icon" scene="rating-category-icon" shape="square" placeholder="上传分类图标" tip="建议 160x160" />
+        </el-form-item>
         <el-form-item label="描述"><el-input v-model="catForm.description" type="textarea" :rows="2" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="catForm.sortOrder" :min="0" /></el-form-item>
+        <el-form-item label="启用"><el-switch v-model="catForm.isActive" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCatDialog = false">取消</el-button>
@@ -175,13 +210,22 @@
     <el-dialog v-model="showItemDialog" :title="editingItem ? '编辑项目' : '新增项目'" width="500px" destroy-on-close>
       <el-form :model="itemForm" label-width="80px">
         <el-form-item label="名称" required><el-input v-model="itemForm.name" /></el-form-item>
+        <el-form-item label="区域">
+          <el-select v-model="itemForm.regionId" clearable filterable placeholder="不选则为全部区域" style="width:100%">
+            <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="分类" required>
           <el-select v-model="itemForm.categoryId" style="width:100%">
             <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
+        <el-form-item label="封面">
+          <ImageUploadBox v-model="itemForm.cover" scene="rating-item-cover" shape="wide" placeholder="上传项目封面" tip="建议 750x350，用于评分项目展示" />
+        </el-form-item>
         <el-form-item label="描述"><el-input v-model="itemForm.description" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="启用"><el-switch v-model="itemForm.isEnabled" /></el-form-item>
+        <el-form-item label="排序"><el-input-number v-model="itemForm.sortOrder" :min="0" /></el-form-item>
+        <el-form-item label="启用"><el-switch :model-value="itemForm.status !== 'disabled'" @update:model-value="itemForm.status = $event ? 'enabled' : 'disabled'" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showItemDialog = false">取消</el-button>
@@ -196,6 +240,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const activeTab = ref('dashboard')
 const saving = ref(false)
@@ -208,7 +253,8 @@ const categories = ref<any[]>([])
 const catLoading = ref(false)
 const showCatDialog = ref(false)
 const editingCat = ref<any>(null)
-const catForm = reactive({ name: '', description: '', sortOrder: 0 })
+const catFilters = reactive({ regionId: '' })
+const catForm = reactive({ name: '', regionId: '', icon: '', description: '', sortOrder: 0, isActive: true })
 
 const items = ref<any[]>([])
 const itemLoading = ref(false)
@@ -217,7 +263,8 @@ const itemPageSize = ref(20)
 const itemTotal = ref(0)
 const showItemDialog = ref(false)
 const editingItem = ref<any>(null)
-const itemForm = reactive({ name: '', categoryId: '', description: '', isEnabled: true })
+const itemFilters = reactive({ keyword: '', regionId: '', categoryId: '', status: '' })
+const itemForm = reactive({ name: '', categoryId: '', regionId: '', cover: '', description: '', sortOrder: 0, status: 'enabled' })
 
 const records = ref<any[]>([])
 const recLoading = ref(false)
@@ -235,6 +282,12 @@ const replyFilters = reactive({ status: '' })
 const settingRegionId = ref('')
 const settingForm = reactive({ enableRating: true, enableDynamic: false, requireLoginToRate: false })
 const settingSaving = ref(false)
+
+function cleanPayload(payload: Record<string, any>) {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== '' && value !== null && value !== undefined),
+  )
+}
 
 async function loadDashboard() {
   try {
@@ -267,15 +320,21 @@ async function loadSetting() {
 async function saveSetting() {
   settingSaving.value = true
   try {
-    await request.put(`/admin/ratings/settings/${settingRegionId.value}`, settingForm)
+    const payload = {
+      enableRating: settingForm.enableRating,
+      enableDynamic: settingForm.enableDynamic,
+      requireLoginToRate: settingForm.requireLoginToRate,
+    }
+    await request.put(`/admin/ratings/settings/${settingRegionId.value}`, payload)
     ElMessage.success('保存成功')
-  } finally { settingSaving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { settingSaving.value = false }
 }
 
 async function loadCategories() {
   catLoading.value = true
   try {
-    const res: any = await request.get('/admin/ratings/categories')
+    const res: any = await request.get('/admin/ratings/categories', { params: cleanPayload(catFilters) })
     categories.value = Array.isArray(res) ? res : res.list || []
   } catch (e: any) { ElMessage.error(e?.message || '加载失败'); categories.value = [] }
   finally { catLoading.value = false }
@@ -283,22 +342,26 @@ async function loadCategories() {
 
 function openCategoryDialog(row?: any) {
   editingCat.value = row || null
-  Object.assign(catForm, row ? { name: row.name, description: row.description || '', sortOrder: row.sortOrder || 0 } : { name: '', description: '', sortOrder: 0 })
+  Object.assign(catForm, row
+    ? { name: row.name, regionId: row.regionId || '', icon: row.icon || '', description: row.description || '', sortOrder: row.sortOrder || 0, isActive: row.isActive ?? true }
+    : { name: '', regionId: catFilters.regionId || '', icon: '', description: '', sortOrder: 0, isActive: true })
   showCatDialog.value = true
 }
 
 async function saveCategory() {
   saving.value = true
   try {
+    const payload = cleanPayload(catForm)
     if (editingCat.value) {
-      await request.put(`/admin/ratings/categories/${editingCat.value.id}`, catForm)
+      await request.put(`/admin/ratings/categories/${editingCat.value.id}`, payload)
     } else {
-      await request.post('/admin/ratings/categories', catForm)
+      await request.post('/admin/ratings/categories', payload)
     }
     ElMessage.success('保存成功')
     showCatDialog.value = false
     loadCategories()
-  } finally { saving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { saving.value = false }
 }
 
 async function deleteCategory(id: string) {
@@ -312,7 +375,7 @@ async function deleteCategory(id: string) {
 async function loadItems() {
   itemLoading.value = true
   try {
-    const params = { page: itemPage.value, pageSize: itemPageSize.value }
+    const params = cleanPayload({ page: itemPage.value, limit: itemPageSize.value, ...itemFilters })
     const res: any = await request.get('/admin/ratings/items', { params })
     items.value = res.list || res.data?.list || []
     itemTotal.value = res.total || res.data?.total || 0
@@ -322,22 +385,26 @@ async function loadItems() {
 
 function openItemDialog(row?: any) {
   editingItem.value = row || null
-  Object.assign(itemForm, row ? { name: row.name, categoryId: row.categoryId, description: row.description || '', isEnabled: row.isEnabled ?? true } : { name: '', categoryId: '', description: '', isEnabled: true })
+  Object.assign(itemForm, row
+    ? { name: row.name, categoryId: row.categoryId, regionId: row.regionId || '', cover: row.cover || '', description: row.description || '', sortOrder: row.sortOrder || 0, status: row.status || 'enabled' }
+    : { name: '', categoryId: itemFilters.categoryId || '', regionId: itemFilters.regionId || catFilters.regionId || '', cover: '', description: '', sortOrder: 0, status: 'enabled' })
   showItemDialog.value = true
 }
 
 async function saveItem() {
   saving.value = true
   try {
+    const payload = cleanPayload(itemForm)
     if (editingItem.value) {
-      await request.put(`/admin/ratings/items/${editingItem.value.id}`, itemForm)
+      await request.put(`/admin/ratings/items/${editingItem.value.id}`, payload)
     } else {
-      await request.post('/admin/ratings/items', itemForm)
+      await request.post('/admin/ratings/items', payload)
     }
     ElMessage.success('保存成功')
     showItemDialog.value = false
     loadItems()
-  } finally { saving.value = false }
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
+  finally { saving.value = false }
 }
 
 async function deleteItem(id: string) {
@@ -351,7 +418,7 @@ async function deleteItem(id: string) {
 async function loadRecords() {
   recLoading.value = true
   try {
-    const params = { page: recPage.value, pageSize: recPageSize.value }
+    const params = { page: recPage.value, limit: recPageSize.value }
     const res: any = await request.get('/admin/ratings/records', { params })
     records.value = res.list || res.data?.list || []
     recTotal.value = res.total || res.data?.total || 0
@@ -370,7 +437,7 @@ async function deleteRecord(id: string) {
 async function loadReplies() {
   replyLoading.value = true
   try {
-    const params = { page: replyPage.value, pageSize: replyPageSize.value, ...replyFilters }
+    const params = { page: replyPage.value, limit: replyPageSize.value, ...replyFilters }
     const res: any = await request.get('/admin/ratings/replies', { params })
     replies.value = res.list || res.data?.list || []
     replyTotal.value = res.total || res.data?.total || 0

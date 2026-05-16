@@ -66,13 +66,26 @@ const routes: RouteRecordRaw[] = [
       { path: 'mall/promotions', component: () => import('@/views/mall/MallPromotionsPage.vue'), meta: { title: '促销活动' } },
       { path: 'mall/service-staff', component: () => import('@/views/mall/MallServiceStaff.vue'), meta: { title: '客服管理' } },
 
+      // ========== 跑腿管理 ==========
+      { path: 'errand/dashboard', component: () => import('@/views/delivery/ErrandDashboard.vue'), meta: { title: '跑腿工作台' } },
+      { path: 'errand/orders', component: () => import('@/views/delivery/ErrandOrdersPage.vue'), meta: { title: '跑腿订单' } },
+      { path: 'errand/pickup-points', component: () => import('@/views/delivery/ErrandPickupPoints.vue'), meta: { title: '取件点管理' } },
+      { path: 'errand/item-sizes', component: () => import('@/views/delivery/ErrandItemSizes.vue'), meta: { title: '物品大小' } },
+      { path: 'errand/riders', component: () => import('@/views/delivery/RidersPage.vue'), meta: { title: '骑手管理' } },
+      { path: 'errand/dispatch', component: () => import('@/views/delivery/DispatchCenter.vue'), meta: { title: '调度中心' } },
+      { path: 'errand/config', component: () => import('@/views/delivery/PricingRules.vue'), meta: { title: '跑腿配置' } },
+      { path: 'errand/abnormal', component: () => import('@/views/delivery/AbnormalOrders.vue'), meta: { title: '异常订单' } },
+
       // ========== 订单履约中心 ==========
       { path: 'order/center', component: () => import('@/views/order/OrderCenterPage.vue'), meta: { title: '统一订单' } },
-      { path: 'delivery/orders', component: () => import('@/views/modules/DeliveryPage.vue'), meta: { title: '跑腿订单' } },
-      { path: 'delivery/riders', component: () => import('@/views/delivery/RidersPage.vue'), meta: { title: '骑手管理' } },
-      { path: 'delivery/dispatch', component: () => import('@/views/delivery/DispatchCenter.vue'), meta: { title: '调度中心' } },
-      { path: 'delivery/pricing', component: () => import('@/views/delivery/PricingRules.vue'), meta: { title: '计费规则' } },
-      { path: 'delivery/abnormal', component: () => import('@/views/delivery/AbnormalOrders.vue'), meta: { title: '异常订单' } },
+      { path: 'delivery/errand', redirect: '/errand/dashboard' },
+      { path: 'delivery/orders', redirect: '/errand/orders' },
+      { path: 'delivery/pickup-points', redirect: '/errand/pickup-points' },
+      { path: 'delivery/item-sizes', redirect: '/errand/item-sizes' },
+      { path: 'delivery/riders', redirect: '/errand/riders' },
+      { path: 'delivery/dispatch', redirect: '/errand/dispatch' },
+      { path: 'delivery/pricing', redirect: '/errand/config' },
+      { path: 'delivery/abnormal', redirect: '/errand/abnormal' },
 
       // ========== 财务中心 ==========
       { path: 'finance/overview', component: () => import('@/views/finance/FinanceOverview.vue'), meta: { title: '财务总览' } },

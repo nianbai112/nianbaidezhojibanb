@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -22,6 +23,98 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 @ApiBearerAuth()
 export class SupplementController {
   constructor(private readonly prisma: PrismaService) {}
+
+  private normalizeNullableString(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    return String(value);
+  }
+
+  private normalizeNumber(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private normalizeClubPayload(input: any, adminId: string, isCreate = false) {
+    const payload: any = {};
+    const stringFields = ['regionId', 'name', 'logo', 'background', 'description', 'location', 'phone', 'status'];
+
+    for (const field of stringFields) {
+      const value = this.normalizeNullableString(input?.[field]);
+      if (value !== undefined) payload[field] = value;
+    }
+
+    const cover = this.normalizeNullableString(input?.cover ?? input?.coverImage);
+    if (cover !== undefined) payload.cover = cover;
+
+    const lat = this.normalizeNumber(input?.lat);
+    if (lat !== undefined) payload.lat = lat;
+
+    const lng = this.normalizeNumber(input?.lng);
+    if (lng !== undefined) payload.lng = lng;
+
+    const sortOrder = this.normalizeNumber(input?.sortOrder);
+    if (sortOrder !== undefined) payload.sortOrder = sortOrder;
+
+    if (input?.isOfficial !== undefined) payload.isOfficial = Boolean(input.isOfficial);
+
+    const leaderId = this.normalizeNullableString(input?.leaderId);
+    if (leaderId) payload.leaderId = leaderId;
+    else if (isCreate) payload.leaderId = adminId;
+
+    if (adminId) payload.adminUserId = adminId;
+
+    if (isCreate && !payload.name) throw new BadRequestException('社团名称不能为空');
+    if (isCreate && !payload.leaderId) throw new BadRequestException('社长用户ID不能为空');
+
+    return payload;
+  }
+
+  private normalizeRankingJson(value: any) {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return [];
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed;
+      } catch {
+        throw new BadRequestException('榜单数据必须是合法 JSON');
+      }
+    }
+    return value;
+  }
+
+  private normalizeRankingPayload(input: any, isCreate = false) {
+    const payload: any = {};
+    const title = this.normalizeNullableString(input?.title ?? input?.name);
+    const type = this.normalizeNullableString(input?.type);
+    const period = this.normalizeNullableString(input?.period);
+    const regionId = this.normalizeNullableString(input?.regionId);
+    const data = this.normalizeRankingJson(input?.data);
+
+    if (title !== undefined) payload.title = title;
+    if (type !== undefined) payload.type = type;
+    if (period !== undefined) payload.period = period;
+    if (input?.regionId !== undefined) payload.regionId = regionId || null;
+    if (data !== undefined) payload.data = data;
+    if (input?.status !== undefined) {
+      const meta = typeof payload.data === 'object' && !Array.isArray(payload.data) && payload.data !== null
+        ? payload.data
+        : payload.data !== undefined
+          ? { items: payload.data }
+          : {};
+      payload.data = { ...meta, status: input.status };
+    }
+
+    if (isCreate) {
+      if (!payload.title) throw new BadRequestException('榜单名称不能为空');
+      payload.type = payload.type || 'post';
+      payload.period = payload.period || 'week';
+      payload.data = payload.data ?? [];
+    }
+
+    return payload;
+  }
 
   // ==================== 漂流瓶 ====================
 
@@ -348,7 +441,19 @@ export class SupplementController {
       }),
       this.prisma.activityClub.count({ where }),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    const regionIds = Array.from(new Set(list.map((item) => item.regionId).filter(Boolean))) as string[];
+    const regions = regionIds.length
+      ? await this.prisma.region.findMany({
+          where: { id: { in: regionIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const regionMap = new Map(regions.map((region) => [region.id, region]));
+    const withRegions = list.map((item) => ({
+      ...item,
+      region: item.regionId ? regionMap.get(item.regionId) || null : null,
+    }));
+    return { code: 0, data: { list: withRegions, total, page: +page, pageSize: +pageSize } };
   }
 
   @Get('clubs/:id')
@@ -363,14 +468,22 @@ export class SupplementController {
         },
       },
     });
-    return { code: 0, data: item };
+    const region = item?.regionId
+      ? await this.prisma.region.findUnique({
+          where: { id: item.regionId },
+          select: { id: true, name: true },
+        })
+      : null;
+    return { code: 0, data: item ? { ...item, region } : null };
   }
 
   @Post('clubs')
   @RequirePermission('club:create')
   @ApiOperation({ summary: '创建社团' })
   async createClub(@Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.activityClub.create({ data });
+    const item = await this.prisma.activityClub.create({
+      data: this.normalizeClubPayload(data, adminId, true),
+    });
     await this.logOperation(adminId, 'club', 'create', item.id);
     return { code: 0, data: item };
   }
@@ -379,7 +492,10 @@ export class SupplementController {
   @RequirePermission('club:update')
   @ApiOperation({ summary: '更新社团' })
   async updateClub(@Param('id') id: string, @Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.activityClub.update({ where: { id }, data });
+    const item = await this.prisma.activityClub.update({
+      where: { id },
+      data: this.normalizeClubPayload(data, adminId, false),
+    });
     await this.logOperation(adminId, 'club', 'update', id);
     return { code: 0, data: item };
   }
@@ -531,10 +647,11 @@ export class SupplementController {
   }
 
   @Post('rankings')
+  @Post('ranking/rules')
   @RequirePermission('ranking:create')
   @ApiOperation({ summary: '创建排行榜' })
   async createRanking(@Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.ranking.create({ data });
+    const item = await this.prisma.ranking.create({ data: this.normalizeRankingPayload(data, true) });
     await this.logOperation(adminId, 'ranking', 'create', item.id);
     return { code: 0, data: item };
   }
@@ -544,7 +661,7 @@ export class SupplementController {
   @RequirePermission('ranking:update')
   @ApiOperation({ summary: '更新排行榜' })
   async updateRanking(@Param('id') id: string, @Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.ranking.update({ where: { id }, data });
+    const item = await this.prisma.ranking.update({ where: { id }, data: this.normalizeRankingPayload(data) });
     await this.logOperation(adminId, 'ranking', 'update', id);
     return { code: 0, data: item };
   }
