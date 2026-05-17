@@ -498,6 +498,230 @@ export class AuthService {
     }
   }
 
+  async createAdminQrLoginSession(ip?: string, ua?: string) {
+    await this.expireAdminQrLoginSessions();
+
+    const ticket = `aql_${crypto.randomBytes(18).toString('hex')}`;
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const scanPath = `/pages/auth/adminScanLogin/adminScanLogin?ticket=${encodeURIComponent(ticket)}`;
+    const urlPrefix = String(
+      this.config.get('ADMIN_QR_LOGIN_URL_PREFIX') ||
+      this.config.get('PUBLIC_BASE_URL') ||
+      '',
+    ).trim();
+    const scanUrl = urlPrefix
+      ? `${urlPrefix.replace(/\/$/, '')}/admin-qr-login?ticket=${encodeURIComponent(ticket)}`
+      : scanPath;
+
+    await this.prisma.adminQrLoginSession.create({
+      data: {
+        ticket,
+        expiresAt,
+        webIp: ip || null,
+        webUserAgent: ua || null,
+      },
+    });
+
+    return {
+      ticket,
+      status: 'PENDING',
+      expiresAt,
+      scanPath,
+      scanUrl,
+      qrcodeText: scanUrl,
+      message: urlPrefix
+        ? '请使用微信扫描二维码，在小程序中确认登录'
+        : '开发环境请在小程序打开扫码确认页并携带 ticket 参数',
+    };
+  }
+
+  async getAdminQrLoginStatus(ticket: string, ip?: string, ua?: string) {
+    const session = await this.prisma.adminQrLoginSession.findUnique({ where: { ticket } });
+    if (!session) {
+      throw new BadRequestException('扫码登录已失效，请刷新二维码');
+    }
+
+    if (session.expiresAt.getTime() <= Date.now() && !['CONFIRMED', 'CANCELED'].includes(session.status)) {
+      await this.prisma.adminQrLoginSession.update({
+        where: { id: session.id },
+        data: { status: 'EXPIRED' },
+      });
+      return { status: 'EXPIRED', message: '二维码已过期，请刷新' };
+    }
+
+    if (session.status === 'CONFIRMED' && session.accountId) {
+      const login = await this.buildAdminLoginPayload(session.accountId, 'wechat_scan', ip, ua);
+      if (session.userId) {
+        await this.prisma.adminWechatBinding.updateMany({
+          where: { accountId: session.accountId, userId: session.userId },
+          data: { lastLoginAt: new Date() },
+        });
+      }
+      return { status: 'CONFIRMED', login };
+    }
+
+    return {
+      status: session.status,
+      nickname: session.nickname,
+      avatar: session.avatar,
+      scannedAt: session.scannedAt,
+      expiresAt: session.expiresAt,
+      message: this.getQrStatusMessage(session.status),
+    };
+  }
+
+  async cancelAdminQrLogin(ticket: string) {
+    await this.prisma.adminQrLoginSession.updateMany({
+      where: { ticket, status: { in: ['PENDING', 'SCANNED'] } },
+      data: { status: 'CANCELED', rejectReason: 'web_cancel' },
+    });
+    return { success: true };
+  }
+
+  async scanAdminQrLogin(ticket: string, userId: string, ip?: string, ua?: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('小程序账号不存在或已被禁用');
+    }
+
+    const session = await this.getUsableQrSession(ticket);
+    const binding = await this.prisma.adminWechatBinding.findUnique({
+      where: { userId },
+      include: { account: true },
+    });
+
+    await this.prisma.adminQrLoginSession.update({
+      where: { id: session.id },
+      data: {
+        status: 'SCANNED',
+        userId,
+        openid: user.openid,
+        nickname: user.nickname || null,
+        avatar: user.avatar || null,
+        scanIp: ip || null,
+        scanUserAgent: ua || null,
+        scannedAt: session.scannedAt || new Date(),
+      },
+    });
+
+    const accountActive = binding?.status === 'ACTIVE' && binding.account?.status === 'active';
+    return {
+      status: 'SCANNED',
+      bindRequired: !accountActive,
+      user: {
+        id: user.id,
+        nickname: user.nickname,
+        avatar: user.avatar,
+      },
+      account: accountActive
+        ? {
+            id: binding.account.id,
+            username: binding.account.username,
+            realName: binding.account.realName,
+            avatar: binding.account.avatar,
+          }
+        : null,
+      message: accountActive ? '请确认是否登录后台' : '首次使用扫码登录，请先绑定管理员账号',
+    };
+  }
+
+  async confirmAdminQrLogin(
+    dto: { ticket: string; username?: string; password?: string },
+    userId: string,
+    ip?: string,
+    ua?: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('小程序账号不存在或已被禁用');
+    }
+
+    const session = await this.getUsableQrSession(dto.ticket);
+    if (session.userId && session.userId !== userId) {
+      throw new BadRequestException('这个二维码已被其他用户扫码，请刷新二维码');
+    }
+
+    let binding = await this.prisma.adminWechatBinding.findUnique({
+      where: { userId },
+      include: { account: true },
+    });
+
+    let account = binding?.status === 'ACTIVE' && binding.account?.status === 'active'
+      ? binding.account
+      : null;
+
+    if (!account) {
+      if (!dto.username || !dto.password) {
+        throw new BadRequestException('首次扫码登录需要填写管理员账号和密码完成绑定');
+      }
+
+      account = await this.verifyAdminCredentialForQr(dto.username, dto.password, ip, ua);
+      const occupied = await this.prisma.adminWechatBinding.findUnique({
+        where: { accountId: account.id },
+      });
+      if (occupied && occupied.userId !== userId && occupied.status === 'ACTIVE') {
+        throw new BadRequestException('该管理员账号已绑定其他微信用户，请先由超级管理员解绑');
+      }
+
+      binding = await this.prisma.adminWechatBinding.upsert({
+        where: { userId },
+        create: {
+          userId,
+          accountId: account.id,
+          openid: user.openid,
+          unionid: user.unionid || null,
+          nickname: user.nickname || null,
+          avatar: user.avatar || null,
+        },
+        update: {
+          accountId: account.id,
+          status: 'ACTIVE',
+          openid: user.openid,
+          unionid: user.unionid || null,
+          nickname: user.nickname || null,
+          avatar: user.avatar || null,
+          boundAt: new Date(),
+        },
+        include: { account: true },
+      });
+    }
+
+    await this.prisma.adminQrLoginSession.update({
+      where: { id: session.id },
+      data: {
+        status: 'CONFIRMED',
+        accountId: account.id,
+        userId,
+        openid: user.openid,
+        nickname: user.nickname || binding?.nickname || null,
+        avatar: user.avatar || binding?.avatar || null,
+        scanIp: ip || session.scanIp,
+        scanUserAgent: ua || session.scanUserAgent,
+        scannedAt: session.scannedAt || new Date(),
+        confirmedAt: new Date(),
+      },
+    });
+
+    return {
+      success: true,
+      status: 'CONFIRMED',
+      account: {
+        username: account.username,
+        realName: account.realName,
+        avatar: account.avatar,
+      },
+      message: '已确认登录，请回到电脑端',
+    };
+  }
+
+  async rejectAdminQrLogin(ticket: string, userId: string) {
+    await this.prisma.adminQrLoginSession.updateMany({
+      where: { ticket, userId, status: { in: ['PENDING', 'SCANNED'] } },
+      data: { status: 'CANCELED', rejectReason: 'miniapp_reject' },
+    });
+    return { success: true, message: '已取消本次扫码登录' };
+  }
+
   async getAdminProfile(accountId: string) {
     const account = await this.prisma.adminAccount.findUnique({
       where: { id: accountId },
@@ -543,6 +767,180 @@ export class AuthService {
   }
 
   // ============ 内部方法 ============
+
+  private async expireAdminQrLoginSessions() {
+    await this.prisma.adminQrLoginSession.updateMany({
+      where: {
+        status: { in: ['PENDING', 'SCANNED'] },
+        expiresAt: { lt: new Date() },
+      },
+      data: { status: 'EXPIRED' },
+    });
+  }
+
+  private async getUsableQrSession(ticket: string) {
+    if (!ticket) {
+      throw new BadRequestException('缺少扫码登录参数，请刷新二维码');
+    }
+
+    const session = await this.prisma.adminQrLoginSession.findUnique({ where: { ticket } });
+    if (!session) {
+      throw new BadRequestException('二维码不存在或已失效');
+    }
+    if (session.expiresAt.getTime() <= Date.now()) {
+      await this.prisma.adminQrLoginSession.update({
+        where: { id: session.id },
+        data: { status: 'EXPIRED' },
+      });
+      throw new BadRequestException('二维码已过期，请刷新');
+    }
+    if (!['PENDING', 'SCANNED'].includes(session.status)) {
+      throw new BadRequestException(this.getQrStatusMessage(session.status));
+    }
+    return session;
+  }
+
+  private getQrStatusMessage(status: string) {
+    const messages: Record<string, string> = {
+      PENDING: '等待小程序扫码',
+      SCANNED: '已扫码，请在小程序确认',
+      CONFIRMED: '已确认登录',
+      EXPIRED: '二维码已过期，请刷新',
+      CANCELED: '本次扫码登录已取消',
+    };
+    return messages[status] || '扫码登录状态异常';
+  }
+
+  private async verifyAdminCredentialForQr(username: string, password: string, ip?: string, ua?: string) {
+    const account = await this.prisma.adminAccount.findFirst({
+      where: {
+        OR: [
+          { username },
+          { phone: username },
+          { email: username },
+        ],
+        status: { in: ['active', 'disabled'] },
+        deletedAt: null,
+      },
+    });
+
+    if (!account) {
+      await this.logAdminLogin('', username, false, '扫码绑定账号不存在', ip, ua);
+      throw new UnauthorizedException('管理员账号或密码错误');
+    }
+
+    if (account.lockedUntil && new Date(account.lockedUntil) > new Date()) {
+      const remainingMin = Math.ceil((new Date(account.lockedUntil).getTime() - Date.now()) / 60000);
+      await this.logAdminLogin(account.id, username, false, `扫码绑定账号已锁定(剩余${remainingMin}分钟)`, ip, ua);
+      throw new UnauthorizedException(`管理员账号已被临时锁定，请在 ${remainingMin} 分钟后重试`);
+    }
+
+    const valid = await bcrypt.compare(password, account.passwordHash);
+    if (!valid) {
+      await this.handleLoginFailure(account, username, ip, ua);
+      throw new UnauthorizedException('管理员账号或密码错误');
+    }
+
+    if (account.status !== 'active') {
+      await this.logAdminLogin(account.id, username, false, '扫码绑定账号已禁用', ip, ua);
+      throw new UnauthorizedException('管理员账号不可用，请联系超级管理员');
+    }
+
+    return account;
+  }
+
+  private async buildAdminLoginPayload(accountId: string, loginMethod: 'password' | 'wechat_scan', ip?: string, ua?: string) {
+    const account = await this.prisma.adminAccount.findUnique({
+      where: { id: accountId },
+      include: {
+        roles: {
+          include: {
+            role: {
+              include: {
+                permissions: { include: { permission: true } },
+                menus: { include: { menu: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!account || account.status !== 'active') {
+      throw new UnauthorizedException('管理员账号不存在或已禁用');
+    }
+
+    await this.prisma.adminAccount.update({
+      where: { id: account.id },
+      data: {
+        loginFailCount: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+        lastLoginIp: ip || null,
+        lastLoginUserAgent: ua || null,
+      },
+    });
+
+    const permissionSet = new Set<string>();
+    const menus: any[] = [];
+    const roles: any[] = [];
+
+    for (const acctRole of account.roles) {
+      roles.push({
+        id: acctRole.role.id,
+        name: acctRole.role.name,
+        code: acctRole.role.code,
+      });
+      for (const rp of acctRole.role.permissions) {
+        permissionSet.add(rp.permission.code);
+      }
+      for (const rm of acctRole.role.menus) {
+        menus.push({
+          id: rm.menu.id,
+          name: rm.menu.name,
+          path: rm.menu.path,
+          icon: rm.menu.icon,
+          parentId: rm.menu.parentId,
+          type: rm.menu.type,
+          sortOrder: rm.menu.sortOrder,
+        });
+      }
+    }
+
+    const tokens = await this.generateAdminTokens(account.id, account.username);
+    await this.logAdminLogin(account.id, account.username, true, undefined, ip, ua);
+
+    return {
+      token: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+      adminId: account.id,
+      userId: account.id,
+      username: account.username,
+      nickname: account.realName || account.username,
+      avatar: account.avatar || '',
+      role: roles.some((role) => role.code === 'super_admin' || role.code === 'SUPER_ADMIN')
+        ? 'super_admin'
+        : roles[0]?.code || 'admin',
+      login_method: loginMethod,
+      login_via_auth_code: false,
+      permissions: Array.from(permissionSet),
+      menus,
+      forcePasswordReset: account.passwordResetRequired === true,
+      user: {
+        id: account.id,
+        username: account.username,
+        realName: account.realName,
+        avatar: account.avatar || '',
+        phone: account.phone || '',
+        email: account.email || '',
+        roles,
+        status: account.status === 'active' ? 1 : 0,
+        passwordResetRequired: account.passwordResetRequired,
+      },
+    };
+  }
 
   private async generateTokens(userId: string, openid: string) {
     const payload = { sub: userId, openid, isAdmin: false };

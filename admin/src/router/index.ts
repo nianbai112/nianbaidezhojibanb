@@ -4,6 +4,7 @@ import MainLayout from '@/layout/MainLayout.vue'
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/dashboard' },
   { path: '/login', component: () => import('@/views/auth/Login.vue'), meta: { public: true, title: '登录' } },
+  { path: '/setup', component: () => import('@/views/setup/SetupWizard.vue'), meta: { public: true, title: '首次安装' } },
   {
     path: '/',
     component: MainLayout,

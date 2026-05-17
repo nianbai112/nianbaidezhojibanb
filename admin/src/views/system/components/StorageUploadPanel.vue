@@ -15,11 +15,11 @@
                 <el-option label="MinIO" value="minio" />
               </el-select>
             </el-form-item>
-            <el-form-item label="CDN 域名">
-              <el-input v-model="form.domain" placeholder="如：https://cdn.example.com" />
+            <el-form-item label="CDN 域名（可选）">
+              <el-input v-model="form.domain" placeholder="不填则自动使用 COS 默认访问域名" />
             </el-form-item>
-            <el-form-item label="上传路径前缀">
-              <el-input v-model="form.uploadPrefix" placeholder="如：uploads/" />
+            <el-form-item label="上传路径前缀（可选）">
+              <el-input v-model="form.uploadPrefix" placeholder="如：uploads/；不填则使用业务默认目录" />
             </el-form-item>
           </div>
         </el-form>
@@ -41,11 +41,25 @@
             <el-form-item label="SecretKey">
               <el-input v-model="form.cos.secretKey" placeholder="请输入 SecretKey" show-password />
             </el-form-item>
-            <el-form-item label="Bucket">
-              <el-input v-model="form.cos.bucket" placeholder="如：mybucket-1250000000" />
+            <el-form-item label="存储桶名称">
+              <el-input v-model="form.cos.bucket" placeholder="如：nianbai-1340278115" />
             </el-form-item>
-            <el-form-item label="Region">
-              <el-input v-model="form.cos.region" placeholder="如：ap-guangzhou" />
+            <el-form-item label="城市选择">
+              <el-select v-model="form.cos.region" placeholder="请选择存储桶所在城市" filterable style="width: 100%">
+                <el-option-group
+                  v-for="group in cosRegionGroups"
+                  :key="group.label"
+                  :label="group.label"
+                >
+                  <el-option
+                    v-for="item in group.options"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
+                  />
+                </el-option-group>
+              </el-select>
+              <div class="form-tip">请选择腾讯云 COS 存储桶创建时的城市，不要填写完整网址。</div>
             </el-form-item>
           </div>
         </el-form>
@@ -271,6 +285,32 @@ const defaultOss = { accessKeyId: '', accessKeySecret: '', bucket: '', endpoint:
 const defaultS3 = { accessKey: '', secretKey: '', bucket: '', region: '', endpoint: '', pathStyle: false }
 const defaultMinio = { accessKey: '', secretKey: '', bucket: '', endpoint: '', region: '', pathStyle: true }
 const defaultLocal = { uploadDir: 'uploads', accessUrl: '' }
+const cosRegionGroups = [
+  {
+    label: '中国大陆',
+    options: [
+      { label: '北京 ap-beijing', value: 'ap-beijing' },
+      { label: '南京 ap-nanjing', value: 'ap-nanjing' },
+      { label: '上海 ap-shanghai', value: 'ap-shanghai' },
+      { label: '广州 ap-guangzhou', value: 'ap-guangzhou' },
+      { label: '成都 ap-chengdu', value: 'ap-chengdu' },
+      { label: '重庆 ap-chongqing', value: 'ap-chongqing' }
+    ]
+  },
+  {
+    label: '中国港澳台与海外',
+    options: [
+      { label: '中国香港 ap-hongkong', value: 'ap-hongkong' },
+      { label: '新加坡 ap-singapore', value: 'ap-singapore' },
+      { label: '东京 ap-tokyo', value: 'ap-tokyo' },
+      { label: '首尔 ap-seoul', value: 'ap-seoul' },
+      { label: '曼谷 ap-bangkok', value: 'ap-bangkok' },
+      { label: '硅谷 na-siliconvalley', value: 'na-siliconvalley' },
+      { label: '弗吉尼亚 na-ashburn', value: 'na-ashburn' },
+      { label: '法兰克福 eu-frankfurt', value: 'eu-frankfurt' }
+    ]
+  }
+]
 const defaultLimits = {
   maxImageSize: 10,
   maxVideoSize: 100,
@@ -308,6 +348,13 @@ function formatDate(date: string) {
 
 function onProviderChange() {
   // 切换 provider 时无需额外操作
+}
+
+function normalizeCosRegion(value: any): string {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const matched = text.match(/cos\.([a-z0-9-]+)\.myqcloud\.com/i)
+  return matched?.[1] || text
 }
 
 // 标记哪些字段是敏感的（需要脱敏）
@@ -354,7 +401,7 @@ function prepareForSave(data: Record<string, any>): Record<string, any> {
           if (SECRET_FIELDS.includes(k) && v === MASK) {
             continue
           }
-          result[key][k] = v
+          result[key][k] = key === 'cos' && k === 'region' ? normalizeCosRegion(v) : v
         }
       }
     } else {
@@ -377,6 +424,7 @@ async function load() {
           if (key === 'cos' || key === 'oss' || key === 's3' || key === 'minio' || key === 'local' || key === 'limits') {
             if (value && typeof value === 'object') {
               form[key] = { ...form[key], ...value }
+              if (key === 'cos') form.cos.region = normalizeCosRegion(form.cos.region)
             }
           } else {
             form[key] = value

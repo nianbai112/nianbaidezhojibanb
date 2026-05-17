@@ -189,7 +189,7 @@ export class UploadService {
           secretId: providerConfig.secretId || this.config.get('COS_SECRET_ID') || '',
           secretKey: providerConfig.secretKey || this.config.get('COS_SECRET_KEY') || '',
           bucket: providerConfig.bucket || this.config.get('COS_BUCKET') || '',
-          region: providerConfig.region || this.config.get('COS_REGION') || '',
+          region: this.normalizeCosRegion(providerConfig.region || this.config.get('COS_REGION') || ''),
         };
 
       case 'local':
@@ -258,15 +258,14 @@ export class UploadService {
     const secretId = String(storage.secretId || '');
     const secretKey = String(storage.secretKey || '');
     const bucket = String(storage.bucket || '');
-    const region = String(storage.region || '');
-    const domain = String(storage.domain || '');
+    const region = this.normalizeCosRegion(storage.region || '');
+    const domain = String(storage.domain || '').trim() || this.buildCosDefaultDomain(bucket, region);
 
     const missing: string[] = [];
     if (!secretId) missing.push('SecretId');
     if (!secretKey) missing.push('SecretKey');
     if (!bucket) missing.push('存储桶');
     if (!region) missing.push('所属地域');
-    if (!domain) missing.push('访问域名');
 
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -299,7 +298,7 @@ export class UploadService {
       throw new BadRequestException(`文件大小超过后台配置限制 ${maxSize}MB`);
     }
 
-    const key = this.generateSafeKey(file, opts.folder);
+    const key = this.applyUploadPrefix(this.generateSafeKey(file, opts.folder), storage.uploadPrefix);
 
     switch (provider) {
       case 'cos':
@@ -345,7 +344,6 @@ export class UploadService {
   private async uploadToLocal(file: Express.Multer.File, key: string, storage: Record<string, any>): Promise<UploadResult> {
     const uploadDir = storage.uploadDir || 'uploads';
     const accessUrl = storage.accessUrl || storage.domain || '';
-    const uploadPrefix = storage.uploadPrefix || '';
 
     // 构建完整的文件路径
     const fullDir = path.resolve(process.cwd(), uploadDir);
@@ -362,7 +360,7 @@ export class UploadService {
 
     // 构建访问 URL
     const urlPrefix = accessUrl.replace(/\/$/, '');
-    const publicPrefix = uploadPrefix || (!urlPrefix ? uploadDir.replace(/^\/+|\/+$/g, '') : '');
+    const publicPrefix = !urlPrefix ? uploadDir.replace(/^\/+|\/+$/g, '') : '';
     const urlParts = [urlPrefix, publicPrefix, key].filter(Boolean);
     const url = `${urlPrefix ? '' : '/'}${urlParts.join('/')}`;
 
@@ -392,7 +390,7 @@ export class UploadService {
     const provider = storage.provider as StorageProvider;
 
     const randomHex = crypto.randomBytes(16).toString('hex');
-    const key = `qrcode/${Date.now()}_${randomHex}.jpg`;
+    const key = this.applyUploadPrefix(`qrcode/${Date.now()}_${randomHex}.jpg`, storage.uploadPrefix);
 
     // 小程序码暂时只支持 COS
     if (provider !== 'cos') {
@@ -797,6 +795,23 @@ export class UploadService {
     const safeExt = this.inferSafeExt(file.mimetype);
     const randomHex = crypto.randomBytes(16).toString('hex');
     return `${folder}/${Date.now()}_${randomHex}.${safeExt}`;
+  }
+
+  private applyUploadPrefix(key: string, uploadPrefix?: string): string {
+    const prefix = String(uploadPrefix || '').trim().replace(/^\/+|\/+$/g, '');
+    return prefix ? `${prefix}/${key.replace(/^\/+/, '')}` : key;
+  }
+
+  private buildCosDefaultDomain(bucket: string, region: string): string {
+    if (!bucket || !region) return '';
+    return `https://${bucket}.cos.${region}.myqcloud.com`;
+  }
+
+  private normalizeCosRegion(value: any): string {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const match = text.match(/cos\.([a-z0-9-]+)\.myqcloud\.com/i);
+    return match?.[1] || text;
   }
 
   private inferSafeExt(mimetype: string): string {

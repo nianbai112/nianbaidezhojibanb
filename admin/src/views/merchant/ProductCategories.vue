@@ -38,12 +38,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="分类图标">
-          <div class="upload-wrap">
-            <el-image v-if="form.icon" :src="form.icon" style="width: 60px; height: 60px; border-radius: 4px; margin-right: 12px;" />
-            <el-upload :show-file-list="false" :http-request="uploadIcon" accept="image/*">
-              <el-button size="small">{{ form.icon ? '更换' : '上传' }}</el-button>
-            </el-upload>
-          </div>
+          <ImageUploadBox v-model="form.icon" scene="merchant-category-icon" shape="square" placeholder="上传分类图标" tip="建议 160x160，可替换和删除" :max-size="2" />
         </el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sortOrder" :min="0" style="width: 100%" /></el-form-item>
         <el-form-item label="类型">
@@ -72,8 +67,8 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getCategories, createCategory, updateCategory, deleteCategory } from '@/api/merchant'
-import { uploadImage } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const list = ref<any[]>([])
@@ -111,16 +106,6 @@ const edit = (row: any) => {
   form.status = row.status || 'active'
   form.parentId = row.parentId || ''
   showDialog.value = true
-}
-
-const uploadIcon = async (options: any) => {
-  try {
-    const res: any = await uploadImage(options.file, 'category')
-    form.icon = res?.url || res?.data?.url || res
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
-  }
 }
 
 const submit = async () => {

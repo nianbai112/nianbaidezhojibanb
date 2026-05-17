@@ -220,12 +220,28 @@
           <FieldSwitch label="允许转发分享" desc="笔记可转发给好友或生成海报" v-model="noteForm.allow_friend_share" />
           <FieldSwitch label="评论图片过滤" desc="评论中的图片也执行二维码过滤" v-model="noteForm.enable_comment_qrcode_filter" />
           <div class="field">
-            <label>卡片广告 ID/图片 URL</label>
-            <el-input v-model="noteForm.card_ad_content" placeholder="广告单元ID或图片URL" />
+            <label>卡片广告内容</label>
+            <el-input v-model="noteForm.card_ad_content" placeholder="广告单元 ID，或通过下方上传广告图" />
+            <ImageUploadBox
+              v-model="cardAdImageValue"
+              scene="config"
+              shape="wide"
+              :max-size="3"
+              placeholder="上传卡片广告图"
+              tip="如果使用广告单元 ID，可继续保留上方文本"
+            />
           </div>
           <div class="field">
-            <label>瀑布流广告 ID/图片 URL</label>
-            <el-input v-model="noteForm.waterfall_ad_content" placeholder="广告单元ID或图片URL" />
+            <label>瀑布流广告内容</label>
+            <el-input v-model="noteForm.waterfall_ad_content" placeholder="广告单元 ID，或通过下方上传广告图" />
+            <ImageUploadBox
+              v-model="waterfallAdImageValue"
+              scene="config"
+              shape="wide"
+              :max-size="3"
+              placeholder="上传瀑布流广告图"
+              tip="上传后会自动写入上方字段"
+            />
           </div>
           <div class="field field-wide">
             <label>内容声明</label>
@@ -604,6 +620,15 @@ const FieldSwitch = defineComponent({
   }
 })
 
+const isImageMaterialValue = (value?: string) => {
+  const text = String(value || '').trim()
+  return /^data:image\//i.test(text)
+    || /^blob:/i.test(text)
+    || /^https?:\/\/.+\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(text)
+    || /^\/uploads\//i.test(text)
+    || /^uploads\//i.test(text)
+}
+
 const NOTE_DEFAULTS = {
   enable_region_posting: 1,
   min_length: 1,
@@ -662,6 +687,20 @@ const NOTE_DEFAULTS = {
   allow_friend_share: 1,
   enable_comment_qrcode_filter: 0
 }
+
+const cardAdImageValue = computed({
+  get: () => isImageMaterialValue(noteForm.card_ad_content) ? noteForm.card_ad_content : '',
+  set: (value: string) => {
+    noteForm.card_ad_content = value
+  }
+})
+
+const waterfallAdImageValue = computed({
+  get: () => isImageMaterialValue(noteForm.waterfall_ad_content) ? noteForm.waterfall_ad_content : '',
+  set: (value: string) => {
+    noteForm.waterfall_ad_content = value
+  }
+})
 
 const CIRCLE_DEFAULTS = {
   enable_circle: 1,

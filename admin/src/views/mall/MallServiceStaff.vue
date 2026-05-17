@@ -53,14 +53,23 @@
       <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50]" layout="total, sizes, prev, pager, next" @size-change="loadData" @current-change="loadData" />
     </div>
 
-    <el-dialog v-model="editVisible" :title="editingId ? '编辑客服' : '新增客服'" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="editVisible" :title="editingId ? '编辑客服' : '新增客服'" width="620px" :close-on-click-modal="false">
       <el-form :model="form" label-width="100px" :rules="rules" ref="formRef">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="昵称" prop="nickname"><el-input v-model="form.nickname" placeholder="请输入昵称" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="头像URL"><el-input v-model="form.avatar" placeholder="头像图片URL" /></el-form-item>
+            <el-form-item label="头像">
+              <ImageUploadBox
+                v-model="form.avatar"
+                scene="mall-service-avatar"
+                shape="square"
+                placeholder="上传客服头像"
+                tip="建议 200x200，可替换和删除"
+                :max-size="2"
+              />
+            </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="16">
@@ -102,6 +111,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 

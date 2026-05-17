@@ -137,13 +137,24 @@
         <el-form-item label="任务内容 / 生成提示词">
           <el-input v-model="form.content" type="textarea" :rows="5" placeholder="写清楚生成方向、语气、场景、是否需要配图等。" />
         </el-form-item>
-        <el-form-item v-if="isPostTask" label="图片 URL（可选，一行一个）">
-          <el-input
-            v-model="form.mediaUrlsText"
-            type="textarea"
-            :rows="3"
-            placeholder="可粘贴已上传图片地址；执行任务时会作为笔记配图发布。"
-          />
+        <el-form-item v-if="isPostTask" label="任务配图（可选）">
+          <div class="media-picker">
+            <ImageUploadBox
+              :model-value="mediaUploadValue"
+              scene="ai-task"
+              shape="wide"
+              :max-size="5"
+              placeholder="上传任务配图"
+              tip="上传后会自动追加到下方配图列表"
+              @update:model-value="appendMediaUrl"
+            />
+            <el-input
+              v-model="form.mediaUrlsText"
+              type="textarea"
+              :rows="3"
+              placeholder="已上传的配图会显示在这里；也可粘贴历史图片路径，一行一个。"
+            />
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -155,10 +166,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted } from 'vue'
+import { computed, nextTick, reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -170,6 +182,7 @@ const circles = ref<any[]>([])
 const bots = ref<any[]>([])
 const total = ref(0)
 const actionLoading = ref('')
+const mediaUploadValue = ref('')
 
 const query = reactive({
   page: 1,
@@ -253,6 +266,22 @@ const resetForm = () => Object.assign(form, {
   circleId: '',
   mediaUrlsText: '',
 })
+
+const appendMediaUrl = async (url: string) => {
+  const imageUrl = String(url || '').trim()
+  if (!imageUrl) return
+  const urls = String(form.mediaUrlsText || '')
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (!urls.includes(imageUrl)) {
+    urls.push(imageUrl)
+  }
+  form.mediaUrlsText = urls.join('\n')
+  mediaUploadValue.value = imageUrl
+  await nextTick()
+  mediaUploadValue.value = ''
+}
 
 const openCreate = () => {
   editingTask.value = null
@@ -467,10 +496,21 @@ onMounted(() => {
   gap: 14px;
 }
 
+.media-picker {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 14px;
+  width: 100%;
+}
+
 @media (max-width: 1100px) {
   .filter-card,
   .form-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .media-picker {
+    grid-template-columns: 1fr;
   }
 }
 

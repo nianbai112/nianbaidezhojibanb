@@ -93,9 +93,17 @@
               <el-image :src="img" style="width: 80px; height: 80px; border-radius: 4px;" />
               <el-button size="small" type="danger" text @click="removeImage(idx)">删除</el-button>
             </div>
-            <el-upload :show-file-list="false" :http-request="uploadProductImage" accept="image/*">
-              <el-button size="small">上传图片</el-button>
-            </el-upload>
+            <div class="product-image-uploader">
+              <ImageUploadBox
+                :model-value="productImageUploadValue"
+                scene="merchant-product"
+                shape="square"
+                placeholder="上传商品图"
+                tip="上传后自动加入列表"
+                :max-size="5"
+                @update:model-value="appendProductImage"
+              />
+            </div>
           </div>
         </el-form-item>
         <el-form-item label="商品详情"><el-input v-model="form.detail" type="textarea" :rows="3" placeholder="商品详情（支持HTML）" /></el-form-item>
@@ -150,11 +158,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getProducts, createProduct, updateProduct, updateProductStatus, auditProduct, getCategories, getMerchants, getProductStockAlerts } from '@/api/merchant'
-import { uploadImage } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const list = ref<any[]>([])
@@ -169,6 +177,7 @@ const editVisible = ref(false)
 const editingId = ref('')
 const form = reactive<any>({ merchantId: '', categoryId: '', name: '', images: [], detail: '', price: 0, originPrice: 0, stock: 0, unit: '', weight: 0, status: 'on_sale', skus: [] })
 const formRef = ref<any>(null)
+const productImageUploadValue = ref('')
 const rules = {
   name: [{ required: true, message: '请输入商品名称', trigger: 'blur' }],
   merchantId: [{ required: true, message: '请选择商家', trigger: 'change' }],
@@ -237,15 +246,15 @@ const openEdit = (row?: any) => {
   editVisible.value = true
 }
 
-const uploadProductImage = async (options: any) => {
-  try {
-    const res: any = await uploadImage(options.file, 'product')
-    const url = res?.url || res?.data?.url || res
-    form.images.push(url)
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
+const appendProductImage = async (url: string) => {
+  const imageUrl = String(url || '').trim()
+  if (!imageUrl) return
+  if (!form.images.includes(imageUrl)) {
+    form.images.push(imageUrl)
   }
+  productImageUploadValue.value = imageUrl
+  await nextTick()
+  productImageUploadValue.value = ''
 }
 const removeImage = (idx: number) => form.images.splice(idx, 1)
 
@@ -317,5 +326,7 @@ onMounted(() => { loadData(); loadOptions() })
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
 .image-list { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 .img-item { display: flex; flex-direction: column; align-items: center; }
+.product-image-uploader { width: 120px; }
+.product-image-uploader :deep(.upload-trigger) { min-height: 96px; padding: 14px; }
 .sku-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 </style>

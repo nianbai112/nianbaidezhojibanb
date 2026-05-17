@@ -114,20 +114,10 @@
         <el-form-item label="营业时间"><el-input v-model="form.businessHours" placeholder="例如 09:00-22:00" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="3" placeholder="商家描述" /></el-form-item>
         <el-form-item label="Logo">
-          <div class="upload-wrap">
-            <el-image v-if="form.logo" :src="form.logo" style="width: 80px; height: 80px; border-radius: 4px; margin-right: 12px;" />
-            <el-upload :show-file-list="false" :http-request="uploadLogo" accept="image/*">
-              <el-button size="small">{{ form.logo ? '更换' : '上传' }}</el-button>
-            </el-upload>
-          </div>
+          <ImageUploadBox v-model="form.logo" scene="merchant-logo" shape="square" placeholder="上传商家 Logo" tip="建议 200x200，可替换和删除" :max-size="2" />
         </el-form-item>
         <el-form-item label="封面">
-          <div class="upload-wrap">
-            <el-image v-if="form.cover" :src="form.cover" style="width: 120px; height: 80px; border-radius: 4px; margin-right: 12px;" />
-            <el-upload :show-file-list="false" :http-request="uploadCover" accept="image/*">
-              <el-button size="small">{{ form.cover ? '更换' : '上传' }}</el-button>
-            </el-upload>
-          </div>
+          <ImageUploadBox v-model="form.cover" scene="merchant-cover" shape="wide" placeholder="上传商家封面" tip="建议 750x350，可替换和删除" :max-size="5" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -162,8 +152,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import { getMerchants, createMerchant, updateMerchant, auditMerchant, updateMerchantStatus, getMerchantDetail } from '@/api/merchant'
 import { getCategories } from '@/api/merchant'
 import { fetchRegions } from '@/api/admin'
-import { uploadImage } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const statusMap: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝', closed: '已关闭' }
 const statusTypeMap: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger', closed: 'info' }
@@ -234,25 +224,6 @@ const openEdit = (row?: any) => {
     Object.assign(form, { name: '', contactPerson: '', phone: '', regionId: '', categoryId: '', address: '', latitude: '', longitude: '', businessHours: '', description: '', logo: '', cover: '', status: 'pending' })
   }
   editVisible.value = true
-}
-
-const uploadLogo = async (options: any) => {
-  try {
-    const res: any = await uploadImage(options.file, 'merchant')
-    form.logo = res?.url || res?.data?.url || res
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
-  }
-}
-const uploadCover = async (options: any) => {
-  try {
-    const res: any = await uploadImage(options.file, 'merchant')
-    form.cover = res?.url || res?.data?.url || res
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
-  }
 }
 
 const submitEdit = async () => {

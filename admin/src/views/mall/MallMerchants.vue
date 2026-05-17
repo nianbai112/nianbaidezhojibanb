@@ -139,38 +139,24 @@
           <el-input v-model="editForm.phone" placeholder="联系电话" />
         </el-form-item>
         <el-form-item label="Logo">
-          <div style="display: flex; gap: 12px; align-items: center;">
-            <el-image v-if="editForm.logo" :src="editForm.logo" style="width: 60px; height: 60px" fit="cover" />
-            <div>
-              <el-upload
-                action="/admin/upload/image"
-                :headers="uploadHeaders"
-                :on-success="(res: any) => { editForm.logo = res?.url || res?.data?.url || '' }"
-                :show-file-list="false"
-                accept="image/*"
-              >
-                <el-button size="small">上传</el-button>
-              </el-upload>
-              <el-input v-model="editForm.logo" placeholder="或输入URL" style="margin-top: 4px; width: 250px" />
-            </div>
-          </div>
+          <ImageUploadBox
+            v-model="editForm.logo"
+            scene="mall-merchant-logo"
+            shape="square"
+            placeholder="上传商户 Logo"
+            tip="建议 300x300，可替换和删除"
+            :max-size="3"
+          />
         </el-form-item>
         <el-form-item label="封面图">
-          <div style="display: flex; gap: 12px; align-items: center;">
-            <el-image v-if="editForm.cover" :src="editForm.cover" style="width: 100px; height: 60px" fit="cover" />
-            <div>
-              <el-upload
-                action="/admin/upload/image"
-                :headers="uploadHeaders"
-                :on-success="(res: any) => { editForm.cover = res?.url || res?.data?.url || '' }"
-                :show-file-list="false"
-                accept="image/*"
-              >
-                <el-button size="small">上传</el-button>
-              </el-upload>
-              <el-input v-model="editForm.cover" placeholder="或输入URL" style="margin-top: 4px; width: 250px" />
-            </div>
-          </div>
+          <ImageUploadBox
+            v-model="editForm.cover"
+            scene="mall-merchant-cover"
+            shape="wide"
+            placeholder="上传商户封面"
+            tip="建议 750x350，可替换和删除"
+            :max-size="5"
+          />
         </el-form-item>
         <el-form-item label="地址">
           <el-input v-model="editForm.address" placeholder="详细地址" />
@@ -203,9 +189,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -216,10 +203,6 @@ const showDetailDialog = ref(false)
 const showEditDialog = ref(false)
 const selectedMerchant = ref<any>(null)
 const merchantStats = ref<any>(null)
-
-const uploadHeaders = computed(() => ({
-  Authorization: `Bearer ${localStorage.getItem('LM_ADMIN_TOKEN') || localStorage.getItem('admin_token')}`,
-}))
 
 const editForm = reactive({
   id: '',

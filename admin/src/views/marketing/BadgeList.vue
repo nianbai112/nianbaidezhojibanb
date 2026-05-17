@@ -24,13 +24,20 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="showCreateDialog" :title="editingBadge ? '编辑徽章' : '创建徽章'" width="500px">
+    <el-dialog v-model="showCreateDialog" :title="editingBadge ? '编辑徽章' : '创建徽章'" width="560px">
       <el-form :model="form" label-width="100px">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="徽章名称" />
         </el-form-item>
         <el-form-item label="图标">
-          <el-input v-model="form.icon" placeholder="图标URL" />
+          <ImageUploadBox
+            v-model="form.icon"
+            scene="marketing-badge-icon"
+            shape="square"
+            placeholder="上传徽章图标"
+            tip="建议 160x160，可替换和删除"
+            :max-size="2"
+          />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -54,6 +61,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const submitting = ref(false)

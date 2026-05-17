@@ -18,6 +18,7 @@ export class WsNativeGateway {
   private wss: WebSocketServer;
   private clients: Map<string, NativeClient> = new Map();
   private userSockets: Map<string, Set<string>> = new Map();
+  private sessionTouchAt: Map<string, number> = new Map();
   private pingInterval: NodeJS.Timeout;
 
   constructor(
@@ -177,6 +178,7 @@ export class WsNativeGateway {
     if (!client) return;
 
     try {
+      this.touchSession(socketId);
       const msg = JSON.parse(raw.toString());
 
       if (msg.event === 'ping') {
@@ -313,6 +315,7 @@ export class WsNativeGateway {
     if (!client) return;
 
     this.clients.delete(socketId);
+    this.sessionTouchAt.delete(socketId);
 
     const userSocketSet = this.userSockets.get(client.userId);
     if (userSocketSet) {
@@ -330,6 +333,17 @@ export class WsNativeGateway {
     } catch {
       // ignore
     }
+  }
+
+  private touchSession(socketId: string) {
+    const now = Date.now();
+    const lastTouch = this.sessionTouchAt.get(socketId) || 0;
+    if (now - lastTouch < 10000) return;
+    this.sessionTouchAt.set(socketId, now);
+    this.prisma.realtimeSession.updateMany({
+      where: { socketId, online: true },
+      data: { lastSeenAt: new Date(now) },
+    }).catch(() => {});
   }
 
   // ===========================================================================

@@ -167,7 +167,15 @@
                     </el-select>
                     <el-input v-else-if="item.linkType === 'miniProgram'" v-model="item.appId" placeholder="外部小程序 AppID" />
                     <el-input v-else-if="item.linkType === 'webview'" v-model="item.path" placeholder="H5 链接，如 https://..." />
-                    <el-input v-else-if="item.linkType === 'image'" v-model="item.path" placeholder="点击后预览的图片 URL，不填默认预览横幅图" />
+                    <ImageUploadBox
+                      v-else-if="item.linkType === 'image'"
+                      v-model="item.path"
+                      scene="region-carousel-preview"
+                      shape="wide"
+                      placeholder="上传点击预览图"
+                      tip="不上传时默认预览横幅主图"
+                      :max-size="5"
+                    />
                     <el-input v-else v-model="item.path" placeholder="不跳转时可留空" disabled />
                     <el-input v-model="item.query" placeholder="跳转参数 Query，如 id=1&from=banner" />
                     <el-input v-model="item.remark" placeholder="运营备注，如广告主/投放时间" />
@@ -331,7 +339,15 @@
                     </el-select>
                     <el-input v-else-if="nav.linkType === 'miniProgram'" v-model="nav.appId" placeholder="外部小程序 AppID" />
                     <el-input v-else-if="nav.linkType === 'webview'" v-model="nav.path" placeholder="H5 链接，如 https://..." />
-                    <el-input v-else-if="nav.linkType === 'image'" v-model="nav.path" placeholder="点击预览图片 URL" />
+                    <ImageUploadBox
+                      v-else-if="nav.linkType === 'image'"
+                      v-model="nav.path"
+                      scene="region-nav-preview"
+                      shape="wide"
+                      placeholder="上传点击预览图"
+                      tip="用于入口点击后的图片预览"
+                      :max-size="5"
+                    />
                     <el-input v-else v-model="nav.path" placeholder="不跳转时可留空" disabled />
                   </div>
                   <div class="nav-secondary-fields">

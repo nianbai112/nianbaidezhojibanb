@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { getProfile, loginAdmin, logoutAdmin } from '@/api/admin'
+import { getProfile, loginAdmin, logoutAdmin, persistAdminLoginPayload } from '@/api/admin'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -7,11 +7,18 @@ export const useAuthStore = defineStore('auth', {
     user: { name: '运营管理员', role: '超级管理员' }
   }),
   actions: {
+    applyLoginPayload(payload: any) {
+      const data = persistAdminLoginPayload(payload)
+      this.token = localStorage.getItem('LM_ADMIN_TOKEN') || data?.token || data?.accessToken || ''
+      const user = data?.user || data
+      this.user.name = user?.nickname || user?.realName || user?.username || data?.nickname || this.user.name
+      this.user.role = user?.roleName || user?.role?.name || user?.roles?.[0]?.name || data?.role || this.user.role
+      return data
+    },
     async login(username: string, password: string) {
       const data: any = await loginAdmin({ username, password })
-      this.token = localStorage.getItem('LM_ADMIN_TOKEN') || data?.token || data?.accessToken || ''
-      this.user.name = data?.user?.nickname || data?.user?.username || username
-      this.user.role = data?.user?.roleName || data?.user?.role?.name || '运营管理员'
+      this.applyLoginPayload(data)
+      if (!this.user.name) this.user.name = username
       return data
     },
     async loadProfile() {

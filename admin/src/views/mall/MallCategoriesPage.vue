@@ -44,21 +44,14 @@
           <el-input v-model="categoryForm.name" placeholder="请输入分类名称" />
         </el-form-item>
         <el-form-item label="图标">
-          <div style="display: flex; gap: 12px; align-items: center;">
-            <el-image v-if="categoryForm.icon" :src="categoryForm.icon" style="width: 40px; height: 40px" fit="cover" />
-            <div>
-              <el-upload
-                action="/admin/upload/image"
-                :headers="uploadHeaders"
-                :on-success="(res: any) => { categoryForm.icon = res?.url || res?.data?.url || '' }"
-                :show-file-list="false"
-                accept="image/*"
-              >
-                <el-button size="small">上传图标</el-button>
-              </el-upload>
-              <el-input v-model="categoryForm.icon" placeholder="或输入图标URL" style="margin-top: 4px; width: 250px" />
-            </div>
-          </div>
+          <ImageUploadBox
+            v-model="categoryForm.icon"
+            scene="mall-category-icon"
+            shape="square"
+            placeholder="上传分类图标"
+            tip="建议 160x160，可替换和删除"
+            :max-size="2"
+          />
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="categoryForm.sortOrder" :min="0" style="width: 100%" />
@@ -76,20 +69,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
 const showCreateDialog = ref(false)
 const editingCategory = ref<any>(null)
 const categories = ref<any[]>([])
-
-const uploadHeaders = computed(() => ({
-  Authorization: `Bearer ${localStorage.getItem('LM_ADMIN_TOKEN') || localStorage.getItem('admin_token')}`,
-}))
 
 const categoryForm = reactive({
   name: '',

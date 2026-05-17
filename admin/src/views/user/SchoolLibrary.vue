@@ -94,7 +94,7 @@
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <el-dialog v-model="showDialog" :title="editingId ? '编辑学校' : '新增学校'" width="700px" destroy-on-close>
+    <el-dialog v-model="showDialog" :title="editingId ? '编辑学校' : '新增学校'" width="780px" destroy-on-close class="school-dialog">
       <el-form :model="form" label-width="100px">
         <el-row :gutter="16">
           <el-col :span="12">
@@ -177,12 +177,32 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="Logo">
-          <el-input v-model="form.logo" placeholder="Logo URL" />
-        </el-form-item>
-        <el-form-item label="封面">
-          <el-input v-model="form.cover" placeholder="封面 URL" />
-        </el-form-item>
+        <el-row :gutter="16" class="media-grid">
+          <el-col :span="10">
+            <el-form-item label="学校 Logo">
+              <ImageUploadBox
+                v-model="form.logo"
+                scene="school-logo"
+                shape="square"
+                placeholder="上传学校 Logo"
+                tip="建议 200x200px，用于学校列表和认证页"
+                :max-size="2"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="14">
+            <el-form-item label="学校封面">
+              <ImageUploadBox
+                v-model="form.cover"
+                scene="school-cover"
+                shape="wide"
+                placeholder="上传学校封面"
+                tip="建议 750x350px，用于学校展示页"
+                :max-size="5"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
         <el-form-item label="备注">
           <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="备注" />
         </el-form-item>
@@ -199,6 +219,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import { fetchSchools, fetchSchoolStats, createSchool, updateSchool, updateSchoolStatus, deleteSchool, fetchRegions } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -437,4 +458,11 @@ onMounted(() => {
 .stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
 .filter-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
+.media-grid {
+  margin-top: 2px;
+}
+
+.media-grid :deep(.el-form-item__content) {
+  align-items: stretch;
+}
 </style>

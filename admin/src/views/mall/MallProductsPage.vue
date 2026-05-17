@@ -136,40 +136,30 @@
           </el-col>
         </el-row>
         <el-form-item label="主图">
-          <div style="display: flex; gap: 12px; align-items: flex-start;">
-            <el-image v-if="productForm.mainImage" :src="productForm.mainImage" style="width: 80px; height: 80px" fit="cover" />
-            <div>
-              <el-upload
-                action="/admin/upload/image"
-                :headers="uploadHeaders"
-                :on-success="(res: any) => { productForm.mainImage = res?.url || res?.data?.url || '' }"
-                :show-file-list="false"
-                accept="image/*"
-              >
-                <el-button size="small">上传主图</el-button>
-              </el-upload>
-              <el-input v-model="productForm.mainImage" placeholder="或手动输入URL" style="margin-top: 8px; width: 300px" />
-            </div>
-          </div>
+          <ImageUploadBox
+            v-model="productForm.mainImage"
+            scene="mall-product-main"
+            shape="square"
+            placeholder="上传商品主图"
+            tip="建议 800x800，可替换和删除"
+            :max-size="5"
+          />
         </el-form-item>
         <el-form-item label="轮播图">
-          <div v-for="(img, index) in productForm.images" :key="index" style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
-            <el-image :src="img" style="width: 60px; height: 60px" fit="cover" />
-            <el-input v-model="productForm.images[index]" placeholder="图片URL" style="flex: 1" />
-            <el-button type="danger" size="small" @click="productForm.images.splice(index, 1)">删除</el-button>
+          <div class="product-images-grid">
+            <div v-for="(_img, index) in productForm.images" :key="index" class="product-image-item">
+              <ImageUploadBox
+                v-model="productForm.images[index]"
+                scene="mall-product-gallery"
+                shape="square"
+                placeholder="上传轮播图"
+                tip="建议 800x800，可替换和删除"
+                :max-size="5"
+              />
+              <el-button type="danger" plain size="small" @click="productForm.images.splice(index, 1)">删除</el-button>
+            </div>
           </div>
-          <div style="display: flex; gap: 8px;">
-            <el-upload
-              action="/admin/upload/image"
-              :headers="uploadHeaders"
-              :on-success="(res: any) => { const url = res?.url || res?.data?.url; if (url) productForm.images.push(url) }"
-              :show-file-list="false"
-              accept="image/*"
-            >
-              <el-button size="small">上传图片</el-button>
-            </el-upload>
-            <el-button size="small" @click="productForm.images.push('')">手动添加</el-button>
-          </div>
+          <el-button size="small" @click="productForm.images.push('')">添加轮播图</el-button>
         </el-form-item>
         <el-form-item label="商品详情">
           <el-input v-model="productForm.detail" type="textarea" :rows="4" placeholder="商品详情描述" />
@@ -232,10 +222,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -247,10 +238,6 @@ const products = ref<any[]>([])
 const categories = ref<any[]>([])
 const merchants = ref<any[]>([])
 const skuList = ref<any[]>([])
-
-const uploadHeaders = computed(() => ({
-  Authorization: `Bearer ${localStorage.getItem('LM_ADMIN_TOKEN') || localStorage.getItem('admin_token')}`,
-}))
 
 const filters = reactive({
   keyword: '',
@@ -567,5 +554,19 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.product-images-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.product-image-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>

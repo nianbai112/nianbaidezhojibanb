@@ -8,11 +8,13 @@
           <p>Lingmeng Admin Console</p>
         </div>
       </div>
+
       <div class="visual-copy">
         <span>Operator Workspace</span>
         <strong>面向校园本地生活的真实运营后台</strong>
         <p>区域、内容、商家、商城、财务、通知与系统运维统一管理。</p>
       </div>
+
       <div class="visual-grid">
         <div><b>14</b><span>业务中心</span></div>
         <div><b>Real</b><span>真实数据</span></div>
@@ -25,33 +27,111 @@
         <div class="login-title">
           <span>Welcome back</span>
           <h2>登录运营后台</h2>
-          <p>请输入管理员账号继续处理平台业务。</p>
+          <p>{{ mode === 'password' ? '请输入管理员账号继续处理平台业务。' : '使用已绑定管理员的小程序微信确认登录。' }}</p>
         </div>
-        <el-form label-position="top" @submit.prevent>
+
+        <div class="login-switch" role="tablist" aria-label="登录方式">
+          <button :class="{ active: mode === 'password' }" type="button" @click="switchMode('password')">账号密码</button>
+          <button :class="{ active: mode === 'qr' }" type="button" @click="switchMode('qr')">小程序扫码</button>
+        </div>
+
+        <el-form v-if="mode === 'password'" label-position="top" @submit.prevent>
           <el-form-item label="账号">
             <el-input v-model="form.username" placeholder="admin" size="large" />
           </el-form-item>
           <el-form-item label="密码">
-            <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password size="large" @keyup.enter="login" />
+            <el-input
+              v-model="form.password"
+              type="password"
+              placeholder="请输入密码"
+              show-password
+              size="large"
+              @keyup.enter="login"
+            />
           </el-form-item>
           <el-button type="primary" size="large" class="login-submit" :loading="loading" @click="login">登录后台</el-button>
-      </el-form>
+        </el-form>
+
+        <div v-else class="qr-login">
+          <div class="qr-box">
+            <canvas ref="qrCanvas" width="220" height="220" />
+            <div v-if="qrLoading" class="qr-mask">生成中</div>
+            <div v-if="qrStatus === 'SCANNED'" class="qr-mask success">已扫码</div>
+            <div v-if="qrStatus === 'EXPIRED' || qrStatus === 'CANCELED'" class="qr-mask danger">已失效</div>
+          </div>
+
+          <div class="qr-status">
+            <strong>{{ qrStatusText }}</strong>
+            <span>{{ qrHintText }}</span>
+          </div>
+
+          <div v-if="qrUserName" class="qr-user">
+            <el-avatar :src="qrAvatar" :size="34">{{ qrUserName.slice(0, 1) }}</el-avatar>
+            <div>
+              <b>{{ qrUserName }}</b>
+              <p>请在小程序确认是否登录后台</p>
+            </div>
+          </div>
+
+          <div class="qr-actions">
+            <el-button @click="startQrLogin">刷新二维码</el-button>
+            <el-button @click="copyTicket">复制 Ticket</el-button>
+          </div>
+
+          <p class="qr-note">
+            首次扫码会在小程序内要求输入管理员账号密码完成绑定；以后同一微信可直接确认登录。
+          </p>
+        </div>
+
+        <router-link class="setup-entry" to="/setup">首次部署？进入安装向导</router-link>
       </div>
     </section>
   </div>
 </template>
+
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import QRCode from 'qrcode'
+import { cancelAdminQrLogin, createAdminQrLogin, getAdminQrLoginStatus } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
-const loading = ref(false)
-const form = reactive({ username:'admin', password:'' })
 
-async function login(){
+const loading = ref(false)
+const mode = ref<'password' | 'qr'>('password')
+const form = reactive({ username: 'admin', password: '' })
+
+const qrCanvas = ref<HTMLCanvasElement | null>(null)
+const qrLoading = ref(false)
+const qrTicket = ref('')
+const qrStatus = ref<'PENDING' | 'SCANNED' | 'CONFIRMED' | 'EXPIRED' | 'CANCELED' | ''>('')
+const qrMessage = ref('')
+const qrUserName = ref('')
+const qrAvatar = ref('')
+let pollTimer: number | null = null
+
+const qrStatusText = computed(() => {
+  const map: Record<string, string> = {
+    PENDING: '等待小程序扫码',
+    SCANNED: '已扫码，请在手机确认',
+    CONFIRMED: '已确认，正在进入后台',
+    EXPIRED: '二维码已过期',
+    CANCELED: '本次扫码已取消'
+  }
+  return map[qrStatus.value] || '正在准备二维码'
+})
+
+const qrHintText = computed(() => {
+  if (qrMessage.value) return qrMessage.value
+  if (qrStatus.value === 'SCANNED') return '手机上确认后，电脑端会自动进入后台'
+  if (qrStatus.value === 'EXPIRED') return '请刷新二维码后重新扫码'
+  return '打开小程序或微信扫一扫，扫描二维码完成登录'
+})
+
+async function login() {
   if (!form.username || !form.password) {
     ElMessage.warning('请输入账号和密码')
     return
@@ -65,7 +145,87 @@ async function login(){
     loading.value = false
   }
 }
+
+async function switchMode(nextMode: 'password' | 'qr') {
+  mode.value = nextMode
+  if (nextMode === 'qr') {
+    await startQrLogin()
+  } else {
+    stopPolling(true)
+  }
+}
+
+async function startQrLogin() {
+  stopPolling(true)
+  qrLoading.value = true
+  qrStatus.value = ''
+  qrMessage.value = ''
+  qrUserName.value = ''
+  qrAvatar.value = ''
+  try {
+    const data: any = await createAdminQrLogin()
+    qrTicket.value = data.ticket
+    qrStatus.value = data.status || 'PENDING'
+    qrMessage.value = data.message || ''
+    await nextTick()
+    if (qrCanvas.value) {
+      await QRCode.toCanvas(qrCanvas.value, data.qrcodeText || data.scanUrl || data.scanPath || data.ticket, {
+        width: 220,
+        margin: 1,
+        color: {
+          dark: '#101827',
+          light: '#ffffff'
+        }
+      })
+    }
+    pollTimer = window.setInterval(pollQrStatus, 1800)
+    await pollQrStatus()
+  } finally {
+    qrLoading.value = false
+  }
+}
+
+async function pollQrStatus() {
+  if (!qrTicket.value) return
+  const data: any = await getAdminQrLoginStatus(qrTicket.value)
+  qrStatus.value = data.status || qrStatus.value
+  qrMessage.value = data.message || ''
+  qrUserName.value = data.nickname || qrUserName.value
+  qrAvatar.value = data.avatar || qrAvatar.value
+
+  if (data.status === 'CONFIRMED') {
+    stopPolling(false)
+    auth.applyLoginPayload(data.login || data)
+    ElMessage.success('扫码登录成功')
+    router.push('/dashboard')
+  }
+  if (data.status === 'EXPIRED' || data.status === 'CANCELED') {
+    stopPolling(false)
+  }
+}
+
+function stopPolling(cancelTicket = false) {
+  if (pollTimer) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+  if (cancelTicket && qrTicket.value && qrStatus.value && !['CONFIRMED', 'EXPIRED', 'CANCELED'].includes(qrStatus.value)) {
+    cancelAdminQrLogin(qrTicket.value).catch(() => undefined)
+  }
+}
+
+async function copyTicket() {
+  if (!qrTicket.value) {
+    ElMessage.warning('请先生成二维码')
+    return
+  }
+  await navigator.clipboard.writeText(qrTicket.value)
+  ElMessage.success('Ticket 已复制，可用于开发工具手动测试')
+}
+
+onBeforeUnmount(() => stopPolling(true))
 </script>
+
 <style scoped>
 .login-page {
   min-height: 100vh;
@@ -208,7 +368,7 @@ async function login(){
 }
 
 .login-card {
-  width: min(440px, 100%);
+  width: min(460px, 100%);
   padding: 34px;
   border-radius: 22px;
   background: #fff;
@@ -230,14 +390,155 @@ async function login(){
 }
 
 .login-title p {
-  margin: 8px 0 26px;
+  margin: 8px 0 22px;
   color: #64748b;
   font-weight: 650;
+}
+
+.login-switch {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid #e3e9f2;
+  border-radius: 14px;
+  background: #f7faff;
+  margin-bottom: 22px;
+}
+
+.login-switch button {
+  height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #64748b;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.login-switch button.active {
+  background: #fff;
+  color: #2563eb;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .08);
 }
 
 .login-submit {
   width: 100%;
   margin-top: 10px;
+}
+
+.qr-login {
+  text-align: center;
+}
+
+.qr-box {
+  position: relative;
+  width: 236px;
+  height: 236px;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  border: 1px solid #e3e9f2;
+  background: #fff;
+  box-shadow: inset 0 0 0 8px #f6f9ff;
+}
+
+.qr-box canvas {
+  width: 220px;
+  height: 220px;
+}
+
+.qr-mask {
+  position: absolute;
+  inset: 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .88);
+  color: #2563eb;
+  font-weight: 950;
+}
+
+.qr-mask.success {
+  color: #059669;
+}
+
+.qr-mask.danger {
+  color: #dc2626;
+}
+
+.qr-status {
+  margin: 16px 0 0;
+}
+
+.qr-status strong,
+.qr-status span {
+  display: block;
+}
+
+.qr-status strong {
+  color: #172033;
+  font-size: 17px;
+}
+
+.qr-status span {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.qr-user {
+  margin: 16px 0 0;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  border-radius: 16px;
+  background: #f7faff;
+  border: 1px solid #e3e9f2;
+}
+
+.qr-user b {
+  display: block;
+  color: #172033;
+  font-size: 14px;
+}
+
+.qr-user p {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.qr-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.qr-note {
+  margin: 14px 0 0;
+  color: #8794aa;
+  line-height: 1.65;
+  font-size: 12px;
+}
+
+.setup-entry {
+  display: block;
+  margin-top: 18px;
+  text-align: center;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.setup-entry:hover {
+  color: #2563eb;
 }
 
 @media (max-width: 960px) {

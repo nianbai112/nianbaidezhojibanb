@@ -383,14 +383,28 @@
                         <el-input v-model="tab.action" size="small" placeholder="publish（发布按钮用）" />
                       </div>
                     </div>
-                    <div class="field-row">
+                    <div class="field-row tab-icon-upload-grid">
                       <div class="field-item">
-                        <label>未选中图标 iconPath</label>
-                        <el-input v-model="tab.iconPath" size="small" placeholder="/static/tabbar/home.png" />
+                        <label>未选中图标</label>
+                        <ImageUploadBox
+                          v-model="tab.iconPath"
+                          scene="tabbar-icon"
+                          shape="square"
+                          placeholder="上传普通图标"
+                          tip="建议 80x80"
+                          :max-size="1"
+                        />
                       </div>
                       <div class="field-item">
-                        <label>选中图标 selectedIconPath</label>
-                        <el-input v-model="tab.selectedIconPath" size="small" placeholder="/static/tabbar/home-active.png" />
+                        <label>选中图标</label>
+                        <ImageUploadBox
+                          v-model="tab.selectedIconPath"
+                          scene="tabbar-icon-active"
+                          shape="square"
+                          placeholder="上传选中图标"
+                          tip="建议 80x80"
+                          :max-size="1"
+                        />
                       </div>
                     </div>
                     <div class="field-row">
@@ -1368,6 +1382,9 @@ onMounted(loadRegions)
   font-size: 11px;
   color: #64748b;
   font-weight: 700;
+}
+.tab-icon-upload-grid {
+  align-items: flex-start;
 }
 .empty-tabs {
   text-align: center;

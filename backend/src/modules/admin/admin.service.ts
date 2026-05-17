@@ -850,15 +850,21 @@ export class AdminService {
       if (lastLoginStart) where.lastLoginAt.gte = new Date(lastLoginStart);
       if (lastLoginEnd) where.lastLoginAt.lte = new Date(`${lastLoginEnd}T23:59:59.999Z`);
     }
-    if (status)
-      where.status =
-        status === "active"
-          ? "ACTIVE"
-          : status === "banned"
-            ? "BANNED"
-            : status === "disabled"
-              ? "INACTIVE"
-              : status.toUpperCase();
+    if (status) {
+      const normalizedStatus = String(status).toLowerCase();
+      if (["punished", "blacklist", "penalty"].includes(normalizedStatus)) {
+        and.push({ OR: [{ status: "BANNED" }, { status: "INACTIVE" }] });
+      } else {
+        where.status =
+          normalizedStatus === "active"
+            ? "ACTIVE"
+            : normalizedStatus === "banned"
+              ? "BANNED"
+              : normalizedStatus === "disabled" || normalizedStatus === "inactive"
+                ? "INACTIVE"
+                : String(status).toUpperCase();
+      }
+    }
     if (userType) {
       if (userType === "robot" || userType === "4") {
         where.userType = 4;
@@ -3969,16 +3975,17 @@ export class AdminService {
   async testStorageConfig(dto: any) {
     const saved = (await this.getConfig("storage")) as Record<string, any>;
     const config = { ...(saved || {}), ...(dto || {}) };
+    const provider = String(config.provider || saved?.provider || "cos");
+    const providerConfig = { ...((saved || {})[provider] || {}), ...((dto || {})[provider] || {}), ...(dto || {}) };
     const secretId = String(
-      config.secretId || config.accessKey || config.COS_SECRET_ID || "",
+      providerConfig.secretId || providerConfig.accessKey || config.secretId || config.accessKey || config.COS_SECRET_ID || "",
     ).trim();
     const secretKey = String(
-      config.secretKey || config.COS_SECRET_KEY || "",
+      providerConfig.secretKey || config.secretKey || config.COS_SECRET_KEY || "",
     ).trim();
-    const bucket = String(config.bucket || config.COS_BUCKET || "").trim();
-    const region = String(
-      config.region || config.endpoint || config.COS_REGION || "",
-    ).trim();
+    const bucket = String(providerConfig.bucket || config.bucket || config.COS_BUCKET || "").trim();
+    const regionRaw = String(providerConfig.region || config.region || config.COS_REGION || "").trim();
+    const region = regionRaw.match(/cos\.([a-z0-9-]+)\.myqcloud\.com/i)?.[1] || regionRaw;
 
     const missing: string[] = [];
     if (!secretId) missing.push("SecretId");
@@ -3988,6 +3995,11 @@ export class AdminService {
     if (missing.length) {
       throw new BadRequestException(
         `COS 配置不完整，缺少：${missing.join("、")}`,
+      );
+    }
+    if (/^https?:\/\//i.test(region) || region.includes(".myqcloud.com")) {
+      throw new BadRequestException(
+        "所属城市/地域填写错误：这里请选择 ap-chongqing 这类地域代码，不要填写 COS 访问域名",
       );
     }
 

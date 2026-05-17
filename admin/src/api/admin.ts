@@ -443,13 +443,19 @@ export function exportRows(filename: string, rows: any[]) {
   URL.revokeObjectURL(url)
 }
 
-export async function loginAdmin(data: { username: string; password: string }) {
-  const res: any = await request.post('/auth/admin/login', data)
+export function persistAdminLoginPayload(payload: any) {
+  const res = payload?.login || payload?.data?.login || payload?.data || payload
   const token = res?.token || res?.accessToken || res?.data?.token || res?.data?.accessToken
   if (token) {
     localStorage.setItem('LM_ADMIN_TOKEN', token)
     localStorage.setItem('admin_token', token)
   }
+  return res
+}
+
+export async function loginAdmin(data: { username: string; password: string }) {
+  const res: any = await request.post('/auth/admin/login', data)
+  persistAdminLoginPayload(res)
   return res
 }
 
@@ -459,6 +465,18 @@ export async function logoutAdmin() {
 
 export async function getProfile() {
   return request.get('/auth/admin/profile')
+}
+
+export async function createAdminQrLogin() {
+  return request.post('/auth/admin/qr/create')
+}
+
+export async function getAdminQrLoginStatus(ticket: string) {
+  return request.get('/auth/admin/qr/status', { params: { ticket } })
+}
+
+export async function cancelAdminQrLogin(ticket: string) {
+  return request.post('/auth/admin/qr/cancel', { ticket })
 }
 
 export async function fetchDashboard() {

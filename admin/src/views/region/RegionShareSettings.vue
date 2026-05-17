@@ -50,11 +50,14 @@
               <div class="form-tip">用户点击分享卡片后跳转的页面路径，可带参数</div>
             </el-form-item>
             <el-form-item label="分享图片" class="span-2">
-              <el-input v-model="form.imageUrl" placeholder="分享卡片封面图片 URL" />
-              <div class="form-tip">建议尺寸 5:4，如 500x400 像素</div>
-              <div v-if="form.imageUrl" class="img-preview wide">
-                <img :src="form.imageUrl" alt="分享图片" />
-              </div>
+              <ImageUploadBox
+                v-model="form.imageUrl"
+                scene="share-image"
+                shape="wide"
+                placeholder="上传分享封面"
+                tip="建议 500x400，可替换和删除"
+                :max-size="2"
+              />
             </el-form-item>
             <el-form-item label="分享描述" class="span-2">
               <el-input v-model="form.description" type="textarea" :rows="3" placeholder="分享给朋友时显示的描述文案" maxlength="50" show-word-limit />
@@ -76,11 +79,14 @@
               <div class="form-tip">发朋友圈时显示的标题</div>
             </el-form-item>
             <el-form-item label="朋友圈图片" class="span-2">
-              <el-input v-model="form.momentsImageUrl" placeholder="朋友圈分享图片 URL" />
-              <div class="form-tip">建议尺寸 1:1，如 500x500 像素</div>
-              <div v-if="form.momentsImageUrl" class="img-preview wide">
-                <img :src="form.momentsImageUrl" alt="朋友圈图片" />
-              </div>
+              <ImageUploadBox
+                v-model="form.momentsImageUrl"
+                scene="moments-image"
+                shape="square"
+                placeholder="上传朋友圈图片"
+                tip="建议 500x500，可替换和删除"
+                :max-size="2"
+              />
             </el-form-item>
             <el-form-item label="朋友圈描述" class="span-2">
               <el-input v-model="form.momentsDescription" type="textarea" :rows="3" placeholder="朋友圈分享的描述文案" maxlength="50" show-word-limit />
@@ -133,6 +139,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import { Check, Picture } from '@element-plus/icons-vue'
 import { fetchRegions, fetchRegionDetail, fetchRegionShareSetting, saveRegionShareSetting } from '@/api/admin'
 

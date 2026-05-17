@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request, Response } from 'express';
@@ -86,6 +86,60 @@ export class AuthController {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     const ua = (req.headers['user-agent'] as string) || '';
     return this.authService.adminLogin(dto, ip, ua);
+  }
+
+  @Post('auth/admin/qr/create')
+  @ApiOperation({ summary: '创建后台扫码登录二维码票据' })
+  async createAdminQrLogin(@Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.createAdminQrLoginSession(ip, ua);
+  }
+
+  @Get('auth/admin/qr/status')
+  @ApiOperation({ summary: '查询后台扫码登录状态' })
+  async getAdminQrLoginStatus(@Query('ticket') ticket: string, @Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.getAdminQrLoginStatus(ticket, ip, ua);
+  }
+
+  @Post('auth/admin/qr/cancel')
+  @ApiOperation({ summary: '取消后台扫码登录' })
+  async cancelAdminQrLogin(@Body() dto: { ticket: string }) {
+    return this.authService.cancelAdminQrLogin(dto.ticket);
+  }
+
+  @Post('auth/admin/qr/scan')
+  @ApiOperation({ summary: '小程序扫码后台登录二维码' })
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  async scanAdminQrLogin(@Body() dto: { ticket: string }, @CurrentUser('sub') userId: string, @Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.scanAdminQrLogin(dto.ticket, userId, ip, ua);
+  }
+
+  @Post('auth/admin/qr/confirm')
+  @ApiOperation({ summary: '小程序确认后台扫码登录' })
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  async confirmAdminQrLogin(
+    @Body() dto: { ticket: string; username?: string; password?: string },
+    @CurrentUser('sub') userId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.confirmAdminQrLogin(dto, userId, ip, ua);
+  }
+
+  @Post('auth/admin/qr/reject')
+  @ApiOperation({ summary: '小程序取消后台扫码登录' })
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  async rejectAdminQrLogin(@Body() dto: { ticket: string }, @CurrentUser('sub') userId: string) {
+    return this.authService.rejectAdminQrLogin(dto.ticket, userId);
   }
 
   @Post('admin/refresh')
