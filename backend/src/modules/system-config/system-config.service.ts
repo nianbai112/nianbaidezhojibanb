@@ -256,6 +256,11 @@ export class SystemConfigService {
         next[key] = this.mergeSecretValue(base[key], next[key]);
       }
     }
+    for (const key of Object.keys(base)) {
+      if (!(key in next) && SECRET_PATTERN.test(key)) {
+        next[key] = base[key] ?? '';
+      }
+    }
     return next;
   }
 

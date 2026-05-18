@@ -1394,32 +1394,6 @@ export class AdminController {
     return this.adminService.loginLogs(q);
   }
 
-  @Get("admin/config/storage")
-  @RequirePermission("system:config")
-  @UseGuards(AdminPermissionGuard)
-  storageConfig() {
-    return this.adminService.getConfig("storage");
-  }
-
-  @Put("admin/config/storage")
-  @RequirePermission("system:config")
-  @UseGuards(AdminPermissionGuard)
-  updateStorageConfig(
-    @Body() dto: any,
-    @CurrentUser("sub") operatorId: string,
-    @Req() req: Request,
-  ) {
-    return this.adminService.setConfig("storage", dto, operatorId, req.ip);
-  }
-
-  @Post("admin/config/storage/test")
-  @RequirePermission("system:config")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "测试腾讯云 COS 存储桶连接" })
-  testStorageConfig(@Body() dto: any) {
-    return this.adminService.testStorageConfig(dto);
-  }
-
   @Get("admin/config/wechat-pay")
   @RequirePermission("system:config")
   @UseGuards(AdminPermissionGuard)
