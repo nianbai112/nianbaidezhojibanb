@@ -13,6 +13,10 @@
         <el-option label="在线" value="online" />
         <el-option label="忙碌" value="busy" />
       </el-select>
+      <el-select v-model="filters.riderType" placeholder="骑手类型" clearable style="width: 120px" @change="loadData">
+        <el-option label="官方骑手" value="official" />
+        <el-option label="兼职骑手" value="part_time" />
+      </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
     </div>
@@ -27,6 +31,18 @@
       <el-table-column prop="status" label="在线状态" width="90">
         <template #default="{ row }">
           <el-tag :type="statusTypeMap[row.status]" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="riderType" label="类型" width="120">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.riderType === 'official'"
+            :disabled="row.verifyStatus !== 'approved'"
+            active-text="官方"
+            inactive-text="兼职"
+            inline-prompt
+            @change="(val: boolean) => toggleOfficial(row, val)"
+          />
         </template>
       </el-table-column>
       <el-table-column prop="rating" label="评分" width="80" />
@@ -69,7 +85,7 @@ const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = reactive({ keyword: '', auditStatus: '', status: '' })
+const filters = reactive({ keyword: '', auditStatus: '', status: '', riderType: '' })
 
 const loadData = async () => {
   loading.value = true
@@ -81,8 +97,26 @@ const loadData = async () => {
 }
 
 const resetFilters = () => {
-  Object.assign(filters, { keyword: '', auditStatus: '', status: '' })
+  Object.assign(filters, { keyword: '', auditStatus: '', status: '', riderType: '' })
   loadData()
+}
+
+const toggleOfficial = async (row: any, next: boolean) => {
+  const riderType = next ? 'official' : 'part_time'
+  try {
+    await ElMessageBox.confirm(
+      next
+        ? `将「${row.realName}」设为官方骑手？开通后可登录官方骑手 App 接单。`
+        : `取消「${row.realName}」的官方骑手资格？其骑手 App 将立即无法使用。`,
+      '确认',
+      { type: 'warning' },
+    )
+    await request.put(`/admin/riders/${row.id}/type`, { rider_type: riderType })
+    ElMessage.success(next ? '已设为官方骑手' : '已取消官方资格')
+    loadData()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '操作失败')
+  }
 }
 
 const audit = async (row: any, status: string) => {

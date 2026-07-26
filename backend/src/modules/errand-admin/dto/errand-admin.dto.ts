@@ -23,6 +23,10 @@ export class RiderQueryDto {
   @IsOptional()
   auditStatus?: string
 
+  @ApiProperty({ required: false, description: 'official | part_time' })
+  @IsOptional()
+  riderType?: string
+
   @ApiProperty({ required: false })
   @IsOptional()
   status?: string

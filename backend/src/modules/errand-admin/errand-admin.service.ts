@@ -114,11 +114,12 @@ export class ErrandAdminService {
   // ==================== Rider ====================
 
   async getRiders(query: RiderQueryDto) {
-    const { page = 1, pageSize = 20, keyword, auditStatus, status, regionId } = query
+    const { page = 1, pageSize = 20, keyword, auditStatus, status, regionId, riderType } = query
     const where: any = {}
     if (auditStatus) where.verifyStatus = auditStatus
     if (status) where.status = this.normalizeRiderStatus(status)
     if (regionId) where.regionId = regionId
+    if (riderType) where.riderType = riderType
     if (keyword) {
       where.OR = [
         { realName: { contains: keyword, mode: 'insensitive' } },
