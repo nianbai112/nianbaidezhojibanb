@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomInt } from 'crypto';
 import { PrismaService } from '../../common/services/prisma.service';
 import { NotifyService } from '../notify/notify.service';
 import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
@@ -382,7 +383,8 @@ export class CommentService {
     const winners: Array<{ lotteryId: string; userId: string; prizeId: string }> = [];
     for (const prize of lottery.prizes) {
       for (let i = 0; i < prize.count && pool.length; i += 1) {
-        const index = Math.floor(Math.random() * pool.length);
+        // 抽奖属安全敏感场景，使用密码学安全随机数
+        const index = randomInt(pool.length);
         const selected = pool[index];
         winners.push({ lotteryId: lottery.id, userId: selected.userId, prizeId: prize.id });
         if (!lottery.allowDuplicate) pool.splice(index, 1);

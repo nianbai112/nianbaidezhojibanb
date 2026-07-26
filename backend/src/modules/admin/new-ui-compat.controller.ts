@@ -12,6 +12,7 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { Request } from "express";
+import * as os from "os";
 import { AdminService } from "./admin.service";
 import { FinanceAdminService } from "../finance-admin/finance-admin.service";
 import { PrismaService } from "../../common/services/prisma.service";
@@ -73,7 +74,6 @@ export class NewUiCompatController {
   @Get("status")
   @ApiOperation({ summary: "系统状态（新后台兼容）" })
   status() {
-    const os = require("os");
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = totalMem - freeMem;
@@ -1747,7 +1747,8 @@ export class NewUiCompatController {
       const clause = ` AND "schoolName" ILIKE $1`;
       countSql += clause;
       listSql += clause;
-      params.push(`%${String(keyword).replace(/%/g, "\\%")}%`);
+      // 转义 LIKE 通配符及转义符本身（\ % _），避免不完整转义
+      params.push(`%${String(keyword).replace(/[\\%_]/g, (c) => "\\" + c)}%`);
     }
     listSql += ` GROUP BY "schoolName" ORDER BY cnt DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     const [list, total] = await Promise.all([

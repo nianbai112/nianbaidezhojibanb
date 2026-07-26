@@ -254,7 +254,7 @@ function mapRow(moduleKey: string, row: any) {
         status: statusText(row.status),
         createdAt
       })
-    case 'delivery':
+    case 'delivery': {
       const rowUser = row.user || row.User
       const rowRider = row.rider || row.RegionRider
       return withMeta(moduleKey, row, {
@@ -268,6 +268,7 @@ function mapRow(moduleKey: string, row: any) {
         status: statusText(row.status),
         createdAt
       })
+    }
     case 'system':
       return withMeta(moduleKey, row, {
         id: row.id || row.key,

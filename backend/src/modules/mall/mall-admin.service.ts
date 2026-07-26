@@ -150,6 +150,8 @@ export class MallAdminService {
   }
 
   async sortCategories(ids: string[], operatorId?: string, ip?: string) {
+    if (!Array.isArray(ids)) throw new BadRequestException("参数格式错误");
+    if (ids.length > 500) throw new BadRequestException("分类数量超出限制");
     for (let i = 0; i < ids.length; i++) {
       await this.prisma.mallCategory.update({
         where: { id: ids[i] },

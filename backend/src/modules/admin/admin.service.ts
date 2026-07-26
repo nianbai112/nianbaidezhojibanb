@@ -10,6 +10,7 @@ import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
 import { PaymentService } from "../payment/payment.service";
 import * as bcrypt from "bcrypt";
+import { randomInt, randomBytes } from "crypto";
 import * as crypto from "crypto";
 
 @Injectable()
@@ -1020,10 +1021,10 @@ export class AdminService {
       try {
         const suffix = String(Date.now()).slice(-6) + String(i).padStart(3, "0");
         const nickname = `${nicknamePrefix}${suffix}`;
-        const openid = `bot_${regionId}_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 8)}`;
-        const selectedGender = gender === "random" ? genders[Math.floor(Math.random() * 3)] : gender.toUpperCase();
+        const openid = `bot_${regionId}_${Date.now()}_${i}_${randomBytes(4).toString("hex")}`;
+        const selectedGender = gender === "random" ? genders[randomInt(3)] : gender.toUpperCase();
         const avatarUrl = avatarMode === "random"
-          ? avatars[Math.floor(Math.random() * avatars.length)] + openid
+          ? avatars[randomInt(avatars.length)] + openid
           : "";
 
         const user = await this.prisma.user.create({
@@ -1599,13 +1600,23 @@ export class AdminService {
     };
   }
 
+  /** 线性裁剪首尾的 - 和 _（避免 /[-_]+$/ 形式正则的多项式回溯） */
+  private trimEdgeSeparators(value: string) {
+    let start = 0;
+    let end = value.length;
+    while (start < end && (value[start] === "-" || value[start] === "_")) start++;
+    while (end > start && (value[end - 1] === "-" || value[end - 1] === "_")) end--;
+    return value.slice(start, end);
+  }
+
   private normalizeRegionCode(value: any) {
-    const code = String(value || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+    const code = this.trimEdgeSeparators(
+      String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9_-]/g, ""),
+    );
     if (!code)
       return `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     if (code.length > 48) return code.slice(0, 48);
@@ -1613,11 +1624,12 @@ export class AdminService {
   }
 
   private generateRegionCode(name: string) {
-    const ascii = name
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+    const ascii = this.trimEdgeSeparators(
+      name
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9_-]/g, ""),
+    );
     return (
       ascii || `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     );
@@ -3997,7 +4009,7 @@ export class AdminService {
         `COS 配置不完整，缺少：${missing.join("、")}`,
       );
     }
-    if (/^https?:\/\//i.test(region) || region.includes(".myqcloud.com")) {
+    if (/^https?:\/\//i.test(region) || /\.myqcloud\.com(\/|$)/i.test(region)) {
       throw new BadRequestException(
         "所属城市/地域填写错误：这里请选择 ap-chongqing 这类地域代码，不要填写 COS 访问域名",
       );

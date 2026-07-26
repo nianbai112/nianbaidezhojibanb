@@ -689,8 +689,8 @@ export class FinanceAdminService {
       });
       if (existing) continue;
 
-      let rewardAmount = 0;
-      let penaltyAmount = 0;
+      const rewardAmount = 0;
+      const penaltyAmount = 0;
 
       const settlementNo = `RS_${Date.now()}_${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
       await this.prisma.riderSettlement.create({

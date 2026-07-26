@@ -12,9 +12,15 @@ import * as nodemailer from 'nodemailer';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as https from 'https';
 
 const SECRET_MASK = '******';
 const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|pass$/i;
+
+const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string),
+  );
 
 @Injectable()
 export class SystemAdminService {
@@ -59,7 +65,9 @@ export class SystemAdminService {
         from: cfg.fromEmail || cfg.user,
         to: dto.toEmail,
         subject: dto.subject || '测试邮件',
-        html: dto.content || `<p>这是一封测试邮件</p>${cfg.emailSignature || ''}`,
+        html: dto.content
+          ? `<p>${escapeHtml(String(dto.content))}</p>${cfg.emailSignature || ''}`
+          : `<p>这是一封测试邮件</p>${cfg.emailSignature || ''}`,
       });
       return { success: true, messageId: info.messageId, response: info.response };
     } catch (e: any) {
@@ -434,12 +442,18 @@ export class SystemAdminService {
 
   async extractArticleImages(url: string) {
     try {
-      const https = require('https');
-      const http = require('http');
-      const mod = url.startsWith('https') ? https : http;
-
+      // 该功能仅用于提取微信公众号文章图片，白名单限定目标域名，防止 SSRF
+      let parsed: URL;
+      try {
+        parsed = new URL(String(url || ''));
+      } catch {
+        throw new BadRequestException('链接格式错误');
+      }
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'mp.weixin.qq.com') {
+        throw new BadRequestException('仅支持微信公众号文章链接（https://mp.weixin.qq.com/...）');
+      }
       return new Promise((resolve, reject) => {
-        mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res: any) => {
+        https.get(parsed.href, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res: any) => {
           let data = '';
           res.on('data', (chunk: string) => data += chunk);
           res.on('end', () => {
@@ -455,6 +469,7 @@ export class SystemAdminService {
         }).on('error', reject);
       });
     } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
       throw new BadRequestException('获取文章失败: ' + e.message);
     }
   }
