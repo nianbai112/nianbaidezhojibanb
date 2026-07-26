@@ -158,6 +158,14 @@ export class ErrandAdminService {
     return this.prisma.regionRider.update({ where: { id }, data: { status: this.normalizeRiderStatus(dto.status) } })
   }
 
+  async updateRiderType(id: string, dto: { rider_type?: string; riderType?: string }) {
+    const riderType = String(dto?.rider_type ?? dto?.riderType ?? '')
+    if (!['official', 'part_time'].includes(riderType)) {
+      throw new BadRequestException('rider_type 仅支持 official / part_time')
+    }
+    return this.prisma.regionRider.update({ where: { id }, data: { riderType } })
+  }
+
   async getRiderRecords(id: string, query: any) {
     const { page = 1, pageSize = 20 } = query
     const where: any = { riderId: id }

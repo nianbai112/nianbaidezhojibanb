@@ -49,6 +49,13 @@ export class ErrandAdminController {
     return this.service.updateRiderStatus(id, dto)
   }
 
+  @Put('admin/riders/:id/type')
+  @RequirePermission('rider:audit')
+  @ApiOperation({ summary: '设置骑手类型（official=官方骑手可用App）' })
+  updateRiderType(@Param('id') id: string, @Body() dto: { rider_type?: string; riderType?: string }) {
+    return this.service.updateRiderType(id, dto)
+  }
+
   @Get('admin/riders/:id/records')
   @RequirePermission('rider:view')
   @ApiOperation({ summary: '骑手配送记录' })

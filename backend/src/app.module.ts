@@ -19,6 +19,7 @@ import { CircleModule } from './modules/circle/circle.module';
 import { ShopModule } from './modules/shop/shop.module';
 import { DeliveryModule } from './modules/delivery/delivery.module';
 import { ErrandModule } from './modules/errand/errand.module';
+import { RiderAppModule } from './modules/rider-app/rider-app.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { FinanceAdminModule } from './modules/finance-admin/finance-admin.module';
 import { CouponAdminModule } from './modules/coupon-admin/coupon-admin.module';
@@ -164,6 +165,7 @@ const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LI
     ShopModule,
     DeliveryModule,
     ErrandModule,
+    RiderAppModule,
     FinanceModule,
     FinanceAdminModule,
     CouponAdminModule,

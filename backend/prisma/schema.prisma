@@ -3519,6 +3519,8 @@ model RegionRider {
   phone             String
   status            String    @default("offline") // offline, online, busy
   verifyStatus      String    @default("pending")
+  riderType         String    @default("part_time") // part_time, official
+  riderBio          String?
   rating            Float     @default(5)
   balance           Decimal   @default(0) @db.Decimal(10, 2)
   totalOrders       Int       @default(0)

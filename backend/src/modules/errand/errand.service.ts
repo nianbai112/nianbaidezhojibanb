@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { WsNativeGateway } from '../websocket/ws-native.gateway';
 import {
   ERRAND_EXTENDED_CONFIG_GROUP,
   buildMiniErrandConfig,
@@ -14,7 +15,70 @@ import {
 
 @Injectable()
 export class ErrandService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly wsNative?: WsNativeGateway,
+  ) {}
+
+  /** 骑手端订单视图（snake_case 字段，兼容骑手 App 展示） */
+  private toRiderOrder(row: any, user?: any) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      order_no: row.orderNo,
+      title: row.title,
+      status: row.status,
+      type: row.type,
+      description: row.description || '',
+      delivery_fee: row.payAmount,
+      pay_amount: row.payAmount,
+      tip: row.tip,
+      pickup_address: row.pickupAddress,
+      pickup_contact: row.pickupContact || '',
+      pickup_phone: row.pickupPhone || '',
+      delivery_address: row.deliverAddress,
+      delivery_contact: row.deliverContact || '',
+      delivery_phone: row.deliverPhone || '',
+      user_id: row.userId,
+      rider_id: row.riderId || '',
+      region_id: row.regionId || '',
+      created_at: row.createdAt,
+      accept_time: row.acceptTime,
+      pickup_time: row.pickupTime,
+      deliver_time: row.deliverTime,
+      complete_time: row.completeTime,
+      user: user || row.User || null,
+      remark: row.remark || '',
+    };
+  }
+
+  /** 新订单进池 / 退回池时，实时推送给该区域已订阅的骑手 */
+  private notifyRegionNewOrder(order: any) {
+    if (!this.wsNative || !order?.regionId) return;
+    try {
+      this.wsNative.pushToRegion(order.regionId, {
+        event: 'new_errand_order',
+        type: 'new_errand_order',
+        data: this.toRiderOrder(order),
+      });
+    } catch {
+      // 推送失败不影响主流程
+    }
+  }
+
+  /** 订单状态变化时推送给下单用户 */
+  private notifyUserOrderUpdate(order: any) {
+    if (!this.wsNative || !order?.userId) return;
+    try {
+      this.wsNative.pushToUser(order.userId, {
+        event: 'orderUpdate',
+        type: 'orderUpdate',
+        data: { order_id: order.id, order_no: order.orderNo, status: order.status, kind: 'errand' },
+      });
+    } catch {
+      // 推送失败不影响主流程
+    }
+  }
 
   private normalizeServiceType(serviceType?: string) {
     const value = String(serviceType || '').trim()
@@ -291,10 +355,12 @@ export class ErrandService {
     if (!order) throw new NotFoundException('订单不存在');
     if (order.userId !== userId) throw new BadRequestException('无权支付该订单');
     if (order.status !== 'pending_pay') throw new BadRequestException('订单状态不允许支付');
-    return this.prisma.errandOrder.update({
+    const paid = await this.prisma.errandOrder.update({
       where: { id: orderId },
       data: { status: 'pending_accept', payChannel, payTime: new Date() },
     });
+    this.notifyRegionNewOrder(paid);
+    return paid;
   }
 
   async acceptOrder(orderId: string, userId: string) {
@@ -315,7 +381,9 @@ export class ErrandService {
       }
       throw new BadRequestException('手慢了，订单已被接走或不可接单');
     }
-    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    const accepted = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    this.notifyUserOrderUpdate(accepted);
+    return accepted;
   }
 
   async updateRiderStatus(orderId: string, userId: string, dto: any) {
@@ -345,7 +413,36 @@ export class ErrandService {
       }
       throw new BadRequestException('订单当前状态不允许该操作');
     }
-    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    const updated = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    // 完成订单：配送费入账到骑手余额（条件更新保证只入账一次）
+    if (status === 'completed' && updated) {
+      await this.prisma.regionRider.update({
+        where: { userId },
+        data: {
+          balance: { increment: updated.payAmount },
+          totalOrders: { increment: 1 },
+          todayOrders: { increment: 1 },
+        },
+      }).catch(() => undefined);
+    }
+    this.notifyUserOrderUpdate(updated);
+    return updated;
+  }
+
+  /** 骑手端订单详情：本人订单（下单人/骑手）或待接单池内订单可查看 */
+  async getOrderDetailForRider(orderId: string, userId: string) {
+    const order = await this.prisma.errandOrder.findUnique({
+      where: { id: orderId },
+      include: { User: { select: { id: true, nickname: true, avatar: true } } },
+    });
+    if (!order) throw new NotFoundException('订单不存在');
+    const isParty = order.userId === userId || order.riderId === userId;
+    if (!isParty) {
+      if (order.status !== 'pending_accept') throw new BadRequestException('无权查看该订单');
+      const rider = await this.prisma.regionRider.findUnique({ where: { userId } });
+      if (!rider || rider.verifyStatus !== 'approved') throw new BadRequestException('无权查看该订单');
+    }
+    return this.toRiderOrder(order, order.User);
   }
 
   async refundOrder(orderId: string, userId: string, dto: any) {
@@ -550,7 +647,42 @@ export class ErrandService {
   }
 
   async getDeliveryOrdersList(userId: string, query: any) {
-    return this.prisma.errandOrder.findMany({ where: { riderId: userId }, orderBy: { createdAt: 'desc' } });
+    const { status, page = 1, pageSize = 10 } = query || {};
+    const take = Math.min(Number(pageSize) || 10, 50);
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+
+    let where: any;
+    if (status === 'pending_accept' || status === 'awaiting_delivery') {
+      // 待接单池：本区域已支付待接的订单
+      const rider = await this.prisma.regionRider.findUnique({ where: { userId } });
+      if (!rider || rider.verifyStatus !== 'approved' || !rider.regionId) {
+        return { orders: [], total: 0, page: Number(page), pageSize: take };
+      }
+      where = { status: 'pending_accept', regionId: rider.regionId };
+    } else if (status === 'active' || status === 'in_progress_all') {
+      where = { riderId: userId, status: { in: ['accepted', 'in_progress', 'arrived'] } };
+    } else if (status) {
+      where = { riderId: userId, status };
+    } else {
+      where = { riderId: userId };
+    }
+
+    const [rows, total] = await Promise.all([
+      this.prisma.errandOrder.findMany({
+        where,
+        include: { User: { select: { id: true, nickname: true, avatar: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.errandOrder.count({ where }),
+    ]);
+    return {
+      orders: rows.map((row) => this.toRiderOrder(row, row.User)),
+      total,
+      page: Number(page),
+      pageSize: take,
+    };
   }
 
   async updateDeliveryOrder(orderId: string, userId: string, dto: any) {
@@ -564,21 +696,83 @@ export class ErrandService {
       data: { riderId: null, status: 'pending_accept', acceptTime: null, pickupTime: null },
     });
     if (result.count === 0) throw new BadRequestException('订单不存在或当前状态不允许退回');
-    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    const returned = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+    this.notifyRegionNewOrder(returned);
+    this.notifyUserOrderUpdate(returned);
+    return returned;
   }
 
   async getRiderInfo(userId: string) {
-    return this.prisma.regionRider.findUnique({ where: { userId } });
+    const rider = await this.prisma.regionRider.findUnique({ where: { userId } });
+    if (!rider) return null;
+    let regionName = '';
+    if (rider.regionId) {
+      const region = await this.prisma.region.findUnique({
+        where: { id: rider.regionId },
+        select: { name: true },
+      });
+      regionName = region?.name || '';
+    }
+    return {
+      ...rider,
+      region_name: regionName,
+      real_name: rider.realName,
+      rider_bio: rider.riderBio || '',
+      rider_type: rider.riderType,
+      is_official: rider.riderType === 'official',
+      region_id: rider.regionId,
+    };
   }
 
   async updateRiderInfo(userId: string, dto: any) {
-    return this.prisma.regionRider.update({ where: { userId }, data: dto });
+    // 只允许骑手改自己的基础资料和接单状态，防止任意字段写入（如余额）
+    const data: any = {};
+    if (dto?.real_name !== undefined || dto?.realName !== undefined) {
+      data.realName = String(dto.real_name ?? dto.realName ?? '').trim().slice(0, 32);
+    }
+    if (dto?.phone !== undefined) {
+      data.phone = String(dto.phone || '').trim().slice(0, 20);
+    }
+    if (dto?.rider_bio !== undefined || dto?.riderBio !== undefined) {
+      data.riderBio = String(dto.rider_bio ?? dto.riderBio ?? '').slice(0, 200);
+    }
+    if (dto?.status !== undefined) {
+      const status = String(dto.status);
+      if (!['online', 'offline', 'busy'].includes(status)) {
+        throw new BadRequestException('不支持的接单状态');
+      }
+      data.status = status;
+    }
+    if (!Object.keys(data).length) return this.getRiderInfo(userId);
+    await this.prisma.regionRider.update({ where: { userId }, data });
+    return this.getRiderInfo(userId);
   }
 
   async getOrderStats(userId: string) {
-    const total = await this.prisma.errandOrder.count({ where: { riderId: userId } });
-    const today = await this.prisma.errandOrder.count({ where: { riderId: userId, createdAt: { gte: new Date(new Date().setHours(0,0,0,0)) } } });
-    return { total, today };
+    const startOfDay = new Date(new Date().setHours(0, 0, 0, 0));
+    const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const [total, today, month, todayIncome, monthIncome] = await Promise.all([
+      this.prisma.errandOrder.count({ where: { riderId: userId, status: 'completed' } }),
+      this.prisma.errandOrder.count({ where: { riderId: userId, status: 'completed', completeTime: { gte: startOfDay } } }),
+      this.prisma.errandOrder.count({ where: { riderId: userId, status: 'completed', completeTime: { gte: startOfMonth } } }),
+      this.prisma.errandOrder.aggregate({
+        where: { riderId: userId, status: 'completed', completeTime: { gte: startOfDay } },
+        _sum: { payAmount: true },
+      }),
+      this.prisma.errandOrder.aggregate({
+        where: { riderId: userId, status: 'completed', completeTime: { gte: startOfMonth } },
+        _sum: { payAmount: true },
+      }),
+    ]);
+    return {
+      total,
+      today,
+      month,
+      today_orders: today,
+      month_orders: month,
+      today_income: Number(todayIncome._sum.payAmount || 0),
+      month_income: Number(monthIncome._sum.payAmount || 0),
+    };
   }
 
   async applyRider(userId: string, dto: any) {

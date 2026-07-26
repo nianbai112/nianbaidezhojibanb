@@ -17,6 +17,7 @@ export interface Response<T> {
 /** 小程序路径列表——这些路径不包装 { code, message, data } */
 const MINI_PROGRAM_PREFIXES = [
   "/wx-auth/",
+  "/rider-app/",
   "/regions",
   "/regions/",
   "/schools",

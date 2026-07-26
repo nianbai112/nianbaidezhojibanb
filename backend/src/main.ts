@@ -180,6 +180,7 @@ async function bootstrap() {
     exclude: [
       // 小程序接口保持根路径
       "wx-auth/(.*)",
+      "rider-app/(.*)",
       "regions/(.*)",
       "regions",
       "schools/(.*)",
