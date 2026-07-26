@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import {
+  findOrCreatePrivateConversation,
+  findPrivateConversation,
+} from '../../common/utils/private-conversation.util';
 
 @Injectable()
 export class MessageService {
@@ -26,34 +30,19 @@ export class MessageService {
   }
 
   private async findPrivateConversation(userId: string, targetId: string) {
-    return this.prisma.conversation.findFirst({
-      where: {
-        type: 'private',
-        AND: [
-          { members: { some: { userId } } },
-          { members: { some: { userId: targetId } } },
-        ],
-      },
-    });
+    return findPrivateConversation(this.prisma, userId, targetId);
   }
 
   private async findOrCreateOfficialConversation(userId: string) {
     const official = await this.getOfficialUser();
-    let conversation = await this.findPrivateConversation(userId, official.id);
-    if (conversation) return { official, conversation };
-
-    conversation = await this.prisma.conversation.create({
-      data: {
-        type: 'private',
+    const conversation = await findOrCreatePrivateConversation(this.prisma, userId, official.id, {
+      conversationData: {
         title: '官方推送消息',
         avatar: official.avatar || '/static/logo.jpg',
         lastMessage: '有问题可以直接联系官方',
-        members: {
-          create: [
-            { userId },
-            { userId: official.id, role: 'admin', nickName: '官方推送消息' },
-          ],
-        },
+      },
+      memberExtras: {
+        [official.id]: { role: 'admin', nickName: '官方推送消息' },
       },
     });
     return { official, conversation };

@@ -15,15 +15,13 @@ import { Logger } from '@nestjs/common';
 import { RedisService } from '../../common/services/redis.service';
 import { PrismaService } from '../../common/services/prisma.service';
 
-// =============================================================================
-// 常量
-// =============================================================================
-const MAX_MESSAGE_LENGTH = 5000; // 单条消息最大字符数
-const RATE_LIMIT_WINDOW_SEC = 10; // 限流窗口（秒）
-const RATE_LIMIT_MAX_MESSAGES = 10; // 窗口内最大消息数
-const RATE_LIMIT_ADMIN_MAX = 30; // 管理员窗口内最大消息数
-const SENSITIVE_WORD_PATTERN =
-  /(赌博|赌场|色情|裸聊|贷款|办证|刻章|发票|枪|毒|嫖)/i;
+import {
+  MAX_MESSAGE_LENGTH,
+  RATE_LIMIT_WINDOW_SEC,
+  RATE_LIMIT_MAX_MESSAGES,
+  RATE_LIMIT_ADMIN_MAX,
+  SENSITIVE_WORD_PATTERN,
+} from './ws.constants';
 
 // =============================================================================
 // Gateway
@@ -226,15 +224,16 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
         throw new WsException(`消息长度不能超过 ${MAX_MESSAGE_LENGTH} 字符`);
       }
 
-      // ── 2. 频率限制 ──
+      // ── 2. 频率限制（INCR 后判断，保证并发下计数原子；仅首次设置过期避免窗口被无限顺延）──
       const rateLimitKey = `ws:rate:${userId}`;
-      const msgCount = parseInt((await this.redis.get(rateLimitKey)) || '0', 10);
       const maxMsg = client.data.isAdmin ? RATE_LIMIT_ADMIN_MAX : RATE_LIMIT_MAX_MESSAGES;
-      if (msgCount >= maxMsg) {
+      const msgCount = await this.redis.incr(rateLimitKey);
+      if (msgCount === 1) {
+        await this.redis.expire(rateLimitKey, RATE_LIMIT_WINDOW_SEC);
+      }
+      if (msgCount > maxMsg) {
         throw new WsException('发送频率过高，请稍后重试');
       }
-      await this.redis.incr(rateLimitKey);
-      await this.redis.expire(rateLimitKey, RATE_LIMIT_WINDOW_SEC);
 
       // ── 3. 敏感词检测 ──
       if (this.detectSensitiveWords(data.content)) {
@@ -286,27 +285,33 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       else if (data.type === 'audio') msgType = 'AUDIO';
       else if (data.type === 'location') msgType = 'LOCATION';
 
-      const saved = await this.prisma.message.create({
-        data: {
-          conversationId: data.conversationId,
-          senderId: userId,
-          type: msgType,
-          content: data.content,
-          extra: data.extra || undefined,
-        },
-        include: {
-          sender: { select: { id: true, nickname: true, avatar: true } },
-        },
-      });
-
-      // 更新会话最后消息
-      await this.prisma.conversation.update({
-        where: { id: data.conversationId },
-        data: {
-          lastMessage: data.content.substring(0, 100),
-          lastMsgTime: new Date(),
-          unreadCount: { increment: 1 },
-        },
+      // 消息落库、会话最后消息、其他成员未读数放进同一事务，避免并发下状态不一致
+      const saved = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.message.create({
+          data: {
+            conversationId: data.conversationId,
+            senderId: userId,
+            type: msgType,
+            content: data.content,
+            extra: data.extra || undefined,
+          },
+          include: {
+            sender: { select: { id: true, nickname: true, avatar: true } },
+          },
+        });
+        await tx.conversation.update({
+          where: { id: data.conversationId },
+          data: {
+            lastMessage: data.content.substring(0, 100),
+            lastMsgTime: created.createdAt,
+          },
+        });
+        // 未读数记在接收方成员上（聊天列表读的是 member.unreadCount）
+        await tx.conversationMember.updateMany({
+          where: { conversationId: data.conversationId, userId: { not: userId } },
+          data: { unreadCount: { increment: 1 } },
+        });
+        return created;
       });
 
       // ── 7. 广播 ──

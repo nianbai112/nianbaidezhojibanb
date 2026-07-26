@@ -298,11 +298,54 @@ export class ErrandService {
   }
 
   async acceptOrder(orderId: string, userId: string) {
-    return this.prisma.errandOrder.update({ where: { id: orderId }, data: { riderId: userId, status: 'accepted', acceptTime: new Date() } });
+    // 条件更新保证并发抢单时只有一个骑手成功
+    const result = await this.prisma.errandOrder.updateMany({
+      where: { id: orderId, status: 'pending_accept' },
+      data: { riderId: userId, status: 'accepted', acceptTime: new Date() },
+    });
+    if (result.count === 0) {
+      const order = await this.prisma.errandOrder.findUnique({
+        where: { id: orderId },
+        select: { riderId: true, status: true },
+      });
+      if (!order) throw new NotFoundException('订单不存在');
+      // 自己重复点击接单按幂等处理
+      if (order.riderId === userId && order.status === 'accepted') {
+        return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+      }
+      throw new BadRequestException('手慢了，订单已被接走或不可接单');
+    }
+    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
   }
 
   async updateRiderStatus(orderId: string, userId: string, dto: any) {
-    return this.prisma.errandOrder.update({ where: { id: orderId }, data: { status: dto.status } });
+    const status = String(dto?.status || '');
+    // 目标状态 -> 允许的当前状态；同时记录对应时间戳
+    const transitions: Record<string, { from: string[]; data: Record<string, any> }> = {
+      in_progress: { from: ['accepted'], data: { status: 'in_progress', pickupTime: new Date() } },
+      arrived: { from: ['in_progress'], data: { status: 'arrived', deliverTime: new Date() } },
+      completed: { from: ['in_progress', 'arrived'], data: { status: 'completed', completeTime: new Date() } },
+    };
+    const transition = transitions[status];
+    if (!transition) throw new BadRequestException('不支持的订单状态');
+    const result = await this.prisma.errandOrder.updateMany({
+      where: { id: orderId, riderId: userId, status: { in: transition.from } },
+      data: transition.data,
+    });
+    if (result.count === 0) {
+      const order = await this.prisma.errandOrder.findUnique({
+        where: { id: orderId },
+        select: { riderId: true, status: true },
+      });
+      if (!order) throw new NotFoundException('订单不存在');
+      if (order.riderId !== userId) throw new BadRequestException('无权操作该订单');
+      // 重复提交同一状态按幂等处理
+      if (order.status === status) {
+        return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
+      }
+      throw new BadRequestException('订单当前状态不允许该操作');
+    }
+    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
   }
 
   async refundOrder(orderId: string, userId: string, dto: any) {
@@ -515,7 +558,13 @@ export class ErrandService {
   }
 
   async returnToPool(orderId: string, userId: string, dto: any) {
-    return this.prisma.errandOrder.update({ where: { id: orderId }, data: { riderId: null, status: 'pending_accept' } });
+    // 只有当前接单骑手能把自己的订单退回大厅，且只允许未完成的订单
+    const result = await this.prisma.errandOrder.updateMany({
+      where: { id: orderId, riderId: userId, status: { in: ['accepted', 'in_progress'] } },
+      data: { riderId: null, status: 'pending_accept', acceptTime: null, pickupTime: null },
+    });
+    if (result.count === 0) throw new BadRequestException('订单不存在或当前状态不允许退回');
+    return this.prisma.errandOrder.findUnique({ where: { id: orderId } });
   }
 
   async getRiderInfo(userId: string) {

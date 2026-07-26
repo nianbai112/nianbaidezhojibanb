@@ -1460,6 +1460,7 @@ model RegionBalanceLog {
 model Conversation {
   id          String    @id @default(cuid())
   type        String    @default("private") // private, group, circle
+  pairKey     String?   @unique // 私聊会话去重键: private:<小userId>:<大userId>
   title       String?
   avatar      String?
   lastMessage String?

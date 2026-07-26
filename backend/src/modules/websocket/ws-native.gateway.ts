@@ -2,6 +2,13 @@ import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/services/prisma.service';
+import { findOrCreatePrivateConversation } from '../../common/utils/private-conversation.util';
+import {
+  MAX_MESSAGE_LENGTH,
+  RATE_LIMIT_WINDOW_SEC,
+  RATE_LIMIT_MAX_MESSAGES,
+  SENSITIVE_WORD_PATTERN,
+} from './ws.constants';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { Server } from 'http';
 
@@ -19,6 +26,7 @@ export class WsNativeGateway {
   private clients: Map<string, NativeClient> = new Map();
   private userSockets: Map<string, Set<string>> = new Map();
   private sessionTouchAt: Map<string, number> = new Map();
+  private msgTimestamps: Map<string, number[]> = new Map();
   private pingInterval: NodeJS.Timeout;
 
   constructor(
@@ -189,37 +197,38 @@ export class WsNativeGateway {
           client.regionId = msg.data.regionId;
         }
       } else if (msg.type === 'message' || msg.event === 'message' || msg.event === 'private_message') {
-        await this.handlePrivateMessage(client, msg);
+        try {
+          await this.handlePrivateMessage(client, msg);
+        } catch (err: any) {
+          this.logger.warn(`Native WS private message failed: ${err.message}`);
+          this.send(client.ws, {
+            event: 'message_error',
+            type: 'message_error',
+            data: {
+              message: '发送失败，请重试',
+              clientMessageId:
+                String(msg.clientMessageId || msg.client_message_id || '').trim() || undefined,
+            },
+          });
+        }
       }
     } catch (err: any) {
       this.logger.warn(`Native WS message handling failed: ${err.message}`);
     }
   }
 
-  private async findOrCreatePrivateConversation(userId: string, receiverId: string) {
-    let conversation = await this.prisma.conversation.findFirst({
-      where: {
-        type: 'private',
-        AND: [
-          { members: { some: { userId } } },
-          { members: { some: { userId: receiverId } } },
-        ],
-      },
-    });
-    if (conversation) return conversation;
-
-    conversation = await this.prisma.conversation.create({
-      data: {
-        type: 'private',
-        members: {
-          create: [
-            { userId },
-            { userId: receiverId },
-          ],
-        },
-      },
-    });
-    return conversation;
+  /** 进程内滑动窗口限流（原生 ws 通道为单进程内存态，与连接管理一致） */
+  private checkRateLimit(userId: string): boolean {
+    const now = Date.now();
+    const windowMs = RATE_LIMIT_WINDOW_SEC * 1000;
+    const recent = (this.msgTimestamps.get(userId) || []).filter((t) => now - t < windowMs);
+    if (recent.length >= RATE_LIMIT_MAX_MESSAGES) {
+      this.msgTimestamps.set(userId, recent);
+      return false;
+    }
+    recent.push(now);
+    this.msgTimestamps.set(userId, recent);
+    return true;
   }
 
   private toMessageType(type?: string) {
@@ -239,44 +248,94 @@ export class WsNativeGateway {
 
   private async handlePrivateMessage(client: NativeClient, msg: any) {
     if (client.isAdmin) return;
+    const clientMessageId =
+      String(msg.clientMessageId || msg.client_message_id || '').trim() || undefined;
+    const fail = (message: string) =>
+      this.send(client.ws, {
+        event: 'message_error',
+        type: 'message_error',
+        data: { message, clientMessageId },
+      });
+
     const receiverId = String(msg.receiverId || msg.receiver_id || '').trim();
     const content = String(msg.message || msg.content || '').trim();
-    if (!receiverId || !content) return;
+    if (!receiverId || !content) {
+      fail('消息内容不能为空');
+      return;
+    }
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      fail(`消息长度不能超过 ${MAX_MESSAGE_LENGTH} 字符`);
+      return;
+    }
+    if (!this.checkRateLimit(client.userId)) {
+      fail('发送频率过高，请稍后重试');
+      return;
+    }
+    if (SENSITIVE_WORD_PATTERN.test(content)) {
+      this.logger.warn(`敏感词检测触发: userId=${client.userId} receiver=${receiverId}`);
+      fail('消息包含违规内容，无法发送');
+      return;
+    }
 
     const receiver = await this.prisma.user.findUnique({
       where: { id: receiverId },
       select: { id: true },
     });
     if (!receiver) {
-      this.send(client.ws, {
-        event: 'message_error',
-        data: { message: '接收方不存在' },
-      });
+      fail('接收方不存在');
       return;
     }
 
-    const conversation = await this.findOrCreatePrivateConversation(client.userId, receiverId);
-    const saved = await this.prisma.message.create({
-      data: {
-        conversationId: conversation.id,
-        senderId: client.userId,
-        type: this.toMessageType(msg.messageType || msg.type) as any,
-        content,
-        extra: msg.extra || undefined,
-      },
-      include: { sender: { select: { id: true, nickname: true, avatar: true } } },
+    const block = await this.prisma.block.findFirst({
+      where: { userId: receiverId, blockedId: client.userId },
     });
+    if (block) {
+      fail('你已被对方拉黑，无法发送消息');
+      return;
+    }
 
-    await Promise.all([
-      this.prisma.conversation.update({
+    const conversation = await findOrCreatePrivateConversation(
+      this.prisma,
+      client.userId,
+      receiverId,
+    );
+    if (conversation.isBlocked) {
+      fail('该会话已被封禁');
+      return;
+    }
+    const selfMember = await this.prisma.conversationMember.findUnique({
+      where: {
+        conversationId_userId: { conversationId: conversation.id, userId: client.userId },
+      },
+      select: { isMuted: true },
+    });
+    if (selfMember?.isMuted) {
+      fail('您已被禁言，无法发送消息');
+      return;
+    }
+
+    // 消息落库、会话最后消息、接收方未读数放进同一事务，避免并发下状态不一致
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
+        data: {
+          conversationId: conversation.id,
+          senderId: client.userId,
+          type: this.toMessageType(msg.messageType || msg.type) as any,
+          content,
+          extra: msg.extra || undefined,
+        },
+        include: { sender: { select: { id: true, nickname: true, avatar: true } } },
+      });
+      await tx.conversation.update({
         where: { id: conversation.id },
-        data: { lastMessage: content, lastMsgTime: saved.createdAt },
-      }),
-      this.prisma.conversationMember.updateMany({
-        where: { conversationId: conversation.id, userId: receiverId },
+        data: { lastMessage: content.substring(0, 100), lastMsgTime: created.createdAt },
+      });
+      await tx.conversationMember.updateMany({
+        where: { conversationId: conversation.id, userId: { not: client.userId } },
         data: { unreadCount: { increment: 1 } },
-      }),
-    ]);
+      });
+      return created;
+    });
 
     const payload = {
       event: 'message',
@@ -299,6 +358,7 @@ export class WsNativeGateway {
       data: {
         conversationId: conversation.id,
         messageId: saved.id,
+        clientMessageId,
         receiverId,
         timestamp: saved.createdAt.toISOString(),
       },
@@ -322,6 +382,7 @@ export class WsNativeGateway {
       userSocketSet.delete(socketId);
       if (userSocketSet.size === 0) {
         this.userSockets.delete(client.userId);
+        this.msgTimestamps.delete(client.userId);
       }
     }
 
