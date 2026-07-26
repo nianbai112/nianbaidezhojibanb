@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
+import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const SECRET_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|pass$/i;
 const SECRET_MASK = '******';
@@ -534,9 +537,6 @@ export class SystemConfigService {
 
   private async testLocalConnection(config: Record<string, any>) {
     const uploadDir = config.uploadDir || 'uploads';
-    const fs = require('fs');
-    const path = require('path');
-
     const fullPath = path.resolve(process.cwd(), uploadDir);
 
     try {
@@ -640,7 +640,6 @@ export class SystemConfigService {
       return { success: false, message: '未配置 Web服务 Key' };
     }
     try {
-      const axios = require('axios');
       const res = await axios.get('https://restapi.amap.com/v3/config/district', {
         params: {
           key: webServiceKey,
@@ -676,7 +675,6 @@ export class SystemConfigService {
       return { success: false, message: '未配置高德 Web服务 Key' };
     }
     try {
-      const axios = require('axios');
       const res = await axios.get('https://restapi.amap.com/v3/geocode/geo', {
         params: {
           key: webServiceKey,
@@ -715,7 +713,6 @@ export class SystemConfigService {
       return { success: false, message: '未配置高德 Web服务 Key' };
     }
     try {
-      const axios = require('axios');
       const res = await axios.get('https://restapi.amap.com/v3/geocode/regeo', {
         params: {
           key: webServiceKey,
@@ -750,7 +747,6 @@ export class SystemConfigService {
       return { success: false, message: '未配置高德 Web服务 Key' };
     }
     try {
-      const axios = require('axios');
       const res = await axios.get('https://restapi.amap.com/v3/place/text', {
         params: {
           key: webServiceKey,

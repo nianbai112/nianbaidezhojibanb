@@ -35,8 +35,9 @@ export class WechatController {
     @Res() res: Response,
   ) {
     const result = await this.officialService.handleCallback('', query);
-    // 纯文本返回（echostr 原样回显），避免被浏览器按 HTML 解析造成反射型 XSS
-    res.type('text/plain').send(String(result ?? ''));
+    // 纯文本返回，且只允许 echostr 合法字符集，避免反射型 XSS
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(String(result ?? '').replace(/[^\w+/=.-]/g, ''));
   }
 
   @Post('official/callback')
@@ -53,6 +54,7 @@ export class WechatController {
       typeof rawBody === 'string' ? rawBody : '',
       query,
     );
-    res.type('text/plain').send(String(result ?? ''));
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(String(result ?? '').replace(/[^\w+/=.-]/g, ''));
   }
 }

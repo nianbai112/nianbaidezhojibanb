@@ -113,7 +113,7 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       }
 
       // ── 2. 提取 token（优先级: auth.token > headers.authorization > query.token）──
-      let token =
+      const token =
         (client.handshake.auth.token as string) ||
         this.extractBearerToken(client.handshake.headers.authorization) ||
         (client.handshake.query.token as string);

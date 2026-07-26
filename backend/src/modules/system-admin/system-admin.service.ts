@@ -453,7 +453,12 @@ export class SystemAdminService {
         throw new BadRequestException('仅支持微信公众号文章链接（https://mp.weixin.qq.com/...）');
       }
       return new Promise((resolve, reject) => {
-        https.get(parsed.href, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res: any) => {
+        // hostname 写死为白名单域名，仅路径来自入参
+        https.get({
+          hostname: 'mp.weixin.qq.com',
+          path: parsed.pathname + parsed.search,
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        }, (res: any) => {
           let data = '';
           res.on('data', (chunk: string) => data += chunk);
           res.on('end', () => {
