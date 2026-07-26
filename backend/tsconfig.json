@@ -9,6 +9,7 @@
     "target": "ES2021",
     "sourceMap": true,
     "outDir": "./dist",
+    "rootDir": "./",
     "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
@@ -29,5 +30,6 @@
       "@utils/*": ["src/utils/*"],
       "@types/*": ["src/types/*"]
     }
-  }
+  },
+  "exclude": ["node_modules", "dist", "dist-check", "coverage"]
 }

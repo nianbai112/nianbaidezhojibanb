@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsOptional, IsBoolean, IsNumber, IsArray, Min, Max } from 'class-validator';
+import { IsString, IsInt, IsOptional, IsBoolean, IsNumber, IsArray, IsObject, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // ==================== 邮箱配置 ====================
@@ -47,7 +47,12 @@ export class CreateWechatTemplateDto {
   @IsString() platformType: string;
   @IsString() templateType: string;
   @IsString() templateId: string;
+  @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() defaultPage?: string;
+  @IsOptional() @IsString() pageTemplate?: string;
+  @IsOptional() @IsObject() fieldMapping?: Record<string, any>;
+  @IsOptional() @IsObject() exampleData?: Record<string, any>;
+  @IsOptional() @IsString() regionId?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 
@@ -55,7 +60,12 @@ export class UpdateWechatTemplateDto {
   @IsOptional() @IsString() platformType?: string;
   @IsOptional() @IsString() templateType?: string;
   @IsOptional() @IsString() templateId?: string;
+  @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() defaultPage?: string;
+  @IsOptional() @IsString() pageTemplate?: string;
+  @IsOptional() @IsObject() fieldMapping?: Record<string, any>;
+  @IsOptional() @IsObject() exampleData?: Record<string, any>;
+  @IsOptional() @IsString() regionId?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 

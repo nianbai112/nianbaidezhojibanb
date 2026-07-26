@@ -12,10 +12,49 @@
 defineProps<{ title:string; subtitle?:string }>()
 </script>
 <style scoped lang="scss">
-.page-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:8px 2px 0; }
-.breadcrumb { color:#64748b; font-size:13px; font-weight:800; margin-bottom:12px; }
-h1 { margin:0; font-size:30px; line-height:1.2; letter-spacing:-1px; font-weight:950; }
-p { margin:8px 0 0; color:#64748b; font-weight:600; }
-.head-actions { display:flex; gap:10px; align-items:center; }
-@media(max-width:720px){ .page-head{ flex-direction:column; } }
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 18px;
+  padding: 2px 2px 2px;
+}
+
+.breadcrumb {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 31px;
+  line-height: 1.14;
+  letter-spacing: 0;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+p {
+  margin: 8px 0 0;
+  color: #526174;
+  font-weight: 520;
+  font-size: 15px;
+}
+
+.head-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+@media(max-width:720px) {
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 </style>

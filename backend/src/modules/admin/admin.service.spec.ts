@@ -52,6 +52,7 @@ const createMockPrisma = () => ({
   adminMenu: { findMany: jest.fn().mockResolvedValue([]) },
   adminAccountRole: { create: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
   adminOperationLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+  serverLog: { count: jest.fn().mockResolvedValue(0) },
   coupon: { findMany: jest.fn().mockResolvedValue([]), create: jest.fn(), update: jest.fn(), delete: jest.fn(), count: jest.fn().mockResolvedValue(0) },
   activity: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
   notification: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
@@ -97,11 +98,17 @@ describe('AdminService', () => {
       const result = await service.dashboard();
       expect(result).toHaveProperty('todayGmv');
       expect(result).toHaveProperty('todayOrders');
+      expect(result).toHaveProperty('todayActiveUsers');
+      expect(result).toHaveProperty('todayPosts');
+      expect(result).toHaveProperty('todayComments');
       expect(result).toHaveProperty('dauEstimate');
       expect(result).toHaveProperty('pendingPosts');
       expect(result).toHaveProperty('pendingWithdraws');
       expect(result).toHaveProperty('pendingReports');
       expect(result).toHaveProperty('pendingMerchants');
+      expect(result).toHaveProperty('pendingRefunds');
+      expect(result).toHaveProperty('pendingCerts');
+      expect(result).toHaveProperty('systemErrorCount');
     });
   });
 

@@ -179,6 +179,7 @@ export class UserAdminService {
     const pageSize = q.pageSize || 20;
     const where: any = {};
     if (q.userId) where.userId = q.userId;
+    if (q.regionId) where.regionId = q.regionId;
     if (q.keyword) {
       where.OR = [
         { name: { contains: q.keyword } },

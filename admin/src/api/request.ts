@@ -13,18 +13,55 @@ request.interceptors.request.use(config => {
   return config
 })
 
+function withDataAlias<T>(value: T): T {
+  if (value && typeof value === 'object' && !('data' in (value as any))) {
+    try {
+      Object.defineProperty(value as any, 'data', {
+        value,
+        enumerable: false,
+        configurable: true
+      })
+    } catch {
+      // Some readonly objects cannot be decorated; keep the original payload.
+    }
+  }
+  return value
+}
+
 request.interceptors.response.use(
   response => {
     const payload = response.data
-    if (payload && typeof payload === 'object' && 'code' in payload && ![0, 200].includes(Number(payload.code))) {
+    const numericCode =
+      payload &&
+      typeof payload === 'object' &&
+      'code' in payload &&
+      (typeof payload.code === 'number' || /^\d+$/.test(String(payload.code)))
+    if (payload && typeof payload === 'object' && payload.success === false) {
       throw payload
     }
-    return payload?.data ?? payload
+    if (numericCode && ![0, 200].includes(Number(payload.code))) {
+      throw payload
+    }
+    return numericCode && 'data' in payload ? withDataAlias(payload.data) : withDataAlias(payload)
   },
   error => {
-    const message = error?.response?.data?.message || error?.message || '接口请求失败'
+    const status = error?.response?.status
+    const responseMessage = error?.response?.data?.message
+    const rawMessage = error?.message || ''
+    let message = Array.isArray(responseMessage)
+      ? responseMessage.join('；')
+      : responseMessage || rawMessage || '接口请求失败'
+
+    if (!error?.response || rawMessage.includes('Network Error') || rawMessage.includes('ECONNREFUSED')) {
+      message = '后端服务未启动或网络不可达，请确认 3000 端口正在运行'
+    } else if ([500, 502, 503, 504].includes(status) && !responseMessage) {
+      message = '后端接口异常，请查看后端终端日志或重启 3000 服务'
+    } else if (status === 403) {
+      message = '没有权限访问该功能，请联系超级管理员分配权限'
+    }
+
     ElMessage.error(message)
-    if (error?.response?.status === 401) {
+    if (status === 401 && !router.currentRoute.value.path.includes('/login')) {
       localStorage.removeItem('LM_ADMIN_TOKEN')
       localStorage.removeItem('admin_token')
       router.push('/login')

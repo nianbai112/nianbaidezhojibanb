@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable } from '@nestjs/common'
 import { PrismaService } from '../../common/services/prisma.service'
 import { RedisService } from '../../common/services/redis.service'
 import {
@@ -93,10 +93,12 @@ export class DatingAdminService {
     return { list, total, page: +page, pageSize: +pageSize }
   }
 
-  async auditProfile(id: string, dto: AuditDatingProfileDto) {
-    const data: any = { auditStatus: dto.auditStatus }
+  async auditProfile(id: string, dto: AuditDatingProfileDto & { status?: string }) {
+    const auditStatus = dto.auditStatus || dto.status
+    if (!auditStatus) throw new BadRequestException('审核状态不能为空')
+    const data: any = { auditStatus }
     if (dto.auditRemark !== undefined) data.auditRemark = dto.auditRemark
-    if (dto.auditStatus === 'rejected') data.isOpen = false
+    if (auditStatus === 'rejected') data.isOpen = false
     return this.prisma.datingProfile.update({ where: { id }, data })
   }
 
@@ -223,10 +225,12 @@ export class DatingAdminService {
     return { list, total, page: +page, pageSize: +pageSize }
   }
 
-  async handleReport(id: string, dto: HandleDatingReportDto) {
+  async handleReport(id: string, dto: HandleDatingReportDto & { action?: string }) {
+    const status = dto.status || (dto.action === 'ignored' ? 'rejected' : dto.action === 'resolved' ? 'resolved' : undefined)
+    if (!status) throw new BadRequestException('处理状态不能为空')
     return this.prisma.datingReport.update({
       where: { id },
-      data: { status: dto.status, result: dto.result, handledAt: new Date() },
+      data: { status, result: dto.result || dto.action || status, handledAt: new Date() },
     })
   }
 
@@ -240,7 +244,13 @@ export class DatingAdminService {
       const ttl = await client.ttl(key)
       items.push({ key, ttl })
     }
-    return { keys: items, total: items.length }
+    return {
+      status: items.length > 0 ? 'active' : 'empty',
+      count: items.length,
+      total: items.length,
+      lastUpdated: new Date().toISOString(),
+      keys: items,
+    }
   }
 
   async clearCache(dto: DatingCacheClearDto) {

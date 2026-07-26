@@ -26,6 +26,7 @@ export class PhotoContestAdminController {
   constructor(private readonly service: PhotoContestService) {}
 
   // ==================== Dashboard ====================
+  @Get('dashboard')
   @Get('dashboard/stats')
   @ApiOperation({ summary: '评选仪表盘统计' })
   @RequirePermission('photoContest:view')
@@ -34,10 +35,18 @@ export class PhotoContestAdminController {
   }
 
   // ==================== 作品管理 (静态路由，必须在:param路由之前) ====================
+  @Get('pending')
   @Get('entries/pending')
   @ApiOperation({ summary: '待审核作品列表' })
   @RequirePermission('photoContest:audit')
   getPendingEntries(@Query() query: EntryQueryDto) {
+    return this.service.getPendingEntries(query);
+  }
+
+  @Get('entries/pending')
+  @ApiOperation({ summary: '待审核作品列表' })
+  @RequirePermission('photoContest:audit')
+  getPendingEntryList(@Query() query: EntryQueryDto) {
     return this.service.getPendingEntries(query);
   }
 
@@ -100,6 +109,13 @@ export class PhotoContestAdminController {
   }
 
   // ==================== 获奖管理 ====================
+  @Get('winners')
+  @ApiOperation({ summary: '获奖列表' })
+  @RequirePermission('photoContest:view')
+  getAllWinners(@Query('contestId') contestId?: string) {
+    return this.service.getWinners(contestId);
+  }
+
   @Post('winners')
   @ApiOperation({ summary: '设置获奖者' })
   @RequirePermission('photoContest:config')

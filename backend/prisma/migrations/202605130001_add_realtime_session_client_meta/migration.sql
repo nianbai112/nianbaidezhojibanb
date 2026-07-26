@@ -1,0 +1,3 @@
+ALTER TABLE "realtime_sessions"
+ADD COLUMN IF NOT EXISTS "ip" TEXT,
+ADD COLUMN IF NOT EXISTS "userAgent" TEXT;

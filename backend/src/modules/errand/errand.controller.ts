@@ -52,6 +52,13 @@ export class ErrandController {
     return this.errandService.updateRiderStatus(orderId, userId, dto);
   }
 
+  @Get('errand/order/detail/:orderId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getOrderDetailForRider(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.errandService.getOrderDetailForRider(orderId, userId);
+  }
+
   @Post('errand/order/refund/:orderId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

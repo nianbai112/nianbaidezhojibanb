@@ -20,6 +20,19 @@ enum UserStatus {
   DELETED
 }
 
+enum AdminWechatBindingStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum AdminQrLoginStatus {
+  PENDING
+  SCANNED
+  CONFIRMED
+  EXPIRED
+  CANCELED
+}
+
 enum Gender {
   UNKNOWN
   MALE
@@ -166,11 +179,19 @@ enum NotificationType {
   SYSTEM
   LIKE
   COMMENT
+  REPLY
   FOLLOW
+  SQUAT
+  MESSAGE
   ORDER
   DELIVERY
+  REFUND
   WALLET
   CIRCLE
+  CERTIFICATION
+  MERCHANT
+  ANNOUNCEMENT
+  ADMIN_BROADCAST
 }
 
 enum CouponType {
@@ -316,9 +337,12 @@ model User {
   communityPayments     CommunityPayment[]
   incentiveRecords      IncentiveRecord[]
   regionRiders          RegionRider[]
+  riderSettlements      RiderSettlement[]   @relation("RiderSettlements")
   cityAgent             CityAgent?
   cityAgentApplications CityAgentApplication[]
   transferRequests      TransferRequest[]
+  adminWechatBinding    AdminWechatBinding?
+  adminQrLoginSessions  AdminQrLoginSession[]
   botAccount            BotAccount?
   photoContestEntries   PhotoContestEntry[]
   photoContestRatings   PhotoContestRating[]
@@ -381,6 +405,8 @@ model StudentVerify {
   idCard     String?
   studentId  String
   schoolName String
+  schoolId   String?              @map("school_id")
+  school     School?             @relation(fields: [schoolId], references: [id], onDelete: SetNull)
   major      String?
   grade      String?
   cardImage  String?
@@ -390,7 +416,38 @@ model StudentVerify {
   createdAt  DateTime            @default(now())
   updatedAt  DateTime            @updatedAt
 
+  @@index([schoolId])
   @@map("student_verifies")
+}
+
+model School {
+  id         String   @id @default(cuid())
+  name       String
+  shortName  String?  @map("short_name")
+  type       String   @default("university") // university / college / highschool / middleschool / primary / other
+  province   String?
+  city       String?
+  district   String?
+  address    String?
+  latitude   Decimal? @db.Decimal(10, 6)
+  longitude  Decimal? @db.Decimal(10, 6)
+  campusName String?  @map("campus_name")
+  logo       String?
+  cover      String?
+  regionId   String?  @map("region_id")
+  region     Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  isEnabled  Boolean  @default(true) @map("is_enabled")
+  sortOrder  Int      @default(0) @map("sort_order")
+  remark     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  studentVerifies StudentVerify[]
+
+  @@index([regionId])
+  @@index([name])
+  @@index([province, city])
+  @@map("schools")
 }
 
 model Role {
@@ -514,8 +571,8 @@ model Region {
   minWithdraw     Decimal? @default(0) @db.Decimal(10,2)
   maxWithdraw     Decimal? @default(0) @db.Decimal(10,2)
   withdrawFee     Decimal? @default(0) @db.Decimal(10,2)
-  withdrawRate    Decimal? @default(0) @db.Decimal(5,4)
-  commissionRate  Decimal? @default(0) @db.Decimal(5,4)
+  withdrawRate    Decimal? @default(0) @db.Decimal(8,4)
+  commissionRate  Decimal? @default(0) @db.Decimal(8,4)
   selfUnbanFee    Decimal? @default(0) @db.Decimal(10,2)
   // 财务：区域累计佣金
   totalCommission Decimal? @default(0) @db.Decimal(12,2)
@@ -529,6 +586,12 @@ model Region {
   onlyStudentAuthUsers        Boolean  @default(false)
   groupChatEnabled            Boolean  @default(false)
   enableQrcodeFilter          Boolean  @default(false)
+
+  // 页面装修配置
+  showCarousel                Boolean  @default(true)
+  showAnnouncement            Boolean  @default(true)
+  showKingkong                Boolean  @default(true)
+  homeFeatureStyle            String?  @default("default") // default / card / simple
 
   // 页面布局
   homeNavLayout       Int?     @default(1) // 1-9
@@ -567,6 +630,8 @@ model Region {
   coupons                  Coupon[]
   datingPackages           DatingPackage[]
   balanceLogs              RegionBalanceLog[]
+  systemAlerts             SystemAlert[]
+  schools                  School[]
 
   @@map("regions")
 }
@@ -640,6 +705,8 @@ model Post {
   user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   regionId      String?
   region        Region?    @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  circleId      String?
+  circle        Circle?     @relation(fields: [circleId], references: [id], onDelete: SetNull)
   type          PostType   @default(TEXT)
   status        PostStatus @default(PENDING)
   title         String?
@@ -674,6 +741,7 @@ model Post {
 
   @@index([userId, createdAt])
   @@index([regionId, status, createdAt])
+  @@index([circleId, status, createdAt])
   @@index([status, isTop, createdAt])
   @@index([type])
   @@map("posts")
@@ -870,6 +938,7 @@ model Circle {
   channels    CircleChannel[]
   topicGroups CircleTopicGroup[]
   payments    CirclePayment[]
+  posts       Post[]
 
   @@map("circles")
 }
@@ -1146,6 +1215,7 @@ model Review {
   isAnonymous Boolean   @default(false)
   reply       String?
   replyAt     DateTime?
+  status      String    @default("active") // active, hidden
   createdAt   DateTime  @default(now())
 
   @@map("reviews")
@@ -1390,6 +1460,7 @@ model RegionBalanceLog {
 model Conversation {
   id          String    @id @default(cuid())
   type        String    @default("private") // private, group, circle
+  pairKey     String?   @unique // 私聊会话去重键: private:<小userId>:<大userId>
   title       String?
   avatar      String?
   lastMessage String?
@@ -1442,18 +1513,25 @@ model Message {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      NotificationType
-  title     String
-  content   String
-  data      Json?
-  isRead    Boolean          @default(false)
-  readAt    DateTime?
-  createdAt DateTime         @default(now())
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId    String?
+  type        NotificationType
+  scene       String?
+  title       String
+  content     String
+  data        Json?
+  linkType    String?
+  linkValue   String?
+  channelMask Json?
+  isRead      Boolean          @default(false)
+  readAt      DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   @@index([userId, isRead, createdAt])
+  @@index([regionId, type, createdAt])
   @@map("notifications")
 }
 
@@ -2950,10 +3028,15 @@ model MallMerchant {
   businessHours String?
   description   String?
   status        String   @default("pending") // pending, approved, rejected, closed
+  rejectReason  String?
   rating        Float    @default(5)
   saleCount     Int      @default(0)
+  totalOrders   Int      @default(0)
+  isShow        Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  products MallProduct[]
 
   @@map("mall_merchants")
 }
@@ -2973,23 +3056,43 @@ model MallCategory {
 model MallProduct {
   id          String   @id @default(cuid())
   merchantId  String
+  merchant    MallMerchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   categoryId  String?
   name        String
+  subtitle    String?
   images      Json
+  mainImage   String?
   detail      String?  @db.Text
   price       Decimal  @db.Decimal(10, 2)
   originPrice Decimal? @db.Decimal(10, 2)
   stock       Int      @default(0)
   saleCount   Int      @default(0)
-  status      String   @default("on_sale")
+  status      String   @default("on_sale") // on_sale, off_sale
   isHot       Boolean  @default(false)
+  isNew       Boolean  @default(false)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  carts MallCart[]
+  carts   MallCart[]
+  skus    MallProductSku[]
+  reviews MallReview[]
 
   @@map("mall_products")
+}
+
+model MallProductSku {
+  id         String      @id @default(cuid())
+  productId  String
+  product    MallProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  skuName    String
+  price      Decimal     @db.Decimal(10, 2)
+  stock      Int         @default(0)
+  isDefault  Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@map("mall_product_skus")
 }
 
 model MallCart {
@@ -3012,8 +3115,9 @@ model MallOrder {
   orderNo         String    @unique
   userId          String
   merchantId      String
-  status          String    @default("pending_pay")
+  status          String    @default("pending_pay") // pending_pay, paid, shipped, received, completed, cancelled
   totalAmount     Decimal   @db.Decimal(10, 2)
+  productAmount   Decimal   @default(0) @db.Decimal(10, 2)
   discountAmount  Decimal   @default(0) @db.Decimal(10, 2)
   freightAmount   Decimal   @default(0) @db.Decimal(10, 2)
   payAmount       Decimal   @db.Decimal(10, 2)
@@ -3025,31 +3129,59 @@ model MallOrder {
   cancelTime      DateTime?
   cancelReason    String?
   remark          String?
+  buyerMessage    String?
+  deliveryType    String    @default("express")
   receiverName    String
   receiverPhone   String
   receiverAddress String
   trackingNo      String?
   trackingCompany String?
-  refundStatus    String    @default("none")
+  refundStatus    String    @default("none") // none, refunding, refunded
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   User            User      @relation(fields: [userId], references: [id])
 
+  items   MallOrderItem[]
   refunds MallRefund[]
 
   @@map("mall_orders")
 }
 
+model MallOrderItem {
+  id           String    @id @default(cuid())
+  orderId      String
+  order        MallOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  productName  String
+  productImage String?
+  skuId        String?
+  skuName      String?
+  price        Decimal   @db.Decimal(10, 2)
+  quantity     Int       @default(1)
+  createdAt    DateTime  @default(now())
+
+  @@map("mall_order_items")
+}
+
 model MallRefund {
-  id        String    @id @default(cuid())
-  orderId   String
-  order     MallOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  refundNo  String    @unique
-  amount    Decimal   @db.Decimal(10, 2)
-  reason    String
-  status    String    @default("pending")
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  orderId        String
+  order          MallOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItemId    String?
+  refundNo       String    @unique
+  refundType     String    @default("refund_only") // refund_only, return_refund
+  amount         Decimal   @db.Decimal(10, 2)
+  quantity       Int       @default(1)
+  reason         String
+  description    String?
+  images         Json?
+  status         String    @default("applying") // applying, approved, rejected, refunded, closed
+  merchantReply  String?
+  rejectReason   String?
+  merchantReplyTime DateTime?
+  refundTime     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@map("mall_refunds")
 }
@@ -3059,6 +3191,7 @@ model MallReview {
   orderId     String
   userId      String
   productId   String
+  product     MallProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
   merchantId  String
   rating      Int       @default(5)
   content     String?
@@ -3066,7 +3199,7 @@ model MallReview {
   isAnonymous Boolean   @default(false)
   reply       String?
   replyAt     DateTime?
-  status      String    @default("active")
+  status      String    @default("active") // active, hidden
   createdAt   DateTime  @default(now())
   User        User      @relation(fields: [userId], references: [id])
 
@@ -3185,6 +3318,26 @@ model DistributorWithdrawal {
   updatedAt     DateTime        @updatedAt
 
   @@map("distributor_withdrawals")
+}
+
+model MallServiceStaff {
+  id           String   @id @default(cuid())
+  merchantId   String?
+  regionId     String?
+  nickname     String
+  avatar       String?
+  phone        String?
+  wechat       String?
+  onlineStatus String   @default("offline") // online, offline
+  workTime     String?
+  status       String   @default("active") // active, disabled
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([merchantId])
+  @@index([regionId])
+  @@index([status])
+  @@map("mall_service_staffs")
 }
 
 model MallBanner {
@@ -3366,6 +3519,8 @@ model RegionRider {
   phone             String
   status            String    @default("offline") // offline, online, busy
   verifyStatus      String    @default("pending")
+  riderType         String    @default("part_time") // part_time, official
+  riderBio          String?
   rating            Float     @default(5)
   balance           Decimal   @default(0) @db.Decimal(10, 2)
   totalOrders       Int       @default(0)
@@ -3620,6 +3775,44 @@ model MerchantSettlement {
   @@map("merchant_settlements")
 }
 
+enum RiderSettlementStatus {
+  PENDING
+  CONFIRMED
+  PAID
+  REJECTED
+}
+
+model RiderSettlement {
+  id               String               @id @default(cuid())
+  settlementNo     String               @unique
+  riderId          String
+  rider            User                 @relation("RiderSettlements", fields: [riderId], references: [id], onDelete: Cascade)
+  regionId         String?
+  periodStart      DateTime
+  periodEnd        DateTime
+  orderCount       Int                  @default(0)
+  deliveryFeeTotal Decimal              @default(0) @db.Decimal(12, 2)
+  rewardAmount     Decimal              @default(0) @db.Decimal(12, 2)
+  penaltyAmount    Decimal              @default(0) @db.Decimal(12, 2)
+  payableAmount    Decimal              @default(0) @db.Decimal(12, 2)
+  paidAmount       Decimal              @default(0) @db.Decimal(12, 2)
+  status           RiderSettlementStatus @default(PENDING)
+  remark           String?
+  confirmedBy      String?
+  confirmedAt      DateTime?
+  paidBy           String?
+  paidAt           DateTime?
+  rejectedBy       String?
+  rejectedAt       DateTime?
+  rejectReason     String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([riderId, periodStart])
+  @@index([status, createdAt])
+  @@map("rider_settlements")
+}
+
 // ==================== 商品加价规则 ====================
 
 model ProductPriceAdjustment {
@@ -3717,22 +3910,32 @@ model PaymentRefund {
 // ==================== 管理员系统（独立建模） ====================
 
 model AdminAccount {
-  id           String    @id @default(cuid())
-  username     String    @unique
-  passwordHash String
-  realName     String
-  avatar       String?
-  phone        String?
-  email        String?
-  status       String    @default("active") // active, disabled, deleted
-  lastLoginAt  DateTime?
-  lastLoginIp  String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  username             String    @unique
+  passwordHash         String
+  realName             String
+  avatar               String?
+  phone                String?
+  email                String?
+  status               String    @default("active") // active, disabled, deleted
+  loginFailCount       Int       @default(0)
+  lockedUntil          DateTime?
+  passwordChangedAt    DateTime?
+  passwordResetRequired Boolean  @default(false)
+  mfaEnabled           Boolean   @default(false)
+  mfaSecret            String?
+  deletedAt            DateTime?
+  lastLoginAt          DateTime?
+  lastLoginIp          String?
+  lastLoginUserAgent   String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   roles         AdminAccountRole[]
   operationLogs AdminOperationLog[]
   loginLogs     AdminLoginLog[]
+  wechatBinding AdminWechatBinding?
+  qrLoginSessions AdminQrLoginSession[]
 
   @@map("admin_accounts")
 }
@@ -3853,6 +4056,55 @@ model AdminLoginLog {
 
   @@index([accountId, createdAt])
   @@map("admin_login_logs")
+}
+
+model AdminWechatBinding {
+  id          String                   @id @default(cuid())
+  accountId   String                   @unique
+  account     AdminAccount             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId      String                   @unique
+  user        User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  openid      String?
+  unionid     String?
+  nickname    String?
+  avatar      String?
+  status      AdminWechatBindingStatus @default(ACTIVE)
+  boundAt     DateTime                 @default(now())
+  lastLoginAt DateTime?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@index([openid])
+  @@index([unionid])
+  @@map("admin_wechat_bindings")
+}
+
+model AdminQrLoginSession {
+  id            String             @id @default(cuid())
+  ticket        String             @unique
+  status        AdminQrLoginStatus @default(PENDING)
+  accountId     String?
+  account       AdminAccount?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  userId        String?
+  user          User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  openid        String?
+  nickname      String?
+  avatar        String?
+  webIp         String?
+  webUserAgent  String?
+  scanIp        String?
+  scanUserAgent String?
+  rejectReason  String?
+  expiresAt     DateTime
+  scannedAt     DateTime?
+  confirmedAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([userId])
+  @@index([accountId])
+  @@map("admin_qr_login_sessions")
 }
 
 model Reconciliation {
@@ -4359,12 +4611,18 @@ model WechatTemplateConfig {
   platformType String   @default("miniprogram")
   templateType String
   templateId   String
+  title        String?
   defaultPage  String?
+  fieldMapping Json?
+  exampleData  Json?
+  pageTemplate String?
   enabled      Boolean  @default(true)
+  regionId     String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  @@unique([platformType, templateType])
+  @@unique([platformType, templateType, regionId])
+  @@index([platformType, enabled])
   @@map("wechat_template_configs")
 }
 
@@ -4400,4 +4658,292 @@ model UploadRecord {
   @@index([fileType, createdAt])
   @@index([scene, createdAt])
   @@map("upload_records")
+}
+
+// ==================== P2: 埋点事件系统 ====================
+
+model TrackingEvent {
+  id          String   @id @default(cuid())
+  eventName   String   // page_view, button_click, content_expose, content_click, etc.
+  userId      String?
+  sessionId   String?
+  regionId    String?
+  pagePath    String?
+  targetId    String?
+  targetType  String?
+  params      Json?
+  ip          String?
+  ua          String?
+  createdAt   DateTime @default(now())
+
+  @@index([eventName, createdAt])
+  @@index([userId, createdAt])
+  @@index([regionId, createdAt])
+  @@index([pagePath, createdAt])
+  @@index([createdAt])
+  @@map("tracking_events")
+}
+
+// ==================== P2: A/B 测试 ====================
+
+model ABTest {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  type        String   // layout, feed_style, popup, share, coupon, recommend
+  status      String   @default("draft") // draft, running, paused, completed
+  regionId    String?
+  variants    Json     // [{id, name, weight, config}]
+  targetMetric String?
+  startAt     DateTime?
+  endAt       DateTime?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignments ABTestAssignment[]
+  results     ABTestResult[]
+
+  @@index([status, regionId])
+  @@map("ab_tests")
+}
+
+model ABTestAssignment {
+  id         String   @id @default(cuid())
+  testId     String
+  test       ABTest   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  userId     String
+  variantId  String
+  createdAt  DateTime @default(now())
+
+  @@unique([testId, userId])
+  @@index([userId])
+  @@map("ab_test_assignments")
+}
+
+model ABTestResult {
+  id         String   @id @default(cuid())
+  testId     String
+  test       ABTest   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  variantId  String
+  metric     String
+  value      Float    @default(0)
+  count      Int      @default(0)
+  date       DateTime
+  createdAt  DateTime @default(now())
+
+  @@unique([testId, variantId, metric, date])
+  @@index([testId, date])
+  @@map("ab_test_results")
+}
+
+// ==================== P2: 推荐策略配置 ====================
+
+model RecommendStrategy {
+  id          String   @id @default(cuid())
+  name        String
+  targetType  String   // post, merchant, product, topic, activity
+  regionId    String?
+  isEnabled   Boolean  @default(true)
+  weights     Json     // {heat, time, interest, follow, behavior, manual}
+  filters     Json     // {blacklist, sensitive, region}
+  rankRules   Json     // {timeDecay, diversity, freshness}
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([targetType, regionId])
+  @@map("recommend_strategies")
+}
+
+model RecommendPool {
+  id         String   @id @default(cuid())
+  targetType String
+  targetId   String
+  regionId   String?
+  score      Float    @default(0)
+  factors    Json?
+  expireAt   DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([targetType, targetId, regionId])
+  @@index([targetType, regionId, score])
+  @@index([expireAt])
+  @@map("recommend_pools")
+}
+
+model RecommendControl {
+  id         String   @id @default(cuid())
+  targetType String
+  targetId   String
+  action     String   // boost, block, pin, downrank
+  reason     String?
+  value      Float    @default(0)
+  expireAt   DateTime?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  @@unique([targetType, targetId, action])
+  @@index([targetType, action])
+  @@map("recommend_controls")
+}
+
+// ==================== P2: 定时任务 ====================
+
+model ScheduledJob {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // daily_report, settlement, ranking, recommend, cleanup, ai_task, notification, monitor
+  cron        String?
+  isEnabled   Boolean  @default(true)
+  config      Json?
+  lastRunAt   DateTime?
+  lastStatus  String?  // success, failed, running
+  lastError   String?
+  runCount    Int      @default(0)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  logs ScheduledJobLog[]
+
+  @@index([type, isEnabled])
+  @@map("scheduled_jobs")
+}
+
+model ScheduledJobLog {
+  id         String      @id @default(cuid())
+  jobId      String
+  job        ScheduledJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status     String      @default("running") // running, success, failed
+  detail     Json?
+  startedAt  DateTime    @default(now())
+  finishedAt DateTime?
+  error      String?
+
+  @@index([jobId, startedAt])
+  @@map("scheduled_job_logs")
+}
+
+// ==================== P2: 数据权限配置 ====================
+
+model DataScope {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  type        String   // all, region, merchant, self, custom
+  config      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles DataScopeRole[]
+
+  @@map("data_scopes")
+}
+
+model DataScopeRole {
+  id         String    @id @default(cuid())
+  scopeId    String
+  scope      DataScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  roleId     String
+  createdAt  DateTime  @default(now())
+
+  @@unique([scopeId, roleId])
+  @@map("data_scope_roles")
+}
+
+model SystemAlert {
+  id          String   @id @default(cuid())
+  type        String   // audit, refund, withdraw, order, ai_task, error_log, operation
+  level       String   @default("medium") // low, medium, high, critical
+  title       String
+  message     String?
+  regionId    String?
+  region      Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  businessId  String?
+  status      String   @default("pending") // pending, processing, resolved, ignored
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  resolveNote String?
+  detail      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([type, status])
+  @@index([level, status])
+  @@index([regionId])
+  @@map("system_alerts")
+}
+
+// ==================== 统一通知中心新增表 ====================
+
+model WechatSubscribeConsent {
+  id           String   @id @default(cuid())
+  userId       String
+  templateType String
+  templateId   String
+  status       String   // accept / reject / ban / unknown
+  sourceScene  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, templateType])
+  @@index([userId, status])
+  @@map("wechat_subscribe_consents")
+}
+
+model WechatMessageLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  openid       String?
+  platformType String   // miniprogram / official
+  templateType String
+  templateId   String
+  page         String?
+  payload      Json?
+  status       String   // pending / success / failed
+  errorCode    String?
+  errorMessage String?
+  sentAt       DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, platformType, createdAt])
+  @@index([status, createdAt])
+  @@map("wechat_message_logs")
+}
+
+model WechatOfficialBinding {
+  id             String   @id @default(cuid())
+  userId         String
+  officialOpenid String   @unique
+  unionid        String?
+  subscribe      Boolean  @default(false)
+  subscribeAt    DateTime?
+  unsubscribedAt DateTime?
+  qrScene        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId])
+  @@index([unionid])
+  @@map("wechat_official_bindings")
+}
+
+model RealtimeSession {
+  id         String   @id @default(cuid())
+  userId     String?
+  adminId    String?
+  socketId   String
+  platform   String   // miniapp / admin
+  online     Boolean  @default(true)
+  ip         String?
+  userAgent  String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([userId, online])
+  @@index([adminId, online])
+  @@index([platform, online])
+  @@map("realtime_sessions")
 }

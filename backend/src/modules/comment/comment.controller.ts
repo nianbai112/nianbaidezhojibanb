@@ -21,6 +21,13 @@ export class CommentController {
     return this.commentService.getMyComments(userId, query);
   }
 
+  @Post('comments/lottery')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createLottery(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.commentService.createLottery(userId, dto);
+  }
+
   @Post('comments/:postId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -40,13 +47,6 @@ export class CommentController {
   @ApiBearerAuth()
   pinComment(@Param('commentId') commentId: string, @Body() dto: any) {
     return this.commentService.pinComment(commentId, dto);
-  }
-
-  @Post('comments/lottery')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createLottery(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.commentService.createLottery(userId, dto);
   }
 
   @Get('comments/lottery/:postId')

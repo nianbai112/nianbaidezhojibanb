@@ -63,26 +63,33 @@ export class DeliveryService {
   }
 
   async acceptOrder(id: string, riderId: string) {
-    const order = await this.prisma.deliveryOrder.findUnique({ where: { id } });
-    if (!order) throw new NotFoundException('订单不存在');
-    if (order.status !== DeliveryOrderStatus.PENDING_ACCEPT) {
-      throw new BadRequestException('订单不可接单');
-    }
-
     // 检查骑手身份
     const rider = await this.prisma.rider.findUnique({ where: { userId: riderId } });
     if (!rider || rider.verifyStatus !== 'approved') {
       throw new ForbiddenException('非认证骑手');
     }
 
-    return this.prisma.deliveryOrder.update({
-      where: { id },
+    // 条件更新保证并发抢单时只有一个骑手成功
+    const result = await this.prisma.deliveryOrder.updateMany({
+      where: { id, status: DeliveryOrderStatus.PENDING_ACCEPT },
       data: {
         riderId,
         status: DeliveryOrderStatus.ACCEPTED,
         acceptTime: new Date(),
       },
     });
+    if (result.count === 0) {
+      const order = await this.prisma.deliveryOrder.findUnique({
+        where: { id },
+        select: { riderId: true, status: true },
+      });
+      if (!order) throw new NotFoundException('订单不存在');
+      if (order.riderId === riderId && order.status === DeliveryOrderStatus.ACCEPTED) {
+        return this.prisma.deliveryOrder.findUnique({ where: { id } });
+      }
+      throw new BadRequestException('手慢了，订单已被接走或不可接单');
+    }
+    return this.prisma.deliveryOrder.findUnique({ where: { id } });
   }
 
   async completeOrder(id: string, userId: string) {

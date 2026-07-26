@@ -168,6 +168,14 @@ export class PostController {
     return this.postService.squatPost(postId, userId);
   }
 
+  @Delete('squats/:postId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '取消蹲守帖子' })
+  unsquatPost(@Param('postId') postId: string, @CurrentUser('sub') userId: string) {
+    return this.postService.unsquatPost(postId, userId);
+  }
+
   @Get('squats/check/:postId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

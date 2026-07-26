@@ -3,7 +3,6 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
-  NotImplementedException,
   Inject,
   forwardRef,
 } from "@nestjs/common";
@@ -11,6 +10,7 @@ import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
 import { PaymentService } from "../payment/payment.service";
 import * as bcrypt from "bcrypt";
+import { randomInt, randomBytes } from "crypto";
 import * as crypto from "crypto";
 
 @Injectable()
@@ -21,6 +21,51 @@ export class AdminService {
     @Inject(forwardRef(() => PaymentService))
     private readonly paymentService?: PaymentService,
   ) {}
+
+  private getHomeTabId(tab: any, index = 0) {
+    if (tab?.id !== undefined && tab?.id !== null && tab?.id !== "") {
+      const parsed = Number(tab.id);
+      if (Number.isFinite(parsed)) return String(parsed);
+    }
+    const key = String(tab?.type || tab?.pageType || tab?.name || "").toLowerCase();
+    const map: Record<string, string> = {
+      note: "0",
+      post: "0",
+      "笔记": "0",
+      takeout: "1",
+      delivery: "1",
+      merchant: "1",
+      mall: "1",
+      "外卖": "1",
+      "商家": "1",
+      secondhand: "2",
+      second_hand: "2",
+      "二手": "2",
+      activity: "3",
+      activities: "3",
+      "活动": "3",
+      rating: "4",
+      vote: "4",
+      photo_vote: "4",
+      "评分": "4",
+      punch: "5",
+      checkin: "5",
+      checkin_map: "5",
+      "打卡": "5",
+      "打卡地点": "5",
+    };
+    return map[key] || String(index);
+  }
+
+  private normalizeRegionTabs(tabs: any) {
+    if (!Array.isArray(tabs)) return [];
+    return tabs.map((tab, index) => ({
+      ...tab,
+      id: this.getHomeTabId(tab, index),
+      enabled: tab?.enabled !== false,
+      sortOrder: tab?.sortOrder ?? tab?.sort_order ?? index,
+    }));
+  }
 
   // ==================== 操作日志 ====================
   private async logOperation(
@@ -64,7 +109,9 @@ export class AdminService {
       todayUsers,
       yesterdayUsers,
       postCount,
+      todayPosts,
       commentCount,
+      todayComments,
       pendingPosts,
       merchantCount,
       activeMerchantCount,
@@ -81,6 +128,8 @@ export class AdminService {
       totalGmv,
       regionCount,
       dauEstimate,
+      todayActiveUsers,
+      systemErrorCount,
     ] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.user.count({ where: { createdAt: { gte: today } } }),
@@ -88,16 +137,16 @@ export class AdminService {
         where: { createdAt: { gte: yesterday, lt: today } },
       }),
       this.prisma.post.count(),
+      this.prisma.post.count({ where: { createdAt: { gte: today } } }),
       this.prisma.comment.count({ where: { deletedAt: null } }),
+      this.prisma.comment.count({ where: { createdAt: { gte: today } } }),
       this.prisma.post.count({ where: { auditStatus: "pending" } }),
       this.prisma.merchant.count(),
       this.prisma.merchant.count({ where: { status: "approved" } }),
       this.prisma.merchant.count({ where: { status: "pending" } }),
       this.prisma.withdraw.count({ where: { status: "PENDING" } }),
       this.prisma.report.count({ where: { status: "pending" } }),
-      this.prisma.refund.count({
-        where: { status: "pending" },
-      }),
+      this.prisma.refund.count({ where: { status: "pending" } }),
       this.prisma.studentVerify.count({ where: { status: "PENDING" } }),
       this.prisma.order.count({ where: { createdAt: { gte: today } } }),
       this.prisma.order.count({
@@ -117,9 +166,12 @@ export class AdminService {
         _sum: { amount: true },
       }),
       this.prisma.region.count(),
-      // DAU 估算：近7天有登录行为的用户（无精确登录表时用创建/活跃替代）
-      this.prisma.user.count({
-        where: { lastLoginAt: { gte: weekAgo } },
+      this.prisma.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
+      // 今日活跃用户（今天有登录行为的用户）
+      this.prisma.user.count({ where: { lastLoginAt: { gte: today } } }),
+      // 系统异常数（今日 ServerLog 中 5xx 错误）
+      this.prisma.serverLog.count({
+        where: { createdAt: { gte: today }, level: "error" },
       }),
     ]);
 
@@ -147,13 +199,16 @@ export class AdminService {
           : 0,
       totalUsers: userCount,
       todayNewUsers: todayUsers,
+      todayActiveUsers,
       userGrowth:
         yesterdayUsers > 0
           ? Math.round(((todayUsers - yesterdayUsers) / yesterdayUsers) * 100)
           : 0,
       dauEstimate,
       postCount,
+      todayPosts,
       commentCount,
+      todayComments,
       merchantCount,
       activeMerchantCount,
       regionCount,
@@ -163,6 +218,7 @@ export class AdminService {
       pendingReports,
       pendingRefunds,
       pendingCerts,
+      systemErrorCount,
     };
   }
 
@@ -248,85 +304,782 @@ export class AdminService {
     return { list };
   }
 
+  /** 仪表盘实时动态（最近用户、帖子、订单、管理操作） */
+  async dashboardRecent() {
+    const [recentUsers, recentPosts, recentOrders, recentOps] = await Promise.all([
+      this.prisma.user.findMany({
+        select: { id: true, nickname: true, avatar: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      this.prisma.post.findMany({
+        select: {
+          id: true, title: true,
+          user: { select: { nickname: true } },
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      this.prisma.order.findMany({
+        select: { id: true, orderNo: true, payAmount: true, status: true, createdAt: true },
+        where: { status: { not: "CANCELLED" } },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      this.prisma.adminOperationLog.findMany({
+        select: {
+          id: true, action: true, module: true, targetId: true, createdAt: true,
+          account: { select: { username: true, realName: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      }),
+    ]);
+
+    return {
+      recentUsers: recentUsers.map((u) => ({ ...u, type: "user" as const, desc: `${u.nickname || "新用户"} 注册` })),
+      recentPosts: recentPosts.map((p) => ({ ...p, type: "post" as const, desc: `${p.user?.nickname || "用户"} 发布了 ${(p.title || "").slice(0, 20)}` })),
+      recentOrders: recentOrders.map((o) => ({ ...o, type: "order" as const, payAmount: Number(o.payAmount || 0), desc: `订单 ${o.orderNo} ${o.status}` })),
+      recentOps: recentOps.map((op) => ({ ...op, type: "operation" as const, desc: `${op.account?.realName || op.account?.username || "管理员"} ${op.action} ${op.module}` })),
+    };
+  }
+
+  // ==================== 区域运营工作台 ====================
+  async regionOpsOverview() {
+    try {
+      const regions = await this.prisma.region.findMany({
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          logo: true,
+          isOpen: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const today = this.getTodayStart();
+      const overview = await Promise.all(
+        regions.map(async (region) => {
+          try {
+            const [
+              userCount,
+              merchantCount,
+              postCount,
+              todayOrders,
+              tabbarConfig,
+              shareSettings,
+            ] = await Promise.all([
+              this.prisma.user.count({
+                where: { addresses: { some: { regionId: region.id } } },
+              }).catch(() => 0),
+              this.prisma.merchant.count({
+                where: { regionId: region.id },
+              }).catch(() => 0),
+              this.prisma.post.count({
+                where: { regionId: region.id },
+              }).catch(() => 0),
+              this.prisma.order.count({
+                where: {
+                  merchant: { regionId: region.id },
+                  createdAt: { gte: today },
+                },
+              }).catch(() => 0),
+              this.prisma.regionTabBar.findUnique({
+                where: { regionId: region.id },
+              }).catch(() => null),
+              this.prisma.shareSettings.findUnique({
+                where: { regionId: region.id },
+              }).catch(() => null),
+            ]);
+
+            let status: "unconfigured" | "pending" | "running" | "warning" | "stopped" = "running";
+            if (!region.isOpen) status = "stopped";
+            else if (!tabbarConfig || !shareSettings) status = "pending";
+            else if (merchantCount < 3 || postCount < 20) status = "warning";
+
+            return {
+              id: region.id,
+              name: region.name,
+              code: region.code,
+              logo: region.logo,
+              status,
+              userCount,
+              merchantCount,
+              postCount,
+              todayOrders,
+              hasTabbar: !!tabbarConfig,
+              hasShareSettings: !!shareSettings,
+            };
+          } catch {
+            return {
+              id: region.id,
+              name: region.name,
+              code: region.code,
+              logo: region.logo,
+              status: "unconfigured" as const,
+              userCount: 0,
+              merchantCount: 0,
+              postCount: 0,
+              todayOrders: 0,
+              hasTabbar: false,
+              hasShareSettings: false,
+            };
+          }
+        }),
+      );
+
+      return { regions: overview };
+    } catch {
+      return { regions: [] };
+    }
+  }
+
+  async regionLaunchChecklist(regionId: string) {
+    try {
+      const region = await this.prisma.region.findUnique({
+        where: { id: regionId },
+      });
+      if (!region) throw new NotFoundException("区域不存在");
+
+      const [
+        tabbarConfig,
+        shareSettings,
+        merchantCount,
+        productCount,
+        postCount,
+      ] = await Promise.all([
+        this.prisma.regionTabBar.findUnique({ where: { regionId } }).catch(() => null),
+        this.prisma.shareSettings.findUnique({ where: { regionId } }).catch(() => null),
+        this.prisma.merchant.count({ where: { regionId } }).catch(() => 0),
+        this.prisma.product.count({
+          where: { merchant: { regionId } },
+        }).catch(() => 0),
+        this.prisma.post.count({ where: { regionId } }).catch(() => 0),
+      ]);
+
+      const checklist = [
+        {
+          id: "basic_info",
+          title: "区域基础信息完整",
+          status: region.name && region.code ? "completed" : "incomplete",
+          description: region.name && region.code ? "区域名称和编码已配置" : "缺少区域名称或编码",
+          actionRoute: "/region/config",
+          actionText: "去配置",
+        },
+        {
+          id: "logo_cover",
+          title: "区域 Logo / 封面已配置",
+          status: region.logo ? "completed" : "incomplete",
+          description: region.logo ? "Logo 已上传" : "未上传区域 Logo",
+          actionRoute: "/region/config",
+          actionText: "去配置",
+        },
+        {
+          id: "tabbar",
+          title: "底部导航已配置",
+          status: tabbarConfig ? "completed" : "incomplete",
+          description: tabbarConfig ? "底部导航已配置" : "未配置底部导航",
+          actionRoute: "/region/tabbar",
+          actionText: "去配置",
+        },
+        {
+          id: "share",
+          title: "分享卡片已配置",
+          status: shareSettings ? "completed" : "incomplete",
+          description: shareSettings ? "分享设置已配置" : "未配置分享卡片",
+          actionRoute: "/region/share-settings",
+          actionText: "去配置",
+        },
+        {
+          id: "merchant_count",
+          title: "商家入驻至少 3 个",
+          status: merchantCount >= 3 ? "completed" : merchantCount > 0 ? "warning" : "incomplete",
+          description: `当前 ${merchantCount} 个商家`,
+          actionRoute: "/merchant/list",
+          actionText: "去管理",
+        },
+        {
+          id: "product_count",
+          title: "商品数量至少 10 个",
+          status: productCount >= 10 ? "completed" : productCount > 0 ? "warning" : "incomplete",
+          description: `当前 ${productCount} 个商品`,
+          actionRoute: "/merchant/products",
+          actionText: "去管理",
+        },
+        {
+          id: "post_count",
+          title: "首批内容至少 20 条",
+          status: postCount >= 20 ? "completed" : postCount > 0 ? "warning" : "incomplete",
+          description: `当前 ${postCount} 条内容`,
+          actionRoute: "/content/posts",
+          actionText: "去管理",
+        },
+      ];
+
+      const completedCount = checklist.filter((c) => c.status === "completed").length;
+      const completionRate = Math.round((completedCount / checklist.length) * 100);
+
+      return {
+        regionId,
+        regionName: region.name,
+        checklist,
+        completionRate,
+        completedCount,
+        totalCount: checklist.length,
+      };
+    } catch (e) {
+      if (e instanceof NotFoundException) throw e;
+      return {
+        regionId,
+        regionName: "",
+        checklist: [],
+        completionRate: 0,
+        completedCount: 0,
+        totalCount: 0,
+      };
+    }
+  }
+
+  async regionHealthScore(regionId: string) {
+    try {
+      const region = await this.prisma.region.findUnique({
+        where: { id: regionId },
+      });
+      if (!region) throw new NotFoundException("区域不存在");
+
+      const today = this.getTodayStart();
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+      const [
+        todayUsers,
+        totalUsers,
+        todayPosts,
+        totalPosts,
+        todayOrders,
+        totalOrders,
+        merchantCount,
+        activeMerchantCount,
+        reportCount,
+      ] = await Promise.all([
+        this.prisma.user.count({
+          where: { addresses: { some: { regionId } }, createdAt: { gte: today } },
+        }).catch(() => 0),
+        this.prisma.user.count({
+          where: { addresses: { some: { regionId } } },
+        }).catch(() => 0),
+        this.prisma.post.count({
+          where: { regionId, createdAt: { gte: today } },
+        }).catch(() => 0),
+        this.prisma.post.count({ where: { regionId } }).catch(() => 0),
+        this.prisma.order.count({
+          where: { merchant: { regionId }, createdAt: { gte: today } },
+        }).catch(() => 0),
+        this.prisma.order.count({
+          where: { merchant: { regionId } },
+        }).catch(() => 0),
+        this.prisma.merchant.count({ where: { regionId } }).catch(() => 0),
+        this.prisma.merchant.count({
+          where: { regionId, status: "approved" },
+        }).catch(() => 0),
+        this.prisma.report.count({
+          where: { createdAt: { gte: weekAgo } },
+        }).catch(() => 0),
+      ]);
+
+      const userScore = Math.min(100, Math.round((todayUsers / Math.max(1, totalUsers * 0.01)) * 100));
+      const contentScore = Math.min(100, todayPosts * 5);
+      const transactionScore = Math.min(100, todayOrders * 3);
+      const merchantScore = merchantCount > 0 ? Math.round((activeMerchantCount / merchantCount) * 100) : 0;
+      const riskScore = Math.max(0, 100 - reportCount * 5);
+
+      const dimensions = [
+        { key: "users", name: "用户活跃", score: userScore, trend: todayUsers > 0 ? "up" : "stable" },
+        { key: "content", name: "内容活跃", score: contentScore, trend: todayPosts > 0 ? "up" : "stable" },
+        { key: "transaction", name: "交易活跃", score: transactionScore, trend: todayOrders > 0 ? "up" : "stable" },
+        { key: "merchant", name: "商家活跃", score: merchantScore, trend: activeMerchantCount > 0 ? "up" : "stable" },
+        { key: "risk", name: "风险健康", score: riskScore, trend: reportCount > 5 ? "down" : "stable" },
+      ];
+
+      const totalScore = Math.round(
+        dimensions.reduce((sum, d) => sum + d.score, 0) / dimensions.length,
+      );
+
+      let level: "excellent" | "healthy" | "warning" | "critical" = "healthy";
+      if (totalScore >= 90) level = "excellent";
+      else if (totalScore >= 70) level = "healthy";
+      else if (totalScore >= 50) level = "warning";
+      else level = "critical";
+
+      let summary = "区域运营健康";
+      if (totalScore < 50) summary = "区域运营存在较大问题，需要重点关注";
+      else if (totalScore < 70) summary = "区域运营部分指标偏低，建议优化";
+      else if (merchantCount < 3) summary = "区域运营健康，但商家数量偏少";
+
+      return {
+        regionId,
+        regionName: region.name,
+        score: totalScore,
+        level,
+        summary,
+        dimensions,
+        metrics: {
+          todayUsers,
+          totalUsers,
+          todayPosts,
+          totalPosts,
+          todayOrders,
+          totalOrders,
+          merchantCount,
+          activeMerchantCount,
+          reportCount,
+        },
+      };
+    } catch (e) {
+      if (e instanceof NotFoundException) throw e;
+      return {
+        regionId,
+        regionName: "",
+        score: 0,
+        level: "critical" as const,
+        summary: "无法获取健康数据",
+        dimensions: [],
+        metrics: {},
+      };
+    }
+  }
+
+  async regionOpsTasks(regionId: string) {
+    try {
+      const region = await this.prisma.region.findUnique({
+        where: { id: regionId },
+      });
+      if (!region) throw new NotFoundException("区域不存在");
+
+      const cached = await this.redis.get(`ops:tasks:${regionId}`);
+      if (cached) {
+        try {
+          return { tasks: JSON.parse(cached) };
+        } catch {}
+      }
+
+      return { tasks: [] };
+    } catch (e) {
+      if (e instanceof NotFoundException) throw e;
+      return { tasks: [] };
+    }
+  }
+
+  async completeRegionOpsTask(regionId: string, taskId: string) {
+    try {
+      const cached = await this.redis.get(`ops:tasks:${regionId}`);
+      if (cached) {
+        try {
+          const tasks = JSON.parse(cached);
+          const updated = tasks.map((t: any) =>
+            t.id === taskId ? { ...t, status: "completed", completedAt: new Date().toISOString() } : t,
+          );
+          await this.redis.set(`ops:tasks:${regionId}`, JSON.stringify(updated), 86400);
+        } catch {}
+      }
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async generateRegionOpsTasks(regionId: string) {
+    try {
+      const region = await this.prisma.region.findUnique({
+        where: { id: regionId },
+      });
+      if (!region) throw new NotFoundException("区域不存在");
+
+      const today = this.getTodayStart();
+      const [
+        merchantCount,
+        postCount,
+        tabbarConfig,
+        shareSettings,
+        todayOrders,
+      ] = await Promise.all([
+        this.prisma.merchant.count({ where: { regionId } }).catch(() => 0),
+        this.prisma.post.count({ where: { regionId } }).catch(() => 0),
+        this.prisma.regionTabBar.findUnique({ where: { regionId } }).catch(() => null),
+        this.prisma.shareSettings.findUnique({ where: { regionId } }).catch(() => null),
+        this.prisma.order.count({
+          where: { merchant: { regionId }, createdAt: { gte: today } },
+        }).catch(() => 0),
+      ]);
+
+      const tasks: any[] = [];
+      let taskId = 1;
+
+      if (postCount < 20) {
+        tasks.push({
+          id: `task_${taskId++}`,
+          regionId,
+          title: "内容补给",
+          description: `${region.name}内容不足，建议补充 ${20 - postCount} 条校园生活笔记`,
+          type: "content",
+          priority: "high",
+          status: "pending",
+          actionText: "去内容审核",
+          actionRoute: "/content/posts",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (merchantCount < 3) {
+        tasks.push({
+          id: `task_${taskId++}`,
+          regionId,
+          title: "商家运营",
+          description: `${region.name}商家数少于 3 个，建议补充商家或开启招商活动`,
+          type: "merchant",
+          priority: "high",
+          status: "pending",
+          actionText: "去商家管理",
+          actionRoute: "/merchant/list",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (!tabbarConfig) {
+        tasks.push({
+          id: `task_${taskId++}`,
+          regionId,
+          title: "配置补全",
+          description: `${region.name}底部导航未配置，建议进入底部导航管理`,
+          type: "config",
+          priority: "medium",
+          status: "pending",
+          actionText: "去底部导航管理",
+          actionRoute: "/region/tabbar",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (!shareSettings) {
+        tasks.push({
+          id: `task_${taskId++}`,
+          regionId,
+          title: "配置补全",
+          description: `${region.name}分享卡片未配置，建议进入分享设置`,
+          type: "config",
+          priority: "medium",
+          status: "pending",
+          actionText: "去分享设置",
+          actionRoute: "/region/share-settings",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (todayOrders === 0) {
+        tasks.push({
+          id: `task_${taskId++}`,
+          regionId,
+          title: "交易活跃",
+          description: `${region.name}今日无订单，建议检查商家状态或开展营销活动`,
+          type: "transaction",
+          priority: "low",
+          status: "pending",
+          actionText: "去营销活动",
+          actionRoute: "/marketing/center",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      await this.redis.set(`ops:tasks:${regionId}`, JSON.stringify(tasks), 86400);
+      return { tasks };
+    } catch (e) {
+      if (e instanceof NotFoundException) throw e;
+      return { tasks: [] };
+    }
+  }
+
   // ==================== 用户管理 ====================
   async users(query: any) {
     const {
       keyword,
+      userId,
       status,
       studentCertStatus,
       regionId,
+      userType,
+      startDate,
+      endDate,
+      lastLoginStart,
+      lastLoginEnd,
+      balanceSort,
       page = 1,
       pageSize = 20,
     } = query;
     const where: any = {};
-    if (keyword)
-      where.OR = [
-        { nickname: { contains: keyword } },
-        { phone: { contains: keyword } },
-      ];
-    if (status)
-      where.status =
-        status === "active"
-          ? "ACTIVE"
-          : status === "banned"
-            ? "BANNED"
-            : status.toUpperCase();
+    const and: any[] = [];
+    const normalizedKeyword = String(keyword || "").trim();
+    if (userId) where.id = String(userId);
+    if (normalizedKeyword)
+      and.push({
+        OR: [
+          { nickname: { contains: normalizedKeyword } },
+          { phone: { contains: normalizedKeyword } },
+          { openid: { contains: normalizedKeyword } },
+          { id: { contains: normalizedKeyword } },
+          { studentVerify: { realName: { contains: normalizedKeyword } } },
+          { studentVerify: { schoolName: { contains: normalizedKeyword } } },
+        ],
+      });
+    if (regionId) {
+      and.push({
+        OR: [
+          { addresses: { some: { regionId: String(regionId) } } },
+          { posts: { some: { regionId: String(regionId) } } },
+          { botAccount: { regionId: String(regionId) } },
+        ],
+      });
+    }
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(`${endDate}T23:59:59.999Z`);
+    }
+    if (lastLoginStart || lastLoginEnd) {
+      where.lastLoginAt = {};
+      if (lastLoginStart) where.lastLoginAt.gte = new Date(lastLoginStart);
+      if (lastLoginEnd) where.lastLoginAt.lte = new Date(`${lastLoginEnd}T23:59:59.999Z`);
+    }
+    if (status) {
+      const normalizedStatus = String(status).toLowerCase();
+      if (["punished", "blacklist", "penalty"].includes(normalizedStatus)) {
+        and.push({ OR: [{ status: "BANNED" }, { status: "INACTIVE" }] });
+      } else {
+        where.status =
+          normalizedStatus === "active"
+            ? "ACTIVE"
+            : normalizedStatus === "banned"
+              ? "BANNED"
+              : normalizedStatus === "disabled" || normalizedStatus === "inactive"
+                ? "INACTIVE"
+                : String(status).toUpperCase();
+      }
+    }
+    if (userType) {
+      if (userType === "robot" || userType === "4") {
+        where.userType = 4;
+      } else if (userType === "merchant") {
+        and.push({ merchantShops: { some: {} } });
+      } else if (userType === "rider") {
+        and.push({ regionRiders: { some: {} } });
+      } else if (userType === "agent") {
+        and.push({ cityAgent: { isNot: null } });
+      } else {
+        where.userType = 1;
+      }
+    }
     if (studentCertStatus) {
       where.studentVerify =
         studentCertStatus === "none"
           ? null
           : { status: studentCertStatus.toUpperCase() };
     }
+    if (and.length) where.AND = and;
 
-    const [list, total] = await Promise.all([
+    const orderBy =
+      balanceSort === "asc"
+        ? { wallet: { balance: "asc" as const } }
+        : balanceSort === "desc"
+          ? { wallet: { balance: "desc" as const } }
+          : { createdAt: "desc" as const };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [list, total, totalUsers, realUsers, robotUsers, todayNewUsers, verifiedUsers, disabledUsers, regions] = await Promise.all([
       this.prisma.user.findMany({
         where,
         include: {
           profile: true,
           studentVerify: true,
           wallet: true,
-          _count: { select: { posts: true, follows: true, followers: true } },
+          botAccount: true,
+          addresses: { select: { regionId: true }, take: 1, orderBy: { createdAt: "desc" } },
+          _count: { select: { posts: true, comments: true, orders: true, reports: true } },
         },
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy,
       }),
       this.prisma.user.count({ where }),
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { userType: { not: 4 } } }),
+      this.prisma.user.count({ where: { userType: 4 } }),
+      this.prisma.user.count({ where: { createdAt: { gte: today } } }),
+      this.prisma.studentVerify.count({ where: { status: "APPROVED" } }),
+      this.prisma.user.count({ where: { OR: [{ status: "BANNED" }, { status: "INACTIVE" }] } }),
+      this.prisma.region.findMany({ select: { id: true, name: true } }),
     ]);
+    const regionNameMap = new Map(regions.map((r) => [r.id, r.name]));
 
     return {
       list: list.map((u) => ({
         id: u.id,
+        openid: u.openid,
         nickname: u.nickname,
         avatar: u.avatar,
         phone: u.phone,
+        userType: u.userType === 4 ? "robot" : "miniapp",
+        typeLabel: u.userType === 4 ? "机器人" : "小程序用户",
+        regionId: u.botAccount?.regionId || u.addresses?.[0]?.regionId || "",
+        regionName: regionNameMap.get(u.botAccount?.regionId || u.addresses?.[0]?.regionId || "") || u.profile?.region || "",
         gender: u.profile?.gender,
-        birthday: u.profile?.birthday,
         school: u.studentVerify?.schoolName || u.profile?.school,
         realName: u.studentVerify?.realName,
         studentId: u.studentVerify?.studentId,
-        major: u.studentVerify?.major || u.profile?.major,
-        grade: u.studentVerify?.grade || u.profile?.grade,
         studentCertStatus: u.studentVerify?.status?.toLowerCase() || "none",
-        studentCardImage: u.studentVerify?.cardImage,
         balance: Math.round(Number(u.wallet?.balance || 0) * 100),
-        points: 0,
-        status:
-          u.status === "ACTIVE"
-            ? "active"
-            : u.status === "BANNED"
-              ? "banned"
-              : "disabled",
+        freezeAmount: Math.round(Number(u.wallet?.freeze || 0) * 100),
+        status: u.status === "ACTIVE" ? "active" : u.status === "BANNED" ? "banned" : "disabled",
         postCount: u._count.posts,
-        followCount: u._count.follows,
-        fansCount: u._count.followers,
+        commentCount: u._count.comments,
+        reportCount: u._count.reports,
+        orderCount: u._count.orders,
+        registerIp: "",
         createdAt: u.createdAt,
         lastLoginAt: u.lastLoginAt,
+        lastLoginIp: u.lastLoginIp,
       })),
       total,
       page: +page,
       pageSize: +pageSize,
+      stats: {
+        totalUsers,
+        realUsers,
+        robotUsers,
+        todayNewUsers,
+        verifiedUsers,
+        disabledUsers,
+      },
     };
+  }
+
+  async userStats() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [totalUsers, realUsers, robotUsers, todayNewUsers, verifiedUsers, disabledUsers] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { userType: { not: 4 } } }),
+      this.prisma.user.count({ where: { userType: 4 } }),
+      this.prisma.user.count({ where: { createdAt: { gte: today } } }),
+      this.prisma.studentVerify.count({ where: { status: "APPROVED" } }),
+      this.prisma.user.count({ where: { OR: [{ status: "BANNED" }, { status: "INACTIVE" }] } }),
+    ]);
+
+    return {
+      totalUsers,
+      realUsers,
+      robotUsers,
+      todayNewUsers,
+      verifiedUsers,
+      disabledUsers,
+    };
+  }
+
+  async createRobots(dto: any, operatorId?: string, ip?: string) {
+    const {
+      regionId,
+      count = 1,
+      password = "admin123",
+      nicknamePrefix = "萌友",
+      gender = "random",
+      avatarMode = "random",
+      enabled = true,
+      remark = "",
+    } = dto;
+
+    if (!regionId) throw new BadRequestException("请选择所属区域");
+    if (count < 1 || count > 500) throw new BadRequestException("机器人数量需在 1-500 之间");
+
+    const region = await this.prisma.region.findUnique({ where: { id: regionId } });
+    if (!region) throw new NotFoundException("区域不存在");
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const genders = ["MALE", "FEMALE", "UNKNOWN"];
+    let created = 0;
+    let failed = 0;
+
+    const avatars = [
+      "https://api.dicebear.com/7.x/avataaars/svg?seed=",
+      "https://api.dicebear.com/7.x/bottts/svg?seed=",
+      "https://api.dicebear.com/7.x/lorelei/svg?seed=",
+    ];
+
+    for (let i = 0; i < count; i++) {
+      try {
+        const suffix = String(Date.now()).slice(-6) + String(i).padStart(3, "0");
+        const nickname = `${nicknamePrefix}${suffix}`;
+        const openid = `bot_${regionId}_${Date.now()}_${i}_${randomBytes(4).toString("hex")}`;
+        const selectedGender = gender === "random" ? genders[randomInt(3)] : gender.toUpperCase();
+        const avatarUrl = avatarMode === "random"
+          ? avatars[randomInt(avatars.length)] + openid
+          : "";
+
+        const user = await this.prisma.user.create({
+          data: {
+            openid,
+            nickname,
+            avatar: avatarUrl,
+            status: enabled ? "ACTIVE" : "INACTIVE",
+            userType: 4,
+            profile: {
+              create: {
+                gender: selectedGender as any,
+                region: region.name,
+              },
+            },
+            wallet: {
+              create: { balance: 0, freeze: 0, totalIn: 0, totalOut: 0 },
+            },
+            botAccount: {
+              create: {
+                regionId,
+                status: enabled ? "active" : "disabled",
+                dailyLimit: 10,
+              },
+            },
+            addresses: {
+              create: {
+                regionId,
+                name: "默认地址",
+                phone: "",
+                detail: region.name,
+                isDefault: true,
+              },
+            },
+          },
+        });
+        created++;
+      } catch (e) {
+        failed++;
+      }
+    }
+
+    if (operatorId) {
+      await this.logOperation(
+        operatorId,
+        "create_robots",
+        "user",
+        regionId,
+        "region",
+        { count: created, failed, regionId, nicknamePrefix },
+        ip,
+      );
+    }
+
+    return { success: true, created, failed };
   }
 
   async userDetail(id: string) {
@@ -336,38 +1089,71 @@ export class AdminService {
         profile: true,
         studentVerify: true,
         wallet: true,
-        _count: { select: { posts: true, follows: true, followers: true } },
+        botAccount: true,
+        addresses: { select: { regionId: true }, take: 1, orderBy: { createdAt: "desc" } },
+        _count: {
+          select: {
+            posts: true,
+            comments: true,
+            likes: true,
+            favorites: true,
+            reports: true,
+            orders: true,
+            follows: true,
+            followers: true,
+            secondHands: true,
+            errandOrders: true,
+          },
+        },
       },
     });
     if (!u) throw new NotFoundException("用户不存在");
+
+    const regions = await this.prisma.region.findMany({ select: { id: true, name: true } });
+    const regionNameMap = new Map(regions.map((r) => [r.id, r.name]));
+    const regionId = (u as any).botAccount?.regionId || u.addresses?.[0]?.regionId || "";
+
     return {
       id: u.id,
+      openid: u.openid,
+      unionid: u.unionid,
       nickname: u.nickname,
       avatar: u.avatar,
       phone: u.phone,
+      userType: u.userType === 4 ? "robot" : "miniapp",
+      typeLabel: u.userType === 4 ? "机器人" : "小程序用户",
+      regionId,
+      regionName: regionNameMap.get(regionId) || u.profile?.region || "",
       gender: u.profile?.gender,
-      birthday: u.profile?.birthday,
       school: u.studentVerify?.schoolName || u.profile?.school,
       realName: u.studentVerify?.realName,
       studentId: u.studentVerify?.studentId,
-      major: u.studentVerify?.major || u.profile?.major,
-      grade: u.studentVerify?.grade || u.profile?.grade,
       studentCertStatus: u.studentVerify?.status?.toLowerCase() || "none",
       studentCardImage: u.studentVerify?.cardImage,
       balance: Math.round(Number(u.wallet?.balance || 0) * 100),
-      points: 0,
-      status:
-        u.status === "ACTIVE"
-          ? "active"
-          : u.status === "BANNED"
-            ? "banned"
-            : "disabled",
+      freezeAmount: Math.round(Number(u.wallet?.freeze || 0) * 100),
+      totalIn: Math.round(Number(u.wallet?.totalIn || 0) * 100),
+      totalOut: Math.round(Number(u.wallet?.totalOut || 0) * 100),
+      status: u.status === "ACTIVE" ? "active" : u.status === "BANNED" ? "banned" : "disabled",
+      bio: u.profile?.bio,
       postCount: u._count.posts,
+      commentCount: u._count.comments,
+      likeCount: u._count.likes,
+      favoriteCount: u._count.favorites,
+      reportCount: u._count.reports,
+      orderCount: u._count.orders,
       followCount: u._count.follows,
       fansCount: u._count.followers,
-      bio: u.profile?.bio,
+      secondHandCount: u._count.secondHands,
+      errandOrderCount: u._count.errandOrders,
       createdAt: u.createdAt,
       lastLoginAt: u.lastLoginAt,
+      lastLoginIp: u.lastLoginIp,
+      botInfo: (u as any).botAccount ? {
+        status: (u as any).botAccount.status,
+        dailyLimit: (u as any).botAccount.dailyLimit,
+        createdAt: (u as any).botAccount.createdAt,
+      } : null,
     };
   }
 
@@ -442,7 +1228,7 @@ export class AdminService {
   // ==================== 区域管理 ====================
   async regions(query: any) {
     const { keyword, status, page = 1, pageSize = 20 } = query;
-    const where: any = {};
+    const where: any = { code: { not: "default" } };
     if (keyword)
       where.OR = [
         { name: { contains: keyword } },
@@ -500,7 +1286,14 @@ export class AdminService {
           longitude: this.toFloatOrNull(dto.longitude),
           radius: this.toPositiveInt(dto.serviceRadius, 5000),
           studentOnly: Boolean(dto.studentOnly),
+          isOpen:
+            dto.isOpen !== undefined
+              ? Boolean(dto.isOpen)
+              : dto.status !== undefined
+                ? Boolean(dto.status)
+                : true,
           sortOrder: this.toInt(dto.sort, 0),
+          settings: dto.settings ?? undefined,
           // 新增字段
           logo: this.nullableString(dto.logo),
           distanceLimit: this.toPositiveInt(dto.distanceLimit, 0),
@@ -522,11 +1315,19 @@ export class AdminService {
           onlyStudentAuthUsers: Boolean(dto.onlyStudentAuthUsers),
           groupChatEnabled: Boolean(dto.groupChatEnabled),
           enableQrcodeFilter: Boolean(dto.enableQrcodeFilter),
+          showCarousel: dto.showCarousel !== undefined ? Boolean(dto.showCarousel) : true,
+          showAnnouncement:
+            dto.showAnnouncement !== undefined ? Boolean(dto.showAnnouncement) : true,
+          showKingkong: dto.showKingkong !== undefined ? Boolean(dto.showKingkong) : true,
+          homeFeatureStyle: this.nullableString(dto.homeFeatureStyle) || 'default',
           homeNavLayout: this.toPositiveInt(dto.homeNavLayout, 1),
           messagePageLayout: this.nullableString(dto.messagePageLayout) || 'default',
           profilePageLayout: this.nullableString(dto.profilePageLayout) || 'default',
           carouselImages: dto.carouselImages ?? undefined,
-          regionTabs: dto.regionTabs ?? undefined,
+          regionTabs:
+            dto.regionTabs !== undefined
+              ? this.normalizeRegionTabs(dto.regionTabs)
+              : undefined,
           homeLeaderboard: dto.homeLeaderboard ?? undefined,
           messageIcons: dto.messageIcons ?? undefined,
           messageNavigation: dto.messageNavigation ?? undefined,
@@ -534,12 +1335,95 @@ export class AdminService {
           homeNavLayoutConfig: dto.homeNavLayoutConfig ?? undefined,
         },
       });
+      await this.generateRegionDefaults(region.id);
       return this.toAdminRegion(region);
     } catch (error: any) {
       if (error?.code === "P2002") {
         throw new ConflictException("区域编码已存在，请换一个编码后再保存");
       }
       throw error;
+    }
+  }
+
+  private async generateRegionDefaults(regionId: string) {
+    try {
+      const defaultBottomTabs = [
+        { id: "home", name: "首页", pagePath: "pages/tabbar/index/index", action: "", iconPath: "/static/tabbar/home.png", selectedIconPath: "/static/tabbar/home-active.png", color: "#8A8A8A", selectedColor: "#1677ff", width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 0, navType: "bottom" },
+        { id: "circle", name: "圈子", pagePath: "pages/tabbar/containers/containers", action: "", iconPath: "/static/tabbar/circle.png", selectedIconPath: "/static/tabbar/circle-active.png", color: "#8A8A8A", selectedColor: "#1677ff", width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 1, navType: "bottom" },
+        { id: "publish", name: "发布", pagePath: "", action: "publish", iconPath: "/static/tabbar/publish.png", selectedIconPath: "/static/tabbar/publish-active.png", color: "#8A8A8A", selectedColor: "#1677ff", width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 2, navType: "bottom" },
+        { id: "message", name: "消息", pagePath: "pages/tabbar/news/news", action: "", iconPath: "/static/tabbar/message.png", selectedIconPath: "/static/tabbar/message-active.png", color: "#8A8A8A", selectedColor: "#1677ff", width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 3, navType: "bottom" },
+        { id: "mine", name: "我的", pagePath: "pages/tabbar/auth/PersonalHomepage", action: "", iconPath: "/static/tabbar/mine.png", selectedIconPath: "/static/tabbar/mine-active.png", color: "#8A8A8A", selectedColor: "#1677ff", width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 4, navType: "bottom" },
+      ];
+      const defaultHomeTabs = this.normalizeRegionTabs([
+        { name: "笔记", type: "note", enabled: true, icon: "", image: "", linkType: "filter", path: "pagesB/post/post", appId: "", query: "", remark: "" },
+        { name: "外卖", type: "takeout", enabled: true, icon: "", image: "", linkType: "filter", path: "pagesA/selection/selection", appId: "", query: "", remark: "" },
+        { name: "二手", type: "secondhand", enabled: true, icon: "", image: "", linkType: "filter", path: "pagesA/SecondHand/Second-hand-selease/Second-hand-selease", appId: "", query: "", remark: "" },
+        { name: "活动", type: "activity", enabled: true, icon: "", image: "", linkType: "filter", path: "pagesA/news/SharingCourtesy/SharingCourtesy", appId: "", query: "", remark: "" },
+      ]);
+      const defaultHomeNav = [
+        { name: "笔记", subtitle: "", icon: "", page: "pagesB/post/post", path: "pagesB/post/post", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 0 },
+        { name: "外卖", subtitle: "", icon: "", page: "pagesA/selection/selection", path: "pagesA/selection/selection", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 1 },
+        { name: "二手", subtitle: "", icon: "", page: "pagesA/SecondHand/Second-hand-selease/Second-hand-selease", path: "pagesA/SecondHand/Second-hand-selease/Second-hand-selease", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 2 },
+        { name: "活动", subtitle: "", icon: "", page: "pagesA/news/SharingCourtesy/SharingCourtesy", path: "pagesA/news/SharingCourtesy/SharingCourtesy", linkType: "internal", appId: "", query: "", remark: "", enabled: true, sortOrder: 3 },
+      ];
+      const defaultProfileItems = [
+        { id: "orders", title: "我的订单", description: "查看订单、配送和售后", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/order/order", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 0, requireLogin: true },
+        { id: "wallet", title: "我的钱包", description: "余额、提现和交易流水", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/withdraw/withdraw", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 1, requireLogin: true },
+        { id: "share", title: "分享有礼", description: "邀请同学加入本地生活圈", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/news/SharingCourtesy/SharingCourtesy", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 2, requireLogin: true },
+        { id: "merchant", title: "商家中心", description: "商家入驻与店铺管理", icon: "", main_image: "/static/logo.jpg", path: "/pagesA/MerchantManagement/managerial", query: "", type: "internal_jump", navigation_permission: "merchant", enabled: true, sortOrder: 3, requireLogin: true },
+        { id: "settings", title: "账号设置", description: "资料、隐私和系统设置", icon: "", main_image: "/static/logo.jpg", path: "/pages/auth/settings/settings", query: "", type: "internal_jump", navigation_permission: "unlimited", enabled: true, sortOrder: 4, requireLogin: false },
+      ];
+      const region = await this.prisma.region.findUnique({
+        where: { id: regionId },
+        select: { regionTabs: true, homeNavLayoutConfig: true, profileLayoutItems: true },
+      });
+      const regionUpdate: any = {};
+      if (!Array.isArray(region?.regionTabs) || !region.regionTabs.length) {
+        regionUpdate.regionTabs = defaultHomeTabs;
+      }
+      if (!Array.isArray(region?.homeNavLayoutConfig) || !region.homeNavLayoutConfig.length) {
+        regionUpdate.homeNavLayoutConfig = defaultHomeNav;
+      }
+      if (!Array.isArray(region?.profileLayoutItems) || !region.profileLayoutItems.length) {
+        regionUpdate.profileLayoutItems = defaultProfileItems;
+      }
+
+      const operations: any[] = [
+        this.prisma.regionTabBar.upsert({
+          where: { regionId },
+          update: {},
+          create: {
+            regionId,
+            config: {
+              color: "#8A8A8A",
+              selectedColor: "#1677ff",
+              backgroundColor: "#ffffff",
+              borderStyle: "black",
+              list: defaultBottomTabs,
+              tabs: defaultBottomTabs,
+            }
+          }
+        }),
+        this.prisma.shareSettings.upsert({
+          where: { regionId },
+          update: {},
+          create: {
+            regionId,
+            activityTitle: "校园生活，尽在这里",
+            activityImage: "",
+            isEnabled: true,
+            inviterReward: 0,
+            inviteeReward: 0,
+            dailyInviteLimit: 100,
+          }
+        })
+      ];
+      if (Object.keys(regionUpdate).length) {
+        operations.push(this.prisma.region.update({ where: { id: regionId }, data: regionUpdate }));
+      }
+      await this.prisma.$transaction(operations);
+    } catch (err) {
+      console.error(`为区域 ${regionId} 生成默认配置失败:`, err);
     }
   }
 
@@ -595,24 +1479,46 @@ export class AdminService {
     if (dto.withdrawRate !== undefined) data.withdrawRate = this.toDecimalOrNull(dto.withdrawRate);
     if (dto.commissionRate !== undefined) data.commissionRate = this.toDecimalOrNull(dto.commissionRate);
     if (dto.selfUnbanFee !== undefined) data.selfUnbanFee = this.toDecimalOrNull(dto.selfUnbanFee);
-    if (dto.showHotList !== undefined) data.showHotList = Boolean(dto.showHotList);
-    if (dto.hotFeaturedDisplay !== undefined) data.hotFeaturedDisplay = this.nullableString(dto.hotFeaturedDisplay) || 'none';
+    if (dto.showHotList !== undefined || dto.show_hot_list !== undefined)
+      data.showHotList = Boolean(dto.showHotList ?? dto.show_hot_list);
+    if (dto.hotFeaturedDisplay !== undefined || dto.hot_featured_display !== undefined)
+      data.hotFeaturedDisplay = this.nullableString(dto.hotFeaturedDisplay ?? dto.hot_featured_display) || 'none';
     if (dto.isForceGuidance !== undefined) data.isForceGuidance = Boolean(dto.isForceGuidance);
-    if (dto.privateMessageEnabled !== undefined) data.privateMessageEnabled = Boolean(dto.privateMessageEnabled);
+    if (dto.privateMessageEnabled !== undefined || dto.private_message_enabled !== undefined)
+      data.privateMessageEnabled = Boolean(dto.privateMessageEnabled ?? dto.private_message_enabled);
     if (dto.contactsRequireStudentAuth !== undefined) data.contactsRequireStudentAuth = Boolean(dto.contactsRequireStudentAuth);
     if (dto.onlyStudentAuthUsers !== undefined) data.onlyStudentAuthUsers = Boolean(dto.onlyStudentAuthUsers);
     if (dto.groupChatEnabled !== undefined) data.groupChatEnabled = Boolean(dto.groupChatEnabled);
     if (dto.enableQrcodeFilter !== undefined) data.enableQrcodeFilter = Boolean(dto.enableQrcodeFilter);
-    if (dto.homeNavLayout !== undefined) data.homeNavLayout = this.toPositiveInt(dto.homeNavLayout, 1);
-    if (dto.messagePageLayout !== undefined) data.messagePageLayout = this.nullableString(dto.messagePageLayout) || 'default';
-    if (dto.profilePageLayout !== undefined) data.profilePageLayout = this.nullableString(dto.profilePageLayout) || 'default';
-    if (dto.carouselImages !== undefined) data.carouselImages = dto.carouselImages ?? null;
-    if (dto.regionTabs !== undefined) data.regionTabs = dto.regionTabs ?? null;
-    if (dto.homeLeaderboard !== undefined) data.homeLeaderboard = dto.homeLeaderboard ?? null;
-    if (dto.messageIcons !== undefined) data.messageIcons = dto.messageIcons ?? null;
-    if (dto.messageNavigation !== undefined) data.messageNavigation = dto.messageNavigation ?? null;
-    if (dto.profileLayoutItems !== undefined) data.profileLayoutItems = dto.profileLayoutItems ?? null;
-    if (dto.homeNavLayoutConfig !== undefined) data.homeNavLayoutConfig = dto.homeNavLayoutConfig ?? null;
+    // 页面装修配置
+    if (dto.showCarousel !== undefined || dto.show_carousel !== undefined)
+      data.showCarousel = Boolean(dto.showCarousel ?? dto.show_carousel);
+    if (dto.showAnnouncement !== undefined || dto.show_announcement !== undefined)
+      data.showAnnouncement = Boolean(dto.showAnnouncement ?? dto.show_announcement);
+    if (dto.showKingkong !== undefined || dto.show_kingkong !== undefined)
+      data.showKingkong = Boolean(dto.showKingkong ?? dto.show_kingkong);
+    if (dto.home_feature_style !== undefined || dto.homeFeatureStyle !== undefined)
+      data.homeFeatureStyle = this.nullableString(dto.homeFeatureStyle ?? dto.home_feature_style) || 'default';
+    if (dto.homeNavLayout !== undefined || dto.home_nav_layout !== undefined)
+      data.homeNavLayout = this.toPositiveInt(dto.homeNavLayout ?? dto.home_nav_layout, 1);
+    if (dto.messagePageLayout !== undefined || dto.message_page_layout !== undefined)
+      data.messagePageLayout = this.nullableString(dto.messagePageLayout ?? dto.message_page_layout) || 'default';
+    if (dto.profilePageLayout !== undefined || dto.profile_page_layout !== undefined)
+      data.profilePageLayout = this.nullableString(dto.profilePageLayout ?? dto.profile_page_layout) || 'default';
+    if (dto.carouselImages !== undefined || dto.carousel_images !== undefined)
+      data.carouselImages = dto.carouselImages ?? dto.carousel_images ?? null;
+    if (dto.regionTabs !== undefined || dto.region_tabs !== undefined)
+      data.regionTabs = this.normalizeRegionTabs(dto.regionTabs ?? dto.region_tabs);
+    if (dto.homeLeaderboard !== undefined || dto.home_leaderboard !== undefined)
+      data.homeLeaderboard = dto.homeLeaderboard ?? dto.home_leaderboard ?? null;
+    if (dto.messageIcons !== undefined || dto.message_icons !== undefined)
+      data.messageIcons = dto.messageIcons ?? dto.message_icons ?? null;
+    if (dto.messageNavigation !== undefined || dto.message_navigation !== undefined)
+      data.messageNavigation = dto.messageNavigation ?? dto.message_navigation ?? null;
+    if (dto.profileLayoutItems !== undefined || dto.profile_layout_items !== undefined)
+      data.profileLayoutItems = dto.profileLayoutItems ?? dto.profile_layout_items ?? null;
+    if (dto.homeNavLayoutConfig !== undefined || dto.home_nav_layout_config !== undefined)
+      data.homeNavLayoutConfig = dto.homeNavLayoutConfig ?? dto.home_nav_layout_config ?? null;
 
     const region = await this.prisma.region.update({ where: { id }, data });
     return this.toAdminRegion(region);
@@ -626,6 +1532,7 @@ export class AdminService {
       code: r.code,
       description: r.description || "",
       coverImage: r.cover || "",
+      background_url: r.cover || "",
       province,
       city,
       district,
@@ -634,6 +1541,7 @@ export class AdminService {
       longitude: r.longitude,
       serviceRadius: r.radius,
       studentOnly: r.studentOnly,
+      isOpen: r.isOpen,
       status: r.isOpen ? 1 : 0,
       sort: r.sortOrder,
       settings: r.settings || {},
@@ -653,33 +1561,62 @@ export class AdminService {
       commissionRate: r.commissionRate ? Number(r.commissionRate) : 0,
       selfUnbanFee: r.selfUnbanFee ? Number(r.selfUnbanFee) : 0,
       showHotList: r.showHotList ?? false,
+      show_hot_list: r.showHotList ?? false,
+      showCarousel: r.showCarousel ?? true,
+      show_carousel: r.showCarousel ?? true,
+      showAnnouncement: r.showAnnouncement ?? true,
+      show_announcement: r.showAnnouncement ?? true,
+      showKingkong: r.showKingkong ?? true,
+      show_kingkong: r.showKingkong ?? true,
       hotFeaturedDisplay: r.hotFeaturedDisplay || "none",
+      hot_featured_display: r.hotFeaturedDisplay || "none",
       isForceGuidance: r.isForceGuidance ?? false,
       privateMessageEnabled: r.privateMessageEnabled ?? true,
+      private_message_enabled: r.privateMessageEnabled ?? true,
       contactsRequireStudentAuth: r.contactsRequireStudentAuth ?? false,
       onlyStudentAuthUsers: r.onlyStudentAuthUsers ?? false,
       groupChatEnabled: r.groupChatEnabled ?? false,
       enableQrcodeFilter: r.enableQrcodeFilter ?? false,
       homeNavLayout: r.homeNavLayout ?? 1,
+      home_nav_layout: r.homeNavLayout ?? 1,
       messagePageLayout: r.messagePageLayout || "default",
+      message_page_layout: r.messagePageLayout || "default",
       profilePageLayout: r.profilePageLayout || "default",
+      profile_page_layout: r.profilePageLayout || "default",
       carouselImages: r.carouselImages ?? [],
-      regionTabs: r.regionTabs ?? [],
+      carousel_images: r.carouselImages ?? [],
+      regionTabs: this.normalizeRegionTabs(r.regionTabs),
+      region_tabs: this.normalizeRegionTabs(r.regionTabs),
       homeLeaderboard: r.homeLeaderboard ?? { enabled: false, items: [] },
+      home_leaderboard: r.homeLeaderboard ?? { enabled: false, items: [] },
       messageIcons: r.messageIcons ?? {},
+      message_icons: r.messageIcons ?? {},
       messageNavigation: r.messageNavigation ?? { cards: [] },
+      message_navigation: r.messageNavigation ?? { cards: [] },
       profileLayoutItems: r.profileLayoutItems ?? [],
+      profile_layout_items: r.profileLayoutItems ?? [],
       homeNavLayoutConfig: r.homeNavLayoutConfig ?? { title: { show: false, text: "", color: "#333333", fontSize: 16, fontWeight: "bold" }, showLayoutSwitch: false },
+      home_nav_layout_config: r.homeNavLayoutConfig ?? { title: { show: false, text: "", color: "#333333", fontSize: 16, fontWeight: "bold" }, showLayoutSwitch: false },
     };
   }
 
+  /** 线性裁剪首尾的 - 和 _（避免 /[-_]+$/ 形式正则的多项式回溯） */
+  private trimEdgeSeparators(value: string) {
+    let start = 0;
+    let end = value.length;
+    while (start < end && (value[start] === "-" || value[start] === "_")) start++;
+    while (end > start && (value[end - 1] === "-" || value[end - 1] === "_")) end--;
+    return value.slice(start, end);
+  }
+
   private normalizeRegionCode(value: any) {
-    const code = String(value || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+    const code = this.trimEdgeSeparators(
+      String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9_-]/g, ""),
+    );
     if (!code)
       return `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     if (code.length > 48) return code.slice(0, 48);
@@ -687,11 +1624,12 @@ export class AdminService {
   }
 
   private generateRegionCode(name: string) {
-    const ascii = name
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+    const ascii = this.trimEdgeSeparators(
+      name
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9_-]/g, ""),
+    );
     return (
       ascii || `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     );
@@ -710,6 +1648,30 @@ export class AdminService {
   private toPositiveInt(value: any, fallback: number) {
     const n = this.toInt(value, fallback);
     return n > 0 ? n : fallback;
+  }
+
+  private getZodiac(birthday?: Date | string | null) {
+    if (!birthday) return "";
+    const date = birthday instanceof Date ? birthday : new Date(birthday);
+    if (Number.isNaN(date.getTime())) return "";
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const signs = [
+      ["摩羯座", 20],
+      ["水瓶座", 19],
+      ["双鱼座", 21],
+      ["白羊座", 20],
+      ["金牛座", 21],
+      ["双子座", 22],
+      ["巨蟹座", 23],
+      ["狮子座", 23],
+      ["处女座", 23],
+      ["天秤座", 24],
+      ["天蝎座", 23],
+      ["射手座", 22],
+      ["摩羯座", 32],
+    ] as const;
+    return day < signs[month - 1][1] ? signs[month - 1][0] : signs[month][0];
   }
 
   private toFloatOrNull(value: any) {
@@ -935,7 +1897,7 @@ export class AdminService {
       ];
     if (auditStatus) where.auditStatus = auditStatus;
     if (status !== undefined && status !== "") {
-      where.status = String(status) === "0" ? "NORMAL" : "DELETED";
+      where.status = String(status);
     }
     if (regionId) {
       where.post = { regionId };
@@ -967,7 +1929,7 @@ export class AdminService {
         regionId: c.post?.regionId,
         regionName: c.post?.region?.name || null,
         userId: c.userId,
-        userNickname: c.user.nickname,
+        userName: c.user.nickname,
         userAvatar: c.user.avatar,
         parentId: c.parentId,
         content: c.content,
@@ -983,12 +1945,25 @@ export class AdminService {
     };
   }
 
+  async getCommentsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [total, todayCount, pending, deleted] = await Promise.all([
+        this.prisma.comment.count().catch(() => 0),
+        this.prisma.comment.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.comment.count({ where: { auditStatus: "pending", status: { not: "deleted" } } }).catch(() => 0),
+        this.prisma.comment.count({ where: { status: "deleted" } }).catch(() => 0),
+      ]);
+      return { total, today: todayCount, pending, deleted };
+    } catch { return { total: 0, today: 0, pending: 0, deleted: 0 }; }
+  }
+
   async deleteComment(id: string, operatorId?: string, ip?: string) {
     const comment = await this.prisma.comment.findUnique({ where: { id } });
     if (!comment) throw new NotFoundException("评论不存在");
     await this.prisma.comment.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: { status: "deleted", deletedAt: new Date() },
     });
     await this.logOperation(
       operatorId || "",
@@ -1005,12 +1980,24 @@ export class AdminService {
   async auditComment(id: string, dto: { status: string; reason?: string }) {
     const comment = await this.prisma.comment.findUnique({ where: { id } });
     if (!comment) throw new NotFoundException("评论不存在");
-    if (dto.status === "rejected") {
-      await this.prisma.comment.update({
-        where: { id },
-        data: { deletedAt: new Date() },
-      });
+    const updateData: any = {};
+    if (dto.status === "active") {
+      updateData.status = "active";
+      updateData.auditStatus = "approved";
+      updateData.deletedAt = null;
+    } else if (dto.status === "hidden") {
+      updateData.status = "hidden";
+      updateData.auditStatus = "approved";
+    } else if (dto.status === "deleted" || dto.status === "rejected") {
+      updateData.status = "deleted";
+      updateData.auditStatus = dto.status === "rejected" ? "rejected" : "approved";
+      updateData.deletedAt = new Date();
     }
+    if (dto.reason) updateData.auditReason = dto.reason;
+    await this.prisma.comment.update({
+      where: { id },
+      data: updateData,
+    });
     return { success: true };
   }
 
@@ -1264,6 +2251,83 @@ export class AdminService {
     return { success: true, count: dto.ids.length };
   }
 
+  async createMerchant(dto: any, operatorId?: string, ip?: string) {
+    const data: any = {
+      name: dto.name,
+      logo: dto.logo,
+      cover: dto.cover,
+      phone: dto.phone,
+      contactPerson: dto.contactPerson,
+      address: dto.address,
+      latitude: dto.latitude ? Number(dto.latitude) : null,
+      longitude: dto.longitude ? Number(dto.longitude) : null,
+      businessHours: dto.businessHours,
+      description: dto.description,
+      regionId: dto.regionId,
+      categoryId: dto.categoryId,
+      status: dto.status || 'pending',
+    };
+    if (dto.userId) data.userId = dto.userId;
+    const merchant = await this.prisma.merchant.create({ data });
+    await this.logOperation(
+      operatorId || '',
+      'create',
+      'merchant',
+      merchant.id,
+      'merchant',
+      { name: dto.name },
+      ip,
+    );
+    return { success: true, data: merchant };
+  }
+
+  async updateMerchant(id: string, dto: any, operatorId?: string, ip?: string) {
+    const merchant = await this.prisma.merchant.findUnique({ where: { id } });
+    if (!merchant) throw new NotFoundException('商家不存在');
+    const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.logo !== undefined) data.logo = dto.logo;
+    if (dto.cover !== undefined) data.cover = dto.cover;
+    if (dto.phone !== undefined) data.phone = dto.phone;
+    if (dto.contactPerson !== undefined) data.contactPerson = dto.contactPerson;
+    if (dto.address !== undefined) data.address = dto.address;
+    if (dto.latitude !== undefined) data.latitude = Number(dto.latitude);
+    if (dto.longitude !== undefined) data.longitude = Number(dto.longitude);
+    if (dto.businessHours !== undefined) data.businessHours = dto.businessHours;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.regionId !== undefined) data.regionId = dto.regionId;
+    if (dto.categoryId !== undefined) data.categoryId = dto.categoryId;
+    if (dto.status !== undefined) data.status = dto.status;
+    const updated = await this.prisma.merchant.update({ where: { id }, data });
+    await this.logOperation(
+      operatorId || '',
+      'update',
+      'merchant',
+      id,
+      'merchant',
+      { name: dto.name },
+      ip,
+    );
+    return { success: true, data: updated };
+  }
+
+  async deleteMerchant(id: string, operatorId?: string, ip?: string) {
+    const merchant = await this.prisma.merchant.findUnique({ where: { id } });
+    if (!merchant) throw new NotFoundException('商家不存在');
+    // 软删除：将状态改为 closed
+    await this.prisma.merchant.update({ where: { id }, data: { status: 'closed' } });
+    await this.logOperation(
+      operatorId || '',
+      'delete',
+      'merchant',
+      id,
+      'merchant',
+      null,
+      ip,
+    );
+    return { success: true };
+  }
+
   // ==================== 商城：分类/商品 ====================
   async categories(_query: any) {
     const list = await this.prisma.category.findMany({
@@ -1275,11 +2339,12 @@ export class AdminService {
   }
 
   async products(query: any) {
-    const { keyword, status, merchantId, page = 1, pageSize = 20 } = query;
+    const { keyword, status, merchantId, categoryId, page = 1, pageSize = 20 } = query;
     const where: any = {};
     if (keyword) where.name = { contains: keyword };
     if (status) where.status = status === "on" ? "on_sale" : status;
     if (merchantId) where.merchantId = merchantId;
+    if (categoryId) where.categoryId = categoryId;
     const [list, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
@@ -1386,6 +2451,7 @@ export class AdminService {
       productId,
       orderId,
       merchantId,
+      status,
       page = 1,
       pageSize = 20,
     } = query;
@@ -1395,6 +2461,7 @@ export class AdminService {
     if (productId) where.productId = productId;
     if (orderId) where.orderId = orderId;
     if (merchantId) where.merchantId = merchantId;
+    if (status) where.status = status;
 
     const [list, total] = await Promise.all([
       this.prisma.review.findMany({
@@ -1420,12 +2487,14 @@ export class AdminService {
         productName: r.product?.name,
         orderId: r.orderId,
         orderNo: r.order?.orderNo,
+        merchantId: r.merchantId,
         rating: r.rating,
         content: r.content,
         images: r.images,
         isAnonymous: r.isAnonymous,
         reply: r.reply,
         replyAt: r.replyAt,
+        status: r.status,
         createdAt: r.createdAt,
       })),
       total,
@@ -1469,6 +2538,25 @@ export class AdminService {
       id,
       "review",
       { reply },
+      ip,
+    );
+    return { success: true };
+  }
+
+  async updateReviewStatus(id: string, dto: { status: string }, operatorId?: string, ip?: string) {
+    const r = await this.prisma.review.findUnique({ where: { id } });
+    if (!r) throw new NotFoundException('评价不存在');
+    await this.prisma.review.update({
+      where: { id },
+      data: { status: dto.status },
+    });
+    await this.logOperation(
+      operatorId || '',
+      'update_status',
+      'review',
+      id,
+      'review',
+      { status: dto.status },
       ip,
     );
     return { success: true };
@@ -2505,20 +3593,49 @@ export class AdminService {
   }
 
   async unreadStats() {
-    const [reportsCount, withdrawsCount, pendingPosts, pendingMerchants] =
-      await Promise.all([
-        this.prisma.report.count({ where: { status: "pending" } }),
-        this.prisma.withdraw.count({ where: { status: "PENDING" } }),
-        this.prisma.post.count({ where: { auditStatus: "pending" } }),
-        this.prisma.merchant.count({ where: { status: "pending" } }),
-      ]);
+    const official = await this.prisma.user.findUnique({
+      where: { openid: "lingmeng_official_message_account" },
+      select: { id: true },
+    });
+
+    if (!official) {
+      return {
+        privateUnread: 0,
+        groupUnread: 0,
+        systemUnread: 0,
+        officialUnreadConversations: 0,
+        officialUnreadMessages: 0,
+        totalUnread: 0,
+      };
+    }
+
+    const [officialUnreadConversations, officialUnreadMessages] = await Promise.all([
+      this.prisma.conversationMember.count({
+        where: {
+          userId: official.id,
+          unreadCount: { gt: 0 },
+          conversation: { type: "private" },
+        },
+      }),
+      this.prisma.conversationMember.aggregate({
+        where: {
+          userId: official.id,
+          unreadCount: { gt: 0 },
+          conversation: { type: "private" },
+        },
+        _sum: { unreadCount: true },
+      }),
+    ]);
+
+    const unreadMessageCount = officialUnreadMessages._sum.unreadCount || 0;
+
     return {
-      privateUnread: 0,
+      privateUnread: officialUnreadConversations,
       groupUnread: 0,
-      systemUnread:
-        reportsCount + withdrawsCount + pendingPosts + pendingMerchants,
-      totalUnread:
-        reportsCount + withdrawsCount + pendingPosts + pendingMerchants,
+      systemUnread: 0,
+      officialUnreadConversations,
+      officialUnreadMessages: unreadMessageCount,
+      totalUnread: unreadMessageCount,
     };
   }
 
@@ -2548,6 +3665,11 @@ export class AdminService {
           code: r.role.code,
         })),
         status: a.status === "active" ? 1 : 0,
+        isLocked: !!(a.lockedUntil && new Date(a.lockedUntil) > new Date()),
+        lockedUntil: a.lockedUntil,
+        loginFailCount: a.loginFailCount,
+        passwordResetRequired: a.passwordResetRequired,
+        passwordChangedAt: a.passwordChangedAt,
         lastLoginAt: a.lastLoginAt,
         createdAt: a.createdAt,
       })),
@@ -2563,7 +3685,10 @@ export class AdminService {
     });
     if (existing) throw new ConflictException("用户名已存在");
 
-    const hash = await bcrypt.hash(dto.password || "Admin@123456", 10);
+    if (!dto.password || typeof dto.password !== 'string' || dto.password.length < 8) {
+      throw new BadRequestException('密码长度至少 8 位');
+    }
+    const hash = await bcrypt.hash(dto.password, 10);
     const account = await this.prisma.adminAccount.create({
       data: {
         username: dto.username,
@@ -2705,11 +3830,26 @@ export class AdminService {
   }
 
   async auditLogs(query: any) {
-    const { page = 1, pageSize = 20, accountId, module, action } = query;
+    const { page = 1, pageSize = 20, accountId, module, action, keyword, startDate, endDate, startTime, endTime } = query;
     const where: any = {};
     if (accountId) where.accountId = accountId;
     if (module) where.module = module;
     if (action) where.action = action;
+    if (keyword) {
+      where.OR = [
+        { action: { contains: keyword } },
+        { module: { contains: keyword } },
+        { targetId: { contains: keyword } },
+        { targetType: { contains: keyword } },
+      ];
+    }
+    const from = startDate || startTime;
+    const to = endDate || endTime;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
 
     const [list, total] = await Promise.all([
       this.prisma.adminOperationLog.findMany({
@@ -2727,6 +3867,7 @@ export class AdminService {
       list: list.map((l) => ({
         id: l.id,
         accountId: l.accountId,
+        adminName: l.account?.realName || l.account?.username,
         username: l.account?.realName || l.account?.username,
         action: l.action,
         module: l.module,
@@ -2734,6 +3875,55 @@ export class AdminService {
         targetType: l.targetType,
         detail: l.detail,
         ip: l.ip,
+        createdAt: l.createdAt,
+      })),
+      total,
+      page: +page,
+      pageSize: +pageSize,
+    };
+  }
+
+  async loginLogs(query: any) {
+    const { page = 1, pageSize = 20, keyword, success, startDate, endDate, startTime, endTime } = query;
+    const where: any = {};
+    if (keyword) {
+      where.OR = [
+        { account: { username: { contains: keyword } } },
+        { ip: { contains: keyword } },
+      ];
+    }
+    if (success !== undefined && success !== '') {
+      where.success = success === true || success === 'true' || success === '1';
+    }
+    const from = startDate || startTime;
+    const to = endDate || endTime;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
+
+    const [list, total] = await Promise.all([
+      this.prisma.adminLoginLog.findMany({
+        where,
+        include: {
+          account: { select: { id: true, username: true, realName: true } },
+        },
+        skip: (+page - 1) * +pageSize,
+        take: +pageSize,
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.adminLoginLog.count({ where }),
+    ]);
+    return {
+      list: list.map((l) => ({
+        id: l.id,
+        accountId: l.accountId,
+        adminName: l.account?.realName || l.account?.username,
+        success: l.success,
+        failReason: l.failReason,
+        ip: l.ip,
+        userAgent: l.ua,
         createdAt: l.createdAt,
       })),
       total,
@@ -2797,16 +3987,17 @@ export class AdminService {
   async testStorageConfig(dto: any) {
     const saved = (await this.getConfig("storage")) as Record<string, any>;
     const config = { ...(saved || {}), ...(dto || {}) };
+    const provider = String(config.provider || saved?.provider || "cos");
+    const providerConfig = { ...((saved || {})[provider] || {}), ...((dto || {})[provider] || {}), ...(dto || {}) };
     const secretId = String(
-      config.secretId || config.accessKey || config.COS_SECRET_ID || "",
+      providerConfig.secretId || providerConfig.accessKey || config.secretId || config.accessKey || config.COS_SECRET_ID || "",
     ).trim();
     const secretKey = String(
-      config.secretKey || config.COS_SECRET_KEY || "",
+      providerConfig.secretKey || config.secretKey || config.COS_SECRET_KEY || "",
     ).trim();
-    const bucket = String(config.bucket || config.COS_BUCKET || "").trim();
-    const region = String(
-      config.region || config.endpoint || config.COS_REGION || "",
-    ).trim();
+    const bucket = String(providerConfig.bucket || config.bucket || config.COS_BUCKET || "").trim();
+    const regionRaw = String(providerConfig.region || config.region || config.COS_REGION || "").trim();
+    const region = regionRaw.match(/cos\.([a-z0-9-]+)\.myqcloud\.com/i)?.[1] || regionRaw;
 
     const missing: string[] = [];
     if (!secretId) missing.push("SecretId");
@@ -2816,6 +4007,11 @@ export class AdminService {
     if (missing.length) {
       throw new BadRequestException(
         `COS 配置不完整，缺少：${missing.join("、")}`,
+      );
+    }
+    if (/^https?:\/\//i.test(region) || /\.myqcloud\.com(\/|$)/i.test(region)) {
+      throw new BadRequestException(
+        "所属城市/地域填写错误：这里请选择 ap-chongqing 这类地域代码，不要填写 COS 访问域名",
       );
     }
 
@@ -3268,6 +4464,7 @@ export class AdminService {
       include: { skus: true },
     });
     if (skus && Array.isArray(skus)) {
+      const existingSkuIds = new Set<string>();
       for (const s of skus) {
         if (s.id) {
           await this.prisma.sKU.update({
@@ -3278,13 +4475,30 @@ export class AdminService {
               originPrice: s.originPrice,
               stock: s.stock,
               image: s.image,
-              status: s.status,
+              status: s.status || "on_sale",
+            },
+          });
+          existingSkuIds.add(s.id);
+        } else {
+          await this.prisma.sKU.create({
+            data: {
+              productId: id,
+              specs: s.specs,
+              price: s.price,
+              originPrice: s.originPrice,
+              stock: s.stock,
+              image: s.image,
+              status: s.status || "on_sale",
             },
           });
         }
       }
     }
-    return { success: true, data: product };
+    const updatedProduct = await this.prisma.product.findUnique({
+      where: { id },
+      include: { skus: true, merchant: { select: { name: true } }, category: { select: { name: true } } },
+    });
+    return { success: true, data: updatedProduct };
   }
 
   async updateProductStatus(id: string, status: number | string) {
@@ -3397,9 +4611,9 @@ export class AdminService {
   // ==================== 退款管理 ====================
   async completeRefund(id: string, dto: any, operatorId?: string, ip?: string) {
     const { transferNo } = dto || {};
-    const refund = await this.prisma.refund.update({
+    const refund = await this.prisma.paymentRefund.update({
       where: { id },
-      data: { status: "completed", refundTime: new Date() },
+      data: { status: "success", refundedAt: new Date() },
     });
     if (operatorId)
       await this.logOperation(
@@ -3658,7 +4872,11 @@ export class AdminService {
     const passwordHash = await bcrypt.hash(password, 10);
     await this.prisma.adminAccount.update({
       where: { id },
-      data: { passwordHash },
+      data: {
+        passwordHash,
+        passwordChangedAt: new Date(),
+        passwordResetRequired: false,
+      },
     });
     if (operatorId)
       await this.logOperation(
@@ -3704,13 +4922,68 @@ export class AdminService {
     return { success: true };
   }
 
+  /** 解锁管理员（清除 loginFailCount + lockedUntil） */
+  async unlockAdmin(id: string, operatorId?: string, ip?: string) {
+    const account = await this.prisma.adminAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException("管理员不存在");
+
+    await this.prisma.adminAccount.update({
+      where: { id },
+      data: { loginFailCount: 0, lockedUntil: null },
+    });
+
+    if (operatorId)
+      await this.logOperation(operatorId, "UNLOCK", "admin", id, "admin_account", { previousFailCount: account.loginFailCount }, ip);
+
+    return { success: true };
+  }
+
+  /** 强制下次登录修改密码 */
+  async forcePasswordReset(id: string, operatorId?: string, ip?: string) {
+    const account = await this.prisma.adminAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException("管理员不存在");
+
+    await this.prisma.adminAccount.update({
+      where: { id },
+      data: { passwordResetRequired: true },
+    });
+
+    if (operatorId)
+      await this.logOperation(operatorId, "FORCE_PASSWORD_RESET", "admin", id, "admin_account", { username: account.username }, ip);
+
+    return { success: true };
+  }
+
+  /** 软删除管理员（设置 deletedAt，不清除数据） */
+  async softDeleteAdmin(id: string, operatorId?: string, ip?: string) {
+    const account = await this.prisma.adminAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException("管理员不存在");
+
+    await this.prisma.adminAccount.update({
+      where: { id },
+      data: {
+        deletedAt: new Date(),
+        status: "disabled",
+      },
+    });
+
+    if (operatorId)
+      await this.logOperation(operatorId, "SOFT_DELETE", "admin", id, "admin_account", { username: account.username }, ip);
+
+    return { success: true };
+  }
+
   // ==================== 角色/菜单管理 ====================
   async createRole(dto: any) {
     const { name, code, description, permissions = [] } = dto;
+    if (!name || !code) throw new BadRequestException("角色名称和角色编码不能为空");
+    const exists = await this.prisma.adminRole.findUnique({ where: { code } });
+    if (exists) throw new ConflictException("角色编码已存在");
     const role = await this.prisma.adminRole.create({
       data: { name, code, description },
     });
     if (permissions.length > 0) {
+      await this.assertPermissionsExist(permissions);
       await this.prisma.adminRolePermission.createMany({
         data: permissions.map((pid: string) => ({
           roleId: role.id,
@@ -3723,12 +4996,20 @@ export class AdminService {
 
   async updateRole(id: string, dto: any) {
     const { name, code, description, permissions } = dto;
+    const current = await this.prisma.adminRole.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException("角色不存在");
     const data: any = {};
     if (name !== undefined) data.name = name;
-    if (code !== undefined) data.code = code;
+    if (code !== undefined && code !== current.code) {
+      if (current.isSystem) throw new BadRequestException("系统内置角色不允许修改角色编码");
+      const exists = await this.prisma.adminRole.findUnique({ where: { code } });
+      if (exists) throw new ConflictException("角色编码已存在");
+      data.code = code;
+    }
     if (description !== undefined) data.description = description;
     const role = await this.prisma.adminRole.update({ where: { id }, data });
     if (permissions && Array.isArray(permissions)) {
+      await this.assertPermissionsExist(permissions);
       await this.prisma.adminRolePermission.deleteMany({
         where: { roleId: id },
       });
@@ -3745,8 +5026,18 @@ export class AdminService {
   }
 
   async deleteRole(id: string) {
+    const role = await this.prisma.adminRole.findUnique({ where: { id } });
+    if (!role) throw new NotFoundException("角色不存在");
+    if (role.isSystem) throw new BadRequestException("系统内置角色不允许删除");
     await this.prisma.adminRole.delete({ where: { id } });
     return { success: true };
+  }
+
+  private async assertPermissionsExist(permissionIds: string[]) {
+    const ids = Array.from(new Set((permissionIds || []).filter(Boolean)));
+    if (!ids.length) return;
+    const count = await this.prisma.adminPermission.count({ where: { id: { in: ids } } });
+    if (count !== ids.length) throw new BadRequestException("存在无效权限点，请刷新后重试");
   }
 
   async createMenu(dto: any) {
@@ -4082,16 +5373,6 @@ export class AdminService {
 
     const value = dto.value ?? dto.data?.status;
     if (action === "delete") {
-      // 检查默认区域
-      const defaultRegions = await this.prisma.region.findMany({
-        where: { id: { in: regionIds }, code: 'default' },
-        select: { id: true, name: true },
-      });
-      if (defaultRegions.length > 0) {
-        throw new BadRequestException(
-          `默认区域不允许删除: ${defaultRegions.map((r) => r.name).join('、')}`,
-        );
-      }
       // 检查关联数据
       const relatedPosts = await this.prisma.post.count({
         where: { regionId: { in: regionIds } },
@@ -4135,9 +5416,6 @@ export class AdminService {
       select: { id: true, name: true, code: true },
     });
     if (!region) throw new NotFoundException("区域不存在");
-    if (region.code === 'default') {
-      throw new BadRequestException("默认区域不允许删除");
-    }
 
     // 检查关联数据
     const [
@@ -4404,15 +5682,23 @@ export class AdminService {
     const config = await this.prisma.regionTabBar.findFirst({
       where: { regionId },
     });
-    return { success: true, data: config };
+    if (!config) return { success: true, data: null };
+    return {
+      success: true,
+      data: {
+        ...config,
+        config: this.normalizeRegionTabBarConfig(config.config),
+      },
+    };
   }
 
   async saveRegionTabBar(dto: any, operatorId?: string, ip?: string) {
     const { regionId, config } = dto;
+    const normalizedConfig = this.normalizeRegionTabBarConfig(config);
     const item = await this.prisma.regionTabBar.upsert({
       where: { regionId },
-      update: { ...config },
-      create: { regionId, ...config },
+      update: { config: normalizedConfig },
+      create: { regionId, config: normalizedConfig },
     });
     if (operatorId)
       await this.logOperation(
@@ -4421,10 +5707,28 @@ export class AdminService {
         "region_tabbar",
         regionId,
         "region",
-        config,
+        normalizedConfig,
         ip,
       );
     return { success: true, data: item };
+  }
+
+  private normalizeRegionTabBarConfig(config: any) {
+    const source = { ...(config || {}) };
+    const list = Array.isArray(source.list)
+      ? source.list
+      : Array.isArray(source.tabs)
+        ? source.tabs
+        : [];
+    return {
+      color: source.color || "#8A8A8A",
+      selectedColor: source.selectedColor || "#1677ff",
+      backgroundColor: source.backgroundColor || "#ffffff",
+      borderStyle: source.borderStyle || "black",
+      ...source,
+      list,
+      tabs: list,
+    };
   }
 
   // ==================== 区域自定义页面 ====================
@@ -4840,6 +6144,186 @@ export class AdminService {
     return d;
   }
 
+  private getNoteSettingConfigKey(regionId: string) {
+    return `content.note_settings.${regionId}`;
+  }
+
+  private getNoteSettingDefaults(regionId = "") {
+    return {
+      regionId,
+      enable_region_posting: 1,
+      min_length: 1,
+      max_length: 5000,
+      enable_note_title: 0,
+      title_min_length: 0,
+      title_max_length: 50,
+      publish_interval_seconds: 0,
+      allow_images: 1,
+      max_images_per_note: 9,
+      allow_download_image: 0,
+      allow_videos: 1,
+      allow_audio: 1,
+      allow_pure_text_notes: 1,
+      image_compression_ratio: 0.8,
+      enable_qrcode_filter: 0,
+      qrcode_replace_image_url: "",
+      qrcode_whitelist_user_ids: [],
+      enable_topics: 1,
+      max_topics_per_note: 3,
+      allow_anonymous_notes: 0,
+      anonymous_default_name: "匿名用户",
+      enable_note_location: 0,
+      enable_note_group: 0,
+      enable_note_top: 0,
+      enable_co_create_note: 0,
+      enable_vote: 0,
+      note_approval_type: "manual",
+      require_phone_before_publish: 0,
+      require_student_auth_before_publish: 0,
+      daily_publish_limit: 10,
+      default_note_prompt: "",
+      content_declaration: "发布校园生活、经验和新鲜事",
+      allow_comments: 1,
+      max_comments: 100,
+      comment_length_limit: 500,
+      allow_anonymous_comments: 0,
+      allow_author_pin_comment: 0,
+      allow_manager_delete_comment: 1,
+      comment_approval_type: "manual",
+      random_comment_enabled: 0,
+      enable_ads: 0,
+      card_ad_content: "",
+      waterfall_ad_content: "",
+      note_list_style: "waterfall",
+      note_sort_strategy: "latest",
+      allow_edit: 1,
+      editable_hours: 24,
+      allow_delete: 1,
+      deletable_hours: 72,
+      manager_can_edit_note: 1,
+      manager_can_delete_note: 1,
+      show_view_count: 1,
+      view_count_mode: "unlimited",
+      enable_report: 1,
+      allow_friend_share: 1,
+      enable_share_poster: 0,
+      enable_comment_qrcode_filter: 0,
+      enable_squat: 1,
+    };
+  }
+
+  private normalizeNoteSettingPayload(payload: any, regionId: string) {
+    const defaults = this.getNoteSettingDefaults(regionId);
+    const source = { ...(payload || {}) };
+
+    if (source.allowTextNote !== undefined) source.allow_pure_text_notes = source.allowTextNote ? 1 : 0;
+    if (source.allowImageNote !== undefined) source.allow_images = source.allowImageNote ? 1 : 0;
+    if (source.allowVideoNote !== undefined) source.allow_videos = source.allowVideoNote ? 1 : 0;
+    const aliasPairs: Array<[string, string]> = [
+      ["allow_image_download", "allow_download_image"],
+      ["note_publish_interval_seconds", "publish_interval_seconds"],
+      ["max_notes_per_day", "daily_publish_limit"],
+      ["enable_note_qrcode_filter", "enable_qrcode_filter"],
+      ["blocked_image_replacement_url", "qrcode_replace_image_url"],
+      ["force_bind_phone", "require_phone_before_publish"],
+      ["force_student_auth", "require_student_auth_before_publish"],
+      ["enable_random_comment", "random_comment_enabled"],
+      ["edit_time_limit", "editable_hours"],
+      ["delete_time_limit", "deletable_hours"],
+      ["allow_manager_edit", "manager_can_edit_note"],
+      ["allow_manager_delete_note", "manager_can_delete_note"],
+      ["note_sorting_strategy", "note_sort_strategy"],
+    ];
+    for (const [alias, key] of aliasPairs) {
+      if (source[key] === undefined && source[alias] !== undefined) source[key] = source[alias];
+    }
+
+    const merged: any = { ...defaults, ...source, regionId };
+    const flagKeys = [
+      "enable_region_posting",
+      "enable_note_title",
+      "allow_images",
+      "allow_download_image",
+      "allow_videos",
+      "allow_audio",
+      "allow_pure_text_notes",
+      "enable_qrcode_filter",
+      "enable_topics",
+      "allow_anonymous_notes",
+      "enable_note_location",
+      "enable_note_group",
+      "enable_note_top",
+      "enable_co_create_note",
+      "enable_vote",
+      "require_phone_before_publish",
+      "require_student_auth_before_publish",
+      "allow_comments",
+      "allow_anonymous_comments",
+      "allow_author_pin_comment",
+      "allow_manager_delete_comment",
+      "random_comment_enabled",
+      "enable_ads",
+      "allow_edit",
+      "allow_delete",
+      "manager_can_edit_note",
+      "manager_can_delete_note",
+      "show_view_count",
+      "enable_report",
+      "allow_friend_share",
+      "enable_share_poster",
+      "enable_comment_qrcode_filter",
+      "enable_squat",
+    ];
+    for (const key of flagKeys) merged[key] = merged[key] ? 1 : 0;
+
+    const numericKeys = [
+      "min_length",
+      "max_length",
+      "title_min_length",
+      "title_max_length",
+      "publish_interval_seconds",
+      "max_images_per_note",
+      "max_topics_per_note",
+      "daily_publish_limit",
+      "max_comments",
+      "comment_length_limit",
+      "editable_hours",
+      "deletable_hours",
+    ];
+    for (const key of numericKeys) {
+      const n = Number(merged[key]);
+      merged[key] = Number.isFinite(n) ? n : defaults[key as keyof typeof defaults];
+    }
+    const ratio = Number(merged.image_compression_ratio);
+    merged.image_compression_ratio = Number.isFinite(ratio) ? Math.min(Math.max(ratio, 0.1), 1) : 0.8;
+    if (typeof merged.qrcode_whitelist_user_ids === "string") {
+      merged.qrcode_whitelist_user_ids = merged.qrcode_whitelist_user_ids
+        .split(/[,\n]/)
+        .map((item: string) => item.trim())
+        .filter(Boolean);
+    }
+
+    return {
+      ...merged,
+      allow_image_download: !!merged.allow_download_image,
+      note_publish_interval_seconds: merged.publish_interval_seconds,
+      max_notes_per_day: merged.daily_publish_limit,
+      enable_note_qrcode_filter: !!merged.enable_qrcode_filter,
+      blocked_image_replacement_url: merged.qrcode_replace_image_url,
+      force_bind_phone: !!merged.require_phone_before_publish,
+      force_student_auth: !!merged.require_student_auth_before_publish,
+      enable_random_comment: !!merged.random_comment_enabled,
+      edit_time_limit: merged.editable_hours,
+      delete_time_limit: merged.deletable_hours,
+      allow_manager_edit: !!merged.manager_can_edit_note,
+      allow_manager_delete_note: !!merged.manager_can_delete_note,
+      note_sorting_strategy: merged.note_sort_strategy,
+      allowTextNote: !!merged.allow_pure_text_notes,
+      allowImageNote: !!merged.allow_images,
+      allowVideoNote: !!merged.allow_videos,
+    };
+  }
+
   // ==================== 笔记配置 ====================
   async getNoteSettings(query: any) {
     const { regionId, page = 1, pageSize = 20 } = query;
@@ -4868,15 +6352,15 @@ export class AdminService {
     }
 
     return {
-      list: list.map((s) => ({
-        id: s.id,
-        regionId: s.regionId,
-        regionName: regionMap[s.regionId] || null,
-        allowVideoNote: s.allowVideoNote,
-        allowImageNote: s.allowImageNote,
-        allowTextNote: s.allowTextNote,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
+      list: await Promise.all(list.map(async (s) => {
+        const detail = await this.getNoteSettingByRegion(s.regionId);
+        return {
+          ...detail,
+          id: s.id,
+          regionName: regionMap[s.regionId] || detail.regionName || null,
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+        };
       })),
       total,
       page: +page,
@@ -4885,23 +6369,328 @@ export class AdminService {
   }
 
   async getNoteSettingByRegion(regionId: string) {
-    const settings = await this.prisma.noteSettings.findUnique({
-      where: { regionId },
-    });
-    return settings || { regionId, allowVideoNote: true, allowImageNote: true, allowTextNote: true };
+    if (!regionId) throw new BadRequestException("regionId 不能为空");
+    const [settings, config, region] = await Promise.all([
+      this.prisma.noteSettings.findUnique({ where: { regionId } }),
+      this.prisma.config.findUnique({ where: { key: this.getNoteSettingConfigKey(regionId) } }),
+      this.prisma.region.findUnique({ where: { id: regionId }, select: { id: true, name: true, settings: true } }),
+    ]);
+    if (!region) throw new NotFoundException("区域不存在");
+    const regionSettings = (region.settings || {}) as Record<string, any>;
+    const storedConfig = (config?.value || regionSettings.noteConfig || {}) as Record<string, any>;
+    const merged = this.normalizeNoteSettingPayload(
+      {
+        ...storedConfig,
+        allowTextNote: settings?.allowTextNote ?? storedConfig.allowTextNote,
+        allowImageNote: settings?.allowImageNote ?? storedConfig.allowImageNote,
+        allowVideoNote: settings?.allowVideoNote ?? storedConfig.allowVideoNote,
+      },
+      regionId,
+    );
+    return { ...merged, regionName: region.name };
   }
 
   async updateNoteSetting(regionId: string, dto: any) {
-    const data: any = {};
-    if (dto.allowVideoNote !== undefined) data.allowVideoNote = dto.allowVideoNote;
-    if (dto.allowImageNote !== undefined) data.allowImageNote = dto.allowImageNote;
-    if (dto.allowTextNote !== undefined) data.allowTextNote = dto.allowTextNote;
+    if (!regionId) throw new BadRequestException("regionId 不能为空");
+    const current = await this.getNoteSettingByRegion(regionId);
+    const next = this.normalizeNoteSettingPayload({ ...current, ...dto }, regionId);
+    const region = await this.prisma.region.findUnique({ where: { id: regionId }, select: { settings: true } });
+    if (!region) throw new NotFoundException("区域不存在");
+    const regionSettings = { ...((region.settings || {}) as Record<string, any>), noteConfig: next };
 
-    const settings = await this.prisma.noteSettings.upsert({
-      where: { regionId },
-      update: data,
-      create: { regionId, ...data },
-    });
-    return { success: true, data: settings };
+    await this.prisma.$transaction([
+      this.prisma.noteSettings.upsert({
+        where: { regionId },
+        update: {
+          allowVideoNote: !!next.allow_videos,
+          allowImageNote: !!next.allow_images,
+          allowTextNote: !!next.allow_pure_text_notes,
+        },
+        create: {
+          regionId,
+          allowVideoNote: !!next.allow_videos,
+          allowImageNote: !!next.allow_images,
+          allowTextNote: !!next.allow_pure_text_notes,
+        },
+      }),
+      this.prisma.config.upsert({
+        where: { key: this.getNoteSettingConfigKey(regionId) },
+        update: { value: next, group: "content", desc: "区域笔记发布、媒体、评论和广告配置" },
+        create: {
+          key: this.getNoteSettingConfigKey(regionId),
+          value: next,
+          group: "content",
+          desc: "区域笔记发布、媒体、评论和广告配置",
+        },
+      }),
+      this.prisma.region.update({
+        where: { id: regionId },
+        data: {
+          settings: regionSettings,
+          enableQrcodeFilter: !!next.enable_qrcode_filter,
+        },
+      }),
+    ]);
+
+    return { success: true, data: await this.getNoteSettingByRegion(regionId) };
+  }
+
+  // ==================== 统计聚合端点 ====================
+
+  /** 仪表盘待办统计 — only return real counts, frontend must not invent todo numbers. */
+  async getDashboardTodos() {
+    const s = async <T>(p: Promise<T>, f: T): Promise<T> => { try { return await p; } catch { return f; } };
+    const [
+      pendingMerchants,
+      pendingMallMerchants,
+      pendingProducts,
+      abnormalOrders,
+      pendingReports,
+      pendingRefunds,
+      pendingPaymentRefunds,
+      pendingCerts,
+      pendingPosts,
+      pendingComments,
+      pendingWithdraws,
+    ] = await Promise.all([
+      s(this.prisma.merchant.count({ where: { status: "pending" } }), 0),
+      s(this.prisma.mallMerchant.count({ where: { status: "pending" } }), 0),
+      s(this.prisma.mallProduct.count({ where: { status: "off_sale" } }), 0),
+      s(this.prisma.mallOrder.count({ where: { OR: [{ refundStatus: { not: "none" } }, { status: "cancelled" }] } }), 0),
+      s(this.prisma.report.count({ where: { status: "pending" } }), 0),
+      s(this.prisma.mallRefund.count({ where: { status: "applying" } }), 0),
+      s(this.prisma.paymentRefund.count({ where: { status: "pending" } }), 0),
+      s(this.prisma.studentVerify.count({ where: { status: "PENDING" } }), 0),
+      s(this.prisma.post.count({ where: { auditStatus: "pending" } }), 0),
+      s(this.prisma.comment.count({ where: { auditStatus: "pending", status: { not: "deleted" } } }), 0),
+      s(this.prisma.withdraw.count({ where: { status: "PENDING" } }), 0),
+    ]);
+    return {
+      pendingCerts,
+      pendingMerchants: pendingMerchants + pendingMallMerchants,
+      pendingProducts,
+      abnormalOrders,
+      pendingReports,
+      pendingRefunds: pendingRefunds + pendingPaymentRefunds,
+      pendingPosts,
+      pendingComments,
+      pendingWithdraws,
+    };
+  }
+
+  /** 订单来源分布 — 没有单独 source 字段时，按真实业务订单表聚合 */
+  async getDashboardOrderSources() {
+    const s = async <T>(p: Promise<T>, f: T): Promise<T> => { try { return await p; } catch { return f; } };
+    const [localOrders, mallOrders, errandOrders, deliveryOrders, groupBuyOrders] = await Promise.all([
+      s(this.prisma.order.count(), 0),
+      s(this.prisma.mallOrder.count(), 0),
+      s(this.prisma.errandOrder.count(), 0),
+      s(this.prisma.deliveryOrder.count(), 0),
+      s(this.prisma.groupBuyOrder.count(), 0),
+    ]);
+    const rows = [
+      { name: "本地商家", count: localOrders },
+      { name: "商城", count: mallOrders },
+      { name: "跑腿", count: errandOrders },
+      { name: "配送", count: deliveryOrders },
+      { name: "团购", count: groupBuyOrders },
+    ].filter((item) => item.count > 0);
+    const total = rows.reduce((sum, item) => sum + item.count, 0);
+    return {
+      total,
+      sources: rows.map((item) => ({
+        ...item,
+        percentage: total ? Math.round((item.count / total) * 10000) / 100 : 0,
+      })),
+    };
+  }
+
+  /** 今日商家GMV排行 Top10 — Models: mallOrder, mallMerchant */
+  async getDashboardMerchantRank() {
+    try {
+      const today = this.getTodayStart();
+      const orders = await this.prisma.mallOrder.groupBy({ by: ["merchantId"], where: { createdAt: { gte: today } }, _sum: { payAmount: true }, _count: { id: true }, orderBy: { _sum: { payAmount: "desc" } }, take: 10 });
+      const ids = orders.map(o => o.merchantId);
+      const merchants = ids.length ? await this.prisma.mallMerchant.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : [];
+      const nameMap = new Map(merchants.map(m => [m.id, m.name]));
+      return { rank: orders.map(o => ({ name: nameMap.get(o.merchantId) || "Unknown", orders: o._count.id, gmv: Math.round(Number(o._sum.payAmount || 0)) })) };
+    } catch { return { rank: [] }; }
+  }
+
+  /** 学生认证统计 — Model: studentVerify */
+  async getVerificationsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [pending, todayApproved, rejected, totalApproved] = await Promise.all([
+        this.prisma.studentVerify.count({ where: { status: "PENDING" } }).catch(() => 0),
+        this.prisma.studentVerify.count({ where: { status: "APPROVED", verifiedAt: { gte: today } } }).catch(() => 0),
+        this.prisma.studentVerify.count({ where: { status: "REJECTED" } }).catch(() => 0),
+        this.prisma.studentVerify.count({ where: { status: "APPROVED" } }).catch(() => 0),
+      ]);
+      return { pending, todayApproved, rejected, totalApproved };
+    } catch { return { pending: 0, todayApproved: 0, rejected: 0, totalApproved: 0 }; }
+  }
+
+  /** 内容审核统计 — Models: post, report, comment */
+  async getReportsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [pendingPosts, pendingReports, todayComments, riskContent, handledReports] = await Promise.all([
+        this.prisma.post.count({ where: { auditStatus: "pending" } }).catch(() => 0),
+        this.prisma.report.count({ where: { status: "pending" } }).catch(() => 0),
+        this.prisma.comment.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.post.count({ where: { OR: [{ auditStatus: "rejected" }, { reports: { some: {} } }] } }).catch(() => 0),
+        this.prisma.report.count({ where: { status: { in: ["resolved", "rejected"] } } }).catch(() => 0),
+      ]);
+      return { pendingPosts, pendingReports, todayComments, riskContent, handledReports };
+    } catch { return { pendingPosts: 0, pendingReports: 0, todayComments: 0, riskContent: 0, handledReports: 0 }; }
+  }
+
+  /** 帖子统计 — Model: post */
+  async getPostsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [totalPosts, todayPosts, pendingAudit, reportedPosts] = await Promise.all([
+        this.prisma.post.count().catch(() => 0),
+        this.prisma.post.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.post.count({ where: { auditStatus: "pending" } }).catch(() => 0),
+        this.prisma.post.count({ where: { reports: { some: {} } } }).catch(() => 0),
+      ]);
+      return { totalPosts, todayPosts, pendingAudit, reportedPosts };
+    } catch { return { totalPosts: 0, todayPosts: 0, pendingAudit: 0, reportedPosts: 0 }; }
+  }
+
+  /** 退款统计 — Model: mallRefund */
+  async getRefundsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [pendingRefunds, todayRefundAgg, approvedCount, refundedCount] = await Promise.all([
+        this.prisma.mallRefund.count({ where: { status: "applying" } }).catch(() => 0),
+        this.prisma.mallRefund.aggregate({ where: { createdAt: { gte: today }, status: "refunded" }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
+        this.prisma.mallRefund.count({ where: { status: "approved" } }).catch(() => 0),
+        this.prisma.mallRefund.count({ where: { status: "refunded" } }).catch(() => 0),
+      ]);
+      return { pendingRefunds, todayRefundAmount: Math.round(Number((todayRefundAgg as any)._sum?.amount || 0)), approvedCount, refundedCount };
+    } catch { return { pendingRefunds: 0, todayRefundAmount: 0, approvedCount: 0, refundedCount: 0 }; }
+  }
+
+  /** 订单统计 — Model: mallOrder */
+  async getOrdersStats() {
+    try {
+      const today = this.getTodayStart();
+      const [todayOrders, pendingPay, pendingDelivery, refunding, completed, abnormalOrders] = await Promise.all([
+        this.prisma.mallOrder.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.mallOrder.count({ where: { status: "pending_pay" } }).catch(() => 0),
+        this.prisma.mallOrder.count({ where: { status: { in: ["paid", "shipped"] } } }).catch(() => 0),
+        this.prisma.mallOrder.count({ where: { refundStatus: "refunding" } }).catch(() => 0),
+        this.prisma.mallOrder.count({ where: { status: "completed" } }).catch(() => 0),
+        this.prisma.mallOrder.count({ where: { OR: [{ refundStatus: { not: "none" } }, { status: "cancelled" }] } }).catch(() => 0),
+      ]);
+      return { todayOrders, pendingPay, pendingDelivery, refunding, completed, abnormalOrders };
+    } catch { return { todayOrders: 0, pendingPay: 0, pendingDelivery: 0, refunding: 0, completed: 0, abnormalOrders: 0 }; }
+  }
+
+  /** 商家统计 — Model: mallMerchant */
+  async getMerchantsStats() {
+    try {
+      const today = this.getTodayStart();
+      const [totalMerchants, todayNew, active, pendingAudit, riskMerchants] = await Promise.all([
+        this.prisma.mallMerchant.count().catch(() => 0),
+        this.prisma.mallMerchant.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.mallMerchant.count({ where: { status: "approved" } }).catch(() => 0),
+        this.prisma.mallMerchant.count({ where: { status: "pending" } }).catch(() => 0),
+        this.prisma.mallMerchant.count({ where: { rating: { lt: 3 } } }).catch(() => 0),
+      ]);
+      return { totalMerchants, todayNew, active, pendingAudit, riskMerchants };
+    } catch { return { totalMerchants: 0, todayNew: 0, active: 0, pendingAudit: 0, riskMerchants: 0 }; }
+  }
+
+  /** 商品统计 — Model: mallProduct */
+  async getProductsStats() {
+    try {
+      const [totalProducts, activeProducts, pendingAudit, violationProducts] = await Promise.all([
+        this.prisma.mallProduct.count().catch(() => 0),
+        this.prisma.mallProduct.count({ where: { status: "on_sale" } }).catch(() => 0),
+        this.prisma.mallProduct.count({ where: { status: "off_sale" } }).catch(() => 0),
+        this.prisma.mallProduct.count({ where: { status: { notIn: ["on_sale", "off_sale"] } } }).catch(() => 0),
+      ]);
+      return { totalProducts, activeProducts, pendingAudit, violationProducts };
+    } catch { return { totalProducts: 0, activeProducts: 0, pendingAudit: 0, violationProducts: 0 }; }
+  }
+
+  /** 区域统计 — Models: region, user, paymentOrder */
+  async getRegionsStats() {
+    try {
+      const [totalRegions, activeRegions, totalUsers, gmvAgg] = await Promise.all([
+        this.prisma.region.count().catch(() => 0),
+        this.prisma.region.count({ where: { isOpen: true } }).catch(() => 0),
+        this.prisma.user.count().catch(() => 0),
+        this.prisma.paymentOrder.aggregate({ where: { status: "paid" }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
+      ]);
+      return { totalRegions, activeRegions, totalUsers, totalGmv: Math.round(Number((gmvAgg as any)._sum?.amount || 0)) };
+    } catch { return { totalRegions: 0, activeRegions: 0, totalUsers: 0, totalGmv: 0 }; }
+  }
+
+  /** 财务统计 — Models: paymentOrder, withdraw, paymentRefund */
+  async getFinanceStats() {
+    try {
+      const today = this.getTodayStart();
+      const [todayRevenueAgg, totalRevenueAgg, todayOrders, pendingWithdraws, totalRefundsAgg, paidOrders] = await Promise.all([
+        this.prisma.paymentOrder.aggregate({ where: { status: "paid", createdAt: { gte: today } }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
+        this.prisma.paymentOrder.aggregate({ where: { status: "paid" }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
+        this.prisma.paymentOrder.count({ where: { status: "paid", createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.withdraw.count({ where: { status: "PENDING" } }).catch(() => 0),
+        this.prisma.paymentRefund.aggregate({ where: { status: "success" }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
+        this.prisma.paymentOrder.count({ where: { status: "paid" } }).catch(() => 0),
+      ]);
+      const todayRevenue = Math.round(Number((todayRevenueAgg as any)._sum?.amount || 0));
+      const totalRevenue = Math.round(Number((totalRevenueAgg as any)._sum?.amount || 0));
+      const totalRefunds = Math.round(Number((totalRefundsAgg as any)._sum?.amount || 0));
+      return { todayRevenue, totalRevenue, todayOrders, pendingWithdraws, totalRefunds, avgOrderValue: paidOrders > 0 ? Math.round(totalRevenue / paidOrders) : 0 };
+    } catch { return { todayRevenue: 0, totalRevenue: 0, todayOrders: 0, pendingWithdraws: 0, totalRefunds: 0, avgOrderValue: 0 }; }
+  }
+
+  /** 跑腿订单统计 — Model: errandOrder */
+  async getDeliveryOrdersStats() {
+    try {
+      const today = this.getTodayStart();
+      const overduePendingTime = new Date(Date.now() - 10 * 60 * 1000);
+      const overdueRunningTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const [totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled, onlineRiders, overdue] = await Promise.all([
+        this.prisma.errandOrder.count().catch(() => 0),
+        this.prisma.errandOrder.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.errandOrder.count({ where: { status: "pending_accept" } }).catch(() => 0),
+        this.prisma.errandOrder.count({ where: { status: { in: ["accepted", "in_progress", "arrived"] } } }).catch(() => 0),
+        this.prisma.errandOrder.count({ where: { status: "completed" } }).catch(() => 0),
+        this.prisma.errandOrder.count({ where: { status: "cancelled" } }).catch(() => 0),
+        this.prisma.regionRider.count({ where: { status: "online", verifyStatus: "approved" } }).catch(() => 0),
+        this.prisma.errandOrder.count({
+          where: {
+            OR: [
+              { status: "pending_accept", createdAt: { lte: overduePendingTime } },
+              { status: { in: ["accepted", "in_progress", "arrived"] }, updatedAt: { lte: overdueRunningTime } },
+              { status: "refunding", updatedAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+            ],
+          },
+        }).catch(() => 0),
+      ]);
+      return { totalOrders, todayOrders, pendingAccept, inProgress, completed, cancelled, onlineRiders, overdue };
+    } catch { return { totalOrders: 0, todayOrders: 0, pendingAccept: 0, inProgress: 0, completed: 0, cancelled: 0, onlineRiders: 0, overdue: 0 }; }
+  }
+
+  /** 文件上传统计 — Model: uploadRecord */
+  async getUploadFilesStats() {
+    try {
+      const today = this.getTodayStart();
+      const [totalFiles, todayFiles, totalSizeAgg, images, videos, others] = await Promise.all([
+        this.prisma.uploadRecord.count().catch(() => 0),
+        this.prisma.uploadRecord.count({ where: { createdAt: { gte: today } } }).catch(() => 0),
+        this.prisma.uploadRecord.aggregate({ _sum: { fileSize: true } }).catch(() => ({ _sum: { fileSize: 0 } })),
+        this.prisma.uploadRecord.count({ where: { fileType: { startsWith: "image" } } }).catch(() => 0),
+        this.prisma.uploadRecord.count({ where: { fileType: { startsWith: "video" } } }).catch(() => 0),
+        this.prisma.uploadRecord.count({ where: { AND: [{ NOT: { fileType: { startsWith: "image" } } }, { NOT: { fileType: { startsWith: "video" } } }] } }).catch(() => 0),
+      ]);
+      return { totalFiles, todayFiles, totalSize: (totalSizeAgg as any)._sum?.fileSize || 0, byType: { images, videos, others } };
+    } catch { return { totalFiles: 0, todayFiles: 0, totalSize: 0, byType: { images: 0, videos: 0, others: 0 } }; }
   }
 }

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsEnum, IsDateString, IsBoolean, IsObject } from 'class-validator'
+import { IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 
@@ -22,6 +22,10 @@ export class RiderQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   auditStatus?: string
+
+  @ApiProperty({ required: false, description: 'official | part_time' })
+  @IsOptional()
+  riderType?: string
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -69,6 +73,10 @@ export class DeliveryOrderQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   status?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  type?: string
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -156,6 +164,66 @@ export class UpdateFeeConfigDto {
   @IsBoolean()
   @Type(() => Boolean)
   isOpen?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsArray()
+  banners?: any[]
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsArray()
+  bannerJson?: any[]
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsArray()
+  banner_json?: any[]
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  serviceDescriptions?: Record<string, string>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  service_descriptions?: Record<string, string>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  baseFees?: Record<string, number>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  base_fees?: Record<string, number>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  serviceSwitches?: Record<string, boolean>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  service_switches?: Record<string, boolean>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsArray()
+  tipOptions?: any[]
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsArray()
+  customTaskTipOptions?: any[]
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  pageConfig?: Record<string, any>
 }
 
 // ==================== Page Config ====================

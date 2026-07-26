@@ -9,14 +9,19 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class CircleController {
   constructor(private readonly circleService: CircleService) {}
 
+  @Get('circles')
+  getList(@Query() query: any) {
+    return this.circleService.getList(query);
+  }
+
   @Get('circles/region/:regionId')
   getByRegion(@Param('regionId') regionId: string, @Query() query: any) {
     return this.circleService.getByRegion(regionId, query);
   }
 
   @Get('circles/:circleId')
-  getDetail(@Param('circleId') circleId: string) {
-    return this.circleService.getDetail(circleId);
+  getDetail(@Param('circleId') circleId: string, @Query() query: any) {
+    return this.circleService.getDetail(circleId, query);
   }
 
   @Post('circles')

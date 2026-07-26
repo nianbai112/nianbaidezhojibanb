@@ -65,7 +65,21 @@ function makeRedis(): RedisService {
   } as unknown as RedisService;
 }
 
-function makePrisma(value: Record<string, any> | null = null): PrismaService {
+function makeStorageConfig(overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    provider: "cos",
+    domain: "https://cdn.example.com",
+    cos: {
+      secretId: "test-id",
+      secretKey: "test-key",
+      bucket: "test-bucket",
+      region: "ap-guangzhou",
+    },
+    ...overrides,
+  };
+}
+
+function makePrisma(value: Record<string, any> | null = makeStorageConfig()): PrismaService {
   return {
     config: {
       findUnique: jest.fn().mockResolvedValue(value ? { value } : null),
@@ -183,7 +197,19 @@ describe("UploadService", () => {
           useValue: makeConfig({ COS_SECRET_ID: undefined }),
         },
         { provide: RedisService, useValue: makeRedis() },
-        { provide: PrismaService, useValue: makePrisma() },
+        {
+          provide: PrismaService,
+          useValue: makePrisma(
+            makeStorageConfig({
+              cos: {
+                secretId: "",
+                secretKey: "test-key",
+                bucket: "test-bucket",
+                region: "ap-guangzhou",
+              },
+            }),
+          ),
+        },
       ],
     }).compile();
     const svc = badModule.get<UploadService>(UploadService);

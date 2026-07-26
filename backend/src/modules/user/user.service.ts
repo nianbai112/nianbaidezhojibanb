@@ -1,24 +1,99 @@
-import { Injectable, NotFoundException, BadRequestException, NotImplementedException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
+import { NotifyService } from '../notify/notify.service';
 import {
   UpdateProfileDto, UpdateSettingsDto, StudentVerifyDto, ListQueryDto,
 } from './dto/user.dto';
+import { Gender } from '@prisma/client';
 
 @Injectable()
 export class UserService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly notifyService: NotifyService,
   ) {}
 
-  async getProfile(userId: string) {
+  private normalizeProfileLayoutItems(items: any) {
+    const defaultItems = [
+      { id: 'orders', title: '我的订单', description: '订单、配送和售后', main_image: '/static/logo.jpg', path: 'pagesA/order/order', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0 },
+      { id: 'wallet', title: '我的钱包', description: '余额、提现和流水', main_image: '/static/logo.jpg', path: 'pagesA/withdraw/withdraw', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1 },
+      { id: 'share', title: '分享有礼', description: '邀请同学加入', main_image: '/static/logo.jpg', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2 },
+      { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.jpg', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
+      { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.jpg', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4 },
+    ];
+    const mapItems = (sourceItems: any[]) => sourceItems
+      .filter((item: any) => {
+        if (!item || item.enabled === false) return false;
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || item.mini_program?.path || '').trim();
+        return linkType === 'popup' || !!path;
+      })
+      .map((item: any, index: number) => {
+        const linkType = String(item.type || item.linkType || item.link_type || '').trim();
+        const path = String(item.path || item.url || item.page || item.link || '').trim();
+        const query = String(item.query || '').trim().replace(/^\?+/, '');
+        const fullPath = query
+          ? path.includes('?')
+            ? `${path}&${query}`
+            : `${path}?${query}`
+          : path;
+        const appId = item.appId || item.appid || item.mini_program?.appid || '';
+        const type =
+          linkType === 'external_jump' || linkType === 'miniProgram' || linkType === 'miniapp'
+            ? 'external_jump'
+            : linkType === 'web_page' || linkType === 'webview'
+              ? 'web_page'
+              : linkType === 'popup'
+                ? 'popup'
+                : 'internal_jump';
+        return {
+          ...item,
+          id: item.id || `profile_${index}`,
+          title: item.title || item.name || '功能入口',
+          description: item.description || item.subtitle || '',
+          main_image: item.main_image || item.mainImage || item.image || item.iconImage || item.icon || '/static/logo.jpg',
+          image: item.image || item.main_image || item.mainImage || item.iconImage || item.icon || '/static/logo.jpg',
+          type,
+          url: type === 'web_page' ? (item.url || fullPath) : fullPath,
+          mini_program: {
+            ...(item.mini_program || {}),
+            appid: appId,
+            path: item.mini_program?.path || fullPath,
+          },
+          navigation_permission: item.navigation_permission || item.navigationPermission || 'unlimited',
+          enabled: item.enabled !== false,
+          sortOrder: item.sortOrder ?? item.sort_order ?? index,
+        };
+      })
+      .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const normalized = mapItems(Array.isArray(items) && items.length ? items : defaultItems);
+    return normalized.length ? normalized : mapItems(defaultItems);
+  }
+
+  async getProfile(userId: string, regionId?: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { profile: true, settings: true, studentVerify: true, wallet: true },
     });
     if (!user) throw new NotFoundException('用户不存在');
-    return user;
+
+    if (!regionId) return user;
+
+    const region = await this.prisma.region.findUnique({
+      where: { id: regionId },
+      select: {
+        profilePageLayout: true,
+        profileLayoutItems: true,
+      },
+    });
+
+    return {
+      ...user,
+      profile_page_layout: region?.profilePageLayout || 'default',
+      profile_layout_items: this.normalizeProfileLayoutItems(region?.profileLayoutItems),
+    };
   }
 
   async getNicknameAvatar(userId: string) {
@@ -30,25 +105,62 @@ export class UserService {
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.nickname && { nickname: dto.nickname }),
-        ...(dto.avatar && { avatar: dto.avatar }),
-      },
-    });
-    await this.prisma.userProfile.update({
-      where: { userId },
-      data: {
-        ...(dto.gender && { gender: dto.gender }),
-        ...(dto.bio !== undefined && { bio: dto.bio }),
-        ...(dto.school !== undefined && { school: dto.school }),
-        ...(dto.major !== undefined && { major: dto.major }),
-        ...(dto.grade !== undefined && { grade: dto.grade }),
-        ...(dto.dormitory !== undefined && { dormitory: dto.dormitory }),
-      },
-    });
+    const normalizedGender = this.normalizeGender(dto.gender ?? dto.riderGender);
+    const phone = dto.mobile ?? dto.phone;
+    const wechat = dto.wechat_account ?? dto.wechatAccount;
+    const birthday = this.normalizeBirthday(dto.birthday);
+
+    const userData: Record<string, any> = {};
+    if (dto.nickname !== undefined) userData.nickname = dto.nickname;
+    if (dto.avatar !== undefined) userData.avatar = dto.avatar;
+    if (phone !== undefined) userData.phone = phone;
+
+    const profileData: Record<string, any> = {};
+    if (normalizedGender !== undefined) profileData.gender = normalizedGender;
+    if (dto.bio !== undefined) profileData.bio = dto.bio;
+    if (dto.school !== undefined) profileData.school = dto.school;
+    if (dto.major !== undefined) profileData.major = dto.major;
+    if (dto.grade !== undefined) profileData.grade = dto.grade;
+    if (dto.dormitory !== undefined) profileData.dormitory = dto.dormitory;
+    if (dto.email !== undefined) profileData.email = dto.email;
+    if (wechat !== undefined) profileData.wechat = wechat;
+    if (birthday !== undefined) profileData.birthday = birthday;
+
+    if (Object.keys(userData).length > 0) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: userData,
+      });
+    }
+    if (Object.keys(profileData).length > 0) {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        update: profileData,
+        create: { userId, ...profileData },
+      });
+    }
     return this.getProfile(userId);
+  }
+
+  private normalizeGender(value: unknown): Gender | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === Gender.MALE || value === 'MALE' || value === 1 || value === '1' || value === 'male') {
+      return Gender.MALE;
+    }
+    if (value === Gender.FEMALE || value === 'FEMALE' || value === 2 || value === '2' || value === 'female') {
+      return Gender.FEMALE;
+    }
+    if (value === Gender.UNKNOWN || value === 'UNKNOWN' || value === 0 || value === '0' || value === 'unknown') {
+      return Gender.UNKNOWN;
+    }
+    throw new BadRequestException('性别参数不合法');
+  }
+
+  private normalizeBirthday(value?: string): Date | undefined {
+    if (value === undefined || value === '') return undefined;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new BadRequestException('生日格式不合法');
+    return date;
   }
 
   async getPrivacySettings(userId: string) {
@@ -98,6 +210,17 @@ export class UserService {
     const data = this.normalizeStudentVerifyDto(dto);
     const exists = await this.prisma.studentVerify.findUnique({ where: { userId } });
     if (exists && exists.status === 'APPROVED') throw new BadRequestException('已认证');
+
+    // 验证学校ID（如果传了的话）
+    let schoolRecord: any = null;
+    if (data.schoolId) {
+      schoolRecord = await this.prisma.school.findUnique({ where: { id: data.schoolId } });
+      if (!schoolRecord) throw new BadRequestException('学校不存在');
+      if (!schoolRecord.isEnabled) throw new BadRequestException('学校已停用');
+      // 用学校库的名称覆盖，保持一致性
+      data.schoolName = schoolRecord.name;
+    }
+
     const record = exists
       ? await this.prisma.studentVerify.update({ where: { userId }, data: { ...data, status: 'PENDING' } })
       : await this.prisma.studentVerify.create({ data: { userId, ...data } });
@@ -121,8 +244,18 @@ export class UserService {
   }
 
   async getStudentVerifyInfo(userId: string) {
-    const record = await this.prisma.studentVerify.findUnique({ where: { userId } });
-    return { data: record ? this.toMiniStudentVerify(record) : null };
+    const record = await this.prisma.studentVerify.findUnique({
+      where: { userId },
+      include: { school: { select: { id: true, name: true, shortName: true } } },
+    });
+    if (!record) return { data: null };
+    const result: any = this.toMiniStudentVerify(record);
+    // 如果有学校记录，补充学校信息
+    if ((record as any).school) {
+      result.school_name = (record as any).school.name;
+      result.school_short_name = (record as any).school.shortName || '';
+    }
+    return { data: result };
   }
 
   async getUniversities(name: string, page: number, size: number) {
@@ -151,6 +284,7 @@ export class UserService {
     const realName = String(dto.realName || dto.name || '').trim();
     const studentId = String(dto.studentId || dto.student_id || '').trim();
     const schoolName = String(dto.schoolName || dto.university || '').trim();
+    const schoolId = String(dto.schoolId || dto.school_id || '').trim() || null;
     const cardImage = String(dto.cardImage || dto.photo_url || '').trim();
     const major = dto.major?.trim();
     const grade = dto.grade?.trim();
@@ -160,7 +294,7 @@ export class UserService {
     if (!schoolName) throw new BadRequestException('请选择学校');
     if (!cardImage) throw new BadRequestException('请上传学生证照片');
 
-    return { realName, studentId, schoolName, major, grade, cardImage };
+    return { realName, studentId, schoolName, schoolId, major, grade, cardImage };
   }
 
   private toMiniStudentVerify(record: any) {
@@ -169,6 +303,8 @@ export class UserService {
       student_id: record.studentId,
       name: record.realName,
       university: record.schoolName,
+      school_id: record.schoolId || '',
+      schoolId: record.schoolId || '',
       major: record.major || '',
       grade: record.grade || '',
       photo_url: record.cardImage || '',
@@ -230,6 +366,26 @@ export class UserService {
       create: { followerId: userId, followingId: targetId },
       update: {},
     });
+
+    // 发送关注通知
+    try {
+      const follower = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { nickname: true },
+      });
+      await this.notifyService.createAndDispatch({
+        userId: targetId,
+        type: 'FOLLOW',
+        scene: 'user_follow',
+        title: '你有新粉丝',
+        content: `${follower?.nickname || '用户'} 关注了你`,
+        data: { fromUserId: userId },
+        linkType: 'user',
+        linkValue: userId,
+        channelMask: { inApp: true, websocket: true },
+      });
+    } catch {}
+
     return { success: true };
   }
 

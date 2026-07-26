@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
 @Injectable()
 export class BotService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiRuntime: AiRuntimeService,
+  ) {}
 
   async bots(query: any) {
     const { page = 1, pageSize = 20, status, keyword, regionId } = query;
@@ -174,19 +178,30 @@ export class BotService {
   }
 
   async runTask(id: string) {
-    const task = await this.prisma.botPostTask.findUnique({ where: { id }, include: { bot: { include: { user: true } } } });
+    const task = await this.prisma.botPostTask.findUnique({ where: { id }, include: { bot: { include: { user: true, persona: true } } } });
     if (!task) return { code: 404, message: '任务不存在' };
     if (task.status !== 'approved' && task.status !== 'pending') return { code: 400, message: '任务状态不可执行' };
 
     try {
       let postId: string | null = null;
-      if (task.type === 'post') {
+      const normalizedType = ['cold_start'].includes(task.type)
+        ? 'post'
+        : ['comment_generate', 'interaction'].includes(task.type)
+          ? 'comment'
+          : task.type;
+      let taskContent = String(task.content || '').trim();
+      if ((!taskContent || taskContent === task.aiPrompt) && task.aiPrompt) {
+        taskContent = await this.aiRuntime.generateText(String(task.aiPrompt), {
+          systemPrompt: task.bot.persona?.prompt || '你是校园本地生活平台的内容运营助手，输出自然真实的内容。',
+        });
+      }
+      if (normalizedType === 'post') {
         const post = await this.prisma.post.create({
           data: {
             userId: task.bot.userId,
             regionId: task.regionId,
             title: task.title || undefined,
-            content: task.content || '',
+            content: taskContent || task.title || '',
             status: 'PUBLISHED',
             auditStatus: 'approved',
             type: Array.isArray(task.mediaUrls) && task.mediaUrls.length > 0 ? 'IMAGE' : 'TEXT',
@@ -196,22 +211,27 @@ export class BotService {
           },
         });
         postId = post.id;
-      } else if (task.type === 'comment' && task.targetPostId) {
+      } else if (normalizedType === 'comment' && task.targetPostId) {
+        const commentText = taskContent
+          .split(/\n+/)
+          .map((item) => item.replace(/^[-*•\d.、\s]+/, '').trim())
+          .filter(Boolean)[0] || taskContent;
         const comment = await this.prisma.comment.create({
           data: {
             postId: task.targetPostId,
             userId: task.bot.userId,
-            content: task.content || '',
+            content: commentText,
             status: 'active',
             auditStatus: 'approved',
           },
         });
+        await this.prisma.post.update({ where: { id: task.targetPostId }, data: { commentCount: { increment: 1 } } }).catch(() => {});
         postId = comment.id;
       }
 
       await this.prisma.botPostTask.update({
         where: { id },
-        data: { status: 'completed', publishedPostId: postId },
+        data: { status: 'completed', content: taskContent || task.content, aiResult: taskContent || task.aiResult, publishedPostId: postId },
       });
       await this.prisma.botActionLog.create({
         data: { botId: task.botId, action: `create_${task.type}`, targetType: task.type, targetId: postId || undefined },

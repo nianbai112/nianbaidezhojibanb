@@ -168,6 +168,13 @@ export class OperationController {
     return this.operationService.getPunchInLocationDetail(locationId);
   }
 
+  @Put('api/punchIn/location/:locationId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  updatePunchInLocation(@Param('locationId') locationId: string, @Body() dto: any) {
+    return this.operationService.updatePunchInLocation(locationId, dto);
+  }
+
   @Get('api/punchIn/comment/location/:locationId')
   getPunchInComments(@Param('locationId') locationId: string, @Query() query: any) {
     return this.operationService.getPunchInComments(locationId, query);
@@ -192,6 +199,20 @@ export class OperationController {
   @ApiBearerAuth()
   addWishlist(@Param('locationId') locationId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.operationService.addWishlist(locationId, userId, dto);
+  }
+
+  @Post('api/punchIn/wishlist')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  addWishlistFromBody(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.addWishlistFromBody(userId, dto);
+  }
+
+  @Delete('api/punchIn/wishlist/:locationId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  removeWishlist(@Param('locationId') locationId: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.removeWishlist(locationId, userId);
   }
 
   @Get('api/rating/categories/:regionId')
@@ -226,9 +247,23 @@ export class OperationController {
     return this.operationService.submitRating(userId, dto);
   }
 
+  @Post('api/rating/items')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createRatingItem(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.createRatingItem(userId, dto);
+  }
+
   @Get('api/rating/replies')
   getRatingReplies(@Query() query: any) {
     return this.operationService.getRatingReplies(query);
+  }
+
+  @Post('api/rating/replies')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createRatingReply(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.createRatingReply(userId, dto);
   }
 
   @Get('api/netdisk/categories')
@@ -263,6 +298,13 @@ export class OperationController {
   @ApiBearerAuth()
   favoriteNetDisk(@Param('resourceId') resourceId: string, @CurrentUser('sub') userId: string) {
     return this.operationService.favoriteNetDisk(resourceId, userId);
+  }
+
+  @Delete('api/netdisk/favorites/:resourceId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  unfavoriteNetDisk(@Param('resourceId') resourceId: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.unfavoriteNetDisk(resourceId, userId);
   }
 
   @Get('api/netdisk/my-favorites')
@@ -347,6 +389,13 @@ export class OperationController {
     return this.operationService.getContactCategories(regionId);
   }
 
+  @Get('api/contacts/my')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMyContacts(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getMyContacts(userId, query);
+  }
+
   @Get('api/contacts/:id')
   getContactDetail(@Param('id') id: string) {
     return this.operationService.getContactDetail(id);
@@ -359,11 +408,18 @@ export class OperationController {
     return this.operationService.createContact(userId, dto);
   }
 
-  @Get('api/contacts/my')
+  @Put('api/contacts/:id')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getMyContacts(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getMyContacts(userId, query);
+  updateContact(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.updateContact(id, userId, dto);
+  }
+
+  @Delete('api/contacts/:id')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  deleteContact(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.deleteContact(id, userId);
   }
 
   @Get('api/rich-text-content')
@@ -425,6 +481,13 @@ export class OperationController {
   @ApiBearerAuth()
   getDatingProfile(@CurrentUser('sub') userId: string) {
     return this.operationService.getDatingProfile(userId);
+  }
+
+  @Post('api/dating/profile')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createOrUpdateDatingProfile(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.createOrUpdateDatingProfile(userId, dto);
   }
 
   @Get('api/dating/profile/list')
@@ -489,6 +552,13 @@ export class OperationController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   claimTitle(@Param('titleId') titleId: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.claimTitle(titleId, userId);
+  }
+
+  @Post('circle/user-titles/purchase/:titleId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  purchaseTitle(@Param('titleId') titleId: string, @CurrentUser('sub') userId: string) {
     return this.operationService.claimTitle(titleId, userId);
   }
 

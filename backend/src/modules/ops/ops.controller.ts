@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Param,
   Query,
   UseGuards,
   Req,
@@ -71,5 +72,44 @@ export class OpsController {
     @Body() dto: { beforeDays: number },
   ) {
     return this.opsService.cleanupLogs(accountId, dto);
+  }
+
+  @Get("admin/ops/alerts")
+  @ApiOperation({ summary: "异常列表" })
+  async alerts(@Query() query: any) {
+    return this.opsService.getAlerts(query);
+  }
+
+  @Get("admin/ops/alerts/summary")
+  @ApiOperation({ summary: "异常统计" })
+  async alertSummary() {
+    return this.opsService.getAlertSummary();
+  }
+
+  @Post("admin/ops/alerts/:id/resolve")
+  @ApiOperation({ summary: "处理异常" })
+  async resolveAlert(
+    @Param("id") id: string,
+    @CurrentUser("sub") accountId: string,
+    @Body() dto: { note?: string },
+  ) {
+    return this.opsService.resolveAlert(id, accountId, dto.note);
+  }
+
+  @Post("admin/ops/alerts/:id/ignore")
+  @ApiOperation({ summary: "忽略异常" })
+  async ignoreAlert(
+    @Param("id") id: string,
+    @CurrentUser("sub") accountId: string,
+    @Body() dto: { reason?: string },
+  ) {
+    return this.opsService.ignoreAlert(id, accountId, dto.reason);
+  }
+
+  @Get("admin/ops/launch-check")
+  @ApiOperation({ summary: "上线检查" })
+  async launchCheck(@CurrentUser("sub") accountId: string) {
+    await this.opsService.ensureSuperAdmin(accountId);
+    return this.opsService.getLaunchCheck();
   }
 }
