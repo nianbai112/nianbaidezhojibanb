@@ -64,6 +64,7 @@ import { RecommendModule } from './modules/recommend/recommend.module';
 import { ABTestModule } from './modules/ab-test/ab-test.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SchoolModule } from './modules/school/school.module';
+import { CampusMapModule } from './modules/campus-map/campus-map.module';
 import { RequestLogInterceptor } from './interceptors/request-log.interceptor';
 import { AllExceptionsFilter } from './filters/all-exceptions.filter';
 
@@ -209,6 +210,7 @@ const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LI
     ABTestModule,
     SchedulerModule,
     SchoolModule,
+    CampusMapModule,
   ],
   providers: [
     {

@@ -1927,6 +1927,97 @@ model Config {
   @@map("configs")
 }
 
+
+model CampusMap {
+  id              String             @id @default(cuid())
+  regionId        String             @unique
+  enabled         Boolean            @default(false)
+  activeVersionId String?            @unique
+  versionCounter  Int                @default(0)
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  draft         CampusMapDraft?
+  versions      CampusMapVersion[] @relation("CampusMapVersions")
+  activeVersion CampusMapVersion?  @relation("CampusMapActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  assets        CampusMapAsset[]
+
+  @@index([enabled, updatedAt])
+  @@map("campus_maps")
+}
+
+model CampusMapDraft {
+  id               String            @id @default(cuid())
+  mapId            String            @unique
+  map              CampusMap         @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  manifest         Json
+  revision         Int               @default(1)
+  basedOnVersionId String?
+  basedOnVersion   CampusMapVersion? @relation("CampusMapDraftBaseVersion", fields: [basedOnVersionId], references: [id], onDelete: SetNull)
+  updatedBy        String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  assets CampusMapAsset[]
+
+  @@index([basedOnVersionId])
+  @@map("campus_map_drafts")
+}
+
+model CampusMapVersion {
+  id           String   @id @default(cuid())
+  mapId        String
+  map          CampusMap @relation("CampusMapVersions", fields: [mapId], references: [id], onDelete: Cascade)
+  version      Int
+  manifest     Json
+  checksum     String   @db.VarChar(64)
+  byteSize     Int
+  featureCount Int
+  layerCount   Int
+  rollbackOfId String?
+  rollbackOf   CampusMapVersion?  @relation("CampusMapRollback", fields: [rollbackOfId], references: [id], onDelete: SetNull)
+  rollbacks    CampusMapVersion[] @relation("CampusMapRollback")
+  publishedBy  String?
+  publishedAt  DateTime @default(now())
+
+  activeFor  CampusMap?       @relation("CampusMapActiveVersion")
+  draftBases CampusMapDraft[] @relation("CampusMapDraftBaseVersion")
+  assets     CampusMapAsset[]
+
+  @@unique([mapId, version])
+  @@index([mapId, publishedAt])
+  @@index([rollbackOfId])
+  @@map("campus_map_versions")
+}
+
+model CampusMapAsset {
+  id              String            @id @default(cuid())
+  mapId           String
+  map             CampusMap         @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  draftId         String?
+  draft           CampusMapDraft?   @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  versionId       String?
+  version         CampusMapVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  kind            String
+  provider        String
+  storageKey      String?           @db.Text
+  url             String            @db.Text
+  mimeType        String?
+  byteSize        Int               @default(0)
+  checksum        String?           @db.VarChar(64)
+  metadata        Json?
+  createdBy       String?
+  createdAt       DateTime          @default(now())
+
+  @@index([mapId, kind])
+  @@index([draftId])
+  @@index([versionId])
+  @@index([checksum])
+  @@map("campus_map_assets")
+}
+
 model SensitiveWord {
   id          String   @id @default(cuid())
   word        String   @unique

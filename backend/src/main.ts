@@ -16,6 +16,9 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // 校园地图清单可包含内联 GeoJSON；只为该管理端路由放宽请求体限制。
+  app.use('/admin/campus-map', express.json({ limit: '5mb' }));
+
   const logger = app.get(LoggerService);
   app.useLogger(logger);
 
