@@ -1,28 +1,9 @@
 <template>
   <div class="page-container">
-    <div class="page-header">
-      <h2>通知中心配置</h2>
-    </div>
+    <PageHeader title="通知中心配置" />
 
     <!-- 通知总览 -->
-    <div class="stats-grid">
-      <div class="stat-card glass-card">
-        <div class="stat-value">{{ stats.todayNotifications }}</div>
-        <div class="stat-label">今日站内通知</div>
-      </div>
-      <div class="stat-card glass-card">
-        <div class="stat-value">{{ stats.todayWechatMessages }}</div>
-        <div class="stat-label">今日微信消息</div>
-      </div>
-      <div class="stat-card glass-card">
-        <div class="stat-value stat-danger">{{ stats.todayWechatFailed }}</div>
-        <div class="stat-label">发送失败</div>
-      </div>
-      <div class="stat-card glass-card">
-        <div class="stat-value stat-success">{{ stats.onlineCount }}</div>
-        <div class="stat-label">在线连接</div>
-      </div>
-    </div>
+    <StatGrid :items="statItems" />
 
     <!-- Tab 切换 -->
     <el-tabs v-model="activeTab" type="border-card" class="notify-tabs">
@@ -188,10 +169,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NotificationSettingsPanel from './components/NotificationSettingsPanel.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
 import {
   fetchNotifyStats,
   fetchSubscribeConsents,
@@ -213,6 +196,12 @@ function copyText(text: string) {
 
 // ── 总览 ──
 const stats = reactive({ todayNotifications: 0, todayWechatMessages: 0, todayWechatFailed: 0, onlineCount: 0 })
+const statItems = computed(() => [
+  { label: '今日站内通知', value: stats.todayNotifications, icon: 'Bell' },
+  { label: '今日微信消息', value: stats.todayWechatMessages, icon: 'ChatDotSquare' },
+  { label: '发送失败', value: stats.todayWechatFailed, tone: 'red' as const, icon: 'CircleClose' },
+  { label: '在线连接', value: stats.onlineCount, tone: 'green' as const, icon: 'Monitor' },
+])
 async function loadStats() {
   try {
     const res: any = await fetchNotifyStats()
@@ -318,26 +307,11 @@ onMounted(() => { loadStats(); loadConsents(); loadBindings(); loadLogs() })
 </script>
 
 <style scoped>
-.page-container { padding: 20px; display: grid; gap: 24px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; }
-.page-header h2 { margin: 0; font-size: 20px; font-weight: 900; color: #0f2a5f; }
-.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.stat-card { text-align: center; padding: 20px; }
-.stat-value { font-size: 28px; font-weight: 950; color: #0f2a5f; }
-.stat-danger { color: #ef4444; }
-.stat-success { color: #10b981; }
-.stat-label { font-size: 13px; color: #64748b; margin-top: 4px; font-weight: 700; }
-.notify-tabs { border-radius: 18px; overflow: hidden; }
+.page-container { display: grid; gap: 24px; }
+.notify-tabs { border-radius: 14px; overflow: hidden; }
 .tab-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
 .ws-section h4 { margin: 0 0 12px; font-size: 14px; font-weight: 800; color: #0f2a5f; }
 .ws-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .form-tip { color: #94a3b8; font-size: 12px; margin-top: 8px; }
-.glass-card {
-  background: rgba(255,255,255,.72);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,.55);
-  border-radius: 18px;
-}
-@media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 </style>

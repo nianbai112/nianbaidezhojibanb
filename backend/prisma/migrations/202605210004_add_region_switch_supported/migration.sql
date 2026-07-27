@@ -1,0 +1,2 @@
+ALTER TABLE "regions"
+ADD COLUMN IF NOT EXISTS "regionSwitchSupported" BOOLEAN NOT NULL DEFAULT true;

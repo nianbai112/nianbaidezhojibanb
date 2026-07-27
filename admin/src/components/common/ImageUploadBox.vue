@@ -50,6 +50,8 @@ const props = defineProps<{
   tip?: string
   accept?: string
   maxSize?: number
+  minWidth?: number
+  minHeight?: number
   shape?: 'square' | 'wide' | 'default'
 }>()
 
@@ -89,6 +91,20 @@ async function handleFile(file: File) {
   if (props.maxSize && file.size > props.maxSize * 1024 * 1024) {
     ElMessage.warning(`图片大小不能超过 ${props.maxSize}MB`)
     return
+  }
+
+  if (props.minWidth || props.minHeight) {
+    const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const image = new Image()
+      const objectUrl = URL.createObjectURL(file)
+      image.onload = () => { URL.revokeObjectURL(objectUrl); resolve({ width: image.naturalWidth, height: image.naturalHeight }) }
+      image.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('无法读取图片尺寸')) }
+      image.src = objectUrl
+    })
+    if ((props.minWidth && size.width < props.minWidth) || (props.minHeight && size.height < props.minHeight)) {
+      ElMessage.warning(`图片至少需要 ${props.minWidth || 0}×${props.minHeight || 0}px，当前为 ${size.width}×${size.height}px`)
+      return
+    }
   }
 
   uploading.value = true
@@ -221,7 +237,7 @@ function previewImage() {
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
-  border-radius: 11px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, .9);
   box-shadow: 0 8px 18px rgba(15, 23, 42, .08);
 }
@@ -237,7 +253,7 @@ function previewImage() {
   border: 0;
   background: #eff6ff;
   color: #2563eb;
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 4px 8px;
   font-size: 12.5px;
   font-weight: 650;

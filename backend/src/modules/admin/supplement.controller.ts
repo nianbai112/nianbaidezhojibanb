@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { PrismaService } from '../../common/services/prisma.service';
+import { PaymentService } from '../payment/payment.service';
+import { NotifyService } from '../notify/notify.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { RequirePermission } from '../../decorators/require-permission.decorator';
@@ -22,7 +24,11 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
 @ApiBearerAuth()
 export class SupplementController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentService: PaymentService,
+    private readonly notifyService: NotifyService,
+  ) {}
 
   private normalizeNullableString(value: unknown) {
     if (value === undefined || value === null || value === '') return undefined;
@@ -33,6 +39,160 @@ export class SupplementController {
     if (value === undefined || value === null || value === '') return undefined;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private normalizeTopupPackagePayload(input: any, isCreate = false) {
+    const payload: any = {};
+    const regionId = this.normalizeNullableString(input?.regionId ?? input?.region_id);
+    const name = this.normalizeNullableString(input?.name ?? input?.packageName ?? input?.package_name);
+    const amount = this.normalizeNumber(input?.amount ?? input?.currentPrice ?? input?.current_price);
+    const originalPrice = this.normalizeNumber(input?.originalPrice ?? input?.original_price);
+    const duration = this.normalizeNumber(input?.duration);
+    const durationUnit = this.normalizeNullableString(input?.durationUnit ?? input?.duration_unit);
+    const description = this.normalizeNullableString(input?.description);
+    const sortOrder = this.normalizeNumber(input?.sortOrder ?? input?.sort_order);
+
+    if (regionId !== undefined) payload.regionId = regionId;
+    if (name !== undefined) payload.name = name;
+    if (amount !== undefined) payload.amount = amount;
+    if (originalPrice !== undefined) payload.originalPrice = originalPrice;
+    if (duration !== undefined) payload.duration = Math.max(1, Math.floor(duration));
+    if (durationUnit !== undefined) payload.durationUnit = durationUnit;
+    if (description !== undefined) payload.description = description;
+    if (sortOrder !== undefined) payload.sortOrder = Math.floor(sortOrder);
+    if (input?.isShow !== undefined || input?.is_show !== undefined) {
+      payload.isShow = input?.isShow === true || input?.isShow === 1 || input?.isShow === '1' || input?.is_show === true || input?.is_show === 1 || input?.is_show === '1';
+    }
+
+    if (isCreate && !payload.regionId) throw new BadRequestException('请选择区域');
+    if (isCreate && !payload.name) throw new BadRequestException('套餐名称不能为空');
+    if (isCreate && (!payload.amount || payload.amount <= 0)) throw new BadRequestException('套餐价格必须大于0');
+    if (isCreate && !payload.duration) payload.duration = 24;
+    if (isCreate && !payload.durationUnit) payload.durationUnit = 'hours';
+    if (isCreate && payload.originalPrice === undefined) payload.originalPrice = payload.amount;
+    return payload;
+  }
+
+  private mapTopupPackage(item: any) {
+    const currentPrice = Number(item.amount || 0);
+    return {
+      ...item,
+      package_id: item.id,
+      package_name: item.name,
+      region_id: item.regionId,
+      current_price: currentPrice,
+      original_price: Number(item.originalPrice || currentPrice),
+      duration_unit: item.durationUnit,
+      sort_order: item.sortOrder,
+      is_show: item.isShow ? 1 : 0,
+    };
+  }
+
+  private mapTopupOrder(item: any, postMap: Map<string, any>) {
+    const post = item.postId ? postMap.get(item.postId) : null;
+    return {
+      ...item,
+      order_id: item.id,
+      order_no: item.orderNo,
+      payment_no: item.paymentNo,
+      user_id: item.userId,
+      post_id: item.postId,
+      region_id: item.regionId,
+      package_id: item.packageId,
+      package_name: item.packageName,
+      amount: Number(item.amount || 0),
+      duration_unit: item.durationUnit,
+      order_status: item.status,
+      top_expire_at: item.topExpireAt,
+      pay_time: item.payTime,
+      created_at: item.createdAt,
+      user: item.User,
+      post,
+      postTitle: post?.title || post?.content?.slice?.(0, 30) || '',
+    };
+  }
+
+  private toBoolFlag(value: any, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+  }
+
+  private normalizeStickerCategoryPayload(input: any) {
+    const payload: any = {};
+    const name = this.normalizeNullableString(input?.name);
+    const icon = this.normalizeNullableString(input?.icon);
+    const description = this.normalizeNullableString(input?.description);
+    const sortOrder = this.normalizeNumber(input?.sortOrder ?? input?.sort_order);
+    if (name !== undefined) payload.name = name;
+    if (icon !== undefined) payload.icon = icon;
+    if (description !== undefined) payload.description = description;
+    if (sortOrder !== undefined) payload.sortOrder = Math.floor(sortOrder);
+    if (input?.isActive !== undefined || input?.is_active !== undefined) {
+      payload.isActive = this.toBoolFlag(input?.isActive ?? input?.is_active, true);
+    }
+    return payload;
+  }
+
+  private normalizeStickerPayload(input: any, isCreate = false) {
+    const payload: any = {};
+    const url = this.normalizeNullableString(input?.url ?? input?.sticker_url ?? input?.stickerUrl);
+    const thumbnail = this.normalizeNullableString(input?.thumbnail ?? input?.thumbnail_url ?? input?.thumbnailUrl);
+    const name = this.normalizeNullableString(input?.name ?? input?.title);
+    const description = this.normalizeNullableString(input?.description);
+    const categoryId = this.normalizeNullableString(input?.categoryId ?? input?.category_id);
+    const packId = this.normalizeNullableString(input?.packId ?? input?.pack_id);
+    const mimeType = this.normalizeNullableString(input?.mimeType ?? input?.mime_type);
+    const fileSize = this.normalizeNumber(input?.fileSize ?? input?.file_size);
+
+    if (url !== undefined) payload.url = url;
+    if (thumbnail !== undefined) payload.thumbnail = thumbnail;
+    if (name !== undefined) payload.name = name;
+    if (description !== undefined) payload.description = description;
+    if (categoryId !== undefined) payload.categoryId = categoryId;
+    if (packId !== undefined) payload.packId = packId;
+    if (mimeType !== undefined) payload.mimeType = mimeType;
+    if (fileSize !== undefined) payload.fileSize = Math.floor(fileSize);
+    if (input?.isShared !== undefined || input?.is_shared !== undefined) {
+      payload.isShared = this.toBoolFlag(input?.isShared ?? input?.is_shared);
+    }
+    if (input?.isOfficial !== undefined || input?.is_official !== undefined) {
+      payload.isOfficial = this.toBoolFlag(input?.isOfficial ?? input?.is_official);
+      payload.source = payload.isOfficial ? 'system' : 'user';
+    }
+    if (isCreate) {
+      if (!payload.url) throw new BadRequestException('请先上传表情图片');
+      if (!payload.name) payload.name = '官方表情';
+      if (payload.thumbnail === undefined) payload.thumbnail = payload.url;
+      if (payload.isOfficial === undefined) payload.isOfficial = true;
+      if (payload.source === undefined) payload.source = payload.isOfficial ? 'system' : 'user';
+      if (!payload.status) payload.status = payload.isOfficial ? 'active' : 'pending';
+    }
+    return payload;
+  }
+
+  private mapStickerCategory(item: any) {
+    return {
+      ...item,
+      sort_order: item.sortOrder ?? 0,
+      is_active: item.isActive ? 1 : 0,
+    };
+  }
+
+  private mapSticker(item: any, category?: any) {
+    return {
+      ...item,
+      user: item.User || item.user || null,
+      category,
+      user_id: item.userId || '',
+      category_id: item.categoryId || '',
+      pack_id: item.packId || '',
+      sticker_url: item.url,
+      thumbnail_url: item.thumbnail || item.url,
+      title: item.name,
+      is_shared: item.isShared ? 1 : 0,
+      is_official: item.isOfficial ? 1 : 0,
+      source_label: item.isOfficial ? '官方基础表情' : '用户上传表情',
+    };
   }
 
   private normalizeClubPayload(input: any, adminId: string, isCreate = false) {
@@ -116,139 +276,23 @@ export class SupplementController {
     return payload;
   }
 
-  // ==================== 漂流瓶 ====================
-
-  @Get('drift-bottles')
-  @RequirePermission('driftBottle:list')
-  @ApiOperation({ summary: '漂流瓶列表' })
-  async getDriftBottleList(
-    @Query('page') page = '1',
-    @Query('pageSize') pageSize = '20',
-    @Query('keyword') keyword?: string,
-  ) {
-    const where: any = {};
-    if (keyword) where.content = { contains: keyword, mode: 'insensitive' };
-
-    const [list, total] = await Promise.all([
-      this.prisma.driftBottle.findMany({
-        where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
-        orderBy: { createdAt: 'desc' },
-        include: { user: { select: { id: true, nickname: true, avatar: true } } },
-      }),
-      this.prisma.driftBottle.count({ where }),
-    ]);
-    return {
-      code: 0,
-      data: {
-        list: list.map((item) => ({
-          ...item,
-          type: item.images ? 'image' : item.voice ? 'voice' : 'text',
-          status: 'active',
-        })),
-        total,
-        page: +page,
-        pageSize: +pageSize,
-      },
-    };
+  private toBoundedInt(value: unknown, fallback: number, min = 0, max = 9999) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(parsed)));
   }
 
-  @Put('drift-bottles/:id/status')
-  @RequirePermission('driftBottle:delete')
-  @ApiOperation({ summary: '更新漂流瓶状态' })
-  async updateDriftBottleStatus(
-    @Param('id') id: string,
-    @Body('status') status: string,
-    @CurrentUser('sub') adminId: string,
-  ) {
-    if (status === 'deleted') {
-      await this.prisma.driftBottle.delete({ where: { id } });
-      await this.logOperation(adminId, 'driftBottle', 'delete', id);
-      return { code: 0, message: '已删除' };
-    }
-
-    await this.prisma.driftBottle.findUniqueOrThrow({ where: { id } });
-    await this.logOperation(adminId, 'driftBottle', 'update_status', id);
-    return { code: 0, message: '状态已记录' };
+  private toMoney(value: unknown, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Number(parsed.toFixed(2)));
   }
 
-  @Delete('drift-bottles/:id')
-  @RequirePermission('driftBottle:delete')
-  @ApiOperation({ summary: '删除漂流瓶' })
-  async deleteDriftBottle(@Param('id') id: string, @CurrentUser('sub') adminId: string) {
-    await this.prisma.driftBottle.delete({ where: { id } });
-    await this.logOperation(adminId, 'driftBottle', 'delete', id);
-    return { code: 0, message: '已删除' };
-  }
-
-  @Get('drift-bottles/reports')
-  @RequirePermission('driftBottle:list')
-  @ApiOperation({ summary: '漂流瓶举报列表' })
-  async getDriftBottleReports(
-    @Query('page') page = '1',
-    @Query('pageSize') pageSize = '20',
-    @Query('status') status?: string,
-  ) {
-    const where: any = {
-      targetType: { in: ['drift_bottle', 'driftBottle', 'drift-bottle'] },
-    };
-    if (status) where.status = status;
-
-    const [list, total] = await Promise.all([
-      this.prisma.report.findMany({
-        where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
-        orderBy: { createdAt: 'desc' },
-        include: { reporter: { select: { id: true, nickname: true, avatar: true } } },
-      }),
-      this.prisma.report.count({ where }),
-    ]);
-
-    const targetIds = list.map((item) => item.targetId).filter(Boolean);
-    const bottles = targetIds.length
-      ? await this.prisma.driftBottle.findMany({
-          where: { id: { in: targetIds } },
-          select: { id: true, content: true },
-        })
-      : [];
-    const bottleMap = new Map(bottles.map((item) => [item.id, item.content]));
-
-    return {
-      code: 0,
-      data: {
-        list: list.map((item) => ({
-          ...item,
-          targetContent: bottleMap.get(item.targetId) || item.detail || '-',
-        })),
-        total,
-        page: +page,
-        pageSize: +pageSize,
-      },
-    };
-  }
-
-  @Post('drift-bottles/reports/:id/handle')
-  @RequirePermission('driftBottle:delete')
-  @ApiOperation({ summary: '处理漂流瓶举报' })
-  async handleDriftBottleReport(
-    @Param('id') id: string,
-    @Body('action') action: string,
-    @CurrentUser('sub') adminId: string,
-  ) {
-    const status = action === 'ignored' ? 'rejected' : 'resolved';
-    await this.prisma.report.update({
-      where: { id },
-      data: {
-        status,
-        result: action || status,
-        handlerId: adminId,
-        handledAt: new Date(),
-      },
-    });
-    await this.logOperation(adminId, 'driftBottle', 'handle_report', id);
-    return { code: 0, message: '已处理' };
+  private boolValue(value: unknown, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    return ['1', 'true', 'yes', 'on', '启用'].includes(String(value).toLowerCase());
   }
 
   // ==================== 打卡点管理 ====================
@@ -264,7 +308,7 @@ export class SupplementController {
   ) {
     const where: any = {};
     if (regionId) where.regionId = regionId;
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.punchInLocation.findMany({
@@ -331,11 +375,11 @@ export class SupplementController {
     return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
   }
 
-  // ==================== 充值套餐 ====================
+  // ==================== 笔记付费置顶 ====================
 
   @Get('topup/packages')
   @RequirePermission('topup:package:list')
-  @ApiOperation({ summary: '充值套餐列表' })
+  @ApiOperation({ summary: '笔记置顶套餐列表' })
   async getTopupPackageList(
     @Query('page') page = '1',
     @Query('pageSize') pageSize = '20',
@@ -353,50 +397,52 @@ export class SupplementController {
       }),
       this.prisma.topupPackage.count({ where }),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    return { code: 0, data: { list: list.map((item) => this.mapTopupPackage(item)), total, page: +page, pageSize: +pageSize } };
   }
 
   @Post('topup/packages')
   @RequirePermission('topup:package:create')
-  @ApiOperation({ summary: '创建充值套餐' })
+  @ApiOperation({ summary: '创建笔记置顶套餐' })
   async createTopupPackage(@Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.topupPackage.create({ data });
-    await this.logOperation(adminId, 'topup', 'create_package', item.id);
-    return { code: 0, data: item };
+    const item = await this.prisma.topupPackage.create({ data: this.normalizeTopupPackagePayload(data, true) });
+    await this.logOperation(adminId, 'topup', 'create_pin_package', item.id);
+    return { code: 0, data: this.mapTopupPackage(item) };
   }
 
   @Put('topup/packages/:id')
   @RequirePermission('topup:package:update')
-  @ApiOperation({ summary: '更新充值套餐' })
+  @ApiOperation({ summary: '更新笔记置顶套餐' })
   async updateTopupPackage(@Param('id') id: string, @Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.topupPackage.update({ where: { id }, data });
-    await this.logOperation(adminId, 'topup', 'update_package', id);
-    return { code: 0, data: item };
+    const item = await this.prisma.topupPackage.update({ where: { id }, data: this.normalizeTopupPackagePayload(data) });
+    await this.logOperation(adminId, 'topup', 'update_pin_package', id);
+    return { code: 0, data: this.mapTopupPackage(item) };
   }
 
   @Delete('topup/packages/:id')
   @RequirePermission('topup:package:delete')
-  @ApiOperation({ summary: '删除充值套餐' })
+  @ApiOperation({ summary: '删除笔记置顶套餐' })
   async deleteTopupPackage(@Param('id') id: string, @CurrentUser('sub') adminId: string) {
     await this.prisma.topupPackage.delete({ where: { id } });
-    await this.logOperation(adminId, 'topup', 'delete_package', id);
+    await this.logOperation(adminId, 'topup', 'delete_pin_package', id);
     return { code: 0, message: '已删除' };
   }
 
   @Get('topup/orders')
   @RequirePermission('topup:order:list')
-  @ApiOperation({ summary: '充值订单列表' })
+  @ApiOperation({ summary: '笔记置顶订单列表' })
   async getTopupOrderList(
     @Query('page') page = '1',
     @Query('pageSize') pageSize = '20',
     @Query('orderNo') orderNo?: string,
     @Query('status') status?: string,
     @Query('userId') userId?: string,
+    @Query('regionId') regionId?: string,
   ) {
     const where: any = {};
     if (orderNo) where.orderNo = { contains: orderNo };
     if (status) where.status = status;
     if (userId) where.userId = userId;
+    if (regionId) where.regionId = regionId;
 
     const [list, total] = await Promise.all([
       this.prisma.topupOrder.findMany({
@@ -408,7 +454,36 @@ export class SupplementController {
       }),
       this.prisma.topupOrder.count({ where }),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    const postIds = list.map((item) => item.postId).filter(Boolean) as string[];
+    const posts = postIds.length
+      ? await this.prisma.post.findMany({
+          where: { id: { in: postIds } },
+          select: { id: true, title: true, content: true, isTop: true, topExpireAt: true },
+        })
+      : [];
+    const postMap = new Map(posts.map((post) => [post.id, post]));
+    return { code: 0, data: { list: list.map((item) => this.mapTopupOrder(item, postMap)), total, page: +page, pageSize: +pageSize } };
+  }
+
+  @Post('topup/orders/:id/sync-payment')
+  @RequirePermission('topup:order:list')
+  @ApiOperation({ summary: '同步笔记置顶订单支付状态' })
+  async syncTopupOrderPayment(@Param('id') id: string) {
+    const order = await this.prisma.topupOrder.findUnique({ where: { id } });
+    if (!order) throw new BadRequestException('置顶订单不存在');
+    if (!order.paymentNo) throw new BadRequestException('该订单暂无支付单号');
+
+    await this.paymentService.queryPayment(order.paymentNo);
+
+    const updated = await this.prisma.topupOrder.findUnique({ where: { id } });
+    if (!updated) throw new BadRequestException('置顶订单不存在');
+    const post = updated.postId
+      ? await this.prisma.post.findUnique({
+          where: { id: updated.postId },
+          select: { id: true, title: true, content: true, isTop: true, topExpireAt: true },
+        })
+      : null;
+    return { code: 0, data: this.mapTopupOrder(updated, post ? new Map([[post.id, post]]) : new Map()) };
   }
 
   // ==================== 社团管理 ====================
@@ -424,7 +499,7 @@ export class SupplementController {
     @Query('regionId') regionId?: string,
   ) {
     const where: any = {};
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
     if (status) where.status = status;
     if (regionId) where.regionId = regionId;
 
@@ -791,7 +866,7 @@ export class SupplementController {
   ) {
     const where: any = {};
     if (categoryId) where.categoryId = categoryId;
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.contact.findMany({
@@ -844,7 +919,7 @@ export class SupplementController {
     @Query('keyword') keyword?: string,
   ) {
     const where: any = {};
-    if (keyword) where.title = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.title = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.wechatArticle.findMany({
@@ -891,7 +966,7 @@ export class SupplementController {
       }),
       this.prisma.printerConfig.count({ where }),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    return { code: 0, data: { list: list.map(({ key, credentialCiphertext, ...printer }) => ({ ...printer, keyConfigured: Boolean(key), credentialConfigured: Boolean(credentialCiphertext) })), total, page: +page, pageSize: +pageSize } };
   }
 
   @Put('printers/:id/status')
@@ -1017,25 +1092,25 @@ export class SupplementController {
       }),
       this.prisma.stickerCategory.count(),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    return { code: 0, data: { list: list.map((item) => this.mapStickerCategory(item)), total, page: +page, pageSize: +pageSize } };
   }
 
   @Post('sticker-categories')
   @RequirePermission('sticker:category:create')
   @ApiOperation({ summary: '创建贴纸分类' })
   async createStickerCategory(@Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.stickerCategory.create({ data });
+    const item = await this.prisma.stickerCategory.create({ data: this.normalizeStickerCategoryPayload(data) });
     await this.logOperation(adminId, 'sticker', 'create_category', item.id);
-    return { code: 0, data: item };
+    return { code: 0, data: this.mapStickerCategory(item) };
   }
 
   @Put('sticker-categories/:id')
   @RequirePermission('sticker:category:update')
   @ApiOperation({ summary: '更新贴纸分类' })
   async updateStickerCategory(@Param('id') id: string, @Body() data: any, @CurrentUser('sub') adminId: string) {
-    const item = await this.prisma.stickerCategory.update({ where: { id }, data });
+    const item = await this.prisma.stickerCategory.update({ where: { id }, data: this.normalizeStickerCategoryPayload(data) });
     await this.logOperation(adminId, 'sticker', 'update_category', id);
-    return { code: 0, data: item };
+    return { code: 0, data: this.mapStickerCategory(item) };
   }
 
   @Delete('sticker-categories/:id')
@@ -1047,6 +1122,29 @@ export class SupplementController {
     return { code: 0, message: '已删除' };
   }
 
+  @Post('stickers')
+  @RequirePermission('sticker:update')
+  @ApiOperation({ summary: '管理员上传官方表情' })
+  async createSticker(@Body() data: any, @CurrentUser('sub') adminId: string) {
+    const payload = this.normalizeStickerPayload({ ...data, isOfficial: true }, true);
+    const item = await this.prisma.sticker.create({
+      data: {
+        ...payload,
+        userId: null,
+        isOfficial: true,
+        isShared: true,
+        source: 'system',
+        status: 'active',
+        reviewedBy: adminId || null,
+        reviewedAt: new Date(),
+        auditReason: '管理员上传官方基础表情',
+      },
+      include: { User: { select: { id: true, nickname: true } } },
+    });
+    await this.logOperation(adminId, 'sticker', 'create_official', item.id);
+    return { code: 0, data: this.mapSticker(item) };
+  }
+
   @Get('stickers')
   @RequirePermission('sticker:list')
   @ApiOperation({ summary: '贴纸列表' })
@@ -1055,12 +1153,24 @@ export class SupplementController {
     @Query('pageSize') pageSize = '20',
     @Query('categoryId') categoryId?: string,
     @Query('status') status?: string,
+    @Query('source') source?: string,
+    @Query('keyword') keyword?: string,
+    @Query('isShared') isShared?: string,
   ) {
-    const where: any = {};
+    const where: any = { status: { not: 'deleted' } };
     if (categoryId) where.categoryId = categoryId;
     if (status) where.status = status;
+    if (source === 'official') where.isOfficial = true;
+    if (source === 'user') where.isOfficial = false;
+    if (isShared !== undefined && isShared !== '') where.isShared = this.toBoolFlag(isShared);
+    if (keyword) {
+      where.OR = [
+        { name: { contains: keyword } },
+        { description: { contains: keyword } },
+      ];
+    }
 
-    const [list, total] = await Promise.all([
+    const [list, total, stats, categories] = await Promise.all([
       this.prisma.sticker.findMany({
         where,
         skip: (+page - 1) * +pageSize,
@@ -1069,15 +1179,82 @@ export class SupplementController {
         include: { User: { select: { id: true, nickname: true } } },
       }),
       this.prisma.sticker.count({ where }),
+      this.prisma.sticker.groupBy({
+        by: ['status'],
+        where: { status: { not: 'deleted' } },
+        _count: { _all: true },
+      }).catch(() => []),
+      this.prisma.stickerCategory.findMany(),
     ]);
-    return { code: 0, data: { list, total, page: +page, pageSize: +pageSize } };
+    const stickerStats = stats as any[];
+    const categoryMap = new Map(categories.map((item) => [item.id, this.mapStickerCategory(item)]));
+    return {
+      code: 0,
+      data: {
+        list: list.map((item) => this.mapSticker(item, item.categoryId ? categoryMap.get(item.categoryId) : undefined)),
+        total,
+        page: +page,
+        pageSize: +pageSize,
+        stats: {
+          total: stickerStats.reduce((sum: number, item: any) => sum + item._count._all, 0),
+          pending: stickerStats.find((item: any) => item.status === 'pending')?._count?._all || 0,
+          active: stickerStats.find((item: any) => item.status === 'active')?._count?._all || 0,
+          rejected: stickerStats.find((item: any) => item.status === 'rejected')?._count?._all || 0,
+          banned: stickerStats.find((item: any) => item.status === 'banned')?._count?._all || 0,
+        },
+      },
+    };
+  }
+
+  @Put('stickers/:id')
+  @RequirePermission('sticker:update')
+  @ApiOperation({ summary: '更新贴纸信息' })
+  async updateSticker(@Param('id') id: string, @Body() data: any, @CurrentUser('sub') adminId: string) {
+    const item = await this.prisma.sticker.update({
+      where: { id },
+      data: this.normalizeStickerPayload(data),
+      include: { User: { select: { id: true, nickname: true } } },
+    });
+    await this.logOperation(adminId, 'sticker', 'update', id);
+    return { code: 0, data: this.mapSticker(item) };
   }
 
   @Put('stickers/:id/status')
   @RequirePermission('sticker:update')
   @ApiOperation({ summary: '更新贴纸状态' })
-  async updateStickerStatus(@Param('id') id: string, @Body('status') status: string, @CurrentUser('sub') adminId: string) {
-    await this.prisma.sticker.update({ where: { id }, data: { status } });
+  async updateStickerStatus(@Param('id') id: string, @Body('status') status: string, @Body('reason') reason: string, @CurrentUser('sub') adminId: string) {
+    const allowed = ['pending', 'active', 'rejected', 'banned', 'deleted'];
+    if (!allowed.includes(status)) throw new BadRequestException('表情状态不正确');
+    const item = await this.prisma.sticker.update({
+      where: { id },
+      data: {
+        status,
+        auditReason: reason || (status === 'active' ? '审核通过' : status === 'rejected' ? '审核不通过' : status === 'banned' ? '已禁用' : undefined),
+        reviewedBy: ['active', 'rejected', 'banned'].includes(status) ? adminId || null : undefined,
+        reviewedAt: ['active', 'rejected', 'banned'].includes(status) ? new Date() : undefined,
+      },
+    });
+    if (item.userId && ['active', 'rejected', 'banned'].includes(status)) {
+      const statusText = status === 'active' ? '已通过' : status === 'rejected' ? '未通过' : '已禁用';
+      const defaultReason = status === 'active' ? '你的表情包已通过审核，可以在我的表情中使用。' : `你的表情包审核${statusText}，请在我的表情中查看。`;
+      await this.notifyService.createAndDispatch({
+        userId: item.userId,
+        type: 'system',
+        scene: 'sticker_review',
+        title: '表情包审核结果',
+        content: reason || defaultReason,
+        data: {
+          stickerId: item.id,
+          status,
+          statusText,
+          reason: reason || item.auditReason || '',
+        },
+        linkType: 'sticker',
+        linkValue: item.id,
+      }).catch((error) => {
+        console.error('表情包审核通知发送失败:', error);
+      });
+    }
     await this.logOperation(adminId, 'sticker', 'update_status', id);
     return { code: 0, message: '已更新' };
   }
@@ -1086,7 +1263,7 @@ export class SupplementController {
   @RequirePermission('sticker:delete')
   @ApiOperation({ summary: '删除贴纸' })
   async deleteSticker(@Param('id') id: string, @CurrentUser('sub') adminId: string) {
-    await this.prisma.sticker.delete({ where: { id } });
+    await this.prisma.sticker.update({ where: { id }, data: { status: 'deleted', auditReason: '管理员删除' } });
     await this.logOperation(adminId, 'sticker', 'delete', id);
     return { code: 0, message: '已删除' };
   }

@@ -1,12 +1,13 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>统一订单中心</h2>
-      <el-button @click="exportOrders">
-        <el-icon><Download /></el-icon>
-        导出订单
-      </el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="统一订单检索" subtitle="跨业务查询与导出；外卖处置请从订单履约或售后处理进入">
+      <template #actions>
+        <el-button @click="exportOrders">
+          <el-icon><Download /></el-icon>
+          导出订单
+        </el-button>
+      </template>
+    </PageHeader>
 
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索订单号" clearable style="width: 200px" @clear="loadOrders" @keyup.enter="loadOrders" />
@@ -16,7 +17,7 @@
         <el-option label="跑腿订单" value="errand" />
         <el-option label="团购订单" value="groupbuy" />
         <el-option label="活动订单" value="activity" />
-        <el-option label="充值订单" value="topup" />
+        <el-option label="置顶订单" value="topup" />
         <el-option label="二手订单" value="secondhand" />
       </el-select>
       <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 240px" @change="handleDateChange" />
@@ -86,27 +87,47 @@
           <el-descriptions-item label="状态">
             <el-tag :type="getStatusType(selectedOrder.status)">{{ selectedOrder.status }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="金额">¥{{ Number(selectedOrder.amount || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="金额">¥{{ orderAmount.toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="用户">{{ selectedOrder.user?.nickname || '-' }}</el-descriptions-item>
           <el-descriptions-item label="商户">{{ selectedOrder.merchant?.name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ formatDate(selectedOrder.createdAt) }}</el-descriptions-item>
         </el-descriptions>
+        <section v-if="deliveryNodes.length" class="delivery-evidence">
+          <h4>配送证据</h4>
+          <div v-for="node in deliveryNodes" :key="node.id || `${node.nodeType}-${node.createdAt}`" class="node-row">
+            <strong>{{ deliveryNodeLabel(node.nodeLabel || node.nodeType) }}</strong>
+            <span>{{ formatDate(node.createdAt) }}</span>
+            <small v-if="node.remark">{{ node.remark }}</small>
+            <small v-if="hasLocation(node)">送达坐标：{{ Number(node.lat).toFixed(6) }}, {{ Number(node.lng).toFixed(6) }}</small>
+            <div v-if="nodeProofImages(node).length" class="node-proofs">
+              <el-image v-for="image in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
+            </div>
+          </div>
+        </section>
       </div>
+      <template #footer><el-button @click="showDetailDialog = false">关闭</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
+const route = useRoute()
 const showDetailDialog = ref(false)
 const orders = ref<any[]>([])
 const selectedOrder = ref<any>(null)
+const orderAmount = computed(() => Number(selectedOrder.value?.amount || selectedOrder.value?.orderAmount || 0))
 const dateRange = ref<any>(null)
+const deliveryNodes = computed(() => selectedOrder.value?.deliveryNodes || [])
+const focusOrderId = ref('')
+const focusOrderType = ref('order')
 
 const filters = reactive({
   keyword: '',
@@ -125,6 +146,12 @@ const formatDate = (date: string) => {
   if (!date) return '-'
   return new Date(date).toLocaleString('zh-CN')
 }
+const hasLocation = (node: any) => node?.lat != null && node?.lng != null && Number.isFinite(Number(node.lat)) && Number.isFinite(Number(node.lng))
+const nodeProofImages = (node: any) => (node?.proofImages || node?.proof_images || []).filter((image: any) => typeof image === 'string' && image)
+const deliveryNodeLabel = (value?: string) => ({
+  merchant_accepted: '商家已接单', merchant_completed: '商家已送达', accepted: '骑手已接单',
+  in_progress: '骑手已取货', arrived: '骑手已送达', completed: '订单已完成', cancelled: '订单已取消',
+}[value || ''] || value || '配送状态更新')
 
 const getStatusType = (status: string) => {
   if (status?.includes('pay') || status?.includes('pending')) return 'warning'
@@ -157,6 +184,12 @@ const loadOrders = async () => {
     const payload: any = (res as any)?.data || res
     orders.value = payload?.list || []
     pagination.total = payload?.total || 0
+    if (focusOrderId.value) {
+      const orderId = focusOrderId.value
+      const type = focusOrderType.value
+      focusOrderId.value = ''
+      await openDetail(orderId, type)
+    }
   } catch (error) {
     ElMessage.error('加载订单列表失败')
   } finally {
@@ -173,19 +206,21 @@ const resetFilters = () => {
   loadOrders()
 }
 
-const viewDetail = async (order: any) => {
+const applyRouteQuery = () => {
+  const keyword = route.query.businessId || route.query.keyword
+  if (keyword) filters.keyword = String(keyword)
+  const orderType = route.query.orderType || route.query.type
+  if (orderType) filters.orderType = String(orderType)
+  if (route.query.focusId) {
+    focusOrderId.value = String(route.query.focusId)
+    focusOrderType.value = String(orderType || 'order')
+  }
+}
+
+const openDetail = async (orderId: string, type?: string) => {
   try {
-    const typeMap: Record<string, string> = {
-      普通订单: 'order',
-      商城订单: 'mall',
-      跑腿订单: 'errand',
-      团购订单: 'groupbuy',
-      活动订单: 'activity',
-      充值订单: 'topup',
-      二手订单: 'secondhand',
-    }
-    const res = await request.get(`/admin/order-center/orders/${order.orderId}`, {
-      params: { type: typeMap[order.orderType] },
+    const res = await request.get(`/admin/order-center/orders/${orderId}`, {
+      params: { type },
     })
     selectedOrder.value = (res as any)?.data || res
     showDetailDialog.value = true
@@ -193,6 +228,11 @@ const viewDetail = async (order: any) => {
     ElMessage.error('获取订单详情失败')
   }
 }
+
+const viewDetail = (order: any) => openDetail(order.orderId, {
+  普通订单: 'order', 商城订单: 'mall', 跑腿订单: 'errand', 团购订单: 'groupbuy',
+  活动订单: 'activity', 置顶订单: 'topup', 二手订单: 'secondhand',
+}[order.orderType])
 
 const exportOrders = async () => {
   try {
@@ -213,20 +253,12 @@ const exportOrders = async () => {
 }
 
 onMounted(() => {
+  applyRouteQuery()
   loadOrders()
 })
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
 .filter-bar {
   display: flex;
   gap: 12px;
@@ -242,4 +274,11 @@ onMounted(() => {
   max-height: 60vh;
   overflow-y: auto;
 }
+.delivery-evidence { margin-top: 16px; }
+.delivery-evidence h4 { margin: 0 0 8px; }
+.node-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid #ebeef5; }
+.node-row span, .node-row small { color: #7b8798; font-size: 12px; }
+.node-row small, .node-proofs { grid-column: 1 / -1; }
+.node-proofs { display: flex; gap: 8px; flex-wrap: wrap; }
+.node-proofs :deep(.el-image) { width: 88px; height: 88px; border-radius: 6px; }
 </style>

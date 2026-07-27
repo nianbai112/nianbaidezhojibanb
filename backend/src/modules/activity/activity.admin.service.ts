@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { MembershipService } from '../membership/membership.service';
 
 @Injectable()
 export class ActivityAdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly membershipService: MembershipService,
+  ) {}
 
   // ==================== Activity CRUD ====================
 
@@ -14,7 +18,7 @@ export class ActivityAdminService {
     if (status) where.status = status;
     if (typeId) where.typeId = typeId;
     if (clubId) where.clubId = clubId;
-    if (keyword) where.title = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.title = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.activity.findMany({
@@ -92,7 +96,7 @@ export class ActivityAdminService {
     const { page = 1, limit = 20, regionId, keyword, isActive } = query;
     const where: any = {};
     if (regionId) where.regionId = regionId;
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
     if (isActive !== undefined) where.isActive = isActive;
 
     const [list, total] = await Promise.all([
@@ -189,8 +193,8 @@ export class ActivityAdminService {
     if (userId) where.userId = userId;
     if (keyword) {
       where.OR = [
-        { orderNo: { contains: keyword, mode: 'insensitive' } },
-        { user: { nickname: { contains: keyword, mode: 'insensitive' } } },
+        { orderNo: { contains: keyword } },
+        { user: { nickname: { contains: keyword } } },
       ];
     }
 
@@ -237,6 +241,16 @@ export class ActivityAdminService {
     if (dto.status === 'rejected') {
       data.refundStatus = null;
       data.refundReason = dto.reason || '退款已拒绝';
+    }
+    if (['refunded', 'success', 'refund_success'].includes(String(dto.status || '').toLowerCase())) {
+      return this.prisma.$transaction(async (tx) => {
+        await this.membershipService.restoreBenefitUsagesForTarget('activity_order', order.id, tx);
+        await tx.subsidyLedger.updateMany({
+          where: { sourceType: 'membership', orderType: 'activity_order', orderId: order.id },
+          data: { status: 'cancelled' },
+        }).catch(() => undefined);
+        return tx.activityOrder.update({ where: { id }, data });
+      });
     }
     return this.prisma.activityOrder.update({ where: { id }, data });
   }

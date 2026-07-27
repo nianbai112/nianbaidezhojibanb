@@ -2,6 +2,12 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { CircleService } from "./circle.service";
 import { PrismaService } from "../../common/services/prisma.service";
 import { MallService } from "../mall/mall.service";
+import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
+import { RedisService } from "../../common/services/redis.service";
+import { MembershipService } from "../membership/membership.service";
+import { UserAccessPolicyService } from "../../common/services/user-access-policy.service";
+import { PaymentService } from "../payment/payment.service";
+import { WalletService } from "../../common/services/wallet.service";
 
 describe("CircleService - 核心功能", () => {
   let circleService: CircleService;
@@ -13,10 +19,12 @@ describe("CircleService - 核心功能", () => {
   const mockCircleCount = jest.fn().mockResolvedValue(0);
   const mockMemberFindMany = jest.fn().mockResolvedValue([]);
   const mockMemberFindUnique = jest.fn();
+  const mockMemberFindFirst = jest.fn();
   const mockMemberCreate = jest.fn();
   const mockMemberDelete = jest.fn();
   const mockMemberCount = jest.fn().mockResolvedValue(0);
   const mockMemberUpdate = jest.fn();
+  const mockCircleUpdateMany = jest.fn();
   const mockTopicGroupFindMany = jest.fn().mockResolvedValue([]);
   const mockTopicGroupDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
   const mockConversationFindFirst = jest.fn().mockResolvedValue(null);
@@ -29,11 +37,13 @@ describe("CircleService - 核心功能", () => {
       findUnique: mockCircleFindUnique,
       create: mockCircleCreate,
       update: mockCircleUpdate,
+      updateMany: mockCircleUpdateMany,
       count: mockCircleCount,
     },
     circleMember: {
       findMany: mockMemberFindMany,
       findUnique: mockMemberFindUnique,
+      findFirst: mockMemberFindFirst,
       create: mockMemberCreate,
       delete: mockMemberDelete,
       update: mockMemberUpdate,
@@ -60,6 +70,15 @@ describe("CircleService - 核心功能", () => {
       providers: [
         CircleService,
         { provide: PrismaService, useValue: mockPrisma },
+        {
+          provide: AdminDataScopeService,
+          useValue: {
+            regionFieldWhere: jest.fn().mockResolvedValue({}),
+            assertRegionAccess: jest.fn().mockResolvedValue(undefined),
+            resolveRegionId: jest.fn(async (_accountId?: string, regionId?: string) => regionId),
+          },
+        },
+        { provide: UserAccessPolicyService, useValue: { assertStudentProtectedAction: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 
@@ -67,7 +86,10 @@ describe("CircleService - 核心功能", () => {
   });
 
   it("inviteMember 应正常邀请成员", async () => {
-    mockMemberFindUnique.mockResolvedValue(null);
+    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", regionId: "region-1" });
+    mockMemberFindUnique
+      .mockResolvedValueOnce({ id: "owner-1", circleId: "circle-1", userId: "user-1", role: "OWNER", status: "active" })
+      .mockResolvedValueOnce(null);
     mockMemberCreate.mockResolvedValue({ id: "cm-1" });
 
     const result = await circleService.inviteMember("circle-1", "user-1", { inviteeId: "user-2" });
@@ -93,7 +115,8 @@ describe("CircleService - 核心功能", () => {
   });
 
   it("auditMember 应审核成员", async () => {
-    mockMemberFindUnique.mockResolvedValue({ id: "member-1", circleId: "circle-1" });
+    mockMemberFindUnique.mockResolvedValue({ id: "owner-1", circleId: "circle-1", userId: "user-1", role: "OWNER", status: "active" });
+    mockMemberFindFirst.mockResolvedValue({ id: "member-1", circleId: "circle-1", userId: "user-2", role: "MEMBER", status: "pending" });
 
     const result = await circleService.auditMember("circle-1", "member-1", "user-1", { status: "approved" });
     expect(result.success).toBe(true);
@@ -167,6 +190,14 @@ describe("MallService - 未实现功能抛出异常", () => {
       providers: [
         MallService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: RedisService, useValue: { getLock: jest.fn().mockResolvedValue(true), releaseLock: jest.fn().mockResolvedValue(undefined) } },
+        { provide: MembershipService, useValue: { hasBenefit: jest.fn().mockResolvedValue(false) } },
+        { provide: UserAccessPolicyService, useValue: {
+          assertStudentProtectedAction: jest.fn().mockResolvedValue(undefined),
+          assertCurrentRegionStudentProtectedAction: jest.fn().mockResolvedValue(undefined),
+        } },
+        { provide: PaymentService, useValue: { wxUnifiedOrder: jest.fn() } },
+        { provide: WalletService, useValue: { deductBalanceAtomic: jest.fn() } },
       ],
     }).compile();
 

@@ -241,7 +241,7 @@ function handleJump(tab: string) {
   padding: 12px 16px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.6);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  border: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
   transition: all 0.2s;
 }
 
@@ -274,7 +274,7 @@ function handleJump(tab: string) {
 }
 
 .optional .check-icon {
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 .check-content {
@@ -285,13 +285,13 @@ function handleJump(tab: string) {
 .check-title {
   font-size: 14px;
   font-weight: 600;
-  color: #334155;
+  color: var(--el-text-color-regular);
   margin-bottom: 2px;
 }
 
 .check-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
 }
 
 .check-summary {
@@ -299,7 +299,7 @@ function handleJump(tab: string) {
   justify-content: center;
   gap: 32px;
   padding: 16px 24px;
-  border-top: 1px solid rgba(226, 232, 240, 0.6);
+  border-top: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
 }
 
 .summary-item {
@@ -311,7 +311,7 @@ function handleJump(tab: string) {
 
 .summary-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
 }
 
 .summary-value {
@@ -328,6 +328,6 @@ function handleJump(tab: string) {
 }
 
 .summary-value.optional {
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 </style>

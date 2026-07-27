@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -21,6 +22,34 @@ export class RedisService {
     await this.redis.del(key);
   }
 
+  async delPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        deleted += await this.redis.del(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
+  }
+
+  async getJson<T = unknown>(key: string): Promise<T | null> {
+    const value = await this.get(key);
+    if (!value) return null;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      await this.del(key).catch(() => undefined);
+      return null;
+    }
+  }
+
+  async setJson(key: string, value: unknown, ttl?: number): Promise<void> {
+    await this.set(key, JSON.stringify(value), ttl);
+  }
+
   async incr(key: string): Promise<number> {
     return this.redis.incr(key);
   }
@@ -36,6 +65,27 @@ export class RedisService {
 
   async releaseLock(key: string): Promise<void> {
     await this.redis.del(key);
+  }
+
+  /**
+   * Runs a short scheduled job once across all application instances.
+   * ponytail: no lock renewal; scheduled jobs are bounded to small batches and
+   * should be moved to a worker queue if they can run longer than the TTL.
+   */
+  async withLock<T>(key: string, ttlSeconds: number, task: () => Promise<T>): Promise<T | undefined> {
+    const token = randomUUID();
+    const locked = await this.redis.set(key, token, 'EX', ttlSeconds, 'NX');
+    if (locked !== 'OK') return undefined;
+    try {
+      return await task();
+    } finally {
+      await this.redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0',
+        1,
+        key,
+        token,
+      );
+    }
   }
 
   async lpush(key: string, ...values: string[]): Promise<number> {

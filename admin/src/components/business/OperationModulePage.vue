@@ -17,7 +17,7 @@
           </el-button>
         </div>
       </div>
-      <DataTableCard v-loading="loading" :title="config.title.replace('管理','列表')" :columns="config.columns" :rows="rows" :total="total" @detail="openDetail" @edit="openForm('update', $event)" @row-action="handleRowAction" @selection-change="selectedRows = $event" />
+    <DataTableCard v-loading="loading" :title="config.title.replace('管理','列表')" :columns="config.columns" :rows="rows" :total="total" :module-key="props.moduleKey" @detail="openDetail" @edit="openForm('update', $event)" @row-action="handleRowAction" @selection-change="selectedRows = $event" />
     </div>
     <Transition name="analytics-slide">
       <div v-if="showAnalytics && hasSidePanels" class="analytics-section">
@@ -69,6 +69,15 @@
         <el-form-item v-if="specialAction === 'resetPassword'" label="新密码">
           <el-input v-model="specialModel.password" type="password" show-password placeholder="请输入新密码" />
         </el-form-item>
+        <template v-if="specialAction === 'refund' && props.moduleKey === 'orders'">
+          <el-alert title="商家备餐或骑手配送中的订单不能直接退款，需先完成履约处置。" type="warning" :closable="false" show-icon />
+          <el-form-item label="退款金额（元）" style="margin-top:16px">
+            <el-input-number v-model="specialModel.amount" :min="0.01" :precision="2" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="退款原因" required>
+            <el-input v-model="specialModel.reason" type="textarea" placeholder="请填写退款原因，系统会写入审计记录" />
+          </el-form-item>
+        </template>
         <el-form-item v-if="['reject','batchReject','cancel'].includes(specialAction)" label="处理原因">
           <el-input v-model="specialModel.reason" type="textarea" placeholder="请输入处理原因" />
         </el-form-item>
@@ -126,6 +135,7 @@ const specialTitle = computed(() => {
     assign: '跑腿派单',
     batchTag: '批量设置用户标签',
     complete: '完成退款处理',
+    refund: '发起退款',
     resetPassword: '重置管理员密码',
     reject: '驳回处理',
     batchReject: '批量驳回',
@@ -245,6 +255,7 @@ function needsSpecial(action: ModuleAction) {
     || action === 'batchTag'
     || action === 'resetPassword'
     || (action === 'complete' && props.moduleKey === 'refunds')
+    || (action === 'refund' && props.moduleKey === 'orders')
     || ['reject', 'batchReject', 'cancel'].includes(action)
 }
 async function openSpecial(action: ModuleAction, targetRows: any[]) {
@@ -254,6 +265,10 @@ async function openSpecial(action: ModuleAction, targetRows: any[]) {
   if (action === 'assign') riders.value = await fetchRiders()
   if (action === 'batchTag') userTags.value = await fetchUserTags()
   if (action === 'batchTag') specialModel.tagIds = []
+  if (action === 'refund' && props.moduleKey === 'orders') {
+    specialModel.amount = Number(targetRows[0]?.amount ?? targetRows[0]?.__raw?.payAmount ?? 0)
+    specialModel.reason = ''
+  }
   specialVisible.value = true
 }
 async function submitSpecial() {

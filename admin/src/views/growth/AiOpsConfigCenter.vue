@@ -816,7 +816,7 @@ onMounted(() => {
   padding: 10px 12px;
   border: none;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
   color: #606266;
@@ -916,7 +916,7 @@ onMounted(() => {
   align-items: center;
   padding: 12px 16px;
   background: #fafafa;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .switch-item b {

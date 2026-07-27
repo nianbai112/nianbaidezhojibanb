@@ -2,11 +2,13 @@ import axios from 'axios'
 
 const setupRequest = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  timeout: 20000
+  timeout: 180000
 })
 
 export interface SetupStatus {
   initialized: boolean
+  setupTokenRequired?: boolean
+  setupWizardMode?: boolean
 }
 
 export interface SetupCheckItem {
@@ -27,6 +29,7 @@ export interface SetupInitPayload {
   adminUsername: string
   adminPassword: string
   adminPhone?: string
+  databaseProvider?: string
   databaseUrl?: string
   redisHost?: string
   redisPort?: number
@@ -49,8 +52,9 @@ export interface SetupInitPayload {
   cosDomain?: string
 }
 
-function setupHeaders(setupToken: string) {
-  return { 'x-setup-token': setupToken }
+function setupHeaders(setupToken?: string) {
+  const token = String(setupToken || '').trim()
+  return token ? { 'x-setup-token': token } : undefined
 }
 
 export async function getSetupStatus() {
@@ -58,12 +62,12 @@ export async function getSetupStatus() {
   return res.data
 }
 
-export async function checkSetupEnvironment(setupToken: string) {
-  const res = await setupRequest.post<SetupCheckResult>('/setup/check', {}, { headers: setupHeaders(setupToken) })
+export async function checkSetupEnvironment(setupToken = '', payload: Partial<SetupInitPayload> = {}) {
+  const res = await setupRequest.post<SetupCheckResult>('/setup/check', payload, { headers: setupHeaders(setupToken) })
   return res.data
 }
 
-export async function initSetup(payload: SetupInitPayload, setupToken: string) {
+export async function initSetup(payload: SetupInitPayload, setupToken = '') {
   const res = await setupRequest.post('/setup/init', payload, { headers: setupHeaders(setupToken) })
   return res.data
 }

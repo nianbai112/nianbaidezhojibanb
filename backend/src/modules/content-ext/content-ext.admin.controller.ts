@@ -37,8 +37,8 @@ export class ContentExtAdminController {
   @Delete('anonymous-identities/:id')
   @ApiOperation({ summary: '删除匿名身份' })
   @RequirePermission('post:audit')
-  deleteAnonymousIdentity(@Param('id') id: string) {
-    return this.service.deleteAnonymousIdentity(id);
+  deleteAnonymousIdentity(@Param('id') id: string, @Query() query: any) {
+    return this.service.deleteAnonymousIdentity(id, String(query.regionId || query.region_id || '').trim());
   }
 
   // =================== 笔记海报配置 ===================
@@ -92,18 +92,4 @@ export class ContentExtAdminController {
     return this.service.deleteBadge(id);
   }
 
-  // =================== 通知记录 ===================
-  @Get('notifications')
-  @ApiOperation({ summary: '获取系统通知记录' })
-  @RequirePermission('user:view')
-  getNotifications(@Query() query: any) {
-    return this.service.getNotifications(query);
-  }
-
-  @Delete('notifications/:id')
-  @ApiOperation({ summary: '删除通知' })
-  @RequirePermission('user:edit')
-  deleteNotification(@Param('id') id: string) {
-    return this.service.deleteNotification(id);
-  }
 }

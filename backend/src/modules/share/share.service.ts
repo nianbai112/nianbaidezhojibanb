@@ -13,6 +13,63 @@ export class ShareService {
 
   // ==================== 分享活动设置 ====================
 
+  private parseList(value: any) {
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    if (!value) return [];
+    if (typeof value === 'string') {
+      return value.split(/[\n,，\s]+/).map((item) => item.trim()).filter(Boolean);
+    }
+    return [];
+  }
+
+  private cleanSettingsDto(dto: UpdateShareSettingsDto) {
+    const data: any = { ...(dto as any) };
+    for (const key of ['inviterWhitelist', 'inviterBlacklist', 'inviteeBlacklist', 'blockedPhonePrefixes']) {
+      if (key in data) data[key] = this.parseList(data[key]);
+    }
+    if (data.rewardReleaseMode) {
+      const mode = String(data.rewardReleaseMode).trim().toLowerCase();
+      data.rewardReleaseMode = ['immediate', 'manual', 'delayed', 'qualified'].includes(mode) ? mode : 'immediate';
+    }
+    return data;
+  }
+
+  private parseJsonObject(value: any) {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    try {
+      const parsed = JSON.parse(String(value));
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private async grantCoupon(tx: any, userId: string, couponId: any, reason: string) {
+    const id = String(couponId || '').trim();
+    if (!id) return null;
+    const coupon = await tx.coupon.findUnique({ where: { id } });
+    if (!coupon || coupon.status !== 'active') throw new BadRequestException(`${reason}优惠券不存在或已失效`);
+    const now = new Date();
+    if (coupon.endAt && now > coupon.endAt) throw new BadRequestException(`${reason}优惠券已过期`);
+    if (coupon.receivedCount >= coupon.totalCount) throw new BadRequestException(`${reason}优惠券已领完`);
+    const owned = await tx.couponReceive.count({ where: { couponId: id, userId } });
+    if (owned >= coupon.limitPerUser) return null;
+    const receive = await tx.couponReceive.create({ data: { couponId: id, userId } });
+    await tx.coupon.update({ where: { id }, data: { receivedCount: { increment: 1 } } });
+    return receive;
+  }
+
+  private async grantRewardCoupon(tx: any, reward: any) {
+    const regionId = reward?.invite?.regionId;
+    if (!regionId) return null;
+    const config = await tx.config.findUnique({ where: { key: `share_invite_coupon_config_${regionId}` } }).catch(() => null);
+    const value = this.parseJsonObject(config?.value);
+    const couponId = reward.type === 'INVITER' ? value.inviterCouponId : value.inviteeCouponId;
+    const reason = reward.type === 'INVITER' ? '邀请人奖励' : '新人奖励';
+    return this.grantCoupon(tx, reward.userId, couponId, reason);
+  }
+
   async getSettingsList(query: ShareQueryDto) {
     const { page = 1, pageSize = 20, regionId, status } = query;
     const where: any = {};
@@ -38,10 +95,11 @@ export class ShareService {
   }
 
   async upsertSettings(regionId: string, dto: UpdateShareSettingsDto) {
+    const data = this.cleanSettingsDto(dto);
     return this.prisma.shareSettings.upsert({
       where: { regionId },
-      create: { ...(dto as any), regionId },
-      update: dto as any,
+      create: { ...data, regionId },
+      update: data,
     });
   }
 
@@ -127,30 +185,51 @@ export class ShareService {
   }
 
   async retryReward(id: string) {
-    const reward = await this.prisma.shareReward.findUnique({ where: { id } });
+    const reward = await this.prisma.shareReward.findUnique({ where: { id }, include: { invite: true } });
     if (!reward) throw new NotFoundException('奖励记录不存在');
     if (reward.status === 'SUCCESS') throw new BadRequestException('该奖励已发放成功');
 
-    // Grant balance to user via wallet transaction
-    const tx = await this.prisma.walletTransaction.create({
-      data: {
-        userId: reward.userId,
-        type: 'REWARD',
-        amount: reward.amount,
-        balance: 0,
-        description: `分享奖励补发 (奖励ID: ${reward.id})`,
-        status: 'SUCCESS',
-      },
-    });
-
-    // Update reward status
-    return this.prisma.shareReward.update({
-      where: { id },
-      data: {
-        status: 'SUCCESS',
-        relatedTransactionId: tx.id,
-        failedReason: null,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const amount = Number(reward.amount || 0);
+      let walletTx: any = null;
+      if (amount > 0) {
+        const wallet = await tx.wallet.upsert({
+          where: { userId: reward.userId },
+          create: { userId: reward.userId, balance: reward.amount, totalIn: reward.amount },
+          update: { balance: { increment: reward.amount }, totalIn: { increment: reward.amount } },
+        });
+        walletTx = await tx.walletTransaction.create({
+          data: {
+            userId: reward.userId,
+            type: 'REWARD',
+            amount: reward.amount,
+            balance: wallet.balance,
+            description: `分享奖励发放 (奖励ID: ${reward.id})`,
+            status: 'SUCCESS',
+          },
+        });
+      }
+      await this.grantRewardCoupon(tx, reward);
+      const updated = await tx.shareReward.update({
+        where: { id },
+        data: {
+          status: 'SUCCESS',
+          relatedTransactionId: walletTx?.id || null,
+          failedReason: null,
+        },
+      });
+      if (reward.inviteId) {
+        const pendingLeft = await tx.shareReward.count({
+          where: { inviteId: reward.inviteId, status: { not: 'SUCCESS' } },
+        });
+        if (pendingLeft === 0) {
+          await tx.shareInvite.update({
+            where: { id: reward.inviteId },
+            data: { status: 'SUCCESS', failedReason: null },
+          });
+        }
+      }
+      return updated;
     });
   }
 

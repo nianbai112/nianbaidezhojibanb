@@ -167,8 +167,8 @@ function formatTime(time: string | Date) {
 .hero-cover {
   width: 72px;
   height: 72px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #bfdbfe, #60a5fa);
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--el-color-primary-light-7), #60a5fa);
   flex-shrink: 0;
   overflow: hidden;
   display: flex;
@@ -193,7 +193,7 @@ function formatTime(time: string | Date) {
 }
 
 .eyebrow {
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 650;
   font-size: 12px;
   margin-bottom: 4px;
@@ -204,7 +204,7 @@ h1 {
   font-size: 26px;
   line-height: 1.15;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--mx-text);
   letter-spacing: 0;
 }
 
@@ -214,7 +214,7 @@ h1 {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
 }
 
@@ -234,7 +234,7 @@ h1 {
 
 .completion-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 500;
   margin-bottom: 4px;
 }
@@ -261,13 +261,13 @@ h1 {
 
 .stat-label {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 .stat-value {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--mx-sub);
 }
 
 .hero-buttons {

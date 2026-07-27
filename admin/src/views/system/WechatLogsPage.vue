@@ -6,24 +6,7 @@
       </template>
     </GlassPageHeader>
 
-    <div class="log-stats">
-      <div class="stat-card glass-card">
-        <span>当前筛选记录</span>
-        <strong>{{ total }}</strong>
-      </div>
-      <div class="stat-card glass-card success">
-        <span>本页成功</span>
-        <strong>{{ pageStats.success }}</strong>
-      </div>
-      <div class="stat-card glass-card danger">
-        <span>本页失败</span>
-        <strong>{{ pageStats.failed }}</strong>
-      </div>
-      <div class="stat-card glass-card warning">
-        <span>本页待发送</span>
-        <strong>{{ pageStats.pending }}</strong>
-      </div>
-    </div>
+    <StatGrid :items="statItems" />
 
     <div class="glass-card filter-card">
       <el-input v-model="filters.userId" clearable placeholder="用户ID" @keyup.enter="loadLogs()" />
@@ -101,6 +84,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
 import { fetchWechatMessageLogs, retryWechatMessage } from '@/api/admin'
 
 const loading = ref(false)
@@ -121,6 +105,13 @@ const pageStats = computed(() => ({
   failed: logs.value.filter((item) => item.status === 'failed').length,
   pending: logs.value.filter((item) => item.status === 'pending').length,
 }))
+
+const statItems = computed(() => [
+  { label: '当前筛选记录', value: total.value, icon: 'Document' },
+  { label: '本页成功', value: pageStats.value.success, tone: 'green' as const, icon: 'CircleCheck' },
+  { label: '本页失败', value: pageStats.value.failed, tone: 'red' as const, icon: 'CircleClose' },
+  { label: '本页待发送', value: pageStats.value.pending, tone: 'orange' as const, icon: 'Clock' },
+])
 
 function formatTime(t: string) {
   if (!t) return '-'
@@ -186,29 +177,6 @@ onMounted(() => loadLogs())
   display: grid;
   gap: 18px;
 }
-.log-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-.stat-card {
-  padding: 18px 20px;
-  display: grid;
-  gap: 8px;
-}
-.stat-card span {
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 800;
-}
-.stat-card strong {
-  color: #0f172a;
-  font-size: 30px;
-  font-weight: 950;
-}
-.stat-card.success strong { color: #16a34a; }
-.stat-card.danger strong { color: #ef4444; }
-.stat-card.warning strong { color: #f59e0b; }
 .filter-card {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto;
@@ -227,13 +195,11 @@ onMounted(() => loadLogs())
   color: #94a3b8;
 }
 @media (max-width: 1200px) {
-  .log-stats,
   .filter-card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 720px) {
-  .log-stats,
   .filter-card {
     grid-template-columns: 1fr;
   }

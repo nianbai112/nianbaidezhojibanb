@@ -78,7 +78,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchConfigGroup, saveConfigGroup, fetchRegions } from '@/api/admin'
+import { fetchConfigGroup, fetchRegions, saveConfigGroup } from '@/api/admin'
 
 const loading = ref(false)
 const saving = ref(false)

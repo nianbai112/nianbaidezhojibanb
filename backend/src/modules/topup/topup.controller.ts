@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { TopupService } from './topup.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -24,14 +24,25 @@ export class TopupController {
   @Post('topnotes/get-payment-info')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getPaymentInfo(@Body() dto: any) {
-    return this.topupService.getPaymentInfo(dto.order_id);
+  getPaymentInfo(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.topupService.getPaymentInfo(dto.order_id, userId);
+  }
+
+  @Post('topnotes/sync-payment/:orderId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  syncPayment(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.topupService.syncOrderPayment(orderId, userId);
   }
 
   @Get('topnotes/user-orders/:userId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getUserOrders(@Param('userId') userId: string) {
+  getUserOrders(@Param('userId') userId: string, @CurrentUser('sub') currentUserId: string) {
+    // AUD-P1-144: 防止越权查看其他用户的置顶订单
+    if (userId !== currentUserId) {
+      throw new ForbiddenException('无权查看其他用户的置顶订单');
+    }
     return this.topupService.getUserOrders(userId);
   }
 
@@ -42,21 +53,21 @@ export class TopupController {
     return this.topupService.cancelOrder(orderId, userId);
   }
 
-  @Get('api/balance-recharge/history')
+  @Get(['api/balance-recharge/history', 'balance-recharge/history'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getRechargeHistory(@CurrentUser('sub') userId: string, @Query() query: any) {
     return this.topupService.getRechargeHistory(userId, query);
   }
 
-  @Post('api/balance-recharge/create')
+  @Post(['api/balance-recharge/create', 'balance-recharge/create'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   createRechargeOrder(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.topupService.createRechargeOrder(userId, dto);
   }
 
-  @Get('api/balance-recharge/check-wechat-binding')
+  @Get(['api/balance-recharge/check-wechat-binding', 'balance-recharge/check-wechat-binding'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   checkWechatBinding(@CurrentUser('sub') userId: string) {

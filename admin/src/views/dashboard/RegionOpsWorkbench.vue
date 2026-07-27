@@ -53,7 +53,7 @@
         </div>
       </div>
       <div v-if="!regions.length && !loading" class="empty-state glass-card">
-        <el-empty description="暂无区域数据，请先创建区域" />
+        <EmptyState description="暂无区域数据，请先创建区域" />
         <el-button type="primary" @click="$router.push('/region/list')">去创建区域</el-button>
       </div>
     </div>
@@ -138,7 +138,7 @@
                   </div>
                 </div>
               </div>
-              <el-empty v-else description="暂无运营任务，点击上方按钮生成" :image-size="60" />
+              <EmptyState v-else description="暂无运营任务，点击上方按钮生成" :image-size="60" />
             </div>
           </div>
         </div>
@@ -169,6 +169,7 @@ import {
   Top, Bottom, Right, Location, Share, Menu, Cpu, Shop, Document, User, Van
 } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import {
   fetchRegionOpsOverview,
   fetchRegionLaunchChecklist,
@@ -203,7 +204,7 @@ const quickActions = [
   { label: '区域配置中心', route: '/region/config', icon: Location },
   { label: '底部导航管理', route: '/region/tabbar', icon: Menu },
   { label: '分享设置', route: '/region/share-settings', icon: Share },
-  { label: 'AI运营配置', route: '/growth/ai-ops-config', icon: Cpu },
+  { label: 'AI运营配置', route: '/ai/ops-config', icon: Cpu },
   { label: '商家管理', route: '/merchant/list', icon: Shop },
   { label: '内容审核', route: '/content/audit', icon: Document },
   { label: '用户管理', route: '/user/list', icon: User },
@@ -360,7 +361,7 @@ onMounted(async () => {
 
   &:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    box-shadow: var(--mx-shadow);
   }
 }
 
@@ -374,18 +375,18 @@ onMounted(async () => {
 .region-logo {
   width: 48px;
   height: 48px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 10px;
+  background: var(--mx-purple);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--mx-card);
   font-size: 20px;
   font-weight: bold;
   overflow: hidden;
 
   &.has-logo {
-    background: #f5f7fa;
+    background: var(--mx-soft);
   }
 
   img {
@@ -402,12 +403,12 @@ onMounted(async () => {
 .region-name {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .region-code {
   font-size: 12px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-top: 2px;
 }
 
@@ -426,13 +427,13 @@ onMounted(async () => {
   display: block;
   font-size: 18px;
   font-weight: 600;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .stat-label {
   display: block;
   font-size: 12px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-top: 2px;
 }
 
@@ -441,24 +442,24 @@ onMounted(async () => {
   align-items: center;
   gap: 4px;
   padding-top: 12px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--mx-border);
 }
 
 .indicator {
   font-size: 14px;
 
   &.success {
-    color: #67c23a;
+    color: var(--el-color-success);
   }
 
   &.warning {
-    color: #e6a23c;
+    color: var(--el-color-warning);
   }
 }
 
 .indicator-text {
   font-size: 12px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-right: 12px;
 }
 
@@ -491,13 +492,13 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--mx-border);
 }
 
 .card-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .completion-rate {
@@ -513,7 +514,7 @@ onMounted(async () => {
 .rate-text {
   font-size: 14px;
   font-weight: 600;
-  color: #606266;
+  color: var(--mx-sub);
 }
 
 .card-body {
@@ -530,7 +531,7 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 12px 0;
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--mx-border);
 
   &:last-child {
     border-bottom: none;
@@ -545,15 +546,15 @@ onMounted(async () => {
   font-size: 20px;
 
   &.success {
-    color: #67c23a;
+    color: var(--el-color-success);
   }
 
   &.warning {
-    color: #e6a23c;
+    color: var(--el-color-warning);
   }
 
   &.incomplete {
-    color: #dcdfe6;
+    color: var(--mx-border-strong);
   }
 }
 
@@ -564,12 +565,12 @@ onMounted(async () => {
 .checklist-title {
   font-size: 14px;
   font-weight: 500;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .checklist-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-top: 2px;
 }
 
@@ -594,27 +595,27 @@ onMounted(async () => {
   line-height: 1;
 
   &.excellent, &.healthy {
-    color: #67c23a;
+    color: var(--el-color-success);
   }
 
   &.warning {
-    color: #e6a23c;
+    color: var(--el-color-warning);
   }
 
   &.critical {
-    color: #f56c6c;
+    color: var(--el-color-danger);
   }
 }
 
 .score-label {
   font-size: 14px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-top: 4px;
 }
 
 .score-summary {
   font-size: 14px;
-  color: #606266;
+  color: var(--mx-sub);
   text-align: center;
   margin-bottom: 20px;
 }
@@ -635,13 +636,13 @@ onMounted(async () => {
 
 .dimension-name {
   font-size: 13px;
-  color: #606266;
+  color: var(--mx-sub);
 }
 
 .dimension-score {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .dimension-trend {
@@ -653,15 +654,15 @@ onMounted(async () => {
   font-size: 12px;
 
   &.up {
-    color: #67c23a;
+    color: var(--el-color-success);
   }
 
   &.down {
-    color: #f56c6c;
+    color: var(--el-color-danger);
   }
 
   &.stable {
-    color: #909399;
+    color: var(--mx-muted);
   }
 }
 
@@ -685,8 +686,8 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 12px;
   padding: 12px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 
   &.completed {
     opacity: 0.6;
@@ -696,23 +697,23 @@ onMounted(async () => {
 .task-priority {
   flex-shrink: 0;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
 
   &.high {
-    background: #fef0f0;
-    color: #f56c6c;
+    background: var(--el-color-danger-light-9);
+    color: var(--el-color-danger);
   }
 
   &.medium {
-    background: #fdf6ec;
-    color: #e6a23c;
+    background: var(--el-color-warning-light-9);
+    color: var(--el-color-warning);
   }
 
   &.low {
-    background: #f0f9eb;
-    color: #67c23a;
+    background: var(--el-color-success-light-9);
+    color: var(--el-color-success);
   }
 }
 
@@ -723,12 +724,12 @@ onMounted(async () => {
 .task-title {
   font-size: 14px;
   font-weight: 500;
-  color: #303133;
+  color: var(--mx-text);
 }
 
 .task-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--mx-muted);
   margin-top: 4px;
 }
 

@@ -9,6 +9,11 @@ import { AppModule } from "./app.module";
 import { TransformInterceptor } from "./interceptors/transform.interceptor";
 import { LoggerService } from "./common/services/logger.service";
 import { WsNativeGateway } from "./modules/websocket/ws-native.gateway";
+import {
+  getMiniProgramGlobalPrefixExcludes,
+  miniProgramApiCompatMiddleware,
+} from "./common/middleware/mini-program-api-compat";
+import { mallAdminApiCompatMiddleware } from "./common/middleware/mall-admin-api-compat";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -54,16 +59,23 @@ async function bootstrap() {
     }
   }
 
+  // AUD-P0-001: 生产环境绝不允许 CORS 回退到 true（完全放开跨域）。
+  // 非生产环境在未配置 CORS_ORIGIN 时才回退 true，方便本地开发。
+  const corsOrigin: any = isProduction
+    ? corsOrigins?.length
+      ? corsOrigins
+      : (() => {
+          logger.error(
+            'FATAL: CORS_ORIGIN must be set to specific origin(s) in production. ' +
+              'Application will now exit.',
+          );
+          process.exit(1);
+        })()
+    : corsOrigins?.length
+      ? corsOrigins
+      : true;
   app.enableCors({
-    origin: isProduction
-      ? isSetupWizard
-        ? corsOrigins?.length
-          ? corsOrigins
-          : true
-        : corsOrigins
-      : corsOrigins?.length
-        ? corsOrigins
-        : true,
+    origin: corsOrigin,
     credentials: true,
   });
 
@@ -75,6 +87,8 @@ async function bootstrap() {
       [
         process.env.UPLOAD_DIR,
         "uploads",
+        path.join("public", "uploads"),
+        path.join("backend", "public", "uploads"),
         path.join("backend", "uploads"),
       ]
         .filter(Boolean)
@@ -99,42 +113,25 @@ async function bootstrap() {
     );
   }
 
+  // ---- 小程序 /api 前缀源码级兼容 ----
+  // 前端统一补 /api；后端早期小程序接口大多挂在根路径。
+  // 这里只转换已知小程序根路径，保留 /api/mall、/api/rating 等真实 /api 模块。
+  app.use(miniProgramApiCompatMiddleware);
+
   // ---- 旧小程序商城管理端路径兼容 ----
   // 小程序源码中商户后台相关接口使用 /api/mall/...，而新后台管理接口集中在
   // /mall/... 下。这里只重写“管理/商户端”子路径，避免影响真实用户端
   // /api/mall/products/list、/api/mall/cart 等接口。
-  app.use((req: any, _res: any, next: any) => {
-    const [pathname, search = ""] = req.url.split("?");
-    let rewritten = pathname;
-
-    if (pathname.startsWith("/api/mall/admin/products/")) {
-      rewritten = pathname.replace("/api/mall/admin/products/", "/mall/products/admin/");
-    } else if (pathname.startsWith("/api/mall/admin/categories")) {
-      rewritten = pathname.replace("/api/mall/", "/mall/");
-    } else if (
-      /^\/api\/mall\/(products|refunds|reviews|promotions|freight|distributor|merchants)\/admin(\/|$)/.test(
-        pathname,
-      )
-    ) {
-      rewritten = pathname.replace("/api/mall/", "/mall/");
-    }
-
-    if (rewritten !== pathname) {
-      req.url = `${rewritten}${search ? `?${search}` : ""}`;
-    }
-    next();
-  });
+  app.use(mallAdminApiCompatMiddleware);
 
   // ---- 旧后台页面路径兼容 ----
-  // 新页面中还保留了少量 /admin/finance/*、/admin/ranking/* 请求。
-  // 后端真实实现已在 /admin/* 与 /admin/recommend/*，这里统一收口，避免重复控制器。
+  // 后端已提供 /admin/finance/* 财务接口，不能再把它们收口到 /admin/*。
+  // 排行相关旧路径仍统一映射到新的推荐/排行接口。
   app.use((req: any, _res: any, next: any) => {
     const [pathname, search = ""] = req.url.split("?");
     let rewritten = pathname;
 
-    if (pathname.startsWith("/admin/finance/")) {
-      rewritten = pathname.replace("/admin/finance/", "/admin/");
-    } else if (pathname === "/admin/ranking/rules") {
+    if (pathname === "/admin/ranking/rules") {
       rewritten = "/admin/rankings";
     } else if (pathname.startsWith("/admin/ranking/rules/")) {
       rewritten = pathname.replace("/admin/ranking/rules/", "/admin/rankings/");
@@ -178,88 +175,19 @@ async function bootstrap() {
   }
 
   // ---- 全局前缀（兼容小程序根路径 + 后台 /api 路径） ----
-  const apiPrefix = process.env.API_PREFIX || "/api/v1";
-  app.setGlobalPrefix(apiPrefix, {
-    exclude: [
-      // 小程序接口保持根路径
-      "wx-auth/(.*)",
-      "regions/(.*)",
-      "regions",
-      "schools/(.*)",
-      "schools",
-      "posts/(.*)",
-      "posts",
-      "comments/(.*)",
-      "comments",
-      "likes/(.*)",
-      "likes",
-      "favorites/(.*)",
-      "favorites",
-      "user-followers/(.*)",
-      "circle-members/(.*)",
-      "topics",
-      "topics/(.*)",
-      "circles/(.*)",
-      "circles",
-      "circle/(.*)",
-      "status/location",
-      "merchants/(.*)",
-      "merchants",
-      "categories",
-      "categories/(.*)",
-      "products",
-      "products/(.*)",
-      "product-options",
-      "product-options/(.*)",
-      "order",
-      "order/(.*)",
-      "shopping-cart",
-      "shopping-cart/(.*)",
-      "addresses",
-      "addresses/(.*)",
-      "merchant",
-      "merchant/(.*)",
-      "second-hand",
-      "second-hand/(.*)",
-      "coupons",
-      "coupons/(.*)",
-      "post-management",
-      "post-management/(.*)",
-      "squats",
-      "squats/(.*)",
-      "delivery-products",
-      "delivery-products/(.*)",
-      "specs",
-      "specs/(.*)",
-      "errand/(.*)",
-      "delivery/(.*)",
-      "wxpay/(.*)",
-      "finance/(.*)",
-      "alipay-transfer",
-      "alipay-transfer/(.*)",
-      "messages/(.*)",
-      "wechat/(.*)",
-      "wechat",
-      "notifications/(.*)",
-      "upload",
-      "upload/(.*)",
-      "auth/(.*)",
-      "activity/(.*)",
-      "activities/(.*)",
-      "explosivesel/(.*)",
-      "topnotes/(.*)",
+	  const apiPrefix = process.env.API_PREFIX || "/api/v1";
+	  app.setGlobalPrefix(apiPrefix, {
+	    exclude: [
+	      ...getMiniProgramGlobalPrefixExcludes(),
+        // Only non-mini-program legacy routes stay here. Mini-program roots are
+        // derived from the single compatibility list above.
+      "balance-recharge",
+      "balance-recharge/(.*)",
       "api/(.*)",
-      "config/(.*)",
       "dashboard",
       "dashboard/(.*)",
-      "region",
-      "region/(.*)",
       "admin/(.*)",
       "mall/(.*)",
-      "setup/(.*)",
-      "healthz",
-      "AnonymousIdentity/(.*)",
-      "notifications",
     ],
   });
 

@@ -19,6 +19,13 @@ export class CircleController {
     return this.circleService.getByRegion(regionId, query);
   }
 
+  @Get('circles/my/manage')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMyManagedCircles(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.circleService.getMyManagedCircles(userId, query);
+  }
+
   @Get('circles/:circleId')
   getDetail(@Param('circleId') circleId: string, @Query() query: any) {
     return this.circleService.getDetail(circleId, query);
@@ -60,8 +67,8 @@ export class CircleController {
   @Get('circles/:circleId/pending-members')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getPendingMembers(@Param('circleId') circleId: string, @Query() query: any) {
-    return this.circleService.getPendingMembers(circleId, query);
+  getPendingMembers(@Param('circleId') circleId: string, @Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.circleService.getPendingMembers(circleId, query, userId);
   }
 
   @Put('circles/:circleId/members/:userId/audit')
@@ -100,6 +107,13 @@ export class CircleController {
   @Get('circles/:circleId/topic-headers')
   getTopicHeaders(@Param('circleId') circleId: string, @Query('include_topics') includeTopics: string) {
     return this.circleService.getTopicHeaders(circleId, includeTopics);
+  }
+
+  @Post('circles/:circleId/topics')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createCircleTopic(@Param('circleId') circleId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.circleService.createCircleTopic(circleId, userId, dto);
   }
 
   @Post('circles/:circleId/topic-headers/batch-create')

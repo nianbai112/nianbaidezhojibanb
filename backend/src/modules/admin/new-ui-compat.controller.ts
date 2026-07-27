@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Req,
+  BadRequestException,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { Request } from "express";
@@ -99,11 +100,12 @@ export class NewUiCompatController {
   @RequirePermission("user:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户列表（新后台兼容）" })
-  async usersCompat(@Query() query: any) {
-    const raw: any = await this.adminService.users(query);
+  async usersCompat(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    const raw: any = await this.adminService.users(query, operatorId);
     return {
       users: (raw.list || []).map((u: any) => ({
         id: u.id,
+        uid: u.uid,
         nickname: u.nickname,
         username: u.nickname || u.id,
         mobile: u.phone || "",
@@ -146,8 +148,8 @@ export class NewUiCompatController {
   @RequirePermission("user:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户列表（新后台兼容 v2）" })
-  async userList(@Query() query: any) {
-    return this.usersCompat(query);
+  async userList(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.usersCompat(query, operatorId);
   }
 
   @Post("auth/admin/users/batch-ban-status")
@@ -170,7 +172,7 @@ export class NewUiCompatController {
   }
 
   @Post("auth/admin/users/batch-balance-update")
-  @RequirePermission("finance:view")
+  @RequirePermission("finance:balance-adjust")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "批量更新用户余额（新后台兼容）" })
   batchBalanceUpdate(
@@ -247,8 +249,8 @@ export class NewUiCompatController {
     if (status) where.status = status.toUpperCase();
     if (keyword) {
       where.OR = [
-        { realName: { contains: keyword, mode: "insensitive" as const } },
-        { schoolName: { contains: keyword, mode: "insensitive" as const } },
+        { realName: { contains: keyword } },
+        { schoolName: { contains: keyword } },
       ];
     }
     const [list, total] = await Promise.all([
@@ -289,7 +291,7 @@ export class NewUiCompatController {
     const where: any = {};
     if (keyword) {
       where.OR = [
-        { name: { contains: keyword, mode: "insensitive" as const } },
+        { name: { contains: keyword } },
         { phone: { contains: keyword } },
       ];
     }
@@ -343,13 +345,8 @@ export class NewUiCompatController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户余额工具（新后台兼容）" })
-  async userBalanceTools(@Query() query: any) {
-    const { page = 1, pageSize = 20 } = query;
-    const [list, total] = await Promise.all([
-      this.prisma.walletTransaction.findMany({ skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, nickname: true } } } }),
-      this.prisma.walletTransaction.count(),
-    ]);
-    return { list, total, page: +page, pageSize: +pageSize };
+  userBalanceTools(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.transactions(query, operatorId);
   }
 
   @Get("user/specified-address")
@@ -359,7 +356,7 @@ export class NewUiCompatController {
   async userSpecifiedAddress(@Query() query: any) {
     const { page = 1, pageSize = 20, keyword } = query;
     const where: any = { isDefault: true };
-    if (keyword) where.name = { contains: keyword, mode: "insensitive" as const };
+    if (keyword) where.name = { contains: keyword };
     const [list, total] = await Promise.all([
       this.prisma.address.findMany({ where, skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, nickname: true } } } }),
       this.prisma.address.count({ where }),
@@ -507,16 +504,16 @@ export class NewUiCompatController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "提现列表（新后台兼容）" })
-  withdrawalsCompat(@Query() query: any) {
-    return this.adminService.withdraws(query);
+  withdrawalsCompat(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.withdraws(query, operatorId);
   }
 
   @Get("auth/withdrawals/:id")
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "提现详情（新后台兼容）" })
-  withdrawalDetailCompat(@Param("id") id: string) {
-    return this.adminService.withdrawDetail(id);
+  withdrawalDetailCompat(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.withdrawDetail(id, operatorId);
   }
 
   @Put("auth/withdrawals/:id/audit")
@@ -557,7 +554,7 @@ export class NewUiCompatController {
   ) {
     const requested = String(dto.status || "").toLowerCase();
     if (["success", "succeeded", "paid", "completed", "complete", "approved"].includes(requested)) {
-      const detail: any = await this.adminService.withdrawDetail(id);
+      const detail: any = await this.adminService.withdrawDetail(id, operatorId);
       if (String(detail.status || "").toUpperCase() === "PENDING") {
         await this.adminService.auditWithdraw(id, { status: "approved" }, operatorId, req.ip);
       }
@@ -597,8 +594,8 @@ export class NewUiCompatController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "提现管理（新后台兼容）" })
-  financeWithdrawal(@Query() query: any) {
-    return this.adminService.withdraws(query);
+  financeWithdrawal(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.withdraws(query, operatorId);
   }
 
   @Get("finance/alipay-transfer")
@@ -641,16 +638,16 @@ export class NewUiCompatController {
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域列表（新后台兼容）" })
-  regionList(@Query() query: any) {
-    return this.adminService.regions(query);
+  regionList(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regions(query, operatorId);
   }
 
   @Get("region/features")
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域特性列表（新后台兼容）" })
-  regionFeatures(@Query() query: any) {
-    return this.adminService.regions(query);
+  regionFeatures(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regions(query, operatorId);
   }
 
   @Get("region/home-page-content")
@@ -765,8 +762,8 @@ export class NewUiCompatController {
   @RequirePermission("merchant:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家列表（新后台兼容）" })
-  merchantList(@Query() query: any) {
-    return this.adminService.merchants(query);
+  merchantList(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchants(query, operatorId);
   }
 
   @Get("merchant/categories")
@@ -789,16 +786,16 @@ export class NewUiCompatController {
   @RequirePermission("review:manage")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家评价列表（新后台兼容）" })
-  merchantReviews(@Query() query: any) {
-    return this.adminService.reviews(query);
+  merchantReviews(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.reviews(query, operatorId);
   }
 
   @Get("merchant/reviews/all")
   @RequirePermission("review:manage")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "全部评价（新后台兼容）" })
-  merchantReviewsAll(@Query() query: any) {
-    return this.adminService.reviews(query);
+  merchantReviewsAll(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.reviews(query, operatorId);
   }
 
   @Get("merchant/settings")
@@ -816,8 +813,8 @@ export class NewUiCompatController {
   @RequirePermission("merchant:audit")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家入驻申请（新后台兼容）" })
-  merchantApplications(@Query() query: any) {
-    return this.adminService.merchants(query);
+  merchantApplications(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchants(query, operatorId);
   }
 
   @Get("merchant/specs")
@@ -851,7 +848,7 @@ export class NewUiCompatController {
       }),
       this.prisma.printerConfig.count(),
     ]);
-    return { list, total, page: +page, pageSize: +pageSize };
+    return { list: list.map(({ key, credentialCiphertext, ...printer }) => ({ ...printer, keyConfigured: Boolean(key), credentialConfigured: Boolean(credentialCiphertext) })), total, page: +page, pageSize: +pageSize };
   }
 
   @Get("merchant/price-adjustment")
@@ -1180,7 +1177,7 @@ export class NewUiCompatController {
   // 营销活动
   // ═══════════════════════════════════════════════════════════════════════════
 
-  @Get("activity/list")
+  @Get("admin/activity/list")
   @RequirePermission("activity:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "活动列表（新后台兼容）" })
@@ -1193,7 +1190,7 @@ export class NewUiCompatController {
     return { list, total, page: +page, pageSize: +pageSize };
   }
 
-  @Get("activity/activities")
+  @Get("admin/activity/activities")
   @RequirePermission("activity:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "活动列表 v2（新后台兼容）" })
@@ -1201,7 +1198,7 @@ export class NewUiCompatController {
     return this.activityList(query);
   }
 
-  @Get("activity/clubs")
+  @Get("admin/activity/clubs")
   @RequirePermission("club:list")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "社团列表（新后台兼容）" })
@@ -1214,7 +1211,7 @@ export class NewUiCompatController {
     return { list, total, page: +page, pageSize: +pageSize };
   }
 
-  @Get("activity/types")
+  @Get("admin/activity/types")
   @RequirePermission("activity:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "活动类型（新后台兼容）" })
@@ -1223,7 +1220,7 @@ export class NewUiCompatController {
     return { list, total: list.length };
   }
 
-  @Get("activity/orders/club")
+  @Get("admin/activity/orders/club")
   @RequirePermission("activity:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "社团订单（新后台兼容）" })
@@ -1367,10 +1364,21 @@ export class NewUiCompatController {
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "分享列表（新后台兼容）" })
   async shareList(@Query() query: any) {
-    const { page = 1, pageSize = 20 } = query;
+    const { page = 1, pageSize = 20, status, regionId, inviterId, inviteeId, keyword } = query;
+    const where: any = {};
+    if (status) where.status = status;
+    if (regionId) where.regionId = regionId;
+    if (inviterId) where.inviterId = inviterId;
+    if (inviteeId) where.inviteeId = inviteeId;
+    if (keyword) {
+      where.OR = [
+        { inviterId: String(keyword) },
+        { inviteeId: String(keyword) },
+      ];
+    }
     const [list, total] = await Promise.all([
-      this.prisma.shareInvite.findMany({ skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { inviter: { select: { id: true, nickname: true } }, invitee: { select: { id: true, nickname: true } } } }),
-      this.prisma.shareInvite.count(),
+      this.prisma.shareInvite.findMany({ where, skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { inviter: { select: { id: true, nickname: true } }, invitee: { select: { id: true, nickname: true } }, rewards: true } }),
+      this.prisma.shareInvite.count({ where }),
     ]);
     return { list, total, page: +page, pageSize: +pageSize };
   }
@@ -1717,18 +1725,22 @@ export class NewUiCompatController {
   }
 
   @Get("note/anonymous")
-  @RequirePermission("post:view")
+  @RequirePermission("post:audit")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "匿名管理（新后台兼容）" })
   async noteAnonymous(@Query() query: any) {
     const { page = 1, pageSize = 20 } = query;
+    const regionId = String(query.regionId || query.region_id || '').trim();
+    if (!regionId) throw new BadRequestException('请选择区域');
+    const where = { regionId };
     const [list, total] = await Promise.all([
       this.prisma.anonymousIdentity.findMany({
+        where,
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
         orderBy: { createdAt: "desc" },
       }),
-      this.prisma.anonymousIdentity.count(),
+      this.prisma.anonymousIdentity.count({ where }),
     ]);
     return { list, total, page: +page, pageSize: +pageSize };
   }
@@ -2033,7 +2045,7 @@ export class NewUiCompatController {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 通讯录 / 公告 / 漂流瓶 / 相亲
+  // 通讯录 / 公告 / 相亲
   // ═══════════════════════════════════════════════════════════════════════════
 
   @Get("contacts")
@@ -2059,19 +2071,6 @@ export class NewUiCompatController {
       this.prisma.communityPayment.count(),
     ]);
     return { data: { communities, payments } };
-  }
-
-  @Get("drift-bottle")
-  @RequirePermission("driftBottle:list")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "漂流瓶列表（新后台兼容）" })
-  async driftBottleList(@Query() query: any) {
-    const { page = 1, pageSize = 20 } = query;
-    const [list, total] = await Promise.all([
-      this.prisma.driftBottle.findMany({ skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, nickname: true } } } }),
-      this.prisma.driftBottle.count(),
-    ]);
-    return { list, total, page: +page, pageSize: +pageSize };
   }
 
   @Get("dating")
@@ -2409,16 +2408,16 @@ export class NewUiCompatController {
   @RequirePermission("merchant:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家列表 v2（新后台兼容）" })
-  merchantsList(@Query() query: any) {
-    return this.adminService.merchants(query);
+  merchantsList(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchants(query, operatorId);
   }
 
   @Get("merchants/applications")
   @RequirePermission("merchant:audit")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家入驻申请 v2（新后台兼容）" })
-  merchantsApplications(@Query() query: any) {
-    return this.adminService.merchants(query);
+  merchantsApplications(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchants(query, operatorId);
   }
 
   @Get("merchants/statistics")
@@ -2446,7 +2445,7 @@ export class NewUiCompatController {
       this.prisma.printerConfig.findMany({ orderBy: { createdAt: "desc" } }),
       this.prisma.printerConfig.count(),
     ]);
-    return { list, total };
+    return { list: list.map(({ key, credentialCiphertext, ...printer }) => ({ ...printer, keyConfigured: Boolean(key), credentialConfigured: Boolean(credentialCiphertext) })), total };
   }
 
   @Get("orders/activity")
@@ -2465,7 +2464,7 @@ export class NewUiCompatController {
   @Get("orders/topup")
   @RequirePermission("topup:order:list")
   @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "充值订单 v2（新后台兼容）" })
+  @ApiOperation({ summary: "置顶订单 v2（新后台兼容）" })
   async ordersTopup(@Query() query: any) {
     const { page = 1, pageSize = 20 } = query;
     const [list, total] = await Promise.all([
@@ -2478,13 +2477,13 @@ export class NewUiCompatController {
   @Get("topnotes/admin/orders")
   @RequirePermission("topup:order:list")
   @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "充值订单（新后台兼容）" })
+  @ApiOperation({ summary: "置顶订单（新后台兼容）" })
   async topnotesOrders(@Query() query: any) { return this.ordersTopup(query); }
 
   @Get("topnotes/packages")
   @RequirePermission("topup:package:list")
   @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "充值套餐（新后台兼容）" })
+  @ApiOperation({ summary: "置顶套餐（新后台兼容）" })
   async topnotesPackages(@Query() query: any) {
     const [list, total] = await Promise.all([
       this.prisma.topupPackage.findMany({ orderBy: { sortOrder: "asc" } as any }),

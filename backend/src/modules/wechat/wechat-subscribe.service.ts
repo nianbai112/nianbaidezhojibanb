@@ -12,6 +12,18 @@ export class WechatSubscribeService {
     private readonly tokenService: WechatTokenService,
   ) {}
 
+  async listEnabledTemplates(types?: string[]) {
+    const templateTypes = (types || []).map((value) => String(value).trim()).filter(Boolean);
+    return this.prisma.wechatTemplateConfig.findMany({
+      where: {
+        platformType: { in: ['miniprogram', 'miniapp'] },
+        enabled: true,
+        ...(templateTypes.length ? { templateType: { in: templateTypes } } : {}),
+      },
+      select: { templateType: true, templateId: true },
+    });
+  }
+
   async sendSubscribeMessage(params: {
     userId: string;
     templateType: string;
@@ -47,9 +59,9 @@ export class WechatSubscribeService {
         where: { userId_templateType: { userId, templateType } },
       });
 
-      if (consent && consent.status === 'reject') {
-        await this.writeLog({ userId, openid: user.openid, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'failed', errorMessage: '用户已拒绝订阅' });
-        return { success: false, error: '用户已拒绝订阅' };
+      if (!consent || consent.status !== 'accept') {
+        await this.writeLog({ userId, openid: user.openid, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'failed', errorMessage: '用户未授权或授权已使用' });
+        return { success: false, error: '用户未授权或授权已使用' };
       }
 
       // 4. 构建发送数据
@@ -76,6 +88,10 @@ export class WechatSubscribeService {
       );
 
       if (result.data.errcode === 0) {
+        await this.prisma.wechatSubscribeConsent.update({
+          where: { id: consent.id },
+          data: { status: 'used' },
+        });
         await this.writeLog({ userId, openid: user.openid, platformType: 'miniprogram', templateType, templateId: template.templateId, page: targetPage, data: templateData, status: 'success' });
         return { success: true };
       } else {

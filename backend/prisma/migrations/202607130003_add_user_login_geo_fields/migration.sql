@@ -1,0 +1,6 @@
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginCountry" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginProvince" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginCity" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginDistrict" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginLocationSource" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginLocatedAt" TIMESTAMP(3);

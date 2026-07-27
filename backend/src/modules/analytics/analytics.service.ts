@@ -1,9 +1,18 @@
 import { Injectable } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../../common/services/prisma.service';
+import { RiderLearningStore } from './rider-learning-store';
+import { RiderAiAdvisoryService } from './rider-ai-advisory.service';
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private riderAiScheduleRunning = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly riderLearningStore: RiderLearningStore,
+    private readonly riderAiAdvisory: RiderAiAdvisoryService,
+  ) {}
 
   private toNumber(value: any): number {
     if (value === null || value === undefined) return 0;
@@ -39,6 +48,73 @@ export class AnalyticsService {
 
   private orderRegionWhere(regionId?: string) {
     return regionId ? { merchant: { regionId } } : {};
+  }
+
+  private createdRange(startDate: Date, endDate: Date) {
+    return { gte: startDate, lte: endDate };
+  }
+
+  private sumValue(agg: any, field: string) {
+    return this.toNumber(agg?._sum?.[field]);
+  }
+
+  private productStatusText(status: string) {
+    const map: Record<string, string> = {
+      PENDING: '待审核',
+      ON_SALE: '在售',
+      SOLD: '已售出',
+      OFFLINE: '已下架',
+      REJECTED: '未通过',
+    };
+    return map[status] || status || '未知';
+  }
+
+  private async paymentAmountByBizType(startDate: Date, endDate: Date, bizType: string, regionId?: string) {
+    const where: any = {
+      bizType,
+      status: 'paid',
+      createdAt: this.createdRange(startDate, endDate),
+    };
+
+    if (regionId) {
+      if (bizType === 'order') {
+        const ids = await this.prisma.order.findMany({ where: this.orderRegionWhere(regionId), select: { id: true } });
+        where.bizId = { in: ids.map((item) => item.id) };
+      } else if (bizType === 'errand_order') {
+        const ids = await this.prisma.errandOrder.findMany({ where: { regionId }, select: { id: true } });
+        where.bizId = { in: ids.map((item) => item.id) };
+      } else if (bizType === 'mall_order') {
+        const merchants = await this.prisma.mallMerchant.findMany({ where: { regionId }, select: { id: true } }).catch(() => []);
+        const ids = merchants.length
+          ? await this.prisma.mallOrder.findMany({ where: { merchantId: { in: merchants.map((item) => item.id) } }, select: { id: true } })
+          : [];
+        where.bizId = { in: ids.map((item) => item.id) };
+      } else if (bizType === 'second_hand') {
+        const products = await this.prisma.secondHand.findMany({ where: { regionId }, select: { id: true } });
+        const orders = products.length
+          ? await this.prisma.secondHandOrder.findMany({ where: { productId: { in: products.map((item) => item.id) } }, select: { id: true } })
+          : [];
+        where.bizId = { in: orders.map((item) => item.id) };
+      }
+    }
+
+    const agg = await this.prisma.paymentOrder.aggregate({ where, _sum: { amount: true }, _count: true });
+    return { count: agg._count, amount: this.sumValue(agg, 'amount') };
+  }
+
+  private async countAndAmount(model: string, amountField: string, where: any, completedWhere: any) {
+    const [total, newCount, completed, amountAgg] = await Promise.all([
+      (this.prisma as any)[model].count({ where }),
+      (this.prisma as any)[model].count({ where }),
+      (this.prisma as any)[model].count({ where: completedWhere }),
+      (this.prisma as any)[model].aggregate({ where: completedWhere, _sum: { [amountField]: true } }),
+    ]);
+    return {
+      total,
+      new: newCount,
+      completed,
+      amount: this.sumValue(amountAgg, amountField),
+    };
   }
 
   private commentRegionWhere(regionId?: string) {
@@ -103,6 +179,238 @@ export class AnalyticsService {
   private calcGrowth(current: number, previous: number): number {
     if (previous === 0) return current > 0 ? 100 : 0;
     return Math.round(((current - previous) / previous) * 10000) / 100;
+  }
+
+  private percent(part: number, total: number): number {
+    if (!total) return 0;
+    return Math.round((part / total) * 10000) / 100;
+  }
+
+  private normalizeStatus(value: any): string {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  private safeDate(value: any): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private minutesBetween(start: any, end: any): number | null {
+    const startDate = this.safeDate(start);
+    const endDate = this.safeDate(end);
+    if (!startDate || !endDate || endDate < startDate) return null;
+    return Math.round(((endDate.getTime() - startDate.getTime()) / 60000) * 100) / 100;
+  }
+
+  private parseRemark(value: any): any {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    try {
+      const parsed = JSON.parse(String(value));
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private finishTimeOf(order: any): Date | null {
+    return this.safeDate(order.completeTime || order.receiveTime || order.deliverTime || order.cancelTime);
+  }
+
+  private expectedDeadlineOf(order: any, fallbackMinutes: number): Date | null {
+    const remark = this.parseRemark(order.remark);
+    const candidates = [
+      order.expectedDeliveryTime,
+      order.expected_delivery_time,
+      order.appointmentTime,
+      order.appointment_time,
+      remark.delivery_time,
+      remark.estimated_delivery_time,
+      remark.expected_delivery_time,
+      remark.appointment_time,
+      remark.dispatch_estimated_latest_time,
+      remark.estimated_delivery?.latest_at,
+    ];
+    const explicit = candidates.map((item) => this.safeDate(item)).find(Boolean) || null;
+    if (explicit) return explicit;
+    const createdAt = this.safeDate(order.createdAt);
+    return createdAt ? new Date(createdAt.getTime() + fallbackMinutes * 60000) : null;
+  }
+
+  private computeFulfillmentMetrics(orders: any[] = [], riskEvents: any[] = [], options: { fallbackMinutes: number }) {
+    const acceptedStatuses = new Set(['accepted', 'in_progress', 'arrived', 'shipped', 'delivered', 'received', 'completed']);
+    const completedStatuses = new Set(['completed', 'received']);
+    const cancelledStatuses = new Set(['cancelled', 'refunded']);
+    const orderIds = new Set(orders.map((order) => order.id).filter(Boolean));
+    const incidentOrderIds = new Set(
+      riskEvents
+        .filter((event) => orderIds.has(event.orderId))
+        .filter((event) => !['info', 'notice'].includes(this.normalizeStatus(event.eventLevel)))
+        .map((event) => event.orderId),
+    );
+    let acceptedOrders = 0;
+    let completedOrders = 0;
+    let cancelledOrders = 0;
+    let timeoutOrders = 0;
+    let acceptMinutesTotal = 0;
+    let acceptMinutesCount = 0;
+    let deliveryMinutesTotal = 0;
+    let deliveryMinutesCount = 0;
+
+    orders.forEach((order) => {
+      const status = this.normalizeStatus(order.status);
+      const accepted = !!order.acceptTime || acceptedStatuses.has(status);
+      const completed = completedStatuses.has(status);
+      const cancelled = cancelledStatuses.has(status);
+      if (accepted) acceptedOrders += 1;
+      if (completed) completedOrders += 1;
+      if (cancelled) cancelledOrders += 1;
+
+      const deadline = this.expectedDeadlineOf(order, options.fallbackMinutes);
+      const finishTime = this.finishTimeOf(order);
+      if (deadline && finishTime && finishTime.getTime() > deadline.getTime()) {
+        timeoutOrders += 1;
+      }
+
+      const acceptMinutes = this.minutesBetween(order.createdAt, order.acceptTime);
+      if (acceptMinutes !== null) {
+        acceptMinutesTotal += acceptMinutes;
+        acceptMinutesCount += 1;
+      }
+      const deliveryMinutes = this.minutesBetween(order.acceptTime || order.createdAt, this.finishTimeOf(order));
+      if (deliveryMinutes !== null) {
+        deliveryMinutesTotal += deliveryMinutes;
+        deliveryMinutesCount += 1;
+      }
+    });
+
+    const totalOrders = orders.length;
+    return {
+      total_orders: totalOrders,
+      accepted_orders: acceptedOrders,
+      completed_orders: completedOrders,
+      cancelled_orders: cancelledOrders,
+      timeout_orders: timeoutOrders,
+      incident_orders: incidentOrderIds.size,
+      acceptance_rate: this.percent(acceptedOrders, totalOrders),
+      completion_rate: this.percent(completedOrders, totalOrders),
+      cancel_rate: this.percent(cancelledOrders, totalOrders),
+      timeout_rate: this.percent(timeoutOrders, totalOrders),
+      incident_rate: this.percent(incidentOrderIds.size, totalOrders),
+      average_accept_minutes: acceptMinutesCount ? Math.round((acceptMinutesTotal / acceptMinutesCount) * 100) / 100 : 0,
+      average_delivery_minutes: deliveryMinutesCount ? Math.round((deliveryMinutesTotal / deliveryMinutesCount) * 100) / 100 : 0,
+    };
+  }
+
+  private combineFulfillmentMetrics(parts: any[]) {
+    const total = parts.reduce((sum, item) => sum + this.toNumber(item.total_orders), 0);
+    const accepted = parts.reduce((sum, item) => sum + this.toNumber(item.accepted_orders), 0);
+    const completed = parts.reduce((sum, item) => sum + this.toNumber(item.completed_orders), 0);
+    const cancelled = parts.reduce((sum, item) => sum + this.toNumber(item.cancelled_orders), 0);
+    const timeout = parts.reduce((sum, item) => sum + this.toNumber(item.timeout_orders), 0);
+    const incident = parts.reduce((sum, item) => sum + this.toNumber(item.incident_orders), 0);
+    return {
+      total_orders: total,
+      accepted_orders: accepted,
+      completed_orders: completed,
+      cancelled_orders: cancelled,
+      timeout_orders: timeout,
+      incident_orders: incident,
+      acceptance_rate: this.percent(accepted, total),
+      completion_rate: this.percent(completed, total),
+      cancel_rate: this.percent(cancelled, total),
+      timeout_rate: this.percent(timeout, total),
+      incident_rate: this.percent(incident, total),
+    };
+  }
+
+  private buildFulfillmentAttentionItems(metrics: any) {
+    const items: string[] = [];
+    if (metrics.acceptance_rate && metrics.acceptance_rate < 80) {
+      items.push(`接单成功率 ${metrics.acceptance_rate}%，建议检查价格、推送范围和骑手在线供给`);
+    }
+    if (metrics.timeout_rate > 10) {
+      items.push(`超时率 ${metrics.timeout_rate}%，建议校准 ETA、预约时间和高峰期缓冲`);
+    }
+    if (metrics.cancel_rate > 10) {
+      items.push(`取消率 ${metrics.cancel_rate}%，建议排查未支付、无人接单和任务描述不清`);
+    }
+    if (metrics.incident_rate > 1) {
+      items.push(`风险事故率 ${metrics.incident_rate}%，建议收紧高风险任务证据和叠单规则`);
+    }
+    return items;
+  }
+
+  private async getRiderFulfillmentMetrics(regionId: string | undefined, startDate: Date, endDate: Date) {
+    const errandWhere: any = {
+      ...(regionId ? { regionId } : {}),
+      createdAt: this.createdRange(startDate, endDate),
+      status: { not: 'pending_pay' },
+      refundStatus: { notIn: ['refunding', 'refunded'] },
+    };
+    const takeawayWhere: any = {
+      ...(regionId ? { merchant: { regionId } } : {}),
+      deliveryMode: { in: ['platform_rider', 'rider_delivery'] as any },
+      createdAt: this.createdRange(startDate, endDate),
+      status: { not: 'PENDING_PAY' } as any,
+      refundStatus: { notIn: ['refunding', 'refunded'] },
+    };
+
+    const [errandOrders, takeawayOrders] = await Promise.all([
+      this.prisma.errandOrder.findMany({
+        where: errandWhere,
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+          acceptTime: true,
+          deliverTime: true,
+          completeTime: true,
+          cancelTime: true,
+          remark: true,
+        },
+      }),
+      this.prisma.order.findMany({
+        where: takeawayWhere,
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+          acceptTime: true,
+          deliverTime: true,
+          receiveTime: true,
+          completeTime: true,
+          cancelTime: true,
+          remark: true,
+        },
+      }).catch(() => []),
+    ]);
+    const orderIds = [...errandOrders, ...takeawayOrders].map((order: any) => order.id).filter(Boolean);
+    const riskEvents = orderIds.length && (this.prisma as any).deliveryRiskEvent?.findMany
+      ? await (this.prisma as any).deliveryRiskEvent.findMany({
+        where: {
+          orderId: { in: orderIds },
+          createdAt: this.createdRange(startDate, endDate),
+        },
+        select: {
+          id: true,
+          orderId: true,
+          orderType: true,
+          eventLevel: true,
+        },
+      }).catch(() => [])
+      : [];
+    const errandMetrics = this.computeFulfillmentMetrics(errandOrders, riskEvents, { fallbackMinutes: 90 });
+    const takeawayMetrics = this.computeFulfillmentMetrics(takeawayOrders, riskEvents, { fallbackMinutes: 60 });
+    const overall = this.combineFulfillmentMetrics([errandMetrics, takeawayMetrics]);
+    return {
+      errand: errandMetrics,
+      takeaway: takeawayMetrics,
+      overall,
+      attention_items: this.buildFulfillmentAttentionItems(overall),
+    };
   }
 
   async getOverview(query: any) {
@@ -270,20 +578,121 @@ export class AnalyticsService {
     const orderTrend = await this.getDailyTrend('order', 'createdAt', startDate, endDate, where);
     const gmvTrend = await this.getDailyAmountTrend('order', 'createdAt', 'payAmount', startDate, endDate, { ...where, status: 'COMPLETED' });
 
+    const orderCreatedWhere = { ...where, createdAt: { gte: startDate, lte: endDate } } as any;
+    const errandWhere = { ...(regionId ? { regionId } : {}), createdAt: { gte: startDate, lte: endDate } } as any;
+    const mallMerchantIds = regionId
+      ? (await this.prisma.mallMerchant.findMany({ where: { regionId }, select: { id: true } }).catch(() => [])).map((item) => item.id)
+      : [];
+    const mallWhere = {
+      ...(regionId ? { merchantId: { in: mallMerchantIds } } : {}),
+      createdAt: { gte: startDate, lte: endDate },
+    } as any;
+    let secondHandWhere: any = { createdAt: { gte: startDate, lte: endDate } };
+    if (regionId) {
+      const products = await this.prisma.secondHand.findMany({ where: { regionId }, select: { id: true } });
+      secondHandWhere.productId = { in: products.map((item) => item.id) };
+    }
+
+    const [takeawayPaid, errandPaid, mallPaid, secondHandPaid, errand, mall, secondHandCount, secondHandCompleted] = await Promise.all([
+      this.paymentAmountByBizType(startDate, endDate, 'order', regionId),
+      this.paymentAmountByBizType(startDate, endDate, 'errand_order', regionId),
+      this.paymentAmountByBizType(startDate, endDate, 'mall_order', regionId),
+      this.paymentAmountByBizType(startDate, endDate, 'second_hand', regionId),
+      this.countAndAmount('errandOrder', 'payAmount', errandWhere, { ...errandWhere, status: 'completed' }),
+      this.countAndAmount('mallOrder', 'payAmount', mallWhere, { ...mallWhere, status: 'completed' }),
+      this.prisma.secondHandOrder.count({ where: secondHandWhere }),
+      this.prisma.secondHandOrder.count({ where: { ...secondHandWhere, status: { in: ['paid', 'shipped', 'completed'] } } }),
+    ]);
+
+    const businessBreakdown = [
+      { key: 'takeaway', name: '商家/外卖', orders: newOrders, completed: completedOrders, gmv: takeawayPaid.amount || gmvAmount, paidCount: takeawayPaid.count },
+      { key: 'errand', name: '跑腿', orders: errand.new, completed: errand.completed, gmv: errandPaid.amount || errand.amount, paidCount: errandPaid.count },
+      { key: 'mall', name: '商城', orders: mall.new, completed: mall.completed, gmv: mallPaid.amount || mall.amount, paidCount: mallPaid.count },
+      { key: 'second_hand', name: '二手交易', orders: secondHandCount, completed: secondHandCompleted, gmv: secondHandPaid.amount, paidCount: secondHandPaid.count },
+    ];
+
     return {
       success: true,
       data: {
-        total: totalOrders,
-        new: newOrders,
-        completed: completedOrders,
+        total: businessBreakdown.reduce((sum, item) => sum + item.orders, 0),
+        new: businessBreakdown.reduce((sum, item) => sum + item.orders, 0),
+        completed: businessBreakdown.reduce((sum, item) => sum + item.completed, 0),
         cancelled: cancelledOrders,
         refunding: refundingOrders,
-        gmv: gmvAmount,
+        gmv: businessBreakdown.reduce((sum, item) => sum + item.gmv, 0),
         refundAmount,
         refundRate,
         refundCount: refundAgg._count,
         trend: orderTrend,
         gmvTrend,
+        businessBreakdown,
+      },
+    };
+  }
+
+  async getSecondHandAnalytics(query: any) {
+    const { startDate, endDate } = this.getDateRange(query);
+    const regionId = query.regionId;
+    const productWhere: any = regionId ? { regionId } : {};
+    const productRangeWhere = { ...productWhere, createdAt: this.createdRange(startDate, endDate) };
+    const productIds = regionId
+      ? (await this.prisma.secondHand.findMany({ where: productWhere, select: { id: true } })).map((item) => item.id)
+      : undefined;
+    const orderWhere: any = { createdAt: this.createdRange(startDate, endDate) };
+    if (productIds) orderWhere.productId = { in: productIds };
+
+    const [
+      totalProducts, newProducts, onSaleProducts, soldProducts, pendingProducts, rejectedProducts,
+      deliveryRows, statusRows, orderTotal, orderRows, paid,
+    ] = await Promise.all([
+      this.prisma.secondHand.count({ where: productWhere }),
+      this.prisma.secondHand.count({ where: productRangeWhere }),
+      this.prisma.secondHand.count({ where: { ...productWhere, status: 'ON_SALE' } }),
+      this.prisma.secondHand.count({ where: { ...productWhere, status: 'SOLD' } }),
+      this.prisma.secondHand.count({ where: { ...productWhere, status: 'PENDING' } }),
+      this.prisma.secondHand.count({ where: { ...productWhere, status: 'REJECTED' } }),
+      this.prisma.secondHand.groupBy({ by: ['deliveryType'], where: productWhere, _count: { _all: true } }),
+      this.prisma.secondHand.groupBy({ by: ['status'], where: productWhere, _count: { _all: true } }),
+      this.prisma.secondHandOrder.count({ where: orderWhere }),
+      this.prisma.secondHandOrder.groupBy({ by: ['status'], where: orderWhere, _count: { _all: true } }),
+      this.paymentAmountByBizType(startDate, endDate, 'second_hand', regionId),
+    ]);
+
+    const trend = await this.getDailyTrend('secondHand', 'createdAt', startDate, endDate, productWhere);
+    const deliveryTypes = deliveryRows.map((item) => ({
+      name: item.deliveryType || '未设置',
+      count: item._count._all,
+    }));
+    const status = statusRows.map((item) => ({
+      name: this.productStatusText(item.status),
+      status: item.status,
+      count: item._count._all,
+    }));
+    const orderStatus = orderRows.map((item) => ({
+      name: item.status,
+      count: item._count._all,
+    }));
+
+    return {
+      success: true,
+      data: {
+        products: {
+          total: totalProducts,
+          new: newProducts,
+          onSale: onSaleProducts,
+          sold: soldProducts,
+          pending: pendingProducts,
+          rejected: rejectedProducts,
+        },
+        orders: {
+          total: orderTotal,
+          paidCount: paid.count,
+          paidAmount: paid.amount,
+        },
+        deliveryTypes,
+        status,
+        orderStatus,
+        trend,
       },
     };
   }
@@ -450,6 +859,113 @@ export class AnalyticsService {
         totalEarnings: this.toNumber(totalDeliveryGmv._sum?.price) + this.toNumber(totalDeliveryGmv._sum?.tip),
       },
     };
+  }
+
+  async getRiderAlgorithmAnalytics(query: any = {}) {
+    const { startDate, endDate } = this.getDateRange(query);
+    const snapshots = await this.riderLearningStore.listSnapshots(800);
+    const summary = this.riderLearningStore.summarizeSnapshots(snapshots);
+    const regionId = query.regionId;
+    const regionWhere = regionId ? { regionId } : {};
+    const [regionRiders, onlineRegionRiders, activeErrands, activeTakeawayOrders, fulfillmentMetrics] = await Promise.all([
+      this.prisma.regionRider.count({ where: regionWhere }),
+      this.prisma.regionRider.count({ where: { ...regionWhere, status: 'online' } }),
+      this.prisma.errandOrder.count({ where: { ...regionWhere, status: { in: ['pending_accept', 'accepted', 'in_progress', 'arrived'] }, refundStatus: { notIn: ['refunding', 'refunded'] } } }),
+      this.prisma.order.count({
+        where: {
+          ...(regionId ? { merchant: { regionId } } : {}),
+          deliveryMode: { in: ['platform_rider', 'rider_delivery'] } as any,
+          status: { in: ['PAID', 'SHIPPED'] } as any,
+          refundStatus: { notIn: ['refunding', 'refunded'] },
+        },
+      }).catch(() => 0),
+      this.getRiderFulfillmentMetrics(regionId, startDate, endDate),
+    ]);
+    const mergedAttentionItems = [
+      ...(summary.attention_items || []),
+      ...(fulfillmentMetrics.attention_items || []),
+    ];
+    return {
+      success: true,
+      data: {
+        summary: {
+          ...summary,
+          fulfillment: fulfillmentMetrics.overall,
+          attention_items: mergedAttentionItems,
+        },
+        fulfillment_metrics: fulfillmentMetrics,
+        rider_supply: {
+          total: regionRiders,
+          online: onlineRegionRiders,
+          online_rate: regionRiders > 0 ? Math.round((onlineRegionRiders / regionRiders) * 10000) / 100 : 0,
+        },
+        errand_algorithm: {
+          active_orders: activeErrands,
+          risk_counts: summary.by_level,
+          top_risk_tags: summary.top_tags,
+          fulfillment: fulfillmentMetrics.errand,
+          attention_items: [
+            ...(summary.attention_items || []),
+            ...this.buildFulfillmentAttentionItems(fulfillmentMetrics.errand),
+          ],
+        },
+        takeaway_algorithm: {
+          active_orders: activeTakeawayOrders,
+          fulfillment: fulfillmentMetrics.takeaway,
+          attention_items: [
+            ...this.buildFulfillmentAttentionItems(fulfillmentMetrics.takeaway),
+            '外卖算法已接入骑手分析中心，建议继续沉淀商家出餐等待、骑手取餐等待和午高峰超时样本',
+          ],
+        },
+        range: {
+          snapshot_count: snapshots.length,
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          generated_at: new Date().toISOString(),
+        },
+      },
+    };
+  }
+
+  async getRiderAiConfig() {
+    return this.riderAiAdvisory.getConfig();
+  }
+
+  async saveRiderAiConfig(dto: any) {
+    return this.riderAiAdvisory.saveConfig(dto);
+  }
+
+  async runRiderAiAnalysis(dto: any = {}) {
+    const analytics = await this.getRiderAlgorithmAnalytics(dto);
+    return this.riderAiAdvisory.runAnalysis(analytics.data, dto.trigger_type || 'manual');
+  }
+
+  @Interval(60 * 1000)
+  async runScheduledRiderAiAnalysisIfDue() {
+    if (this.riderAiScheduleRunning) return;
+    const state = await this.riderAiAdvisory.shouldRunScheduledAnalysis();
+    if (!state.due) return;
+    this.riderAiScheduleRunning = true;
+    try {
+      const analytics = await this.getRiderAlgorithmAnalytics({});
+      await this.riderAiAdvisory.runAnalysis(analytics.data, 'scheduled');
+    } catch (error) {
+      console.error('[rider-ai-advisory] scheduled analysis failed', error);
+    } finally {
+      this.riderAiScheduleRunning = false;
+    }
+  }
+
+  async getRiderAiSuggestions(query: any = {}) {
+    return this.riderAiAdvisory.listSuggestions(query);
+  }
+
+  async updateRiderAiSuggestionStatus(id: string, dto: any = {}) {
+    return this.riderAiAdvisory.updateSuggestionStatus(id, dto);
+  }
+
+  async getRiderAiRunLogs(query: any = {}) {
+    return this.riderAiAdvisory.listRunLogs(query);
   }
 
   async getFunnelAnalytics(query: any) {

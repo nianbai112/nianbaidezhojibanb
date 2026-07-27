@@ -143,6 +143,33 @@ export class AiAdminController {
     return this.aiAdminService.runTask(id, operatorId);
   }
 
+  @Post('tasks/:id/retry')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '重新排队AI任务' })
+  retryTask(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.retryTask(id, operatorId);
+  }
+
+  @Post('tasks/:id/cancel')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '取消AI任务' })
+  cancelTask(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.cancelTask(id, operatorId);
+  }
+
+  @Get('tasks/:id/timeline')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI任务时间线' })
+  getTaskTimeline(@Param('id') id: string) {
+    return this.aiAdminService.getTaskTimeline(id);
+  }
+
   // ==================== 日志管理 ====================
 
   @Get('logs')
@@ -152,6 +179,75 @@ export class AiAdminController {
     return this.aiAdminService.getLogs(query);
   }
 
+  @Get('call-logs')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI模型调用日志' })
+  getCallLogs(@Query() query: any) {
+    return this.aiAdminService.getCallLogs(query);
+  }
+
+  @Get('moderation-records')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI内容审核记录' })
+  getModerationRecords(@Query() query: any) {
+    return this.aiAdminService.getModerationRecords(query);
+  }
+
+  @Get('quota-usage')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI调用配额和成本' })
+  getQuotaUsage(@Query() query: any) {
+    return this.aiAdminService.getQuotaUsage(query);
+  }
+
+  @Get('risk-events')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI风险事件' })
+  getRiskEvents(@Query() query: any) {
+    return this.aiAdminService.getRiskEvents(query);
+  }
+
+  @Post('risk-events/:id/handle')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '处理AI风险事件' })
+  handleRiskEvent(
+    @Param('id') id: string,
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.handleRiskEvent(id, body, operatorId);
+  }
+
+  // ==================== 数据修复 ====================
+
+  @Get('repair/stats')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI数据修复统计' })
+  getRepairStats() {
+    return this.aiAdminService.getRepairStats();
+  }
+
+  @Post('repair/running-tasks')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '修复卡死的AI任务' })
+  repairRunningTasks(@CurrentUser('sub') operatorId: string) {
+    return this.aiAdminService.repairRunningTasks(operatorId);
+  }
+
+  @Post('repair/comment-counts')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '重算帖子评论数' })
+  repairCommentCounts(@CurrentUser('sub') operatorId: string) {
+    return this.aiAdminService.repairCommentCounts(operatorId);
+  }
+
+  @Post('repair/bot-profiles')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '修复机器人用户资料' })
+  repairBotProfiles(@CurrentUser('sub') operatorId: string) {
+    return this.aiAdminService.repairBotProfiles(operatorId);
+  }
+
   // ==================== 配置管理 ====================
 
   @Get('config')
@@ -159,6 +255,23 @@ export class AiAdminController {
   @ApiOperation({ summary: '获取AI配置' })
   getConfig() {
     return this.aiAdminService.getConfig();
+  }
+
+  @Get('config/versions')
+  @RequirePermission('ai:view')
+  @ApiOperation({ summary: 'AI配置版本记录' })
+  getConfigVersions(@Query() query: any) {
+    return this.aiAdminService.getConfigVersions(query);
+  }
+
+  @Post('config/versions/:id/rollback')
+  @RequirePermission('ai:edit')
+  @ApiOperation({ summary: '回滚AI配置版本' })
+  rollbackConfigVersion(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.aiAdminService.rollbackConfigVersion(id, operatorId);
   }
 
   @Put('config')

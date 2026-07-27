@@ -2,6 +2,7 @@
   <div class="page-shell">
     <PageHeader title="提现审核" subtitle="审核用户提现申请" icon="Wallet" />
     <div class="filter-bar">
+      <el-input v-model="filters.keyword" placeholder="搜索提现ID/用户/账号" clearable style="width: 220px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
         <el-option label="待审核" value="PENDING" />
         <el-option label="处理中" value="PROCESSING" />
@@ -9,7 +10,7 @@
         <el-option label="已拒绝" value="REJECTED" />
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
-      <el-button @click="filters.status = ''; loadData()">重置</el-button>
+      <el-button @click="resetFilters">重置</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="user.nickname" label="用户" width="120">
@@ -36,6 +37,7 @@
             <el-button size="small" type="success" @click="review(row, true)">通过</el-button>
             <el-button size="small" type="danger" @click="review(row, false)">拒绝</el-button>
           </template>
+          <el-button v-else-if="row.status === 'PROCESSING'" size="small" type="primary" @click="complete(row)">确认打款</el-button>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -48,6 +50,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -55,11 +58,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const statusMap: Record<string, string> = { PENDING: '待审核', PROCESSING: '处理中', SUCCESS: '成功', FAILED: '失败', REJECTED: '已拒绝' }
 const statusTypeMap: Record<string, string> = { PENDING: 'warning', PROCESSING: 'primary', SUCCESS: 'success', FAILED: 'danger', REJECTED: 'danger' }
 const loading = ref(false)
+const route = useRoute()
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = reactive({ status: '' })
+const filters = reactive({ keyword: '', status: '' })
 
 const loadData = async () => {
   loading.value = true
@@ -68,6 +72,12 @@ const loadData = async () => {
     list.value = res?.list || res?.data?.list || []
     total.value = res?.total || res?.data?.total || 0
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') } finally { loading.value = false }
+}
+
+const resetFilters = () => {
+  filters.keyword = ''
+  filters.status = ''
+  loadData()
 }
 
 const review = async (row: any, approved: boolean) => {
@@ -84,7 +94,25 @@ const review = async (row: any, approved: boolean) => {
   } catch (e: any) { if (e !== 'cancel') ElMessage.error('操作失败') }
 }
 
-onMounted(() => loadData())
+const complete = async (row: any) => {
+  try {
+    const { value: transferNo } = await ElMessageBox.prompt('请输入打款流水号', '确认提现打款', { inputPlaceholder: '支付平台或银行流水号', inputValidator: (value) => value?.trim() ? true : '打款流水号不能为空' })
+    await request.put(`/admin/withdrawals/${row.id}/complete`, { transferNo: transferNo.trim() })
+    ElMessage.success('已确认打款')
+    loadData()
+  } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
+}
+
+const applyRouteQuery = () => {
+  const keyword = route.query.businessId || route.query.keyword || route.query.focusId
+  if (keyword) filters.keyword = String(keyword)
+  if (route.query.status) filters.status = String(route.query.status)
+}
+
+onMounted(() => {
+  applyRouteQuery()
+  loadData()
+})
 </script>
 
 <style scoped>

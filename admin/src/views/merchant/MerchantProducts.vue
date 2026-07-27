@@ -1,6 +1,8 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商品管理" subtitle="管理商家商品" icon="Goods" />
+    <PageHeader :title="isDormShopPage ? '小店商品' : '商品管理'" :subtitle="isDormShopPage ? '管理宿舍小店商品，和正式商家商品分开运营' : '管理商家商品与分类'" icon="Goods">
+      <template #actions><el-button @click="router.push(isDormShopPage ? '/merchant/dorm-categories' : '/merchant/categories')">商品分类</el-button></template>
+    </PageHeader>
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索商品名称" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.merchantId" placeholder="商家" clearable filterable style="width: 160px" @change="loadData">
@@ -20,13 +22,13 @@
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
-      <el-button type="success" @click="openEdit()">新增商品</el-button>
+      <el-button type="primary" @click="openEdit()">新增商品</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="images" label="商品图" width="80">
         <template #default="{ row }">
-          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 50px; height: 50px; border-radius: 4px;" />
-          <span v-else-if="row.image || row.cover" :src="row.image || row.cover" style="width: 50px; height: 50px; border-radius: 4px;" />
+          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 50px; height: 50px; border-radius: 6px;" />
+          <span v-else-if="row.image || row.cover" :src="row.image || row.cover" style="width: 50px; height: 50px; border-radius: 6px;" />
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -80,9 +82,19 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="商品分类" prop="categoryId">
-              <el-select v-model="form.categoryId" placeholder="请选择分类" style="width: 100%" filterable>
-                <el-option v-for="c in categoryList" :key="c.id" :label="c.name" :value="c.id" />
-              </el-select>
+              <div class="category-select-row">
+                <el-select
+                  v-model="form.categoryId"
+                  placeholder="请选择分类"
+                  style="width: 100%"
+                  filterable
+                  :no-data-text="isDormShopPage ? '暂无小店分类，请先新增' : '暂无商品分类，请先新增'"
+                >
+                  <el-option v-for="c in categoryList" :key="c.id" :label="c.name" :value="c.id" />
+                </el-select>
+                <el-button plain type="primary" @click="openQuickCategory">新增分类</el-button>
+              </div>
+              <div class="form-tip">商品必须归入分类；分类会同步到小程序商品列表。</div>
             </el-form-item>
           </el-col>
         </el-row>
@@ -90,7 +102,7 @@
         <el-form-item label="商品图片">
           <div class="image-list">
             <div v-for="(img, idx) in form.images" :key="idx" class="img-item">
-              <el-image :src="img" style="width: 80px; height: 80px; border-radius: 4px;" />
+              <el-image :src="img" style="width: 80px; height: 80px; border-radius: 6px;" />
               <el-button size="small" type="danger" text @click="removeImage(idx)">删除</el-button>
             </div>
             <div class="product-image-uploader">
@@ -154,16 +166,36 @@
         <el-button type="primary" @click="submitEdit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="quickCategoryVisible" :title="isDormShopPage ? '新增小店分类' : '新增商品分类'" width="420px" :close-on-click-modal="false" append-to-body>
+      <el-form ref="quickCategoryRef" :model="quickCategoryForm" :rules="quickCategoryRules" label-width="90px">
+        <el-form-item label="分类名称" prop="name">
+          <el-input v-model="quickCategoryForm.name" placeholder="如：饮料、零食、日用品" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="quickCategoryForm.sortOrder" :min="0" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="quickCategoryVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitQuickCategory">创建并选中</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick } from 'vue'
+import { computed, ref, reactive, onMounted, nextTick, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
-import { getProducts, createProduct, updateProduct, updateProductStatus, auditProduct, getCategories, getMerchants, getProductStockAlerts } from '@/api/merchant'
+import { getProducts, createProduct, updateProduct, updateProductStatus, auditProduct, getCategories, getMerchants, getProductStockAlerts, createCategory } from '@/api/merchant'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
+const route = useRoute()
+const router = useRouter()
+const isDormShopPage = computed(() => route.path.includes('/dorm-'))
+const businessType = computed(() => isDormShopPage.value ? 'dorm_shop' : 'takeaway')
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
@@ -174,9 +206,12 @@ const merchantList = ref<any[]>([])
 const categoryList = ref<any[]>([])
 
 const editVisible = ref(false)
+const quickCategoryVisible = ref(false)
 const editingId = ref('')
 const form = reactive<any>({ merchantId: '', categoryId: '', name: '', images: [], detail: '', price: 0, originPrice: 0, stock: 0, unit: '', weight: 0, status: 'on_sale', skus: [] })
 const formRef = ref<any>(null)
+const quickCategoryRef = ref<any>(null)
+const quickCategoryForm = reactive({ name: '', sortOrder: 0 })
 const productImageUploadValue = ref('')
 const rules = {
   name: [{ required: true, message: '请输入商品名称', trigger: 'blur' }],
@@ -185,13 +220,16 @@ const rules = {
   price: [{ required: true, message: '请输入售价', trigger: 'blur' }],
   stock: [{ required: true, message: '请输入库存', trigger: 'blur' }],
 }
+const quickCategoryRules = {
+  name: [{ required: true, message: '请输入分类名称', trigger: 'blur' }],
+}
 
 const formatDate = (d: any) => d ? new Date(d).toLocaleString('zh-CN') : '-'
 
 const loadData = async () => {
   loading.value = true
   try {
-    const params: any = { page: page.value, pageSize: pageSize.value, keyword: filters.keyword, merchantId: filters.merchantId, categoryId: filters.categoryId, status: filters.status }
+    const params: any = { page: page.value, pageSize: pageSize.value, businessType: businessType.value, keyword: filters.keyword, merchantId: filters.merchantId, categoryId: filters.categoryId, status: filters.status }
     if (filters.stockAlert === true) {
       const alertRes: any = await getProductStockAlerts({ pageSize: 100 })
       const alertIds = (alertRes?.list || alertRes?.data?.list || []).map((p: any) => p.id)
@@ -218,11 +256,15 @@ const resetFilters = () => {
   loadData()
 }
 
+const applyMerchantContext = () => {
+  filters.merchantId = typeof route.query.merchantId === 'string' ? route.query.merchantId : ''
+}
+
 const loadOptions = async () => {
   try {
-    const mRes: any = await getMerchants({ page: 1, pageSize: 500 })
+    const mRes: any = await getMerchants({ page: 1, pageSize: 500, businessType: businessType.value })
     merchantList.value = mRes?.list || mRes?.data?.list || []
-    const cRes: any = await getCategories()
+    const cRes: any = await getCategories({ pageSize: 500, businessType: businessType.value, type: 'product' })
     categoryList.value = cRes?.list || cRes?.data?.list || []
   } catch (e: any) {
     ElMessage.error(e?.message || '加载选项失败')
@@ -241,9 +283,37 @@ const openEdit = (row?: any) => {
       skus: Array.isArray(row.skus) ? row.skus.map((s: any) => ({ ...s })) : []
     })
   } else {
-    Object.assign(form, { merchantId: '', categoryId: '', name: '', images: [], detail: '', price: 0, originPrice: 0, stock: 0, unit: '', weight: 0, status: 'on_sale', skus: [] })
+    Object.assign(form, { merchantId: merchantList.value.length === 1 ? merchantList.value[0].id : '', categoryId: categoryList.value.length === 1 ? categoryList.value[0].id : '', name: '', images: [], detail: '', price: 0, originPrice: 0, stock: 0, unit: '', weight: 0, status: 'on_sale', skus: [] })
   }
   editVisible.value = true
+}
+
+const openQuickCategory = () => {
+  quickCategoryForm.name = ''
+  quickCategoryForm.sortOrder = categoryList.value.length
+  quickCategoryVisible.value = true
+  nextTick(() => quickCategoryRef.value?.clearValidate())
+}
+
+const submitQuickCategory = async () => {
+  const valid = await quickCategoryRef.value?.validate().catch(() => false)
+  if (!valid) return
+  try {
+    const res: any = await createCategory({
+      name: quickCategoryForm.name,
+      sortOrder: quickCategoryForm.sortOrder,
+      type: 'product',
+      businessType: businessType.value,
+      status: 'active',
+    })
+    const created = res?.data || res
+    await loadOptions()
+    if (created?.id) form.categoryId = created.id
+    quickCategoryVisible.value = false
+    ElMessage.success('分类已创建')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '创建分类失败')
+  }
 }
 
 const appendProductImage = async (url: string) => {
@@ -317,7 +387,18 @@ const audit = async (row: any, status: string) => {
   }
 }
 
-onMounted(() => { loadData(); loadOptions() })
+watch(() => route.path, () => {
+  resetFilters()
+  loadOptions()
+})
+
+watch(() => route.query.merchantId, () => {
+  applyMerchantContext()
+  page.value = 1
+  loadData()
+})
+
+onMounted(() => { applyMerchantContext(); loadData(); loadOptions() })
 </script>
 
 <style scoped>
@@ -329,4 +410,8 @@ onMounted(() => { loadData(); loadOptions() })
 .product-image-uploader { width: 120px; }
 .product-image-uploader :deep(.upload-trigger) { min-height: 96px; padding: 14px; }
 .sku-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.category-select-row { display: flex; width: 100%; gap: 8px; }
+.category-select-row .el-select { flex: 1; min-width: 0; }
+.category-select-row .el-button { flex: none; }
+.form-tip { color: #8a97aa; font-size: 12px; line-height: 18px; margin-top: 4px; }
 </style>

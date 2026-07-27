@@ -6,11 +6,24 @@ import { Request, Response } from 'express';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { WechatOfficialService } from './wechat-official.service';
+import { WechatSubscribeService } from './wechat-subscribe.service';
 
 @ApiTags('微信')
 @Controller('wechat')
 export class WechatController {
-  constructor(private readonly officialService: WechatOfficialService) {}
+  constructor(
+    private readonly officialService: WechatOfficialService,
+    private readonly subscribeService: WechatSubscribeService,
+  ) {}
+
+  @Get('subscribe-templates')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取当前页面可申请的订阅消息模板' })
+  async getSubscribeTemplates(@Query('types') rawTypes?: string) {
+    const types = String(rawTypes || '').split(',').map((value) => value.trim()).filter((value) => /^takeaway_(order_status|merchant_order|rider_order)$/.test(value));
+    return { list: await this.subscribeService.listEnabledTemplates(types) };
+  }
 
   @Get('binding/status')
   @UseGuards(JwtGuard)
@@ -48,8 +61,13 @@ export class WechatController {
   ) {
     // 获取原始 XML body
     const rawBody = (req as any).rawBody || body;
+    const xmlBody = Buffer.isBuffer(rawBody)
+      ? rawBody.toString('utf8')
+      : typeof rawBody === 'string'
+        ? rawBody
+        : '';
     const result = await this.officialService.handleCallback(
-      typeof rawBody === 'string' ? rawBody : '',
+      xmlBody,
       query,
     );
     res.send(result);

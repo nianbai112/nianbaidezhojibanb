@@ -92,7 +92,7 @@ function handleReset() {
 }
 
 .form-tip {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
   margin-top: 4px;
   padding: 0 24px;
@@ -110,14 +110,14 @@ function handleReset() {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.66);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  border: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
 }
 
 .sortable-grip {
   cursor: grab;
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 16px;
   user-select: none;
 }
@@ -130,7 +130,7 @@ function handleReset() {
 }
 
 .muted {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 

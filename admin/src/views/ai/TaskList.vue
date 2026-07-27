@@ -6,7 +6,7 @@
         <h1>AI 任务</h1>
         <p>创建和管理自动发帖、评论、冷启动和互动任务，所有任务都必须绑定具体机器人。</p>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openCreate">创建任务</el-button>
+      <el-button v-if="hasEditPermission" type="primary" :icon="Plus" @click="openCreate">创建任务</el-button>
     </div>
 
     <div class="filter-card">
@@ -48,6 +48,16 @@
             <el-tag size="small">{{ typeLabel(row.type) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="目标帖子" width="190">
+          <template #default="{ row }">
+            <div v-if="row.targetPostId" class="target-post-cell">
+              <code>{{ row.targetPostId }}</code>
+              <el-button size="small" link type="primary" @click="copyPostId(row.targetPostId)">复制</el-button>
+              <el-button size="small" link type="success" @click="openTargetPost(row.targetPostId)">查看</el-button>
+            </div>
+            <span v-else class="muted">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
@@ -58,8 +68,9 @@
         </el-table-column>
         <el-table-column label="操作" width="330" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="editTask(row)">编辑</el-button>
+            <el-button v-if="hasEditPermission" size="small" @click="editTask(row)">编辑</el-button>
             <el-button
+              v-if="hasEditPermission"
               size="small"
               type="primary"
               plain
@@ -69,6 +80,7 @@
               生成草稿
             </el-button>
             <el-button
+              v-if="hasEditPermission"
               size="small"
               type="success"
               :disabled="['completed', 'cancelled', 'running'].includes(row.status)"
@@ -77,7 +89,7 @@
             >
               立即执行
             </el-button>
-            <el-button size="small" :type="row.status === 'running' ? 'warning' : 'success'" @click="toggleStatus(row)">
+            <el-button v-if="hasEditPermission" size="small" :type="row.status === 'running' ? 'warning' : 'success'" @click="toggleStatus(row)">
               {{ row.status === 'running' ? '暂停' : '启动' }}
             </el-button>
           </template>
@@ -131,7 +143,12 @@
             </el-select>
           </el-form-item>
           <el-form-item v-if="isCommentTask" label="目标帖子ID" required>
-            <el-input v-model="form.targetPostId" placeholder="自动评论/互动任务需要填写目标帖子ID" />
+            <el-input v-model="form.targetPostId" placeholder="从帖子管理复制帖子ID后粘贴到这里">
+              <template #append>
+                <el-button @click="openPostsForCopy">找帖子</el-button>
+              </template>
+            </el-input>
+            <div class="form-tip">用于指定机器人要评论或互动的帖子；帖子管理列表和详情里可以一键复制。</div>
           </el-form-item>
         </div>
         <el-form-item label="任务内容 / 生成提示词">
@@ -166,12 +183,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('ai:edit'))
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const submitting = ref(false)
 const dialogVisible = ref(false)
@@ -214,6 +238,10 @@ const activeCircles = computed(() => {
   })
 })
 const pickPage = (res: any) => res?.data || res || { list: [], total: 0 }
+const routeParam = (key: string) => {
+  const value = route.query[key]
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
 
 const loadTasks = async () => {
   loading.value = true
@@ -287,6 +315,18 @@ const openCreate = () => {
   editingTask.value = null
   resetForm()
   dialogVisible.value = true
+}
+
+const openCreateFromRoute = () => {
+  const targetPostId = routeParam('targetPostId')
+  if (!targetPostId) return
+  editingTask.value = null
+  resetForm()
+  form.type = ['comment', 'interaction'].includes(routeParam('type')) ? routeParam('type') : 'comment'
+  form.targetPostId = targetPostId
+  form.regionId = routeParam('regionId')
+  dialogVisible.value = true
+  ElMessage.success('已带入目标帖子ID，请选择机器人后保存任务')
 }
 
 const editTask = (task: any) => {
@@ -388,6 +428,40 @@ const runTask = async (task: any) => {
   }
 }
 
+const copyText = async (value: string) => {
+  const text = String(value || '').trim()
+  if (!text) return
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+const copyPostId = async (postId: string) => {
+  try {
+    await copyText(postId)
+    ElMessage.success('帖子ID已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选中帖子ID复制')
+  }
+}
+
+const openTargetPost = (postId: string) => {
+  router.push({ path: '/content/posts', query: { id: postId } })
+}
+
+const openPostsForCopy = () => {
+  router.push({ path: '/content/posts' })
+}
+
 const resetQuery = () => {
   Object.assign(query, { page: 1, type: '', status: '', regionId: '' })
   loadTasks()
@@ -403,13 +477,14 @@ onMounted(() => {
   loadRegions()
   loadCircles()
   loadBots()
+  openCreateFromRoute()
 })
 </script>
 
 <style scoped>
 .ai-page {
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .page-head {
@@ -421,7 +496,7 @@ onMounted(() => {
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -434,17 +509,17 @@ onMounted(() => {
 
 .page-head p {
   margin: 8px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
 
 .filter-card,
 .table-card {
-  border: 1px solid rgba(190, 207, 230, .72);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
 }
 
@@ -467,16 +542,43 @@ onMounted(() => {
 }
 
 .task-cell b {
-  color: #0f172a;
+  color: var(--mx-text);
 }
 
 .task-cell span {
   overflow: hidden;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.target-post-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.target-post-cell code {
+  overflow: hidden;
+  max-width: 96px;
+  color: var(--el-color-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted,
+.form-tip {
+  color: var(--mx-sub);
+  font-size: 12px;
+}
+
+.form-tip {
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .pagination-row {
@@ -485,7 +587,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding-top: 16px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
 }

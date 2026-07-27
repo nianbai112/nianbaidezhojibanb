@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { RedisService } from '../../common/services/redis.service';
 import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 
 @Injectable()
@@ -7,6 +8,7 @@ export class AiAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRuntime: AiRuntimeService,
+    private readonly redis: RedisService,
   ) {}
 
   private async logOperation(operatorId: string, action: string, module: string, targetId: string, ip: string) {
@@ -43,6 +45,10 @@ export class AiAdminService {
         minInterval: 30,
         maxTasksPerBotPerDay: 8,
         failurePauseMinutes: 30,
+        maxDailyCalls: 0,
+        maxDailyTokens: 0,
+        maxDailyCost: 0,
+        maxMiniProgramCallsPerUserDay: 20,
       },
       scheduling: {
         batchSize: 5,
@@ -68,6 +74,63 @@ export class AiAdminService {
         ...((value || {}).scheduling || {}),
       },
     };
+  }
+
+  private mergeConfigOverride(base: any = {}, override: any = {}) {
+    const cleanBase = base && typeof base === 'object' && !Array.isArray(base) ? base : {};
+    const cleanOverride = override && typeof override === 'object' && !Array.isArray(override) ? override : {};
+    return {
+      ...cleanBase,
+      ...cleanOverride,
+      riskControl: {
+        ...(cleanBase.riskControl || {}),
+        ...(cleanOverride.riskControl || {}),
+      },
+      scheduling: {
+        ...(cleanBase.scheduling || {}),
+        ...(cleanOverride.scheduling || {}),
+      },
+    };
+  }
+
+  private legacyRobotToConfig(value: any) {
+    const robot = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const result: any = {};
+    if (robot.postDailyLimit !== undefined) {
+      result.riskControl = { ...(result.riskControl || {}), maxPostsPerDay: Number(robot.postDailyLimit) || 0 };
+    }
+    if (robot.commentDailyLimit !== undefined) {
+      result.riskControl = { ...(result.riskControl || {}), maxCommentsPerDay: Number(robot.commentDailyLimit) || 0 };
+    }
+    if (robot.defaultInterval !== undefined) {
+      result.riskControl = { ...(result.riskControl || {}), minInterval: Number(robot.defaultInterval) || 0 };
+    }
+    if (robot.autoAudit !== undefined) {
+      result.contentSafetyEnabled = Boolean(robot.autoAudit);
+      result.reviewBeforePost = Boolean(robot.autoAudit);
+    }
+    return result;
+  }
+
+  private aiConfigToLegacyRobotConfig(value: any) {
+    const config = this.mergeConfig(value);
+    const risk = config.riskControl || {};
+    return {
+      postDailyLimit: Number(risk.maxPostsPerDay || 0),
+      commentDailyLimit: Number(risk.maxCommentsPerDay || 0),
+      defaultInterval: Number(risk.minInterval || 0),
+      autoAudit: Boolean(config.contentSafetyEnabled),
+      enabledRegions: Array.isArray(config.enabledRegions) ? config.enabledRegions : [],
+    };
+  }
+
+  private async mirrorLegacyRobotConfig(value: any, operatorId?: string) {
+    const robotValue = this.aiConfigToLegacyRobotConfig(value);
+    await this.prisma.config.upsert({
+      where: { key: 'robot' },
+      update: { value: robotValue, group: 'ai', updatedBy: operatorId || null },
+      create: { key: 'robot', value: robotValue, group: 'ai', createdBy: operatorId || null, updatedBy: operatorId || null },
+    }).catch(() => undefined);
   }
 
   private sanitizeConfig(config: any) {
@@ -106,10 +169,134 @@ export class AiAdminService {
     return d;
   }
 
-  private formatLogMessage(detail: any) {
+  private isFailedLog(action?: string | null, detail?: any) {
+    const normalizedAction = String(action || '').toLowerCase();
+    const normalizedStatus = String(detail?.status || '').toLowerCase();
+    return normalizedAction.includes('fail')
+      || ['error', 'failed'].includes(normalizedAction)
+      || ['error', 'failed'].includes(normalizedStatus)
+      || Boolean(detail?.error);
+  }
+
+  private formatTechnicalError(message: any) {
+    const raw = String(message || '').trim();
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+    if (lower.includes('fetch failed') || lower.includes('network error')) {
+      return 'AI服务连接失败，请检查模型配置、网络或服务商接口状态';
+    }
+    if (lower.includes('invalid `tx.comment.create()`') || lower.includes('tx.comment.create')) {
+      return '发布评论失败：评论数据写入异常，请联系技术处理';
+    }
+    if (lower.includes('invalid `tx.post.create()`') || lower.includes('tx.post.create')) {
+      return '发布笔记失败：笔记数据写入异常，请联系技术处理';
+    }
+    if (raw.includes('目标帖子不存在')) {
+      return '目标帖子不存在，无法发布评论';
+    }
+    if (lower.includes('api key') || raw.includes('密钥')) {
+      return 'AI密钥未配置或不可用，请检查AI配置';
+    }
+    if (lower.includes('timeout') || raw.includes('超时')) {
+      return 'AI服务响应超时，请稍后重试或检查服务商状态';
+    }
+    return raw.length > 80 ? `${raw.slice(0, 80)}...` : raw;
+  }
+
+  private formatLogMessage(detail: any, action?: string | null) {
     if (!detail) return '';
-    if (typeof detail === 'string') return detail;
-    return detail.message || detail.error || detail.content || detail.summary || JSON.stringify(detail);
+    if (typeof detail === 'string') return this.formatTechnicalError(detail);
+    const detailMessage = detail.message || detail.error || detail.content || detail.summary;
+    const actionText = String(action || '').toLowerCase();
+    if (actionText === 'generate_draft') {
+      return detail.title ? `已生成草稿：${detail.title}` : '已生成AI草稿';
+    }
+    if (actionText === 'create_post') {
+      return `已发布 ${Number(detail.createdCount || 1)} 篇笔记`;
+    }
+    if (actionText === 'create_comment') {
+      return `已发布 ${Number(detail.createdCount || 1)} 条评论`;
+    }
+    if (actionText.includes('fail') || actionText === 'error') {
+      return `任务执行失败：${this.formatTechnicalError(detailMessage || '请查看任务详情')}`;
+    }
+    if (detailMessage) return this.formatTechnicalError(detailMessage);
+    return '已记录一次机器人操作';
+  }
+
+  private pageParams(query: any) {
+    const page = Math.max(1, Number(query?.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query?.pageSize || query?.limit) || 20));
+    return { page, pageSize, skip: (page - 1) * pageSize };
+  }
+
+  private dateWhere(query: any) {
+    if (!query?.startDate && !query?.endDate) return undefined;
+    const createdAt: any = {};
+    if (query.startDate) createdAt.gte = new Date(query.startDate);
+    if (query.endDate) createdAt.lte = new Date(`${query.endDate}T23:59:59.999Z`);
+    return createdAt;
+  }
+
+  private maskConfigValue(value: any) {
+    const merged = this.mergeConfig(value);
+    return {
+      ...merged,
+      apiKey: merged.apiKey ? '********' : '',
+    };
+  }
+
+  private async nextConfigVersion(configKey: string) {
+    const latest = await this.prisma.aiConfigVersion.findFirst({
+      where: { configKey },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    });
+    return (latest?.version || 0) + 1;
+  }
+
+  private toSettingFlag(value: any, fallback: number) {
+    if (value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true') return 1;
+    if (value === false || value === 0 || value === '0' || String(value).toLowerCase() === 'false') return 0;
+    return fallback;
+  }
+
+  private async getCommentReviewSettings(regionId?: string | null) {
+    if (!regionId) return { approvalType: 'none', aiFailureToManual: true };
+    const config = await this.prisma.config.findUnique({
+      where: { key: `content.note_settings.${regionId}` },
+      select: { value: true },
+    }).catch(() => null);
+    const settings = (config?.value as any) || {};
+    return {
+      approvalType: String(settings.comment_approval_type || 'none').toLowerCase(),
+      aiFailureToManual: this.toSettingFlag(
+        settings.ai_review_failure_to_manual ?? settings.ai_review_failed_to_manual ?? settings.ai_manual_fallback,
+        1,
+      ) === 1,
+    };
+  }
+
+  private async writeTaskTimeline(taskId: string, event: string, status?: string, detail?: any, operatorId?: string) {
+    await this.prisma.aiTaskTimeline.create({
+      data: { taskId, event, status: status || null, detail: detail || undefined, operatorId: operatorId || null },
+    }).catch(() => undefined);
+  }
+
+  private async attachLatestCallMetrics(taskId: string, extra: Record<string, any> = {}) {
+    const call = await this.prisma.aiCallLog.findFirst({
+      where: { taskId },
+      orderBy: { createdAt: 'desc' },
+    }).catch(() => null);
+    if (!call) return extra;
+    return {
+      ...extra,
+      provider: call.provider,
+      model: call.model,
+      tokenInput: call.inputTokens,
+      tokenOutput: call.outputTokens,
+      costAmount: call.costAmount,
+    };
   }
 
   private async resolveBotAccountId(input?: string) {
@@ -132,6 +319,18 @@ export class AiAdminService {
     if (normalized === 'cold_start') return 'post';
     if (normalized === 'interaction' || normalized === 'comment_generate') return 'comment';
     return normalized;
+  }
+
+  private async resolveTargetPostIdForTask(type: any, targetPostId: any) {
+    if (this.normalizeTaskType(type) !== 'comment') return null;
+    const postId = String(targetPostId || '').trim();
+    if (!postId) throw new BadRequestException('评论/互动任务必须绑定目标帖子ID');
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!post || post.deletedAt) throw new BadRequestException('目标帖子不存在或已删除，请重新复制帖子ID');
+    return post.id;
   }
 
   private splitGeneratedItems(text: string, max = 6) {
@@ -224,6 +423,11 @@ export class AiAdminService {
   private async generateTaskContent(task: any) {
     const raw = await this.aiRuntime.generateText(this.buildTaskPrompt(task), {
       systemPrompt: this.buildTaskSystemPrompt(task),
+      type: this.normalizeTaskType(task.type) === 'comment' ? 'comment_generate' : 'post_generate',
+      source: 'admin_task',
+      taskId: task.id,
+      botId: task.botId,
+      regionId: task.regionId || task.bot?.regionId || undefined,
     });
     const normalizedType = this.normalizeTaskType(task.type);
     if (normalizedType === 'comment') {
@@ -374,10 +578,10 @@ export class AiAdminService {
           botName: log.bot?.user?.nickname || '-',
           botAvatar: log.bot?.user?.avatar || '',
           action: log.action,
-          status: log.action === 'error' || log.action === 'failed' ? 'failed' : 'success',
+          status: this.isFailedLog(log.action, log.detail) ? 'failed' : 'success',
           targetType: log.targetType,
           targetId: log.targetId,
-          message: this.formatLogMessage(log.detail),
+          message: this.formatLogMessage(log.detail, log.action),
           createdAt: log.createdAt,
         })),
         botPool: botPool.map((bot) => ({
@@ -464,6 +668,18 @@ export class AiAdminService {
         status: 'ACTIVE',
       },
     });
+    await Promise.all([
+      this.prisma.userProfile.upsert({
+        where: { userId: user.id },
+        update: { bio: data.bio || data.description || '校园 AI 运营账号' },
+        create: { userId: user.id, bio: data.bio || data.description || '校园 AI 运营账号' },
+      }).catch(() => undefined),
+      this.prisma.userSettings.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: { userId: user.id },
+      }).catch(() => undefined),
+    ]);
 
     // 创建机器人账号
     const bot = await this.prisma.botAccount.create({
@@ -579,6 +795,7 @@ export class AiAdminService {
 
     if (!type) throw new BadRequestException('任务类型不能为空');
     const resolvedBotId = await this.resolveBotAccountId(botId);
+    const resolvedTargetPostId = await this.resolveTargetPostIdForTask(type, targetPostId);
 
     const task = await this.prisma.botPostTask.create({
       data: {
@@ -591,12 +808,16 @@ export class AiAdminService {
         circleId: circleId || null,
         topicId: topicId || null,
         mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : undefined,
-        targetPostId: targetPostId || null,
+        targetPostId: resolvedTargetPostId,
         publishAt: publishAt ? new Date(publishAt) : undefined,
         status: 'pending',
+        source: data.source || 'admin',
+        priority: Number(data.priority || 0),
+        maxRetryTimes: Number(data.maxRetryTimes || data.maxRetry || 1),
       },
     });
 
+    await this.writeTaskTimeline(task.id, 'created', task.status, { type: task.type, title: task.title }, operatorId);
     await this.logOperation(operatorId, 'create', 'ai_task', task.id, ip);
     return { success: true, data: task };
   }
@@ -604,6 +825,9 @@ export class AiAdminService {
   async updateTask(id: string, data: any, operatorId: string, ip: string) {
     const task = await this.prisma.botPostTask.findUnique({ where: { id } });
     if (!task) throw new NotFoundException('任务不存在');
+    const nextType = data.type ?? task.type;
+    const nextTargetPostId = data.targetPostId ?? task.targetPostId;
+    const resolvedTargetPostId = await this.resolveTargetPostIdForTask(nextType, nextTargetPostId);
 
     const updateData: any = {
       title: data.title ?? data.name,
@@ -611,7 +835,7 @@ export class AiAdminService {
       aiPrompt: data.aiPrompt ?? data.prompt,
       regionId: data.regionId || null,
       type: data.type,
-      targetPostId: data.targetPostId || null,
+      targetPostId: resolvedTargetPostId,
       circleId: data.circleId || null,
       topicId: data.topicId || null,
       publishAt: data.publishAt ? new Date(data.publishAt) : undefined,
@@ -626,6 +850,7 @@ export class AiAdminService {
       data: updateData,
     });
 
+    await this.writeTaskTimeline(id, 'updated', updated.status, { fields: Object.keys(updateData) }, operatorId);
     await this.logOperation(operatorId, 'update', 'ai_task', id, ip);
     return { success: true, data: updated };
   }
@@ -639,12 +864,14 @@ export class AiAdminService {
       data: { status },
     });
 
+    await this.writeTaskTimeline(id, 'status_changed', status, {}, operatorId);
     return { success: true };
   }
 
   async generateTaskDraft(id: string, operatorId: string) {
     const task = await this.getTaskWithBot(id);
     const generated = await this.generateTaskContent(task);
+    const callMetrics = await this.attachLatestCallMetrics(id);
     const updated = await this.prisma.botPostTask.update({
       where: { id },
       data: {
@@ -653,8 +880,22 @@ export class AiAdminService {
         aiResult: generated,
         isAiGenerated: true,
         failReason: null,
+        ...callMetrics,
       },
     });
+    await this.prisma.aiGeneratedSnapshot.create({
+      data: {
+        taskId: id,
+        botId: task.botId,
+        targetType: this.normalizeTaskType(task.type),
+        targetId: task.targetPostId || null,
+        prompt: this.buildTaskPrompt(task),
+        rawResult: generated,
+        finalContent: generated,
+        mediaUrls: task.mediaUrls || undefined,
+      },
+    }).catch(() => undefined);
+    await this.writeTaskTimeline(id, 'draft_generated', updated.status, { length: generated.length }, operatorId);
     await this.prisma.botActionLog.create({
       data: {
         botId: task.botId,
@@ -668,6 +909,17 @@ export class AiAdminService {
   }
 
   async runTask(id: string, operatorId: string) {
+    const lockKey = `ai:task:run:${id}`;
+    const locked = await this.redis.getLock(lockKey, 15 * 60);
+    if (!locked) throw new BadRequestException('该 AI 任务正在执行中，请稍后再试');
+    try {
+      return await this.runTaskUnlocked(id, operatorId);
+    } finally {
+      await this.redis.releaseLock(lockKey).catch(() => undefined);
+    }
+  }
+
+  private async runTaskUnlocked(id: string, operatorId: string) {
     const task = await this.getTaskWithBot(id);
     if (['completed', 'cancelled'].includes(task.status)) {
       throw new BadRequestException('任务已结束，不能重复执行');
@@ -675,14 +927,22 @@ export class AiAdminService {
 
     await this.prisma.botPostTask.update({
       where: { id },
-      data: { status: 'running', failReason: null },
+      data: {
+        status: 'running',
+        failReason: null,
+        startedAt: new Date(),
+        lockedAt: new Date(),
+        lockedBy: operatorId || 'system',
+      },
     });
+    await this.writeTaskTimeline(id, 'started', 'running', { operatorId }, operatorId);
 
     try {
       const normalizedType = this.normalizeTaskType(task.type);
       const generatedContent = await this.ensureTaskContent(task);
       let targetId = '';
       let createdCount = 0;
+      let publishedCommentIds: string[] = [];
 
       if (normalizedType === 'post') {
         const mediaUrls = this.mediaUrlsFromTask(task);
@@ -714,45 +974,131 @@ export class AiAdminService {
         if (!task.targetPostId) throw new BadRequestException('评论任务必须绑定目标帖子ID');
         const comments = this.splitGeneratedItems(generatedContent, 5);
         if (comments.length === 0) throw new BadRequestException('AI未生成可发布的评论内容');
+        const targetPost = await this.prisma.post.findUnique({
+          where: { id: task.targetPostId },
+          select: { id: true, regionId: true },
+        });
+        if (!targetPost) throw new BadRequestException('目标帖子不存在，无法发布评论');
+        const reviewSettings = await this.getCommentReviewSettings(targetPost.regionId || task.regionId || task.bot.regionId);
+        const approvalType = reviewSettings.approvalType;
+        const reviews: Array<{
+          content: string;
+          status: string;
+          auditStatus: string;
+          auditReason: string;
+          aiResult?: any;
+        }> = [];
+        for (const content of comments) {
+          let review = {
+            content,
+            status: 'active',
+            auditStatus: 'approved',
+            auditReason: '无需审核',
+            aiResult: undefined as any,
+          };
+          if (['ai', 'llm', 'model'].includes(approvalType)) {
+            const result = await this.aiRuntime.moderateContent({
+              type: 'comment',
+              content,
+              regionId: targetPost.regionId || task.regionId || task.bot.regionId,
+              approvalType,
+              manualFallback: reviewSettings.aiFailureToManual,
+            });
+            review = {
+              content,
+              status: result.decision === 'approve' ? 'active' : 'hidden',
+              auditStatus: result.decision === 'approve' ? 'approved' : result.decision === 'reject' ? 'rejected' : 'pending',
+              auditReason: result.reason || (result.decision === 'approve' ? 'AI审核通过' : 'AI建议人工复核'),
+              aiResult: result,
+            };
+          } else if (!['none', 'auto', 'pass', 'published', 'approved'].includes(approvalType)) {
+            review = {
+              content,
+              status: 'hidden',
+              auditStatus: 'pending',
+              auditReason: '等待人工审核',
+              aiResult: undefined,
+            };
+          }
+          reviews.push(review);
+        }
         const created = await this.prisma.$transaction(async (tx) => {
           const rows = [];
-          for (const content of comments) {
+          for (const review of reviews) {
             rows.push(await tx.comment.create({
               data: {
                 postId: task.targetPostId!,
                 userId: task.bot.userId,
-                content,
-                status: 'active',
-                auditStatus: 'approved',
-                auditReason: 'AI任务生成，已通过',
+                content: review.content,
+                status: review.status,
+                auditStatus: review.auditStatus,
+                auditReason: review.auditReason,
               },
             }));
           }
-          await tx.post.update({
-            where: { id: task.targetPostId! },
-            data: { commentCount: { increment: rows.length } },
-          });
+          const visibleCount = rows.filter((row) => row.status === 'active' && row.auditStatus === 'approved').length;
+          if (visibleCount > 0) {
+            await tx.post.update({
+              where: { id: task.targetPostId! },
+              data: { commentCount: { increment: visibleCount } },
+            });
+          }
           return rows;
         });
+        await Promise.all(created.map((comment, index) => {
+          const review = reviews[index];
+          if (!review?.aiResult) return undefined;
+          return this.aiRuntime.recordModeration({
+            targetType: 'comment',
+            targetId: comment.id,
+            userId: task.bot.userId,
+            regionId: targetPost.regionId || task.regionId || task.bot.regionId,
+            approvalType,
+            result: review.aiResult,
+            finalStatus: review.auditStatus,
+          });
+        }));
         targetId = created[0]?.id || task.targetPostId;
         createdCount = created.length;
+        publishedCommentIds = created.map((item) => item.id);
       } else {
         throw new BadRequestException(`暂不支持执行 ${task.type} 类型的AI任务`);
       }
 
       const updated = await this.prisma.botPostTask.update({
         where: { id },
-        data: {
+        data: await this.attachLatestCallMetrics(id, {
           status: 'completed',
           content: generatedContent,
           aiResult: generatedContent,
           isAiGenerated: true,
           publishedPostId: targetId || null,
+          publishedCommentIds: normalizedType === 'comment' ? publishedCommentIds : undefined,
           reviewedBy: operatorId || task.reviewedBy,
           reviewedAt: new Date(),
+          completedAt: new Date(),
+          lockedAt: null,
+          lockedBy: null,
           failReason: null,
-        },
+        }),
       });
+      await this.prisma.botAccount.update({
+        where: { id: task.botId },
+        data: { failureCount: 0, lastExecutedAt: new Date(), riskLevel: 'normal' },
+      }).catch(() => undefined);
+      await this.prisma.aiGeneratedSnapshot.create({
+        data: {
+          taskId: id,
+          botId: task.botId,
+          targetType: normalizedType,
+          targetId: targetId || null,
+          prompt: this.buildTaskPrompt(task),
+          rawResult: generatedContent,
+          finalContent: generatedContent,
+          mediaUrls: task.mediaUrls || undefined,
+        },
+      }).catch(() => undefined);
+      await this.writeTaskTimeline(id, 'completed', 'completed', { targetId, createdCount }, operatorId);
       await this.prisma.botActionLog.create({
         data: {
           botId: task.botId,
@@ -764,18 +1110,41 @@ export class AiAdminService {
       }).catch(() => {});
       return { success: true, data: { task: updated, targetId, createdCount } };
     } catch (error: any) {
-      const message = error?.message || 'AI任务执行失败';
+      const rawMessage = error?.message || 'AI任务执行失败';
+      const message = this.formatTechnicalError(rawMessage);
       await this.prisma.botPostTask.update({
         where: { id },
-        data: { status: 'failed', failReason: message },
+        data: {
+          status: 'failed',
+          failReason: message,
+          completedAt: new Date(),
+          lockedAt: null,
+          lockedBy: null,
+          retryCount: { increment: 1 },
+        },
       }).catch(() => {});
+      await this.prisma.botAccount.update({
+        where: { id: task.botId },
+        data: { failureCount: { increment: 1 }, riskLevel: 'warning' },
+      }).catch(() => undefined);
+      await this.prisma.aiRiskEvent.create({
+        data: {
+          eventType: 'task_failed',
+          level: 'warning',
+          botId: task.botId,
+          taskId: id,
+          regionId: task.regionId || task.bot.regionId || null,
+          detail: { message, rawMessage, operatorId },
+        },
+      }).catch(() => undefined);
+      await this.writeTaskTimeline(id, 'failed', 'failed', { message }, operatorId);
       await this.prisma.botActionLog.create({
         data: {
           botId: task.botId,
           action: 'task_failed',
           targetType: 'ai_task',
           targetId: id,
-          detail: { operatorId, error: message },
+          detail: { operatorId, error: message, rawError: rawMessage },
         },
       }).catch(() => {});
       throw new BadRequestException(message);
@@ -788,7 +1157,11 @@ export class AiAdminService {
     const { page = 1, pageSize = 20, botId, action, startDate, endDate } = query;
     const where: any = {};
     if (botId) where.botId = botId;
-    if (action) where.action = action;
+    if (action) {
+      where.action = ['error', 'failed'].includes(String(action))
+        ? { in: ['error', 'failed', 'task_failed'] }
+        : action;
+    }
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) where.createdAt.gte = new Date(startDate);
@@ -816,11 +1189,11 @@ export class AiAdminService {
           botId: l.botId,
           botName: l.bot?.user?.nickname,
           action: l.action,
-          status: l.action === 'error' || l.action === 'failed' ? 'failed' : 'success',
+          status: this.isFailedLog(l.action, l.detail) ? 'failed' : 'success',
           targetType: l.targetType,
           targetId: l.targetId,
           detail: l.detail,
-          message: this.formatLogMessage(l.detail),
+          message: this.formatLogMessage(l.detail, l.action),
           createdAt: l.createdAt,
         })),
         total,
@@ -830,12 +1203,365 @@ export class AiAdminService {
     };
   }
 
+  async getCallLogs(query: any) {
+    const { page, pageSize, skip } = this.pageParams(query);
+    const where: any = {};
+    for (const key of ['purpose', 'status', 'provider', 'model', 'taskId', 'botId', 'regionId', 'source']) {
+      if (query?.[key]) where[key] = String(query[key]);
+    }
+    const createdAt = this.dateWhere(query);
+    if (createdAt) where.createdAt = createdAt;
+    if (query?.keyword) {
+      where.OR = [
+        { requestId: { contains: String(query.keyword) } },
+        { promptPreview: { contains: String(query.keyword) } },
+        { responsePreview: { contains: String(query.keyword) } },
+        { errorMessage: { contains: String(query.keyword) } },
+      ];
+    }
+
+    const [list, total] = await Promise.all([
+      this.prisma.aiCallLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.aiCallLog.count({ where }),
+    ]);
+    return {
+      success: true,
+      data: {
+        list: list.map((item) => ({ ...item, costAmount: Number(item.costAmount || 0) })),
+        total,
+        page,
+        pageSize,
+      },
+    };
+  }
+
+  async getModerationRecords(query: any) {
+    const { page, pageSize, skip } = this.pageParams(query);
+    const where: any = {};
+    for (const key of ['targetType', 'targetId', 'decision', 'regionId', 'userId', 'approvalType', 'finalStatus']) {
+      if (query?.[key]) where[key] = String(query[key]);
+    }
+    const createdAt = this.dateWhere(query);
+    if (createdAt) where.createdAt = createdAt;
+
+    const [list, total] = await Promise.all([
+      this.prisma.aiModerationRecord.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.aiModerationRecord.count({ where }),
+    ]);
+    return { success: true, data: { list, total, page, pageSize } };
+  }
+
+  async getQuotaUsage(query: any) {
+    const { page, pageSize, skip } = this.pageParams(query);
+    const where: any = {};
+    for (const key of ['provider', 'model', 'purpose', 'regionId', 'botId', 'scopeKey']) {
+      if (query?.[key]) where[key] = String(query[key]);
+    }
+    if (query?.startDate || query?.endDate) {
+      where.date = {};
+      if (query.startDate) where.date.gte = new Date(query.startDate);
+      if (query.endDate) where.date.lte = new Date(`${query.endDate}T23:59:59.999Z`);
+    }
+    const [list, total, summary] = await Promise.all([
+      this.prisma.aiQuotaUsage.findMany({
+        where,
+        orderBy: [{ date: 'desc' }, { updatedAt: 'desc' }],
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.aiQuotaUsage.count({ where }),
+      this.prisma.aiQuotaUsage.aggregate({
+        where,
+        _sum: {
+          callCount: true,
+          successCount: true,
+          failedCount: true,
+          inputTokens: true,
+          outputTokens: true,
+          costAmount: true,
+        },
+      }),
+    ]);
+    return {
+      success: true,
+      data: {
+        list: list.map((item) => ({ ...item, costAmount: Number(item.costAmount || 0) })),
+        total,
+        page,
+        pageSize,
+        summary: {
+          callCount: summary._sum.callCount || 0,
+          successCount: summary._sum.successCount || 0,
+          failedCount: summary._sum.failedCount || 0,
+          inputTokens: summary._sum.inputTokens || 0,
+          outputTokens: summary._sum.outputTokens || 0,
+          costAmount: Number(summary._sum.costAmount || 0),
+        },
+      },
+    };
+  }
+
+  async getRiskEvents(query: any) {
+    const { page, pageSize, skip } = this.pageParams(query);
+    const where: any = {};
+    for (const key of ['eventType', 'level', 'status', 'botId', 'taskId', 'regionId', 'targetType', 'targetId']) {
+      if (query?.[key]) where[key] = String(query[key]);
+    }
+    const createdAt = this.dateWhere(query);
+    if (createdAt) where.createdAt = createdAt;
+    const [list, total] = await Promise.all([
+      this.prisma.aiRiskEvent.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.aiRiskEvent.count({ where }),
+    ]);
+    return { success: true, data: { list, total, page, pageSize } };
+  }
+
+  async handleRiskEvent(id: string, body: any, operatorId: string) {
+    const event = await this.prisma.aiRiskEvent.findUnique({ where: { id } });
+    if (!event) throw new NotFoundException('AI风险事件不存在');
+    const updated = await this.prisma.aiRiskEvent.update({
+      where: { id },
+      data: {
+        status: body?.status || 'handled',
+        handledBy: operatorId || null,
+        handledAt: new Date(),
+        detail: { ...((event.detail as any) || {}), handleRemark: body?.remark || '' },
+      },
+    });
+    return { success: true, data: updated };
+  }
+
+  async getConfigVersions(query: any) {
+    const { page, pageSize, skip } = this.pageParams(query);
+    const configKey = String(query?.configKey || 'ai_ops_config');
+    const [list, total] = await Promise.all([
+      this.prisma.aiConfigVersion.findMany({
+        where: { configKey },
+        orderBy: { version: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.aiConfigVersion.count({ where: { configKey } }),
+    ]);
+    return { success: true, data: { list, total, page, pageSize } };
+  }
+
+  async rollbackConfigVersion(id: string, operatorId: string) {
+    const version = await this.prisma.aiConfigVersion.findUnique({ where: { id } });
+    if (!version) throw new NotFoundException('AI配置版本不存在');
+    await this.prisma.config.upsert({
+      where: { key: version.configKey },
+      update: { value: version.value as any, updatedAt: new Date() },
+      create: { key: version.configKey, value: version.value as any, group: 'ai' },
+    });
+    const nextVersion = await this.nextConfigVersion(version.configKey);
+    await this.prisma.aiConfigVersion.create({
+      data: {
+        configKey: version.configKey,
+        version: nextVersion,
+        value: version.value as any,
+        maskedValue: this.maskConfigValue(version.value),
+        changedBy: operatorId || null,
+        changeReason: `回滚到版本 ${version.version}`,
+      },
+    }).catch(() => undefined);
+    return { success: true };
+  }
+
+  async getTaskTimeline(id: string) {
+    const [task, list] = await Promise.all([
+      this.prisma.botPostTask.findUnique({ where: { id } }),
+      this.prisma.aiTaskTimeline.findMany({ where: { taskId: id }, orderBy: { createdAt: 'asc' } }),
+    ]);
+    if (!task) throw new NotFoundException('AI任务不存在');
+    return { success: true, data: { task, list } };
+  }
+
+  async retryTask(id: string, operatorId: string) {
+    const task = await this.prisma.botPostTask.findUnique({ where: { id } });
+    if (!task) throw new NotFoundException('AI任务不存在');
+    if (!['failed', 'cancelled'].includes(task.status)) {
+      throw new BadRequestException('只有失败或已取消的任务可以重新排队');
+    }
+    const updated = await this.prisma.botPostTask.update({
+      where: { id },
+      data: {
+        status: 'pending',
+        failReason: null,
+        cancelledAt: null,
+        completedAt: null,
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+    await this.redis.releaseLock(`ai:task:run:${id}`).catch(() => undefined);
+    await this.writeTaskTimeline(id, 'retry_queued', updated.status, {}, operatorId);
+    return { success: true, data: updated };
+  }
+
+  async cancelTask(id: string, operatorId: string) {
+    const task = await this.prisma.botPostTask.findUnique({ where: { id } });
+    if (!task) throw new NotFoundException('AI任务不存在');
+    if (task.status === 'completed') throw new BadRequestException('已完成任务不能取消');
+    const updated = await this.prisma.botPostTask.update({
+      where: { id },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        completedAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+    await this.redis.releaseLock(`ai:task:run:${id}`).catch(() => undefined);
+    await this.writeTaskTimeline(id, 'cancelled', updated.status, {}, operatorId);
+    return { success: true, data: updated };
+  }
+
+  async getRepairStats() {
+    const staleTime = new Date(Date.now() - 30 * 60 * 1000);
+    const [staleRunningTasks, bots, commentMismatchRows] = await Promise.all([
+      this.prisma.botPostTask.count({ where: { status: 'running', startedAt: { lt: staleTime } } }),
+      this.prisma.botAccount.findMany({
+        include: { user: { include: { profile: true, settings: true } } },
+        take: 5000,
+      }),
+      this.prisma.$queryRaw<Array<{ count: number }>>`
+        SELECT COUNT(*)::int AS count
+        FROM posts p
+        LEFT JOIN (
+          SELECT "postId", COUNT(*)::int AS visible_count
+          FROM comments
+          WHERE "deletedAt" IS NULL AND status = 'active' AND "auditStatus" = 'approved'
+          GROUP BY "postId"
+        ) c ON c."postId" = p.id
+        WHERE COALESCE(p."commentCount", 0) <> COALESCE(c.visible_count, 0)
+      `.catch(() => [{ count: 0 }]),
+    ]);
+    return {
+      success: true,
+      data: {
+        staleRunningTasks,
+        commentCountMismatches: Number(commentMismatchRows?.[0]?.count || 0),
+        botsMissingProfile: bots.filter(bot => !bot.user?.profile).length,
+        botsMissingSettings: bots.filter(bot => !bot.user?.settings).length,
+      },
+    };
+  }
+
+  async repairRunningTasks(operatorId: string) {
+    const staleTime = new Date(Date.now() - 30 * 60 * 1000);
+    const tasks = await this.prisma.botPostTask.findMany({
+      where: { status: 'running', startedAt: { lt: staleTime } },
+      select: { id: true, botId: true, regionId: true },
+      take: 200,
+    });
+    for (const task of tasks) {
+      await this.prisma.botPostTask.update({
+        where: { id: task.id },
+        data: {
+          status: 'failed',
+          failReason: '任务运行超时，已由数据修复面板标记失败',
+          completedAt: new Date(),
+          lockedAt: null,
+          lockedBy: null,
+        },
+      });
+      await this.redis.releaseLock(`ai:task:run:${task.id}`).catch(() => undefined);
+      await this.writeTaskTimeline(task.id, 'repair_timeout', 'failed', {}, operatorId);
+      await this.prisma.aiRiskEvent.create({
+        data: {
+          eventType: 'repair_stale_running_task',
+          level: 'warning',
+          botId: task.botId,
+          taskId: task.id,
+          regionId: task.regionId || null,
+          status: 'handled',
+          handledBy: operatorId || null,
+          handledAt: new Date(),
+          detail: { action: 'mark_failed' },
+        },
+      }).catch(() => undefined);
+    }
+    return { success: true, data: { repaired: tasks.length } };
+  }
+
+  async repairCommentCounts(operatorId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string; actual: number }>>`
+      SELECT p.id, COALESCE(c.visible_count, 0)::int AS actual
+      FROM posts p
+      LEFT JOIN (
+        SELECT "postId", COUNT(*)::int AS visible_count
+        FROM comments
+        WHERE "deletedAt" IS NULL AND status = 'active' AND "auditStatus" = 'approved'
+        GROUP BY "postId"
+      ) c ON c."postId" = p.id
+      WHERE COALESCE(p."commentCount", 0) <> COALESCE(c.visible_count, 0)
+      LIMIT 5000
+    `.catch(() => []);
+    let repaired = 0;
+    for (const item of rows) {
+      await this.prisma.post.update({
+        where: { id: item.id },
+        data: { commentCount: Number(item.actual || 0) },
+      }).then(() => { repaired += 1; }).catch(() => undefined);
+    }
+    await this.prisma.adminOperationLog.create({
+      data: { accountId: operatorId || '', action: 'repair_comment_counts', module: 'ai_repair', targetId: 'comments', ip: '' },
+    }).catch(() => undefined);
+    return { success: true, data: { repaired } };
+  }
+
+  async repairBotProfiles(operatorId: string) {
+    const bots = await this.prisma.botAccount.findMany({
+      include: { user: { include: { profile: true, settings: true } } },
+      take: 1000,
+    });
+    let profiles = 0;
+    let settings = 0;
+    for (const bot of bots) {
+      if (!bot.user?.profile) {
+        await this.prisma.userProfile.create({
+          data: { userId: bot.userId, bio: '校园 AI 运营账号' },
+        }).then(() => { profiles += 1; }).catch(() => undefined);
+      }
+      if (!bot.user?.settings) {
+        await this.prisma.userSettings.create({
+          data: { userId: bot.userId },
+        }).then(() => { settings += 1; }).catch(() => undefined);
+      }
+    }
+    await this.prisma.adminOperationLog.create({
+      data: { accountId: operatorId || '', action: 'repair_bot_profiles', module: 'ai_repair', targetId: 'bots', ip: '' },
+    }).catch(() => undefined);
+    return { success: true, data: { profiles, settings } };
+  }
+
   // ==================== 配置管理 ====================
 
   async getConfig() {
-    const config = await this.prisma.config.findUnique({ where: { key: 'ai_ops_config' } });
+    const [config, legacyRobot] = await Promise.all([
+      this.prisma.config.findUnique({ where: { key: 'ai_ops_config' } }),
+      this.prisma.config.findUnique({ where: { key: 'robot' } }).catch(() => null),
+    ]);
     const runtimeConfig = await this.aiRuntime.getSafeConfig();
-    const safe = this.sanitizeConfig(config?.value);
+    const mergedConfig = this.mergeConfigOverride(this.legacyRobotToConfig(legacyRobot?.value), config?.value);
+    const safe = this.sanitizeConfig(mergedConfig);
     return {
       success: true,
       data: {
@@ -850,18 +1576,36 @@ export class AiAdminService {
   }
 
   async saveConfig(data: any, operatorId: string, ip: string) {
-    const existing = await this.prisma.config.findUnique({ where: { key: 'ai_ops_config' } });
-    const existingConfig = this.mergeConfig(existing?.value);
-    const incoming = this.mergeConfig(data);
+    const [existing, legacyAi, legacyRobot] = await Promise.all([
+      this.prisma.config.findUnique({ where: { key: 'ai_ops_config' } }),
+      this.prisma.config.findUnique({ where: { key: 'ai' } }).catch(() => null),
+      this.prisma.config.findUnique({ where: { key: 'robot' } }).catch(() => null),
+    ]);
+    const existingConfig = this.mergeConfig(this.mergeConfigOverride(this.legacyRobotToConfig(legacyRobot?.value), existing?.value));
+    const legacyAiValue = (legacyAi?.value || {}) as any;
+    const incoming = this.mergeConfig(this.mergeConfigOverride(this.legacyRobotToConfig(legacyRobot?.value), data));
     if (!data.apiKey || String(data.apiKey).includes('*')) {
-      incoming.apiKey = existingConfig.apiKey || '';
+      incoming.apiKey = existingConfig.apiKey || legacyAiValue.apiKey || '';
     }
+    if (!data.apiBaseUrl && data.apiEndpoint) incoming.apiBaseUrl = data.apiEndpoint;
 
     await this.prisma.config.upsert({
       where: { key: 'ai_ops_config' },
       update: { value: incoming, updatedAt: new Date() },
       create: { key: 'ai_ops_config', value: incoming, group: 'ai' },
     });
+    const version = await this.nextConfigVersion('ai_ops_config');
+    await this.prisma.aiConfigVersion.create({
+      data: {
+        configKey: 'ai_ops_config',
+        version,
+        value: incoming,
+        maskedValue: this.maskConfigValue(incoming),
+        changedBy: operatorId || null,
+        changeReason: data.changeReason || data.remark || '后台保存 AI 配置',
+      },
+    }).catch(() => undefined);
+    await this.mirrorLegacyRobotConfig(incoming, operatorId);
 
     await this.logOperation(operatorId, 'save', 'ai_config', 'global', ip);
     return { success: true };

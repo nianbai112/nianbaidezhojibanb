@@ -59,8 +59,8 @@ export class FinanceAdminController {
   @Get('region-balance-logs')
   @ApiOperation({ summary: '区域余额变动列表' })
   @RequirePermission('finance:view')
-  getRegionBalanceLogs(@Query() q: RegionBalanceQueryDto) {
-    return this.financeAdminService.getRegionBalanceLogs(q);
+  getRegionBalanceLogs(@Query() q: RegionBalanceQueryDto, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getRegionBalanceLogs(q, operatorId);
   }
 
   @Post('region-balance/adjust')
@@ -73,14 +73,38 @@ export class FinanceAdminController {
     return this.financeAdminService.adjustRegionBalance(dto, operatorId);
   }
 
+  // ================= 财务总览 =================
+
+  @Get('finance/overview')
+  @Get('finance/stats')
+  @ApiOperation({ summary: '财务总览真实统计' })
+  @RequirePermission('finance:view')
+  getFinanceOverview(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getFinanceOverview(q, operatorId);
+  }
+
+  @Get('finance/subsidies/overview')
+  @ApiOperation({ summary: '平台补贴总览' })
+  @RequirePermission('finance:view')
+  getSubsidyOverview(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getSubsidyOverview(q, operatorId);
+  }
+
+  @Get('finance/subsidies')
+  @ApiOperation({ summary: '平台补贴账本' })
+  @RequirePermission('finance:view')
+  getSubsidyLedgers(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getSubsidyLedgers(q, operatorId);
+  }
+
   // ================= 支付订单查询 =================
 
   @Get('payment-orders')
   @Get('finance/payment-orders')
   @ApiOperation({ summary: '支付订单列表' })
   @RequirePermission('finance:view')
-  getPaymentOrders(@Query() q: any) {
-    return this.financeAdminService.getPaymentOrders(q);
+  getPaymentOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getPaymentOrders(q, operatorId);
   }
 
   // ================= 退款订单查询 =================
@@ -89,8 +113,8 @@ export class FinanceAdminController {
   @Get('finance/refund-orders')
   @ApiOperation({ summary: '退款订单列表' })
   @RequirePermission('finance:view')
-  getRefundOrders(@Query() q: any) {
-    return this.financeAdminService.getRefundOrders(q);
+  getRefundOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getRefundOrders(q, operatorId);
   }
 
   // ================= 用户余额流水 =================
@@ -99,8 +123,8 @@ export class FinanceAdminController {
   @Get('finance/user-wallet-logs')
   @ApiOperation({ summary: '用户余额流水' })
   @RequirePermission('finance:view')
-  getUserWalletLogs(@Query() q: any) {
-    return this.financeAdminService.getUserWalletLogs(q);
+  getUserWalletLogs(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getUserWalletLogs(q, operatorId);
   }
 
   // ================= 提现管理 =================
@@ -109,8 +133,8 @@ export class FinanceAdminController {
   @Get('finance/withdrawals')
   @ApiOperation({ summary: '提现申请列表' })
   @RequirePermission('finance:view')
-  getWithdrawals(@Query() q: any) {
-    return this.financeAdminService.getWithdrawals(q);
+  getWithdrawals(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getWithdrawals(q, operatorId);
   }
 
   @Put('withdrawals/:id/review')
@@ -127,13 +151,27 @@ export class FinanceAdminController {
     return this.financeAdminService.reviewWithdrawal(id, dto, operatorId, ip);
   }
 
+  @Put('withdrawals/:id/complete')
+  @Put('finance/withdrawals/:id/complete')
+  @ApiOperation({ summary: '确认提现打款' })
+  @RequirePermission('withdraw:complete')
+  completeWithdrawal(
+    @Param('id') id: string,
+    @Body() dto: { transferNo?: string },
+    @CurrentUser('sub') operatorId?: string,
+    @Req() req?: Request,
+  ) {
+    const ip = (req?.headers?.['x-forwarded-for'] as string) || req?.ip || '';
+    return this.financeAdminService.completeWithdrawal(id, dto, operatorId, ip);
+  }
+
   // ================= 商家结算 =================
 
   @Get('merchant-settlements')
   @ApiOperation({ summary: '商家结算列表' })
   @RequirePermission('finance:view')
-  getMerchantSettlements(@Query() q: any) {
-    return this.financeAdminService.getMerchantSettlements(q);
+  getMerchantSettlements(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getMerchantSettlements(q, operatorId);
   }
 
   @Put('merchant-settlements/:id/confirm')
@@ -149,20 +187,53 @@ export class FinanceAdminController {
     return this.financeAdminService.confirmMerchantSettlement(id, dto, operatorId, ip);
   }
 
+  @Put('merchant-settlements/:id/pay')
+  @ApiOperation({ summary: '登记商家线下打款' })
+  @RequirePermission('finance:settlement')
+  payMerchantSettlement(
+    @Param('id') id: string,
+    @Body() dto: { transferNo?: string; remark?: string },
+    @CurrentUser('sub') operatorId?: string,
+    @Req() req?: Request,
+  ) {
+    const ip = (req?.headers?.['x-forwarded-for'] as string) || req?.ip || '';
+    return this.financeAdminService.payMerchantSettlement(id, dto, operatorId, ip);
+  }
+
+  @Put('merchant-settlements/:id/offset')
+  @ApiOperation({ summary: '登记商家退款差额抵扣' })
+  @RequirePermission('finance:settlement')
+  offsetMerchantSettlement(
+    @Param('id') id: string,
+    @Body() dto: { reference?: string },
+    @CurrentUser('sub') operatorId?: string,
+    @Req() req?: Request,
+  ) {
+    const ip = (req?.headers?.['x-forwarded-for'] as string) || req?.ip || '';
+    return this.financeAdminService.offsetMerchantSettlement(id, dto, operatorId, ip);
+  }
+
   // ================= 骑手结算 =================
 
   @Get('rider-settlements')
   @ApiOperation({ summary: '骑手结算列表' })
   @RequirePermission('finance:view')
-  getRiderSettlements(@Query() q: any) {
-    return this.financeAdminService.getRiderSettlements(q);
+  getRiderSettlements(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getRiderSettlements(q, operatorId);
+  }
+
+  @Get('rider-settlements/pending-summary')
+  @ApiOperation({ summary: '骑手未结算收益汇总' })
+  @RequirePermission('finance:view')
+  getRiderPendingSummary(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getRiderPendingSummary(q, operatorId);
   }
 
   @Get('rider-settlements/:id')
   @ApiOperation({ summary: '骑手结算详情' })
   @RequirePermission('finance:view')
-  getRiderSettlementDetail(@Param('id') id: string) {
-    return this.financeAdminService.getRiderSettlementDetail(id);
+  getRiderSettlementDetail(@Param('id') id: string, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getRiderSettlementDetail(id, operatorId);
   }
 
   @Post('rider-settlements/generate')
@@ -230,7 +301,7 @@ export class FinanceAdminController {
   @Get('finance/abnormal-orders')
   @ApiOperation({ summary: '异常资金单' })
   @RequirePermission('finance:view')
-  getAbnormalOrders(@Query() q: any) {
-    return this.financeAdminService.getAbnormalOrders(q);
+  getAbnormalOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.getAbnormalOrders(q, operatorId);
   }
 }

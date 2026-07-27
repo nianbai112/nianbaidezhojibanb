@@ -13,13 +13,6 @@
       </div>
       <div class="switch-item">
         <div>
-          <b>强制用户引导</b>
-          <p>新用户必须完成资料填写</p>
-        </div>
-        <el-switch v-model="isForceGuidance" />
-      </div>
-      <div class="switch-item">
-        <div>
           <b>开启私信</b>
           <p>用户之间是否可以私信</p>
         </div>
@@ -75,7 +68,6 @@ import { computed } from 'vue'
 
 interface Props {
   showHotList?: boolean
-  isForceGuidance?: boolean
   privateMessageEnabled?: boolean
   contactsRequireStudentAuth?: boolean
   onlyStudentAuthUsers?: boolean
@@ -86,7 +78,6 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   showHotList: false,
-  isForceGuidance: false,
   privateMessageEnabled: true,
   contactsRequireStudentAuth: false,
   onlyStudentAuthUsers: false,
@@ -97,7 +88,6 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   'update:showHotList': [value: boolean]
-  'update:isForceGuidance': [value: boolean]
   'update:privateMessageEnabled': [value: boolean]
   'update:contactsRequireStudentAuth': [value: boolean]
   'update:onlyStudentAuthUsers': [value: boolean]
@@ -109,11 +99,6 @@ const emit = defineEmits<{
 const showHotList = computed({
   get: () => props.showHotList,
   set: (val) => emit('update:showHotList', val)
-})
-
-const isForceGuidance = computed({
-  get: () => props.isForceGuidance,
-  set: (val) => emit('update:isForceGuidance', val)
 })
 
 const privateMessageEnabled = computed({
@@ -175,7 +160,7 @@ const hotFeaturedDisplay = computed({
   padding: 14px 16px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.6);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  border: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
 }
 
 .switch-item b {
@@ -184,7 +169,7 @@ const hotFeaturedDisplay = computed({
 
 .switch-item p {
   margin: 4px 0 0;
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 

@@ -13,7 +13,7 @@
         <el-option v-for="group in groups" :key="group" :label="group" :value="group" />
       </el-select>
       <el-tag effect="plain">{{ filteredPaths.length }} 个页面</el-tag>
-      <span v-if="sourceDir" class="source-hint">来源：{{ sourceDir }}</span>
+      <span v-if="sourceHint" class="source-hint">{{ sourceHint }}</span>
     </div>
 
     <div class="path-grid" v-loading="loading">
@@ -25,15 +25,15 @@
           </div>
           <el-tag size="small" :type="item.tabbar ? 'primary' : 'info'" effect="plain">{{ item.tabbar ? 'Tabbar' : item.kind }}</el-tag>
         </div>
-        <div class="path-value">{{ item.fullPath }}</div>
+        <div class="path-value">{{ pathWithQuery(item) }}</div>
         <div class="path-actions">
-          <el-button size="small" type="primary" plain :icon="DocumentCopy" @click="copyPath(item.fullPath)">复制路径</el-button>
-          <el-button size="small" :icon="DocumentCopy" @click="copyPath('/' + item.fullPath)">复制 / 路径</el-button>
+          <el-button size="small" type="primary" plain :icon="DocumentCopy" @click="copyPath(pathWithQuery(item))">复制路径</el-button>
+          <el-button size="small" :icon="DocumentCopy" @click="copyPath('/' + pathWithQuery(item))">复制 / 路径</el-button>
         </div>
       </div>
     </div>
 
-    <el-empty v-if="!loading && !filteredPaths.length" description="没有扫描到页面路径" />
+    <EmptyState v-if="!loading && !filteredPaths.length" description="没有扫描到页面路径" />
   </div>
 </template>
 
@@ -42,6 +42,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentCopy, RefreshRight } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { fetchMiniProgramPaths } from '@/api/admin'
 
 interface MiniPath {
@@ -49,6 +50,7 @@ interface MiniPath {
   group: string
   kind: string
   fullPath: string
+  query?: string
   tabbar?: boolean
 }
 
@@ -56,6 +58,7 @@ const keyword = ref('')
 const groupFilter = ref('')
 const loading = ref(false)
 const sourceDir = ref('')
+const sourceHint = ref('')
 const paths = ref<MiniPath[]>([])
 
 const groups = computed(() => Array.from(new Set(paths.value.map((item) => item.group))))
@@ -73,8 +76,13 @@ async function copyPath(value: string) {
   ElMessage.success('路径已复制')
 }
 
+function pathWithQuery(item: MiniPath) {
+  const query = String(item.query || '').trim().replace(/^\?+/, '')
+  return query ? `${item.fullPath}?${query}` : item.fullPath
+}
+
 async function copyAll() {
-  await copyPath(filteredPaths.value.map((item) => `${item.title}\t${item.fullPath}`).join('\n'))
+  await copyPath(filteredPaths.value.map((item) => `${item.title}\t${pathWithQuery(item)}`).join('\n'))
 }
 
 async function loadPaths(showSuccess = false) {
@@ -87,12 +95,21 @@ async function loadPaths(showSuccess = false) {
       group: item.group || (item.packageName === 'main' ? '主包' : item.packageName || '未分组'),
       kind: item.kind || '页面',
       fullPath: item.fullPath || item.path,
+      query: item.query || '',
       tabbar: item.tabbar,
     }))
     sourceDir.value = res?.sourceDir || res?.data?.sourceDir || ''
+    const sourceType = res?.sourceType || res?.data?.sourceType || ''
+    const message = res?.message || res?.data?.message || ''
+    sourceHint.value = sourceType === 'manifest'
+      ? '来源：内置页面路径清单'
+      : sourceDir.value
+        ? `来源：${sourceDir.value}`
+        : message
     if (showSuccess) ElMessage.success(`已扫描 ${paths.value.length} 个小程序页面`)
   } catch (e: any) {
     paths.value = []
+    sourceHint.value = ''
     ElMessage.error(e?.message || '扫描小程序页面路径失败')
   } finally {
     loading.value = false
@@ -112,7 +129,7 @@ onMounted(() => loadPaths())
 }
 .path-search { max-width: 420px; }
 .source-hint {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 700;
 }
@@ -133,22 +150,22 @@ onMounted(() => loadPaths())
   gap: 12px;
 }
 .path-title {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 16px;
   font-weight: 950;
 }
 .path-group {
   margin-top: 3px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 850;
 }
 .path-value {
   padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(248, 250, 252, .9);
-  border: 1px solid rgba(226, 232, 240, .85);
-  color: #334155;
+  border-radius: 10px;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
+  color: var(--mx-sub);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   word-break: break-all;

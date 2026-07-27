@@ -4,12 +4,23 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { AdminGuard } from '../../guards/admin.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 
 @ApiTags('认证')
 @Controller()
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  private getClientIp(req: Request) {
+    const forwarded = req.headers['x-forwarded-for'];
+    const realIp = req.headers['x-real-ip'];
+    const cfIp = req.headers['cf-connecting-ip'];
+    const raw = Array.isArray(forwarded)
+      ? forwarded[0]
+      : forwarded || realIp || cfIp || req.ip || '';
+    return String(raw).split(',')[0].trim();
+  }
 
   // ============ 小程序接口 ============
 
@@ -18,8 +29,10 @@ export class AuthController {
   @ApiOperation({ summary: '微信小程序登录' })
   @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
-  async wxMiniLogin(@Body() dto: any) {
-    return this.authService.wxMiniLogin(dto);
+  async wxMiniLogin(@Body() dto: any, @Req() req: Request) {
+    const ip = this.getClientIp(req);
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.wxMiniLogin(dto, ip, ua);
   }
 
   /** 获取微信手机号 — 严格限流 */
@@ -30,6 +43,38 @@ export class AuthController {
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async getPhoneNumber(@Body() dto: any, @CurrentUser('sub') userId: string) {
     return this.authService.getPhoneNumber(userId, dto);
+  }
+
+  /** 微信手机号一键登录 — 小程序端 getPhoneNumber + uni.login */
+  @Post('wx-auth/phone-one-tap-login')
+  @ApiOperation({ summary: '微信手机号一键登录' })
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  async phoneOneTapLogin(@Body() dto: any, @Req() req: Request) {
+    const ip = this.getClientIp(req);
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.phoneOneTapLogin(dto, ip, ua);
+  }
+
+  /** 发送手机号登录验证码 */
+  @Post('auth/phone/send-code')
+  @ApiOperation({ summary: '发送手机号登录验证码' })
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  async sendPhoneLoginCode(@Body() dto: any, @Req() req: Request) {
+    const ip = this.getClientIp(req);
+    return this.authService.sendPhoneLoginCode(dto, ip);
+  }
+
+  /** 手机号验证码登录 */
+  @Post('auth/phone/login')
+  @ApiOperation({ summary: '手机号验证码登录' })
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  async phoneLogin(@Body() dto: any, @Req() req: Request) {
+    const ip = this.getClientIp(req);
+    const ua = (req.headers['user-agent'] as string) || '';
+    return this.authService.phoneLogin(dto, ip, ua);
   }
 
   /** 刷新 Token — 限流防止滥用 */
@@ -70,20 +115,20 @@ export class AuthController {
     @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string },
     @Req() req: Request,
   ) {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ip = this.getClientIp(req);
     const ua = (req.headers['user-agent'] as string) || '';
     return this.authService.adminLogin(dto, ip, ua);
   }
 
   @Post('auth/admin/login')
-  @ApiOperation({ summary: '后台管理员登录（新后台兼容路径）' })
+  @ApiOperation({ summary: '管理员登录（新后台兼容路径）' })
   @UseGuards(ThrottlerGuard)
-  @Throttle({ admin_auth: { ttl: 60000, limit: parseInt(process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30', 10) } })
+  @Throttle({ admin_auth: { ttl: 60000, limit: 30 } })
   async adminLoginCompat(
-    @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string },
+    @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string; mfaCode?: string },
     @Req() req: Request,
   ) {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    const ip = this.getClientIp(req);
     const ua = (req.headers['user-agent'] as string) || '';
     return this.authService.adminLogin(dto, ip, ua);
   }
@@ -156,7 +201,7 @@ export class AuthController {
 
   @Post('admin/logout')
   @ApiOperation({ summary: '后台退出登录' })
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard)
   @ApiBearerAuth()
   async adminLogout(@CurrentUser('sub') accountId: string) {
     return this.authService.adminLogout(accountId);
@@ -164,7 +209,7 @@ export class AuthController {
 
   @Post('auth/admin/logout')
   @ApiOperation({ summary: '后台退出登录（新后台兼容路径）' })
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard)
   @ApiBearerAuth()
   async adminLogoutCompat(@CurrentUser('sub') accountId: string) {
     return this.authService.adminLogout(accountId);
@@ -172,7 +217,7 @@ export class AuthController {
 
   @Get('admin/profile')
   @ApiOperation({ summary: '获取当前管理员信息' })
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard)
   @ApiBearerAuth()
   async getAdminProfile(@CurrentUser('sub') accountId: string) {
     return this.authService.getAdminProfile(accountId);
@@ -180,7 +225,7 @@ export class AuthController {
 
   @Get('auth/admin/profile')
   @ApiOperation({ summary: '获取当前管理员信息（新后台兼容路径）' })
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard)
   @ApiBearerAuth()
   async getAdminProfileCompat(@CurrentUser('sub') accountId: string) {
     return this.authService.getAdminProfile(accountId);
@@ -191,5 +236,39 @@ export class AuthController {
   async adminResetPasswordCompat(@Body() dto: { username?: string; email?: string; oldPassword?: string; newPassword?: string }) {
     // 新 UI 忘记密码功能：当前仅做占位，后续可对接邮件发送重置链接
     return { success: true, message: '密码重置功能暂未开放，请联系超级管理员' };
+  }
+
+  // ===== AUD-P1-165: MFA 管理端点 =====
+
+  @Post('auth/admin/mfa/setup')
+  @UseGuards(JwtGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '生成 MFA 密钥和 QR 码' })
+  async setupMfa(@CurrentUser('sub') accountId: string, @CurrentUser('username') username: string) {
+    return this.authService.generateMfaSecret(accountId, username);
+  }
+
+  @Post('auth/admin/mfa/enable')
+  @UseGuards(JwtGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '验证 TOTP 码并启用 MFA' })
+  async enableMfa(@CurrentUser('sub') accountId: string, @Body() dto: { code: string }) {
+    return this.authService.enableMfa(accountId, dto.code);
+  }
+
+  @Post('auth/admin/mfa/disable')
+  @UseGuards(JwtGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '验证 TOTP 码并禁用 MFA' })
+  async disableMfa(@CurrentUser('sub') accountId: string, @Body() dto: { code: string }) {
+    return this.authService.disableMfa(accountId, dto.code);
+  }
+
+  @Get('auth/admin/mfa/status')
+  @UseGuards(JwtGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取 MFA 启用状态' })
+  async getMfaStatus(@CurrentUser('sub') accountId: string) {
+    return this.authService.getMfaStatus(accountId);
   }
 }

@@ -9,7 +9,7 @@
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
-      <el-button type="success" @click="openEdit()">新增客服</el-button>
+      <el-button type="primary" @click="openEdit()">新增客服</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="avatar" label="头像" width="70">

@@ -4,6 +4,22 @@
     <div class="glass-card">
       <div class="card-header"><div class="card-title">存储配置</div></div>
       <div class="card-body">
+        <el-alert
+          v-if="!storageSaved"
+          title="当前存储配置尚未保存，上传仍会使用本地存储。"
+          type="warning"
+          show-icon
+          :closable="false"
+          class="status-alert"
+        />
+        <el-alert
+          v-else-if="form.provider === 'cos'"
+          title="当前上传已切换到腾讯云 COS。"
+          type="success"
+          show-icon
+          :closable="false"
+          class="status-alert"
+        />
         <el-form label-position="top">
           <div class="form-grid two">
             <el-form-item label="上传方式">
@@ -16,10 +32,10 @@
               </el-select>
             </el-form-item>
             <el-form-item label="CDN 域名（可选）">
-              <el-input v-model="form.domain" placeholder="不填则自动使用 COS 默认访问域名" />
+              <el-input v-model="form.domain" placeholder="不填则自动使用 COS 默认访问域名" autocomplete="off" />
             </el-form-item>
             <el-form-item label="上传路径前缀（可选）">
-              <el-input v-model="form.uploadPrefix" placeholder="如：uploads/；不填则使用业务默认目录" />
+              <el-input v-model="form.uploadPrefix" placeholder="如：uploads/；不填则使用业务默认目录" autocomplete="off" />
             </el-form-item>
           </div>
         </el-form>
@@ -36,13 +52,13 @@
         <el-form label-position="top">
           <div class="form-grid two">
             <el-form-item label="SecretId">
-              <el-input v-model="form.cos.secretId" placeholder="请输入 SecretId" show-password />
+              <el-input v-model="form.cos.secretId" placeholder="请输入 SecretId" show-password autocomplete="new-password" />
             </el-form-item>
             <el-form-item label="SecretKey">
-              <el-input v-model="form.cos.secretKey" placeholder="请输入 SecretKey" show-password />
+              <el-input v-model="form.cos.secretKey" placeholder="请输入 SecretKey" show-password autocomplete="new-password" />
             </el-form-item>
             <el-form-item label="存储桶名称">
-              <el-input v-model="form.cos.bucket" placeholder="如：nianbai-1340278115" />
+              <el-input v-model="form.cos.bucket" placeholder="如：nianbai-1340278115" autocomplete="off" />
             </el-form-item>
             <el-form-item label="城市选择">
               <el-select v-model="form.cos.region" placeholder="请选择存储桶所在城市" filterable style="width: 100%">
@@ -277,6 +293,7 @@ const saving = ref(false)
 const testing = ref(false)
 const loadingFiles = ref(false)
 const files = ref<any[]>([])
+const storageSaved = ref(false)
 
 const MASK = '******'
 
@@ -417,6 +434,7 @@ async function load() {
   try {
     const data = await fetchStorageConfig()
     if (data && typeof data === 'object') {
+      storageSaved.value = data.saved === true
       const processed = processResponse(data)
       // 合并数据
       for (const [key, value] of Object.entries(processed)) {
@@ -456,6 +474,7 @@ async function save() {
   try {
     const data = prepareForSave({ ...form })
     await saveStorageConfig(data)
+    storageSaved.value = true
     ElMessage.success('存储上传配置已保存')
     // 重新加载以获取最新的脱敏数据
     await load()
@@ -472,7 +491,10 @@ async function testConnection(provider: string) {
     const data = prepareForSave({ ...form })
     const res: any = await testStorageConfig({ provider, ...data[provider] })
     if (res?.success) {
-      ElMessage.success(res?.message || '连接测试成功')
+      await saveStorageConfig(data)
+      storageSaved.value = true
+      ElMessage.success(`${res?.message || '连接测试成功'}，配置已保存`)
+      await load()
     } else {
       ElMessage.error(res?.message || '连接测试失败')
     }
@@ -521,6 +543,9 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 12px;
   padding-top: 16px;
+}
+.status-alert {
+  margin-bottom: 16px;
 }
 .form-tip {
   color: #94a3b8;

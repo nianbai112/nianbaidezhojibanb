@@ -1,12 +1,13 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>商城商品管理</h2>
-      <el-button type="primary" @click="showCreateDialog = true">
-        <el-icon><Plus /></el-icon>
-        新增商品
-      </el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="商城商品管理">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true">
+          <el-icon><Plus /></el-icon>
+          新增商品
+        </el-button>
+      </template>
+    </PageHeader>
 
     <div class="filter-bar">
       <el-input
@@ -227,6 +228,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -535,15 +537,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
 .filter-bar {
   display: flex;
   gap: 12px;

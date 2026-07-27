@@ -1,14 +1,19 @@
 import {
-  Controller, Get, Put, Delete, Body, Param, Query, UseGuards,
+  Controller, Get, Put, Post, Delete, Body, Param, Query, UseGuards, Req,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { SecondHandAdminService } from './second-hand.admin.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { RequirePermission } from '../../decorators/require-permission.decorator';
+import { CurrentUser } from '../../decorators/current-user.decorator';
 import {
   SecondHandProductQueryDto, SecondHandProductStatusDto,
+  SecondHandProductBatchStatusDto,
   SecondHandOrderQueryDto,
+  SecondHandOrderStatusDto,
+  SecondHandReportQueryDto, SecondHandReportHandleDto,
   SecondHandRegionSettingQueryDto, UpdateSecondHandRegionSettingDto,
 } from './dto/second-hand.admin.dto';
 
@@ -20,6 +25,13 @@ export class SecondHandAdminController {
   constructor(private readonly secondHandService: SecondHandAdminService) {}
 
   // ==================== 商品管理 ====================
+
+  @Get('admin/second-hand/stats')
+  @ApiOperation({ summary: '二手运营总览' })
+  @RequirePermission('secondhand:view')
+  getStats(@Query('regionId') regionId?: string) {
+    return this.secondHandService.getStats(regionId);
+  }
 
   @Get('admin/second-hand/products')
   @ApiOperation({ summary: '二手商品列表' })
@@ -38,8 +50,24 @@ export class SecondHandAdminController {
   @Put('admin/second-hand/products/:id/status')
   @ApiOperation({ summary: '更新二手商品状态' })
   @RequirePermission('secondhand:audit')
-  updateProductStatus(@Param('id') id: string, @Body() dto: SecondHandProductStatusDto) {
-    return this.secondHandService.updateProductStatus(id, dto);
+  updateProductStatus(
+    @Param('id') id: string,
+    @Body() dto: SecondHandProductStatusDto,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.secondHandService.updateProductStatus(id, dto, operatorId, req.ip);
+  }
+
+  @Post('admin/second-hand/products/batch-status')
+  @ApiOperation({ summary: '批量更新二手商品状态' })
+  @RequirePermission('secondhand:audit')
+  batchUpdateProductStatus(
+    @Body() dto: SecondHandProductBatchStatusDto,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.secondHandService.batchUpdateProductStatus(dto, operatorId, req.ip);
   }
 
   @Delete('admin/second-hand/products/:id')
@@ -63,6 +91,39 @@ export class SecondHandAdminController {
   @RequirePermission('secondhand:view')
   getOrderDetail(@Param('id') id: string) {
     return this.secondHandService.getOrderDetail(id);
+  }
+
+  @Put('admin/second-hand/orders/:id/status')
+  @ApiOperation({ summary: '更新二手订单状态' })
+  @RequirePermission('secondhand:audit')
+  updateOrderStatus(
+    @Param('id') id: string,
+    @Body() dto: SecondHandOrderStatusDto,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.secondHandService.updateOrderStatus(id, dto, operatorId, req.ip);
+  }
+
+  // ==================== 举报/纠纷 ====================
+
+  @Get('admin/second-hand/reports')
+  @ApiOperation({ summary: '二手举报/纠纷列表' })
+  @RequirePermission('secondhand:view')
+  getReportList(@Query() query: SecondHandReportQueryDto) {
+    return this.secondHandService.getReportList(query);
+  }
+
+  @Put('admin/second-hand/reports/:id/handle')
+  @ApiOperation({ summary: '处理二手举报/纠纷' })
+  @RequirePermission('secondhand:audit')
+  handleReport(
+    @Param('id') id: string,
+    @Body() dto: SecondHandReportHandleDto,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.secondHandService.handleReport(id, dto, operatorId, req.ip);
   }
 
   // ==================== 区域配置 ====================

@@ -249,13 +249,13 @@ onMounted(loadGroupBuys)
 .marketing-header p { margin: 0; color: #64748b; font-weight: 700; }
 .eyebrow { color: #2563eb !important; font-size: 13px; }
 .filter-card,
-.data-card { background: rgba(255,255,255,0.86); border: 1px solid #dbe7f5; border-radius: 16px; box-shadow: 0 14px 36px rgba(37,99,235,.08); }
+.data-card { background: rgba(255,255,255,0.86); border: 1px solid #dbe7f5; border-radius: 14px; box-shadow: 0 14px 36px rgba(37,99,235,.08); }
 .filter-card { display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto auto; gap: 12px; padding: 16px; margin-bottom: 18px; }
 .data-card { padding: 18px; }
 .media-cell { display: flex; align-items: center; gap: 12px; }
 .media-cell strong { color: #0f172a; }
 .media-cell p { margin: 4px 0 0; color: #64748b; }
-.thumb { width: 52px; height: 52px; border-radius: 12px; object-fit: cover; background: #eff6ff; flex: none; }
+.thumb { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; background: #eff6ff; flex: none; }
 .placeholder { display: grid; place-items: center; color: #2563eb; font-weight: 900; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
 .dialog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }

@@ -57,6 +57,9 @@
             {{ region.isOpen !== false ? '正常运营' : '已停用' }}
           </el-tag>
           <el-tag v-if="region.isHot" type="warning" effect="light">热门</el-tag>
+          <el-tag :type="isRegionSwitchOpen(region) ? 'success' : 'danger'" effect="light">
+            {{ isRegionSwitchOpen(region) ? '切换开放' : '切换关闭' }}
+          </el-tag>
         </div>
 
         <div class="region-card-body">
@@ -92,6 +95,10 @@
               <b :class="{ muted: !hasLocation(region) }">{{ hasLocation(region) ? '已配置' : '未配置' }}</b>
             </div>
             <div>
+              <span>小程序负责人</span>
+              <b :class="{ muted: !getRegionManagerName(region) }">{{ getRegionManagerName(region) || '未配置' }}</b>
+            </div>
+            <div>
               <span>首页广告</span>
               <b :class="{ muted: !hasCarousel(region) }">{{ hasCarousel(region) ? `${getCarousel(region).length} 张` : '未上传' }}</b>
             </div>
@@ -107,10 +114,24 @@
             <el-tag size="small" :type="region.groupChatEnabled ? 'success' : 'info'" effect="plain">
               {{ region.groupChatEnabled ? '群聊开启' : '群聊关闭' }}
             </el-tag>
+            <el-tag size="small" :type="isRegionSwitchOpen(region) ? 'success' : 'danger'" effect="plain">
+              {{ isRegionSwitchOpen(region) ? '用户可切换' : '用户不可切换' }}
+            </el-tag>
           </div>
         </div>
 
         <div class="region-card-actions">
+          <div class="region-switch-toggle" :class="{ off: !isRegionSwitchOpen(region) }">
+            <span>{{ isRegionSwitchOpen(region) ? '允许用户切换' : '禁止用户切换' }}</span>
+            <el-switch
+              v-model="region.regionSwitchSupported"
+              inline-prompt
+              active-text="开"
+              inactive-text="关"
+              :loading="region.regionSwitchSaving"
+              @change="value => saveRegionSwitch(region, value)"
+            />
+          </div>
           <el-button text :icon="EditPen" @click="openEditBasic(region)">编辑档案</el-button>
           <el-button text :icon="HomeFilled" @click="goRegionModule(region, '/region/page-decoration')">页面装修</el-button>
           <el-button text :icon="Menu" @click="goRegionModule(region, '/region/tabbar')">Tabbar</el-button>
@@ -120,11 +141,11 @@
       </article>
     </section>
 
-    <el-empty v-if="!loading && !filteredRegions.length" class="empty-card glass-card" description="没有符合条件的区域">
+    <EmptyState v-if="!loading && !filteredRegions.length" class="empty-card glass-card" description="没有符合条件的区域">
       <el-button type="primary" @click="openCreateDrawer">新建第一个区域</el-button>
-    </el-empty>
+    </EmptyState>
 
-    <el-drawer v-model="createVisible" class="region-create-drawer" :title="drawerTitle" size="880px" :close-on-click-modal="false">
+    <el-drawer v-model="createVisible" class="region-create-drawer" :title="drawerTitle" size="min(980px, calc(100vw - 32px))" :close-on-click-modal="false">
       <div class="create-layout">
         <el-steps :active="createStep" direction="vertical" class="create-steps">
           <el-step title="基础档案" description="名称、类型、状态" />
@@ -156,11 +177,35 @@
               <el-form-item label="是否热门">
                 <el-switch v-model="createForm.isHot" active-text="是" inactive-text="否" />
               </el-form-item>
+              <el-form-item label="允许用户切换到此区域">
+                <el-switch v-model="createForm.regionSwitchSupported" inline-prompt active-text="允许" inactive-text="禁止" />
+                <div class="switch-help">关闭后，小程序用户不能自行切换到该区域。</div>
+              </el-form-item>
               <el-form-item label="区域负责人">
                 <el-input v-model="createForm.managerName" placeholder="可选，用于运营备注" />
               </el-form-item>
               <el-form-item label="联系电话">
                 <el-input v-model="createForm.contactPhone" placeholder="可选" />
+              </el-form-item>
+              <el-form-item label="负责账号">
+                <el-select v-model="createForm.managerAccountId" clearable filterable placeholder="选择可登录后台的账号" style="width:100%">
+                  <el-option
+                    v-for="account in adminAccounts"
+                    :key="account.id"
+                    :label="`${account.realName || account.username}（${account.username}）`"
+                    :value="account.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="小程序区域负责人">
+                <el-select v-model="createForm.managerUserId" clearable filterable placeholder="选择小程序用户" style="width:100%">
+                  <el-option
+                    v-for="user in miniUsers"
+                    :key="user.id"
+                    :label="userOptionLabel(user)"
+                    :value="user.id"
+                  />
+                </el-select>
               </el-form-item>
               <el-form-item label="区域描述" class="span-2">
                 <el-input v-model="createForm.description" type="textarea" :rows="4" placeholder="展示在小程序区域详情页，用一句话讲清楚这个区域" />
@@ -195,7 +240,7 @@
               </div>
               <el-button :icon="MapLocation" @click="mapVisible = true">从高德地图选择</el-button>
             </div>
-            <div class="form-grid three">
+            <div class="location-form-grid">
               <el-form-item label="经度 longitude">
                 <el-input-number v-model="createForm.longitude" :precision="6" controls-position="right" style="width:100%" />
               </el-form-item>
@@ -208,7 +253,7 @@
               <el-form-item label="距离限制（米）">
                 <el-input-number v-model="createForm.distanceLimit" :min="0" :step="500" controls-position="right" style="width:100%" />
               </el-form-item>
-              <el-form-item label="详细地址" class="span-2">
+              <el-form-item label="详细地址" class="location-address-field">
                 <el-input v-model="createForm.address" placeholder="可手动填写，地图选择后自动带入" />
               </el-form-item>
             </div>
@@ -284,12 +329,16 @@ import {
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
-import { createRegion, fetchRegionDetail, fetchRegions, saveRegionTabbar } from '@/api/admin'
+import EmptyState from '@/components/common/EmptyState.vue'
+import { createRegion, fetchRegionDetail, fetchRegions, saveRegionTabbar, updateRegion } from '@/api/admin'
+import { request } from '@/api/request'
 
 const router = useRouter()
 const loading = ref(false)
 const creating = ref(false)
 const regions = ref<any[]>([])
+const adminAccounts = ref<any[]>([])
+const miniUsers = ref<any[]>([])
 const keyword = ref('')
 const statusFilter = ref('all')
 const typeFilter = ref('all')
@@ -299,16 +348,16 @@ const mapVisible = ref(false)
 
 const defaultTabs = [
   { id: '0', name: '笔记', type: 'note', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesB/post/post', appId: '', query: '', remark: '', sortOrder: 0 },
-  { id: '1', name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/selection', appId: '', query: '', remark: '', sortOrder: 1 },
-  { id: '2', name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', appId: '', query: '', remark: '', sortOrder: 2 },
-  { id: '3', name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', appId: '', query: '', remark: '', sortOrder: 3 }
+  { id: '1', name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/merchant/merchant', appId: '', query: '', remark: '', sortOrder: 1 },
+  { id: '2', name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: '', appId: '', query: '', remark: '', sortOrder: 2 },
+  { id: '3', name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/list/list?tabIndex=0', appId: '', query: '', remark: '', sortOrder: 3 }
 ]
 
 const defaultNav = [
   { id: 'note', name: '笔记', subtitle: '', icon: '', linkType: 'internal', path: 'pagesB/post/post', query: '', remark: '', enabled: true, sortOrder: 0 },
-  { id: 'takeout', name: '外卖', subtitle: '', icon: '', linkType: 'internal', path: 'pagesA/selection/selection', query: '', remark: '', enabled: true, sortOrder: 1 },
-  { id: 'secondhand', name: '二手', subtitle: '', icon: '', linkType: 'internal', path: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', query: '', remark: '', enabled: true, sortOrder: 2 },
-  { id: 'activity', name: '活动', subtitle: '', icon: '', linkType: 'internal', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', query: '', remark: '', enabled: true, sortOrder: 3 }
+  { id: 'takeout', name: '外卖', subtitle: '', icon: '', linkType: 'internal', path: 'pagesA/merchant/merchant', query: '', remark: '', enabled: true, sortOrder: 1 },
+  { id: 'secondhand', name: '二手', subtitle: '', icon: '', linkType: 'internal', path: 'pages/tabbar/index/index?tab=secondhand', query: '', remark: '', enabled: true, sortOrder: 2 },
+  { id: 'activity', name: '活动', subtitle: '', icon: '', linkType: 'internal', path: 'pagesA/selection/list/list?tabIndex=0', query: '', remark: '', enabled: true, sortOrder: 3 }
 ]
 
 const defaultTabbarConfig = {
@@ -339,8 +388,11 @@ const createForm = reactive<any>({
   regionType: 'campus',
   isOpen: true,
   isHot: false,
+  regionSwitchSupported: true,
   managerName: '',
   contactPhone: '',
+  managerAccountId: '',
+  managerUserId: '',
   description: '',
   logo: '',
   coverImage: '',
@@ -377,7 +429,11 @@ const filteredRegions = computed(() => {
   })
 })
 
-onMounted(loadRegions)
+onMounted(() => {
+  loadRegions()
+  loadAdminAccounts()
+  loadMiniUsers()
+})
 
 async function loadRegions() {
   loading.value = true
@@ -390,6 +446,30 @@ async function loadRegions() {
   }
 }
 
+async function loadAdminAccounts() {
+  try {
+    const res: any = await request.get('/admin/admins', { params: { page: 1, pageSize: 200 } })
+    adminAccounts.value = Array.isArray(res) ? res : res?.list || res?.data?.list || []
+  } catch {
+    adminAccounts.value = []
+  }
+}
+
+async function loadMiniUsers() {
+  try {
+    const res: any = await request.get('/admin/users', { params: { page: 1, pageSize: 200, status: 'active', userType: 'normal' } })
+    miniUsers.value = Array.isArray(res) ? res : res?.list || res?.data?.list || []
+  } catch {
+    miniUsers.value = []
+  }
+}
+
+function userOptionLabel(user: any) {
+  const name = user?.nickname || user?.realName || user?.phone || '未命名用户'
+  const uid = user?.uid ? `UID ${user.uid}` : String(user?.id || '').slice(0, 8)
+  return `${name}（${uid}）`
+}
+
 function openCreateDrawer() {
   Object.assign(createForm, {
     name: '',
@@ -397,8 +477,11 @@ function openCreateDrawer() {
     regionType: 'campus',
     isOpen: true,
     isHot: false,
+    regionSwitchSupported: true,
     managerName: '',
     contactPhone: '',
+    managerAccountId: '',
+    managerUserId: '',
     description: '',
     logo: '',
     coverImage: '',
@@ -441,6 +524,8 @@ async function submitCreate() {
       regionType: createForm.regionType,
       isOpen: createForm.isOpen,
       isHot: createForm.isHot,
+      regionSwitchSupported: createForm.regionSwitchSupported,
+      region_switch_supported: createForm.regionSwitchSupported,
       description: createForm.description,
       logo: createForm.logo,
       coverImage: createForm.coverImage,
@@ -449,10 +534,19 @@ async function submitCreate() {
       latitude: createForm.latitude || undefined,
       serviceRadius: createForm.serviceRadius,
       distanceLimit: createForm.distanceLimit,
+      managerName: createForm.managerName,
+      managerPhone: createForm.contactPhone,
+      contactPhone: createForm.contactPhone,
+      managerAccountId: createForm.managerAccountId || undefined,
+      managerUserId: createForm.managerUserId || undefined,
+      manager_user_id: createForm.managerUserId || undefined,
       settings: {
         operator: {
           managerName: createForm.managerName,
-          contactPhone: createForm.contactPhone
+          contactPhone: createForm.contactPhone,
+          managerAccountId: createForm.managerAccountId,
+          managerUserId: createForm.managerUserId || undefined,
+          manager_id: createForm.managerUserId || undefined
         },
         createTemplate: createForm.templateKey
       },
@@ -533,6 +627,39 @@ function openEditBasic(region: any) {
   goRegionModule(region, '/region/config')
 }
 
+function toStrictBoolean(value: any, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const text = String(value).trim().toLowerCase()
+  if (['false', '0', 'no', 'off'].includes(text)) return false
+  if (['true', '1', 'yes', 'on'].includes(text)) return true
+  return Boolean(value)
+}
+
+function isRegionSwitchOpen(region: any) {
+  return toStrictBoolean(region?.regionSwitchSupported ?? region?.region_switch_supported, true)
+}
+
+async function saveRegionSwitch(region: any, value: any) {
+  region.regionSwitchSaving = true
+  try {
+    const switchSupported = toStrictBoolean(value, true)
+    await updateRegion(region.id, {
+      regionSwitchSupported: switchSupported,
+      region_switch_supported: switchSupported
+    })
+    region.regionSwitchSupported = switchSupported
+    region.region_switch_supported = switchSupported
+    ElMessage.success(switchSupported ? '已允许用户切换到该区域' : '已禁止用户切换到该区域')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '保存区域切换状态失败')
+    await loadRegions()
+  } finally {
+    region.regionSwitchSaving = false
+  }
+}
+
 function goRegionModule(region: any, path: string) {
   localStorage.setItem('LM_SELECTED_REGION_ID', String(region.id))
   localStorage.setItem('selectedRegionId', String(region.id))
@@ -546,6 +673,10 @@ function hasLocation(region: any) {
 
 function hasCarousel(region: any) {
   return getCarousel(region).some((item: any) => item?.image || item?.imageUrl || item?.url)
+}
+
+function getRegionManagerName(region: any) {
+  return region?.managerNickname || region?.managerUser?.nickname || region?.managerName || ''
 }
 
 function getCarousel(region: any) {
@@ -603,14 +734,14 @@ function money(value: any) {
 .region-toolbar,
 .region-card,
 .empty-card {
-  border: 1px solid rgba(219, 228, 240, .9);
-  background: rgba(255, 255, 255, .88);
-  box-shadow: 0 14px 36px rgba(15, 23, 42, .05);
+  border: 1px solid var(--mx-border);
+  background: var(--mx-card);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--mx-text) 5%, transparent);
 }
 
 .overview-card {
   min-height: 118px;
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -618,23 +749,23 @@ function money(value: any) {
 }
 
 .overview-card span {
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 800;
 }
 
 .overview-card b {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 32px;
   line-height: 1;
 }
 
 .overview-card small {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
 }
 
 .region-toolbar {
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 16px;
   display: flex;
   align-items: center;
@@ -650,7 +781,7 @@ function money(value: any) {
 }
 
 .toolbar-right {
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -663,7 +794,7 @@ function money(value: any) {
 }
 
 .region-card {
-  border-radius: 16px;
+  border-radius: 14px;
   overflow: hidden;
 }
 
@@ -673,7 +804,7 @@ function money(value: any) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  background: linear-gradient(135deg, #eef6ff, #f8fbff);
+  background: var(--mx-hover);
   background-size: cover;
   background-position: center;
 }
@@ -692,14 +823,14 @@ function money(value: any) {
 
 .region-identity h3 {
   margin: 0 0 5px;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 18px;
   font-weight: 900;
 }
 
 .region-identity p {
   margin: 0;
-  color: #64748b;
+  color: var(--mx-sub);
   line-height: 1.45;
   min-height: 20px;
 }
@@ -707,15 +838,15 @@ function money(value: any) {
 .completion-block {
   padding: 14px;
   border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #e6eef8;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
   margin-bottom: 16px;
 }
 
 .completion-top {
   display: flex;
   justify-content: space-between;
-  color: #334155;
+  color: var(--mx-sub);
   font-weight: 900;
   margin-bottom: 8px;
 }
@@ -727,27 +858,27 @@ function money(value: any) {
 }
 
 .region-facts div {
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 10px 12px;
-  background: #fbfdff;
-  border: 1px solid #e8f0f8;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
 }
 
 .region-facts span {
   display: block;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 800;
   margin-bottom: 4px;
 }
 
 .region-facts b {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 14px;
 }
 
 .region-facts b.muted {
-  color: #d97706;
+  color: var(--el-color-warning);
 }
 
 .region-flags {
@@ -758,42 +889,73 @@ function money(value: any) {
 }
 
 .region-card-actions {
-  border-top: 1px solid #e6eef8;
+  border-top: 1px solid var(--mx-border);
   padding: 10px 14px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   justify-content: flex-end;
+  align-items: center;
+}
+
+.region-switch-toggle {
+  margin-right: auto;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success-dark-2);
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.region-switch-toggle.off {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger-dark-2);
+}
+
+.switch-help {
+  width: 100%;
+  margin-top: 6px;
+  color: var(--mx-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .empty-card {
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 32px;
 }
 
 .create-layout {
   display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 28px;
-  min-height: calc(100vh - 180px);
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 24px;
+  min-height: 560px;
 }
 
 .create-steps {
   position: sticky;
   top: 0;
   align-self: start;
-  padding: 8px 0;
+  padding: 8px 0 16px;
+  min-width: 0;
 }
 
 .create-panel {
-  border: 1px solid #e3edf8;
-  border-radius: 16px;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
   padding: 22px;
-  background: #fff;
+  background: var(--mx-card);
+  min-width: 0;
 }
 
 .panel-title {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 18px;
   font-weight: 900;
   margin-bottom: 18px;
@@ -813,6 +975,44 @@ function money(value: any) {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.location-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 18px 20px;
+  align-items: start;
+}
+
+.location-form-grid :deep(.el-form-item) {
+  display: block;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.location-form-grid :deep(.el-form-item__label) {
+  display: block;
+  height: auto;
+  line-height: 20px;
+  margin-bottom: 8px;
+  justify-content: flex-start;
+  color: var(--mx-text);
+  font-weight: 900;
+  text-align: left;
+}
+
+.location-form-grid :deep(.el-form-item__content) {
+  display: block;
+  min-width: 0;
+}
+
+.location-form-grid :deep(.el-input-number),
+.location-form-grid :deep(.el-input) {
+  width: 100%;
+}
+
+.location-address-field {
+  grid-column: 1 / -1;
+}
+
 .span-2 {
   grid-column: span 2;
 }
@@ -823,32 +1023,40 @@ function money(value: any) {
 }
 
 .asset-label {
-  color: #334155;
+  color: var(--mx-sub);
   font-weight: 900;
   margin-bottom: 10px;
 }
 
 .map-summary {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
-  background: #f8fafc;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-soft);
   padding: 16px;
   margin-bottom: 18px;
 }
 
 .map-summary span {
   display: block;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 800;
   margin-bottom: 6px;
 }
 
 .map-summary b {
-  color: #0f172a;
+  display: block;
+  color: var(--mx-text);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.map-summary :deep(.el-button) {
+  flex: 0 0 auto;
 }
 
 .template-grid {
@@ -859,9 +1067,9 @@ function money(value: any) {
 
 .template-card {
   text-align: left;
-  border: 1px solid #dbe4f0;
+  border: 1px solid var(--mx-border);
   border-radius: 14px;
-  background: #fff;
+  background: var(--mx-card);
   padding: 16px;
   cursor: pointer;
   transition: .18s ease;
@@ -869,20 +1077,20 @@ function money(value: any) {
 
 .template-card b {
   display: block;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 15px;
   margin-bottom: 8px;
 }
 
 .template-card span {
-  color: #64748b;
+  color: var(--mx-sub);
   line-height: 1.45;
 }
 
 .template-card.active {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, .1);
-  background: #f8fbff;
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--el-color-primary) 10%, transparent);
+  background: var(--mx-hover);
 }
 
 .copy-template-row {
@@ -921,6 +1129,7 @@ function money(value: any) {
   .region-card-grid,
   .form-grid.two,
   .form-grid.three,
+  .location-form-grid,
   .asset-grid,
   .template-grid,
   .create-layout {

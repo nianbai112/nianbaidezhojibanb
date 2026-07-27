@@ -405,7 +405,7 @@ onMounted(() => {
 .growth-header p { margin: 0; color: #64748b; font-weight: 700; }
 .eyebrow { color: #2563eb !important; font-size: 13px; }
 .toolbar-card,
-.data-card { background: rgba(255,255,255,0.86); border: 1px solid #dbe7f5; border-radius: 16px; box-shadow: 0 14px 36px rgba(37,99,235,.08); }
+.data-card { background: rgba(255,255,255,0.86); border: 1px solid #dbe7f5; border-radius: 14px; box-shadow: 0 14px 36px rgba(37,99,235,.08); }
 .toolbar-card { display: flex; gap: 12px; align-items: center; padding: 16px; margin-bottom: 18px; }
 .toolbar-card .el-select { width: 180px; }
 .push-right { margin-left: auto; }

@@ -47,6 +47,35 @@ export class UpdateDatingConfigDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  requireStudentAuth?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  enableWhoLikedMe?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  enablePaidPackage?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  aiRecommendEnabled?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  profileReviewMode?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
   @IsObject()
   matchRules?: Record<string, any>
 }
@@ -75,6 +104,10 @@ export class DatingProfileQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   gender?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  regionId?: string
 }
 
 export class AuditDatingProfileDto {
@@ -112,6 +145,10 @@ export class DatingMatchQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   matchType?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  regionId?: string
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -290,6 +327,10 @@ export class DatingReportQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   status?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  regionId?: string
 }
 
 export class HandleDatingReportDto {

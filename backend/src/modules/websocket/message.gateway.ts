@@ -14,6 +14,9 @@ import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
 import { RedisService } from '../../common/services/redis.service';
 import { PrismaService } from '../../common/services/prisma.service';
+import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
+import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
+import { SystemConfigService } from '../system-config/system-config.service';
 
 // =============================================================================
 // 常量
@@ -42,6 +45,9 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
     private readonly config: ConfigService,
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
+    private readonly privateMessagePermission: PrivateMessagePermissionService,
+    private readonly userAccess: UserAccessPolicyService,
+    private readonly systemConfigService: SystemConfigService,
   ) {
     this.loadAllowedOrigins();
   }
@@ -138,6 +144,10 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       client.data.username = payload.username || '';
       client.data.openid = payload.openid || '';
 
+      if (!client.data.isAdmin) {
+        await this.userAccess.assertActiveUser(client.data.userId, '连接实时服务');
+      }
+
       // 管理员离开加入管理员房间
       if (client.data.isAdmin) {
         client.join('room:admins');
@@ -164,6 +174,16 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
   // 普通用户事件
   // ===========================================================================
 
+  /**
+   * AUD-P1-177: 小程序已统一使用 /ws-native；禁用旧 Socket.IO 写入口，
+   * 避免其绕开 clientMessageId 幂等和 ConversationMember 未读数契约。
+   */
+  @SubscribeMessage('sendMessage')
+  async rejectLegacySendMessage(@ConnectedSocket() client: Socket) {
+    await this.assertActiveUser(client, '发送消息');
+    throw new WsException('旧版 Socket.IO 消息发送已停用，请使用原生实时通道');
+  }
+
   /** 加入会话房间 */
   @SubscribeMessage('joinConversation')
   async handleJoinConversation(
@@ -172,12 +192,12 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
   ) {
     try {
       const userId = client.data.userId;
-      this.assertAuth(userId);
+      await this.assertActiveUser(client, '加入会话');
 
       // 校验用户属于该会话
       const member = await this.prisma.conversationMember.findFirst({
         where: { conversationId: data.conversationId, userId },
-        include: { conversation: { select: { isBlocked: true } } },
+        include: { conversation: { select: { isBlocked: true, type: true } } },
       });
 
       if (!member) {
@@ -203,20 +223,23 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
     @ConnectedSocket() client: Socket,
   ) {
     const userId = client.data.userId;
-    this.assertAuth(userId);
+    await this.assertActiveUser(client, '离开会话');
     client.leave(`conv:${data.conversationId}`);
     return { event: 'left', data: { conversationId: data.conversationId } };
   }
 
   /** 发送消息 */
-  @SubscribeMessage('sendMessage')
+  @SubscribeMessage('__legacySendMessageDisabled')
   async handleSendMessage(
     @MessageBody() data: { conversationId: string; type: string; content: string; extra?: any },
     @ConnectedSocket() client: Socket,
   ) {
     try {
       const userId = client.data.userId;
-      this.assertAuth(userId);
+      await this.assertActiveUser(client, '发送消息');
+      if (this.isLegacyMessageWriteDisabled()) {
+        throw new WsException('旧版 Socket.IO 消息发送已停用，请使用原生实时通道');
+      }
 
       // ── 1. 消息内容校验 ──
       if (!data.content || !data.content.trim()) {
@@ -237,7 +260,7 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       await this.redis.expire(rateLimitKey, RATE_LIMIT_WINDOW_SEC);
 
       // ── 3. 敏感词检测 ──
-      if (this.detectSensitiveWords(data.content)) {
+      if (await this.detectSensitiveWords(data.content)) {
         this.logger.warn(`敏感词检测触发: userId=${userId} conv=${data.conversationId}`);
         await this.logSecurity(client, 'sensitive_word', '消息含敏感词', {
           conversationId: data.conversationId,
@@ -249,7 +272,7 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       // ── 4. 会话成员资格校验 ──
       const member = await this.prisma.conversationMember.findFirst({
         where: { conversationId: data.conversationId, userId },
-        include: { conversation: { select: { isBlocked: true } } },
+        include: { conversation: { select: { isBlocked: true, type: true } } },
       });
 
       if (!member) {
@@ -261,6 +284,20 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       if (member.isMuted) {
         throw new WsException('您已被禁言，无法发送消息');
       }
+      if (member.conversation.type === 'circle') {
+        const conversation = await this.prisma.conversation.findUnique({
+          where: { id: data.conversationId },
+          select: { title: true },
+        });
+        const circle = conversation?.title
+          ? await this.prisma.circle.findUnique({ where: { id: conversation.title }, select: { regionId: true } }).catch(() => null)
+          : null;
+        try {
+          await this.userAccess.assertStudentProtectedAction(userId, circle?.regionId, '发送群聊消息');
+        } catch (error: any) {
+          throw new WsException(error?.response?.message || error?.message || '学生认证审核通过后可发送群聊消息');
+        }
+      }
 
       // ── 5. 检查是否被对方拉黑 ──
       const otherMembers = await this.prisma.conversationMember.findMany({
@@ -268,7 +305,16 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
           conversationId: data.conversationId,
           userId: { not: userId },
         },
-        select: { userId: true },
+        select: {
+          userId: true,
+          user: {
+            select: {
+              id: true,
+              userType: true,
+              settings: { select: { messagePermission: true, allowMessage: true } },
+            },
+          },
+        },
       });
       for (const om of otherMembers) {
         const block = await this.prisma.block.findFirst({
@@ -276,6 +322,12 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
         });
         if (block) {
           throw new WsException('你已被对方拉黑，无法发送消息');
+        }
+        if (member.conversation.type === 'private') {
+          const permission = await this.checkPrivateMessagePermission(userId, om.user);
+          if (!permission.allowed) {
+            throw new WsException(permission.message || '对方当前不允许接收你的私信');
+          }
         }
       }
 
@@ -338,7 +390,7 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
   ) {
     try {
       const userId = client.data.userId;
-      this.assertAuth(userId);
+      await this.assertActiveUser(client, '撤回消息');
 
       const msg = await this.prisma.message.findUnique({ where: { id: data.messageId } });
       if (!msg) throw new WsException('消息不存在');
@@ -369,7 +421,7 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
     @ConnectedSocket() client: Socket,
   ) {
     const userId = client.data.userId;
-    if (!userId) return;
+    await this.assertActiveUser(client, '发送输入状态');
     client.to(`conv:${data.conversationId}`).emit('userTyping', {
       conversationId: data.conversationId,
       userId,
@@ -520,6 +572,25 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
     if (!userId) throw new WsException('未认证，请先登录');
   }
 
+  private isLegacyMessageWriteDisabled() {
+    return true;
+  }
+
+  private async assertActiveUser(client: Socket, scene: string) {
+    this.assertAuth(client.data.userId);
+    if (!client.data.isAdmin) {
+      await this.userAccess.assertActiveUser(client.data.userId, scene);
+    }
+  }
+
+  disconnectUser(userId: string): number {
+    if (!this.server) return 0;
+    const room = this.server.sockets.adapter.rooms.get(`user:${userId}`);
+    const count = room?.size || 0;
+    if (count) this.server.in(`user:${userId}`).disconnectSockets(true);
+    return count;
+  }
+
   private assertAdmin(client: Socket) {
     if (!client.data.isAdmin) {
       this.logger.warn(`非管理员尝试调用管理员事件: userId=${client.data.userId}`);
@@ -559,9 +630,24 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
     throw new WsException(`缺少权限: ${permCode}`);
   }
 
-  /** 敏感词检测（可后续升级为敏感词库检测） */
-  private detectSensitiveWords(text: string): boolean {
-    return SENSITIVE_WORD_PATTERN.test(text);
+  /** 敏感词检测 — AUD-P1-152: 改用后台共享敏感词库，不再使用硬编码正则 */
+  private async detectSensitiveWords(text: string): Promise<boolean> {
+    const hit = await this.systemConfigService.checkSensitiveWord(text);
+    return !!hit;
+  }
+
+  private normalizeMessagePermission(value: any, allowMessage?: boolean) {
+    if (allowMessage === false && (value === undefined || value === null || value === '')) return 4;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.min(Math.max(Math.floor(parsed), 0), 4);
+  }
+
+  private async checkPrivateMessagePermission(
+    senderId: string,
+    receiver: { id: string; userType?: number | null; settings?: { messagePermission?: number | null; allowMessage?: boolean | null } | null },
+  ) {
+    return this.privateMessagePermission.check(senderId, receiver);
   }
 
   /** 记录安全日志 */

@@ -68,8 +68,8 @@ export class RecommendController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '小程序话题更新兼容接口' })
-  updateTopic(@Param('id') id: string, @Body() body: any) {
-    return this.recommendService.updateTopic(id, body);
+  updateTopic(@Param('id') id: string, @Body() body: any, @CurrentUser('sub') userId: string) {
+    return this.recommendService.updateTopic(id, body, userId);
   }
 
   @Get('admin/recommend/strategy')

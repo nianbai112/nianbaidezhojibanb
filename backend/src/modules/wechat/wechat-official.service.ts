@@ -10,7 +10,11 @@ import { XMLParser } from 'fast-xml-parser';
 @Injectable()
 export class WechatOfficialService {
   private readonly logger = new Logger(WechatOfficialService.name);
-  private readonly xmlParser = new XMLParser({ ignoreAttributes: false });
+  private readonly maxCallbackXmlBytes = 64 * 1024;
+  private readonly xmlParser = new XMLParser({
+    ignoreAttributes: false,
+    processEntities: false,
+  });
 
   constructor(
     private readonly prisma: PrismaService,
@@ -73,15 +77,21 @@ export class WechatOfficialService {
 
   async handleCallback(body: string, query: Record<string, string>): Promise<string> {
     const token = await this.getCallbackToken();
+    const signature = String(query?.signature || '').trim();
+    const timestamp = String(query?.timestamp || '').trim();
+    const nonce = String(query?.nonce || '').trim();
 
-    // 验证签名
-    if (query.signature) {
-      const arr = [token, query.timestamp, query.nonce].sort();
-      const hash = crypto.createHash('sha1').update(arr.join('')).digest('hex');
-      if (hash !== query.signature) {
-        this.logger.warn('微信回调签名验证失败');
-        return 'error';
-      }
+    // 公众号回调必须验签；缺少配置或任一签名参数时不能继续处理事件。
+    if (!token || !signature || !timestamp || !nonce) {
+      this.logger.warn('微信回调缺少 token 或签名参数');
+      return 'error';
+    }
+    const hash = crypto.createHash('sha1').update([token, timestamp, nonce].sort().join('')).digest('hex');
+    const expected = Buffer.from(hash);
+    const actual = Buffer.from(signature);
+    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+      this.logger.warn('微信回调签名验证失败');
+      return 'error';
     }
 
     // GET 请求用于服务器验证
@@ -91,6 +101,14 @@ export class WechatOfficialService {
 
     // POST 请求处理事件
     try {
+      if (Buffer.byteLength(body || '', 'utf8') > this.maxCallbackXmlBytes) {
+        this.logger.warn('公众号回调 XML 过大，已忽略');
+        return 'success';
+      }
+      if (/<!DOCTYPE|<!ENTITY/i.test(body || '')) {
+        this.logger.warn('公众号回调 XML 包含不安全的 DOCTYPE/ENTITY，已忽略');
+        return 'success';
+      }
       const xml = this.xmlParser.parse(body);
       const msg = xml.xml;
 

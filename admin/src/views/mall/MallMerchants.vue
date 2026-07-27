@@ -1,8 +1,6 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>商户管理</h2>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="商户管理" />
 
     <div class="filter-bar">
       <el-input
@@ -25,6 +23,18 @@
 
     <el-table :data="merchants" v-loading="loading" border stripe>
       <el-table-column prop="name" label="商户名称" min-width="150" />
+      <el-table-column label="小程序商户用户" min-width="190">
+        <template #default="{ row }">
+          <div v-if="merchantOwner(row)" class="user-cell">
+            <el-avatar :size="32" :src="merchantOwner(row).avatar">{{ userInitial(merchantOwner(row)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ merchantOwner(row).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">{{ merchantOwner(row).phone || `UID ${merchantOwner(row).uid || merchantOwner(row).id}` }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="logo" label="Logo" width="80">
         <template #default="{ row }">
           <el-image v-if="row.logo" :src="row.logo" :preview-src-list="[row.logo]" style="width: 40px; height: 40px" fit="cover" />
@@ -79,6 +89,18 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item label="商户名称">{{ selectedMerchant?.name }}</el-descriptions-item>
         <el-descriptions-item label="联系电话">{{ selectedMerchant?.phone || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="小程序商户用户" :span="2">
+          <div v-if="merchantOwner(selectedMerchant)" class="user-cell">
+            <el-avatar :size="36" :src="merchantOwner(selectedMerchant).avatar">{{ userInitial(merchantOwner(selectedMerchant)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ merchantOwner(selectedMerchant).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">用户ID：{{ merchantOwner(selectedMerchant).id }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定小程序用户</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="小程序手机号">{{ merchantOwner(selectedMerchant)?.phone || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="小程序UID">{{ merchantOwner(selectedMerchant)?.uid ? `UID ${merchantOwner(selectedMerchant).uid}` : '-' }}</el-descriptions-item>
         <el-descriptions-item label="Logo">
           <el-image v-if="selectedMerchant?.logo" :src="selectedMerchant.logo" style="width: 60px; height: 60px" fit="cover" />
           <span v-else>-</span>
@@ -193,6 +215,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -203,6 +226,8 @@ const showDetailDialog = ref(false)
 const showEditDialog = ref(false)
 const selectedMerchant = ref<any>(null)
 const merchantStats = ref<any>(null)
+const merchantOwner = (row: any) => row?.user || row?.User || null
+const userInitial = (user: any) => String(user?.nickname || '用').slice(0, 1)
 
 const editForm = reactive({
   id: '',
@@ -372,17 +397,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
 .filter-bar {
   display: flex;
   gap: 12px;
@@ -393,5 +407,33 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-meta {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.user-name {
+  font-weight: 600;
+  color: #172033;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-sub {
+  color: #7b8798;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

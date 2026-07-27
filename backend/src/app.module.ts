@@ -1,9 +1,11 @@
+import './config/bootstrap-env';
 import { Module, Provider } from '@nestjs/common';
 import { APP_INTERCEPTOR, APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { validate } from './config/env.validation';
+import { getEnvFilePaths } from './config/env-loader';
 import { PrismaModule } from './common/modules/prisma.module';
 import { RedisModule } from './common/modules/redis.module';
 import { LoggerModule } from './common/modules/logger.module';
@@ -14,10 +16,13 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { RegionModule } from './modules/region/region.module';
 import { PostModule } from './modules/post/post.module';
+import { PostShareModule } from './modules/post-share/post-share.module';
 import { CommentModule } from './modules/comment/comment.module';
 import { CircleModule } from './modules/circle/circle.module';
 import { ShopModule } from './modules/shop/shop.module';
-import { DeliveryModule } from './modules/delivery/delivery.module';
+// SEC-P0-B5: DeliveryModule 为历史遗留空壳（订单池恒空、骑手表无写入、orderPool 越权泄露地址电话），已下线。
+// 其唯一有用副作用（写 Redis rider:location）已迁移至 ErrandService.updateLocation。
+// import { DeliveryModule } from './modules/delivery/delivery.module';
 import { ErrandModule } from './modules/errand/errand.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { FinanceAdminModule } from './modules/finance-admin/finance-admin.module';
@@ -54,6 +59,8 @@ import { NetDiskModule } from './modules/netdisk/netdisk.module';
 import { UserAdminModule } from './modules/user-admin/user-admin.module';
 import { SystemAdminModule } from './modules/system-admin/system-admin.module';
 import { OrderCenterModule } from './modules/order-center/order-center.module';
+import { OrderAppealModule } from './modules/order-appeal/order-appeal.module';
+import { AssistantTicketModule } from './modules/assistant-ticket/assistant-ticket.module';
 import { LayoutConfigModule } from './modules/layout-config/layout-config.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { MarketingAdminModule } from './modules/marketing-admin/marketing-admin.module';
@@ -64,6 +71,9 @@ import { RecommendModule } from './modules/recommend/recommend.module';
 import { ABTestModule } from './modules/ab-test/ab-test.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SchoolModule } from './modules/school/school.module';
+import { LicenseRuntimeModule } from './modules/license-runtime/license-runtime.module';
+import { MembershipModule } from './modules/membership/membership.module';
+import { SearchModule } from './modules/search/search.module';
 import { CampusMapModule } from './modules/campus-map/campus-map.module';
 import { RequestLogInterceptor } from './interceptors/request-log.interceptor';
 import { AllExceptionsFilter } from './filters/all-exceptions.filter';
@@ -95,12 +105,13 @@ const uploadAdminVideoThrottleLimit = parseInt(
   10,
 );
 const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || '60', 10);
+const envFilePath = getEnvFilePaths();
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
+      envFilePath,
       validate,
     }),
     ThrottlerModule.forRootAsync({
@@ -160,10 +171,11 @@ const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LI
     UserModule,
     RegionModule,
     PostModule,
+    PostShareModule,
     CommentModule,
     CircleModule,
     ShopModule,
-    DeliveryModule,
+    // DeliveryModule 已下线（见上方 import 处说明）
     ErrandModule,
     FinanceModule,
     FinanceAdminModule,
@@ -200,6 +212,8 @@ const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LI
     UserAdminModule,
     SystemAdminModule,
     OrderCenterModule,
+    OrderAppealModule,
+    AssistantTicketModule,
     LayoutConfigModule,
     AnalyticsModule,
     MarketingAdminModule,
@@ -210,6 +224,9 @@ const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LI
     ABTestModule,
     SchedulerModule,
     SchoolModule,
+    LicenseRuntimeModule,
+    MembershipModule,
+    SearchModule,
     CampusMapModule,
   ],
   providers: [

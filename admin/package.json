@@ -1,21 +1,22 @@
 {
   "name": "lingmeng-admin",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.36",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext .vue,.ts,.tsx --fix",
+    "lint": "npm run lint:check",
+    "lint:check": "eslint . --ext .vue,.ts,.tsx",
+    "lint:fix": "eslint . --ext .vue,.ts,.tsx --fix",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
-    "axios": "^1.7.9",
-    "dayjs": "^1.11.13",
-    "echarts": "^5.5.1",
+    "axios": "^1.18.1",
     "element-plus": "^2.10.7",
+    "ol": "^10.9.0",
     "pinia": "^2.3.0",
     "qrcode": "^1.5.4",
     "sass": "^1.90.0",
@@ -25,9 +26,10 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.6",
-    "@vitejs/plugin-vue": "^5.2.1",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.5",
-    "vue-tsc": "^2.2.0"
+    "@vitejs/plugin-vue": "5.2.1",
+    "typescript": "5.7.3",
+    "unplugin-vue-components": "^32.1.0",
+    "vite": "^6.4.3",
+    "vue-tsc": "2.2.0"
   }
 }

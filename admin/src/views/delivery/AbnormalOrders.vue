@@ -18,8 +18,19 @@
           <el-tag type="danger" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="description" label="异常原因" min-width="180" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.description || row.cancelReason || '-' }}</template>
+      <el-table-column prop="abnormalReason" label="异常原因" min-width="260">
+        <template #default="{ row }">
+          <div class="risk-list">
+            <div v-for="event in row.openRiskEvents || []" :key="event.id" class="risk-item">
+              <el-tag :type="event.eventLevel === 'critical' ? 'danger' : event.eventLevel === 'error' ? 'warning' : 'info'" size="small">
+                {{ riskTypeMap[event.eventType] || event.eventType }}
+              </el-tag>
+              <span>{{ event.description }}</span>
+              <el-button link type="primary" @click="handleRisk(event.id)">标记已处理</el-button>
+            </div>
+            <span v-if="!(row.openRiskEvents || []).length">{{ row.abnormalReason || '-' }}</span>
+          </div>
+        </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="下单时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN') }}</template>
@@ -36,6 +47,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
+import { handleErrandRiskEvent } from '@/api/errand'
 
 const statusMap: Record<string, string> = {
   CANCELLED: '已取消',
@@ -51,6 +63,12 @@ const statusMap: Record<string, string> = {
   refunded: '已退款',
   cancelled: '已取消',
 }
+const riskTypeMap: Record<string, string> = {
+  unaccepted_timeout: '长时间无人接单',
+  delivery_overdue: '履约超时',
+  refund_failed: '退款失败',
+  auto_receipt_hold_48h: '自动确认长时间阻塞',
+}
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
@@ -60,10 +78,20 @@ const total = ref(0)
 const loadData = async () => {
   loading.value = true
   try {
-    const res: any = await request.get('/admin/abnormal-orders', { params: { page: page.value, pageSize: pageSize.value } })
+    const res: any = await request.get('/admin/errand/abnormal-orders', { params: { page: page.value, pageSize: pageSize.value } })
     list.value = res?.list || res?.data?.list || []
     total.value = res?.total || res?.data?.total || 0
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') } finally { loading.value = false }
+}
+
+const handleRisk = async (id: string) => {
+  try {
+    await handleErrandRiskEvent(id)
+    ElMessage.success('已标记处理')
+    await loadData()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '处理失败')
+  }
 }
 
 onMounted(() => loadData())
@@ -73,4 +101,6 @@ onMounted(() => loadData())
 .page-shell { padding: 24px; }
 .filter-bar { display: flex; gap: 12px; margin: 16px 0; }
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
+.risk-list { display: grid; gap: 8px; }
+.risk-item { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
 </style>

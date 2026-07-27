@@ -123,6 +123,25 @@ export class SystemAdminController {
   @ApiOperation({ summary: '批量删除文件' })
   batchDeleteFiles(@Body() dto: BatchDeleteFilesDto) { return this.svc.batchDeleteFiles(dto); }
 
+  // ==================== 协议与条款 ====================
+
+  @Get('agreement-documents')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '协议文档列表' })
+  listAgreementDocuments(@Query() query: any) { return this.svc.listAgreementDocuments(query); }
+
+  @Put('agreement-documents/:type')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '保存协议文档' })
+  saveAgreementDocument(@Param('type') type: string, @Body() dto: any) {
+    return this.svc.saveAgreementDocument(type, dto);
+  }
+
+  @Get('agreement-consents')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '用户协议确认记录' })
+  listAgreementConsents(@Query() query: any) { return this.svc.listAgreementConsents(query); }
+
   // ==================== 系统配置分组 ====================
 
   @Get('config-group/:group')

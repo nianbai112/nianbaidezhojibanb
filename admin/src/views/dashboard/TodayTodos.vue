@@ -16,7 +16,7 @@
         </div>
         <el-button type="primary" size="small" :disabled="item.count === 0" @click="$router.push(item.route)">去处理</el-button>
       </div>
-      <el-empty v-if="!loading && todos.every(item => item.count === 0)" class="todos-empty" description="当前暂无待处理事项" />
+      <EmptyState v-if="!loading && todos.every(item => item.count === 0)" class="todos-empty" description="当前暂无待处理事项" />
     </div>
   </div>
 </template>
@@ -25,14 +25,17 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { request } from '@/api/request'
 
 const loading = ref(false)
 const todos = ref([
   { title: '学生认证审核', key: 'pendingCerts', count: 0, icon: 'Checked', color: '#3b82f6', route: '/user/verification' },
-  { title: '商家入驻审核', key: 'pendingMerchants', count: 0, icon: 'Shop', color: '#10b981', route: '/merchant/audit' },
+  { title: '商家入驻审核', key: 'pendingMerchants', count: 0, icon: 'Shop', color: '#10b981', route: '/merchant/list?auditStatus=pending' },
   { title: '商品审核', key: 'pendingProducts', count: 0, icon: 'Goods', color: '#0ea5e9', route: '/mall/products' },
   { title: '退款处理', key: 'pendingRefunds', count: 0, icon: 'Money', color: '#f59e0b', route: '/merchant/refunds' },
+  { title: '外卖履约预警', key: 'takeawayFulfillmentAlerts', count: 0, icon: 'Warning', color: '#f97316', route: '/merchant/orders?alert=fulfillment' },
+  { title: '配送申诉待处理', key: 'pendingOrderAppeals', count: 0, icon: 'Warning', color: '#dc2626', route: '/order/appeals?status=pending' },
   { title: '内容待审', key: 'pendingPosts', count: 0, icon: 'Document', color: '#8b5cf6', route: '/content/audit' },
   { title: '评论待审', key: 'pendingComments', count: 0, icon: 'ChatDotRound', color: '#14b8a6', route: '/content/audit' },
   { title: '用户举报', key: 'pendingReports', count: 0, icon: 'Warning', color: '#ec4899', route: '/content/audit' },
@@ -76,15 +79,15 @@ onMounted(loadTodos)
 .todo-icon {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--mx-card);
 }
 .todo-content { flex: 1; }
-.todo-title { font-weight: 600; color: #1e293b; }
-.todo-count { font-size: 13px; color: #64748b; margin-top: 4px; }
+.todo-title { font-weight: 600; color: var(--mx-text); }
+.todo-count { font-size: 13px; color: var(--mx-sub); margin-top: 4px; }
 .todos-empty {
   grid-column: 1 / -1;
   min-height: 240px;

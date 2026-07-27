@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商家评价" subtitle="管理商家评价" icon="Star" />
+    <PageHeader title="评价管理" subtitle="处理评价回复与违规内容治理" icon="Star" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索评价内容" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
@@ -39,7 +39,7 @@
       <el-table-column prop="content" label="评价内容" min-width="180" show-overflow-tooltip />
       <el-table-column prop="images" label="图片" width="100">
         <template #default="{ row }">
-          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 40px; height: 40px; border-radius: 4px; cursor: pointer;" preview-teleported :preview-src-list="row.images" />
+          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 40px; height: 40px; border-radius: 6px; cursor: pointer;" preview-teleported :preview-src-list="row.images" />
           <span v-else>-</span>
         </template>
       </el-table-column>

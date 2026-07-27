@@ -110,9 +110,9 @@
             </article>
           </div>
 
-          <el-empty v-if="!feeConfig.banners.length" description="暂无跑腿轮播图">
+          <EmptyState v-if="!feeConfig.banners.length" description="暂无跑腿轮播图">
             <el-button type="primary" @click="addBanner">添加轮播图</el-button>
-          </el-empty>
+          </EmptyState>
 
           <el-divider />
           <div class="form-grid two">
@@ -175,10 +175,124 @@
             </el-form-item>
           </div>
         </el-card>
-      </el-tab-pane>
+	      </el-tab-pane>
+
+	      <el-tab-pane label="接单规则" name="taking">
+	        <el-card shadow="never" class="settings-card" v-loading="loading">
+	          <div class="section-title">
+	            <strong>接单人范围</strong>
+	            <span>后端按这里的规则决定订单进入认证骑手池，还是允许普通用户接单。</span>
+	          </div>
+	          <div class="switch-list">
+	            <div class="switch-row">
+	              <div>
+	                <strong>允许普通用户接单</strong>
+	                <span>开启后，符合规则的同校用户可在接单大厅接低风险跑腿单。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserEnabled" active-text="开启" inactive-text="关闭" />
+	            </div>
+	            <div class="switch-row">
+	              <div>
+	                <strong>允许下单人选择接单身份</strong>
+	                <span>开启后，小程序下单页展示「认证骑手 / 同校用户」，认证骑手加价只在用户主动选择认证骑手时生效。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.receiverChoiceEnabled" active-text="开启" inactive-text="关闭" />
+	            </div>
+	            <div class="switch-row">
+	              <div>
+	                <strong>无人接单兜底给认证骑手</strong>
+	                <span>同校用户单超过等待时间无人接后，进入认证骑手兜底池，按用户原价结算。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserFallbackEnabled" active-text="开启" inactive-text="关闭" />
+	            </div>
+	            <div class="switch-row">
+	              <div>
+	                <strong>手机号验证</strong>
+	                <span>开启后，普通用户必须绑定手机号后才能接单。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequirePhone" active-text="需要" inactive-text="不需要" />
+	            </div>
+	            <div class="switch-row">
+	              <div>
+	                <strong>学生认证</strong>
+	                <span>开启后，普通用户必须通过学生认证后才能接单。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequireStudentVerify" active-text="需要" inactive-text="不需要" />
+	            </div>
+	            <div class="switch-row">
+	              <div>
+	                <strong>高风险任务必须认证骑手</strong>
+	                <span>蛋糕、贵重、易碎、大件重物等风险任务不进入普通用户池。</span>
+	              </div>
+	              <el-switch v-model="feeConfig.orderTakingPolicy.highRiskRequiresApprovedRider" active-text="开启" inactive-text="关闭" />
+	            </div>
+	          </div>
+
+	          <el-divider />
+	          <div class="form-grid">
+	            <el-form-item label="认证骑手加价金额">
+	              <el-input-number
+	                v-model="feeConfig.orderTakingPolicy.approvedRiderSurchargeAmount"
+	                :min="0"
+	                :max="100"
+	                :precision="2"
+	                :step="0.5"
+	              />
+	            </el-form-item>
+	            <el-form-item label="认证骑手优先(分钟)">
+	              <el-input-number v-model="feeConfig.orderTakingPolicy.riderPriorityMinutes" :min="0" :max="120" />
+	            </el-form-item>
+	            <el-form-item label="兜底等待时间(分钟)">
+	              <el-input-number v-model="feeConfig.orderTakingPolicy.ordinaryUserFallbackMinutes" :min="1" :max="120" />
+	            </el-form-item>
+	            <el-form-item label="普通用户进行中上限">
+	              <el-input-number v-model="feeConfig.orderTakingPolicy.ordinaryUserMaxActiveOrders" :min="0" :max="10" />
+	            </el-form-item>
+	            <el-form-item label="普通用户每日接单上限">
+	              <el-input-number v-model="feeConfig.orderTakingPolicy.ordinaryUserDailyLimit" :min="0" :max="100" />
+	            </el-form-item>
+	          </div>
+	          <el-form-item label="普通用户可接任务">
+	            <el-checkbox-group v-model="feeConfig.orderTakingPolicy.ordinaryUserTaskTypes" class="task-type-checks">
+	              <el-checkbox v-for="service in serviceCards" :key="service.key" :label="service.key">
+	                {{ service.title }}
+	              </el-checkbox>
+	            </el-checkbox-group>
+	          </el-form-item>
+	        </el-card>
+	      </el-tab-pane>
+
+	      <el-tab-pane label="风险标签" name="risk">
+	        <el-card shadow="never" class="settings-card" v-loading="loading">
+	          <div class="section-title">
+	            <strong>按任务场景配置风险项</strong>
+	            <span>小程序按这里下发的配置展示风险标签；AI建议只进入建议中心，不会自动改这里。</span>
+	          </div>
+	          <div class="risk-service-list">
+	            <article v-for="service in serviceCards" :key="service.key" class="risk-service-card">
+	              <div class="risk-service-head">
+	                <div>
+	                  <strong>{{ service.title }}</strong>
+	                  <span>{{ service.scene }}</span>
+	                </div>
+	                <el-button size="small" plain @click="resetRiskTags(service.key)">恢复默认</el-button>
+	              </div>
+	              <div class="risk-tag-editor">
+	                <div v-for="tag in feeConfig.riskTagConfig[service.key]" :key="tag.key" class="risk-tag-row">
+	                  <el-switch v-model="tag.enabled" active-text="显示" inactive-text="隐藏" />
+	                  <el-input v-model="tag.label" placeholder="标签名称" />
+	                  <el-input v-model="tag.desc" placeholder="给用户看的简短说明" />
+	                  <el-switch v-model="tag.requiresApprovedRider" active-text="需认证骑手" inactive-text="不强制" />
+	                  <el-input-number v-model="tag.extraEtaMinutes" :min="0" :max="60" controls-position="right" />
+	                </div>
+	              </div>
+	            </article>
+	          </div>
+	        </el-card>
+	      </el-tab-pane>
 
       <el-tab-pane label="奖惩规则" name="reward">
-        <el-card shadow="never" class="settings-card" v-loading="loading">
+	        <el-card shadow="never" class="settings-card" v-loading="loading">
           <div class="section-title">
             <strong>骑手奖惩</strong>
             <span>用于后续结算、调度和服务质量治理。</span>
@@ -202,6 +316,26 @@
           </div>
         </el-card>
       </el-tab-pane>
+
+      <el-tab-pane label="闭环与结算" name="closure">
+        <el-card shadow="never" class="settings-card" v-loading="loading">
+          <div class="section-title">
+            <strong>交易闭环开关</strong>
+            <span>按区域控制自动确认和新结算链路，关闭时不会直接改写已有订单。</span>
+          </div>
+          <div class="form-grid">
+            <el-form-item label="闭环版本">
+              <el-input-number v-model="feeConfig.closureVersion" :min="1" :max="99" :precision="0" />
+            </el-form-item>
+            <el-form-item label="24小时自动确认">
+              <el-switch v-model="feeConfig.autoReceiptEnabled" active-text="开启" inactive-text="暂停" />
+            </el-form-item>
+            <el-form-item label="V2结算与追偿">
+              <el-switch v-model="feeConfig.settlementV2Enabled" active-text="开启" inactive-text="暂停" />
+            </el-form-item>
+          </div>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -209,6 +343,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import { fetchRegions } from '@/api/admin'
@@ -235,6 +370,38 @@ const defaultDescriptions: Record<string, string> = {
   custom_task: '打印、买东西、送资料等临时任务都可以发布',
 }
 
+const defaultRiskTagConfig: Record<string, any[]> = {
+  express_pickup: [
+    { key: 'large', label: '包裹大件', desc: '箱子/大包裹', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '包裹较重', desc: '桶装/重物', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'fragile', label: '易碎标识', desc: '玻璃/陶瓷', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'valuable', label: '贵重包裹', desc: '手机/电脑', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+  ],
+  express_send: [
+    { key: 'valuable', label: '贵重物品', desc: '手机/电脑/证件', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'fragile', label: '易碎物品', desc: '玻璃/陶瓷', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'large', label: '大件包裹', desc: '箱子/大包', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '重物包裹', desc: '较重需搬运', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'liquid', label: '液体粉末', desc: '需确认可寄', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'prohibited', label: '疑似禁寄', desc: '需人工确认', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 0 },
+  ],
+  food_delivery: [
+    { key: 'cake', label: '蛋糕', desc: '需平放', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 8 },
+    { key: 'liquid', label: '汤水/奶茶', desc: '易洒漏', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'hot', label: '热餐热饮', desc: '注意保温', enabled: true, requiresApprovedRider: false, extraEtaMinutes: 2 },
+    { key: 'cold', label: '冷饮冷食', desc: '注意时效', enabled: true, requiresApprovedRider: false, extraEtaMinutes: 2 },
+    { key: 'large', label: '多人餐', desc: '餐品较多', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+  ],
+  custom_task: [
+    { key: 'valuable', label: '贵重物品', desc: '需当面交接', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'fragile', label: '易碎物品', desc: '需轻拿轻放', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'large', label: '大件任务', desc: '搬运/大包', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '重物任务', desc: '搬运较重', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'liquid', label: '液体物品', desc: '易洒漏', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'prohibited', label: '不确定风险', desc: '需平台确认', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 0 },
+  ],
+}
+
 const activeTab = ref('services')
 const loading = ref(false)
 const saving = ref(false)
@@ -257,6 +424,39 @@ const rewardConfig = ref<any>({
   nightReward: 0,
 })
 
+const persistedMetaKeys = new Set(['id', 'regionId', 'region_id', 'createdAt', 'created_at', 'updatedAt', 'updated_at'])
+
+function stripPersistedMeta<T = any>(source: T): T {
+  if (Array.isArray(source)) return source.map(item => stripPersistedMeta(item)) as T
+  if (!source || typeof source !== 'object') return source
+  return Object.entries(source as Record<string, any>).reduce((result, [key, value]) => {
+    if (!persistedMetaKeys.has(key)) result[key] = stripPersistedMeta(value)
+    return result
+  }, {} as Record<string, any>) as T
+}
+
+function cloneRiskTags(list: any[] = []) {
+  return list.map(item => ({
+    key: item.key,
+    label: item.label,
+    desc: item.desc || item.description || '',
+    enabled: item.enabled !== false,
+    requiresApprovedRider: item.requiresApprovedRider ?? item.requires_approved_rider ?? true,
+    extraEtaMinutes: Number(item.extraEtaMinutes ?? item.extra_eta_minutes ?? 0),
+  }))
+}
+
+function normalizeRiskTagConfig(source: any = {}) {
+  const raw = source.riskTagConfig || source.risk_tag_config || {}
+  return serviceCards.reduce((result, service) => {
+    const list = Array.isArray(raw[service.key]) && raw[service.key].length
+      ? raw[service.key]
+      : defaultRiskTagConfig[service.key]
+    result[service.key] = cloneRiskTags(list)
+    return result
+  }, {} as Record<string, any[]>)
+}
+
 function makeFeeConfig(source: any = {}) {
   const basePrice = Number(source.basePrice ?? 0)
   const baseFees = { ...(source.baseFees || source.base_fees || {}) }
@@ -270,11 +470,28 @@ function makeFeeConfig(source: any = {}) {
     if (baseFees[service.key] === undefined) baseFees[service.key] = basePrice
     if (!serviceDescriptions[service.key]) serviceDescriptions[service.key] = defaultDescriptions[service.key]
   })
-  const banners = Array.isArray(source.banners || source.bannerJson || source.banner_json)
-    ? (source.banners || source.bannerJson || source.banner_json)
-    : []
+	  const banners = Array.isArray(source.banners || source.bannerJson || source.banner_json)
+	    ? (source.banners || source.bannerJson || source.banner_json)
+	    : []
+	  const rawPolicy = source.orderTakingPolicy || source.order_taking_policy || {}
+	  const orderTakingPolicy = {
+	    ordinaryUserEnabled: rawPolicy.ordinaryUserEnabled ?? rawPolicy.ordinary_user_enabled ?? false,
+	    ordinaryUserTaskTypes: Array.isArray(rawPolicy.ordinaryUserTaskTypes || rawPolicy.ordinary_user_task_types)
+	      ? (rawPolicy.ordinaryUserTaskTypes || rawPolicy.ordinary_user_task_types)
+	      : ['express_pickup'],
+	    ordinaryUserRequirePhone: rawPolicy.ordinaryUserRequirePhone ?? rawPolicy.ordinary_user_require_phone ?? false,
+	    ordinaryUserRequireStudentVerify: rawPolicy.ordinaryUserRequireStudentVerify ?? rawPolicy.ordinary_user_require_student_verify ?? false,
+	    ordinaryUserMaxActiveOrders: Number(rawPolicy.ordinaryUserMaxActiveOrders ?? rawPolicy.ordinary_user_max_active_orders ?? 1),
+	    ordinaryUserDailyLimit: Number(rawPolicy.ordinaryUserDailyLimit ?? rawPolicy.ordinary_user_daily_limit ?? 3),
+	    riderPriorityMinutes: Number(rawPolicy.riderPriorityMinutes ?? rawPolicy.rider_priority_minutes ?? 0),
+	    receiverChoiceEnabled: rawPolicy.receiverChoiceEnabled ?? rawPolicy.receiver_choice_enabled ?? false,
+	    ordinaryUserFallbackEnabled: rawPolicy.ordinaryUserFallbackEnabled ?? rawPolicy.ordinary_user_fallback_enabled ?? false,
+	    ordinaryUserFallbackMinutes: Number(rawPolicy.ordinaryUserFallbackMinutes ?? rawPolicy.ordinary_user_fallback_minutes ?? 10),
+	    approvedRiderSurchargeAmount: Number(rawPolicy.approvedRiderSurchargeAmount ?? rawPolicy.approved_rider_surcharge_amount ?? 0),
+	    highRiskRequiresApprovedRider: rawPolicy.highRiskRequiresApprovedRider ?? rawPolicy.high_risk_requires_approved_rider ?? true,
+	  }
 
-  return {
+	  return {
     basePrice,
     distancePrice: Number(source.distancePrice ?? 0),
     weightPrice: Number(source.weightPrice ?? 0),
@@ -286,15 +503,20 @@ function makeFeeConfig(source: any = {}) {
     serviceSwitches,
     baseFees,
     serviceDescriptions,
-    banners: banners.map((item: any) => ({
-      image_url: item.image_url || item.imageUrl || '',
-      link_url: item.link_url || item.linkUrl || '',
-      title: item.title || '',
-      enabled: item.enabled !== false,
-    })),
-    tipOptions: Array.isArray(source.tipOptions) ? source.tipOptions : ['不需要', '¥2', '¥5', '¥10', '其他'],
-    customTaskTipOptions: Array.isArray(source.customTaskTipOptions) ? source.customTaskTipOptions : ['¥2', '¥5', '¥10', '¥15', '其他'],
-  }
+	    banners: banners.map((item: any) => ({
+	      image_url: item.image_url || item.imageUrl || '',
+	      link_url: item.link_url || item.linkUrl || '',
+	      title: item.title || '',
+	      enabled: item.enabled !== false,
+	    })),
+	    tipOptions: Array.isArray(source.tipOptions) ? source.tipOptions : ['不需要', '¥2', '¥5', '¥10', '其他'],
+	    customTaskTipOptions: Array.isArray(source.customTaskTipOptions) ? source.customTaskTipOptions : ['¥2', '¥5', '¥10', '¥15', '其他'],
+	    orderTakingPolicy,
+	    riskTagConfig: normalizeRiskTagConfig(source),
+	    closureVersion: Number(source.closureVersion ?? source.closure_version ?? 2),
+	    autoReceiptEnabled: source.autoReceiptEnabled ?? source.auto_receipt_enabled ?? true,
+	    settlementV2Enabled: source.settlementV2Enabled ?? source.settlement_v2_enabled ?? true,
+	  }
 }
 
 function parseOptions(text: string) {
@@ -318,8 +540,8 @@ async function loadAll() {
     feeConfig.value = makeFeeConfig(fee || {})
     tipOptionsText.value = feeConfig.value.tipOptions.join(',')
     customTipOptionsText.value = feeConfig.value.customTaskTipOptions.join(',')
-    pageConfig.value = { ...pageConfig.value, ...(page || {}) }
-    rewardConfig.value = { ...rewardConfig.value, ...(reward || {}) }
+    pageConfig.value = { ...pageConfig.value, ...stripPersistedMeta(page || {}) }
+    rewardConfig.value = { ...rewardConfig.value, ...stripPersistedMeta(reward || {}) }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载跑腿配置失败')
   } finally {
@@ -342,6 +564,10 @@ function moveBanner(index: number, step: number) {
   feeConfig.value.banners.splice(next, 0, item)
 }
 
+function resetRiskTags(serviceKey: string) {
+  feeConfig.value.riskTagConfig[serviceKey] = cloneRiskTags(defaultRiskTagConfig[serviceKey] || [])
+}
+
 async function saveAll() {
   if (!selectedRegionId.value) {
     ElMessage.warning('请先选择区域')
@@ -356,9 +582,9 @@ async function saveAll() {
       banners: feeConfig.value.banners.filter((item: any) => item.image_url),
     }
     await Promise.all([
-      saveErrandFeeConfig(selectedRegionId.value, payload),
-      saveErrandPageConfig(selectedRegionId.value, pageConfig.value),
-      saveErrandRewardPunish(selectedRegionId.value, rewardConfig.value),
+      saveErrandFeeConfig(selectedRegionId.value, stripPersistedMeta(payload)),
+      saveErrandPageConfig(selectedRegionId.value, stripPersistedMeta(pageConfig.value)),
+      saveErrandRewardPunish(selectedRegionId.value, stripPersistedMeta(rewardConfig.value)),
     ])
     ElMessage.success('跑腿配置已保存，小程序刷新后生效')
   } catch (e: any) {
@@ -388,10 +614,10 @@ onMounted(async () => {
 .service-board,
 .service-card,
 .settings-card {
-  border: 1px solid rgba(203, 213, 225, 0.78);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
+  border: 1px solid var(--mx-border-strong);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
 }
 
 .service-board {
@@ -400,19 +626,19 @@ onMounted(async () => {
   gap: 24px;
   align-items: center;
   padding: 24px;
-  background: linear-gradient(135deg, #eff6ff, #f8fafc 52%, #ecfeff);
+  background: var(--mx-soft);
 }
 
 .board-copy p,
 .section-title span,
 .service-head span {
   margin: 0;
-  color: #64748b;
+  color: var(--mx-sub);
 }
 
 .board-copy h3 {
   margin: 6px 0;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 26px;
   font-weight: 850;
 }
@@ -436,7 +662,7 @@ onMounted(async () => {
 
 .service-head strong {
   display: block;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 17px;
 }
 
@@ -454,10 +680,10 @@ onMounted(async () => {
   font-size: 20px;
 }
 
-.service-icon.blue { background: linear-gradient(135deg, #2563eb, #38bdf8); }
-.service-icon.cyan { background: linear-gradient(135deg, #0891b2, #22d3ee); }
-.service-icon.orange { background: linear-gradient(135deg, #f97316, #facc15); }
-.service-icon.purple { background: linear-gradient(135deg, #7c3aed, #c084fc); }
+.service-icon.blue { background: var(--el-color-primary); }
+.service-icon.cyan { background: var(--mx-cyan); }
+.service-icon.orange { background: var(--el-color-warning); }
+.service-icon.purple { background: var(--mx-purple); }
 
 .service-body {
   display: grid;
@@ -465,7 +691,7 @@ onMounted(async () => {
 }
 
 .service-body label {
-  color: #475569;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
@@ -475,11 +701,11 @@ onMounted(async () => {
 }
 
 .settings-tabs {
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .settings-card {
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .section-title {
@@ -490,7 +716,7 @@ onMounted(async () => {
 }
 
 .section-title strong {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 18px;
 }
 
@@ -511,19 +737,19 @@ onMounted(async () => {
   align-items: center;
   gap: 18px;
   padding: 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  background: #f8fafc;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-soft);
 }
 
 .switch-row strong {
   display: block;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 16px;
 }
 
 .switch-row span {
-  color: #64748b;
+  color: var(--mx-sub);
 }
 
 .banner-grid {
@@ -536,9 +762,9 @@ onMounted(async () => {
   display: grid;
   gap: 14px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  background: #f8fafc;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-soft);
 }
 
 .banner-fields {
@@ -569,6 +795,54 @@ onMounted(async () => {
   width: 100%;
 }
 
+.task-type-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+.risk-service-list {
+  display: grid;
+  gap: 18px;
+}
+
+.risk-service-card {
+  padding: 18px;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-soft);
+}
+
+.risk-service-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.risk-service-head strong {
+  display: block;
+  color: var(--mx-text);
+  font-size: 16px;
+}
+
+.risk-service-head span {
+  color: var(--mx-sub);
+}
+
+.risk-tag-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.risk-tag-row {
+  display: grid;
+  grid-template-columns: 120px minmax(110px, 0.7fr) minmax(180px, 1.2fr) 150px 120px;
+  gap: 10px;
+  align-items: center;
+}
+
 @media (max-width: 1400px) {
   .service-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -579,7 +853,8 @@ onMounted(async () => {
   .service-grid,
   .banner-grid,
   .form-grid,
-  .form-grid.two {
+  .form-grid.two,
+  .risk-tag-row {
     grid-template-columns: 1fr;
   }
 

@@ -179,7 +179,7 @@
           <el-form-item label="每日打卡上限"><el-input-number v-model="configForm.maxDailyCheckins" :min="1" /></el-form-item>
           <el-form-item label="打卡范围(米)"><el-input-number v-model="configForm.locationVerifyRadius" :min="100" /></el-form-item>
         </el-form>
-        <el-empty v-else description="请先选择区域" />
+        <EmptyState v-else description="请先选择区域" />
       </el-tab-pane>
 
       <el-tab-pane label="数据统计" name="stats">
@@ -272,6 +272,7 @@ import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 
 const activeTab = ref('locations')
 const saving = ref(false)
@@ -631,11 +632,11 @@ onMounted(async () => {
 .tab-toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
 .media-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.thumb { width: 56px; height: 40px; border-radius: 8px; flex-shrink: 0; background: #eef5ff; }
-.icon-thumb { width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0; background: #eef5ff; }
-.thumb-empty { display: flex; align-items: center; justify-content: center; color: #8aa4c7; font-size: 12px; }
-.cell-title { font-weight: 600; color: #1f2d3d; }
-.cell-sub { max-width: 360px; margin-top: 4px; color: #8a98ac; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumb { width: 56px; height: 40px; border-radius: 6px; flex-shrink: 0; background: var(--el-color-primary-light-9); }
+.icon-thumb { width: 34px; height: 34px; border-radius: 6px; flex-shrink: 0; background: var(--el-color-primary-light-9); }
+.thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--mx-muted); font-size: 12px; }
+.cell-title { font-weight: 600; color: var(--mx-text); }
+.cell-sub { max-width: 360px; margin-top: 4px; color: var(--mx-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inline-field { display: flex; width: 100%; gap: 8px; }
 .inline-field .el-input { flex: 1; }
 </style>

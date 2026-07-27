@@ -1,12 +1,13 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>商城分类管理</h2>
-      <el-button type="primary" @click="showCreateDialog = true; resetForm()">
-        <el-icon><Plus /></el-icon>
-        新增分类
-      </el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="商城分类管理">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true; resetForm()">
+          <el-icon><Plus /></el-icon>
+          新增分类
+        </el-button>
+      </template>
+    </PageHeader>
 
     <el-table :data="categories" v-loading="loading" border stripe row-key="id">
       <el-table-column prop="name" label="分类名称" min-width="200" />
@@ -74,6 +75,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -166,15 +168,3 @@ onMounted(() => {
   loadCategories()
 })
 </script>
-
-<style scoped>
-.page-container {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-</style>

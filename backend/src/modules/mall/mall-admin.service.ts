@@ -4,10 +4,16 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { PrismaService } from "../../common/services/prisma.service";
+import { PaymentService } from "../payment/payment.service";
+import { MallService } from "./mall.service";
 
 @Injectable()
 export class MallAdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentService: PaymentService,
+    private readonly mallService: MallService,
+  ) {}
 
   // ==================== 操作日志 ====================
   private async logOperation(
@@ -561,6 +567,16 @@ export class MallAdminService {
     return order;
   }
 
+  // AUD-P1-183: 通用商城后台订单状态接口（mall:edit）只允许无资金副作用的
+  // 明确运营动作，且必须做当前状态白名单校验；
+  // 资金终态（paid/refunding/refunded）禁止，只能由 PaymentService 支付回调 /
+  // 统一退款状态机写入；发货请使用专用发货接口（deliverOrder）。
+  private static readonly ALLOWED_ORDER_STATUS_TRANSITIONS: Record<string, string[]> = {
+    cancelled: ["pending_pay"],
+    received: ["shipped"],
+    completed: ["received"],
+  };
+
   async updateOrderStatus(
     id: string,
     dto: { status: string; reason?: string },
@@ -570,12 +586,51 @@ export class MallAdminService {
     const order = await this.prisma.mallOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundException("订单不存在");
 
-    const updateData: any = { status: dto.status };
-    if (dto.status === "cancelled") {
-      updateData.cancelTime = new Date();
-      updateData.cancelReason = dto.reason;
+    const target = dto.status;
+    if (!target) throw new BadRequestException("订单状态不能为空");
+
+    // 资金终态与各业务终态流转必须由专门入口推进，禁止通过泛化 mall:edit 接口直写
+    const FORBIDDEN = ["pending_pay", "paid", "shipped", "refunding", "refunded"];
+    if (FORBIDDEN.includes(target)) {
+      throw new BadRequestException(
+        `订单状态 [${target}] 不允许通过通用状态接口修改；发货请使用发货接口，支付/退款结果由支付中心与退款状态机写入`,
+      );
     }
-    if (dto.status === "completed") {
+
+    const allowedFrom = MallAdminService.ALLOWED_ORDER_STATUS_TRANSITIONS[target];
+    if (!allowedFrom) {
+      throw new BadRequestException(`不支持将订单状态修改为 [${target}]`);
+    }
+    if (!allowedFrom.includes(order.status)) {
+      throw new BadRequestException(
+        `当前订单状态为 [${order.status}]，不允许流转到 [${target}]`,
+      );
+    }
+
+    // AUD-P1-185: 后台取消待支付订单复用商城用户侧的事务性资源回滚方法，
+    // 统一恢复库存/销量、优惠券、会员权益与补贴台账；operatorId/原因/操作日志一并写入。
+    // 该路径仅对 pending_pay 开放（上方白名单已校验），paid 等资金终态订单绝不会进入此处
+    // （也不会触发任何资源回滚），它们必须走退款状态机。
+    if (target === "cancelled") {
+      const cancelled = await this.mallService.cancelPendingPayOrder(id, {
+        type: "admin",
+        operatorId,
+        reason: dto.reason,
+      });
+      await this.logOperation(
+        operatorId,
+        "cancel_pending_pay",
+        "mall_order",
+        id,
+        "order",
+        dto,
+        ip,
+      );
+      return { success: true, data: cancelled };
+    }
+
+    const updateData: any = { status: target };
+    if (target === "completed") {
       updateData.completeTime = new Date();
     }
 
@@ -732,7 +787,7 @@ export class MallAdminService {
             },
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ reason: "asc" }, { createdAt: "desc" }],
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
       }),
@@ -742,6 +797,7 @@ export class MallAdminService {
     return {
       list: list.map((refund) => ({
         ...refund,
+        isPriority: String(refund.reason || "").includes("会员优先") || String(refund.description || "").includes("会员优先"),
         orderNo: refund.order?.orderNo,
         orderItems: refund.order?.items || [],
       })),
@@ -784,28 +840,27 @@ export class MallAdminService {
     });
     if (!refund) throw new NotFoundException("退款记录不存在");
 
+    if (refund.status !== 'applying') {
+      throw new BadRequestException(`退款状态 ${refund.status} 不支持审核`);
+    }
     const status = dto.status || "";
     const approved = dto.approved !== undefined
       ? dto.approved
       : status === "approved" || status === "merchant_approved";
     const rejected = status === "rejected" || status === "merchant_rejected";
+    const nextStatus = approved ? 'merchant_approved' : rejected ? 'merchant_rejected' : status === 'closed' ? 'closed' : '';
+    if (!nextStatus) throw new BadRequestException('退款审核状态无效');
 
-    const updated = await this.prisma.mallRefund.update({
-      where: { id },
+    const updated = await this.prisma.mallRefund.updateMany({
+      where: { id, status: 'applying' },
       data: {
-        status: approved ? "approved" : rejected ? "rejected" : status || refund.status,
+        status: nextStatus,
         merchantReply: dto.merchant_reply || (approved ? (dto.reason || null) : undefined),
         rejectReason: rejected ? (dto.reason || dto.reject_reason || "商家拒绝退款") : undefined,
         merchantReplyTime: new Date(),
       },
     });
-
-    if (approved) {
-      await this.prisma.mallOrder.update({
-        where: { id: refund.orderId },
-        data: { refundStatus: "refunding" },
-      });
-    }
+    if (updated.count === 0) throw new BadRequestException('退款状态已变更，请刷新后重试');
 
     await this.logOperation(
       operatorId,
@@ -817,7 +872,7 @@ export class MallAdminService {
       ip,
     );
 
-    return { success: true, data: updated };
+    return { success: true, data: { ...refund, status: nextStatus } };
   }
 
   async finishRefund(
@@ -828,31 +883,41 @@ export class MallAdminService {
   ) {
     const refund = await this.prisma.mallRefund.findUnique({
       where: { id },
+      include: { order: true },
     });
     if (!refund) throw new NotFoundException("退款记录不存在");
+    if (!['approved', 'merchant_approved'].includes(refund.status)) {
+      throw new BadRequestException(`退款状态 ${refund.status} 不支持发起退款`);
+    }
 
-    const updated = await this.prisma.mallRefund.update({
-      where: { id },
-      data: { status: "refunded", refundTime: new Date() },
-    });
+    // AUD-P1-011: 商城售后完成退款必须调用统一 PaymentService.refund，不再只改状态
+    try {
+      const paymentResult = await this.paymentService.refund({
+        bizType: 'mall_order',
+        bizId: refund.orderId,
+        amount: Number(refund.amount || refund.order?.totalAmount || 0),
+        reason: refund.reason || '商城售后退款',
+        operatorId,
+      });
 
-    // 更新订单退款状态
-    await this.prisma.mallOrder.update({
-      where: { id: refund.orderId },
-      data: { refundStatus: "refunded" },
-    });
+      const isSettled = paymentResult.status === 'success';
+      const updated = await this.prisma.mallRefund.updateMany({
+        where: { id, status: { in: ['approved', 'merchant_approved'] } },
+        data: isSettled
+          ? { status: 'refunded', refundTime: new Date() }
+          : { status: 'processing' },
+      });
+      if (updated.count === 0) throw new BadRequestException('退款状态已变更，请刷新后重试');
 
-    await this.logOperation(
-      operatorId,
-      "finish_refund",
-      "mall_refund",
-      id,
-      "refund",
-      dto,
-      ip,
-    );
-
-    return { success: true, data: updated };
+      await this.logOperation(operatorId, "finish_refund", "mall_refund", id, "refund", {
+        ...dto,
+        paymentStatus: paymentResult.status,
+      }, ip);
+      return { success: true, data: { id, orderId: refund.orderId, status: isSettled ? 'refunded' : 'processing' } };
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      throw new BadRequestException(`退款失败: ${e.message}`);
+    }
   }
 
   async rejectRefund(
@@ -866,14 +931,18 @@ export class MallAdminService {
     });
     if (!refund) throw new NotFoundException("退款记录不存在");
 
-    const updated = await this.prisma.mallRefund.update({
-      where: { id },
+    if (refund.status !== 'applying') {
+      throw new BadRequestException(`退款状态 ${refund.status} 不支持拒绝`);
+    }
+    const updated = await this.prisma.mallRefund.updateMany({
+      where: { id, status: 'applying' },
       data: {
-        status: "rejected",
+        status: "merchant_rejected",
         rejectReason: dto.reason || "商家拒绝退款",
         merchantReplyTime: new Date(),
       },
     });
+    if (updated.count === 0) throw new BadRequestException('退款状态已变更，请刷新后重试');
 
     await this.logOperation(
       operatorId,
@@ -885,7 +954,7 @@ export class MallAdminService {
       ip,
     );
 
-    return { success: true, data: updated };
+    return { success: true, data: { ...refund, status: 'merchant_rejected' } };
   }
 
   // ==================== 评价管理 ====================
@@ -1019,6 +1088,8 @@ export class MallAdminService {
       where.OR = [
         { realName: { contains: keyword } },
         { phone: { contains: keyword } },
+        { User: { is: { nickname: { contains: keyword } } } },
+        { User: { is: { phone: { contains: keyword } } } },
       ];
     }
     if (status) where.status = status;
@@ -1033,7 +1104,7 @@ export class MallAdminService {
         where,
         include: {
           User: {
-            select: { id: true, nickname: true, avatar: true, phone: true },
+            select: { id: true, uid: true, nickname: true, avatar: true, phone: true },
           },
           level: true,
         },
@@ -1057,7 +1128,7 @@ export class MallAdminService {
       where: { id },
       include: {
         User: {
-          select: { id: true, nickname: true, avatar: true, phone: true },
+          select: { id: true, uid: true, nickname: true, avatar: true, phone: true },
         },
         level: true,
         commissions: true,
@@ -1538,6 +1609,8 @@ export class MallAdminService {
         { name: { contains: keyword } },
         { phone: { contains: keyword } },
         { address: { contains: keyword } },
+        { user: { is: { nickname: { contains: keyword } } } },
+        { user: { is: { phone: { contains: keyword } } } },
       ];
     }
     if (status) where.status = status;
@@ -1546,6 +1619,9 @@ export class MallAdminService {
     const [list, total] = await Promise.all([
       this.prisma.mallMerchant.findMany({
         where,
+        include: {
+          user: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } },
+        },
         orderBy: { createdAt: "desc" },
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
@@ -1564,6 +1640,9 @@ export class MallAdminService {
   async getMerchantDetail(id: string) {
     const merchant = await this.prisma.mallMerchant.findUnique({
       where: { id },
+      include: {
+        user: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } },
+      },
     });
     if (!merchant) throw new NotFoundException("商户不存在");
     return merchant;

@@ -6,7 +6,7 @@
         <h1>机器人管理</h1>
         <p>机器人是真正执行发帖、评论、互动和冷启动的账号池。</p>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openCreate">创建机器人</el-button>
+      <el-button v-if="hasEditPermission" type="primary" :icon="Plus" @click="openCreate">创建机器人</el-button>
     </div>
 
     <div class="filter-card">
@@ -48,8 +48,9 @@
         </el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="editBot(row)">编辑</el-button>
+            <el-button v-if="hasEditPermission" size="small" @click="editBot(row)">编辑</el-button>
             <el-button
+              v-if="hasEditPermission"
               size="small"
               :type="row.botStatus === 'active' ? 'warning' : 'success'"
               @click="toggleStatus(row)"
@@ -118,10 +119,14 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { onMounted, reactive, ref } from 'vue'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('ai:edit'))
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
 const loading = ref(false)
@@ -261,7 +266,7 @@ onMounted(() => {
 <style scoped>
 .ai-page {
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .page-head {
@@ -273,7 +278,7 @@ onMounted(() => {
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -286,17 +291,17 @@ onMounted(() => {
 
 .page-head p {
   margin: 8px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
 
 .filter-card,
 .table-card {
-  border: 1px solid rgba(190, 207, 230, .72);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
 }
 
@@ -325,11 +330,11 @@ onMounted(() => {
 }
 
 .bot-cell b {
-  color: #0f172a;
+  color: var(--mx-text);
 }
 
 .bot-cell span {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 700;
 }
@@ -340,7 +345,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding-top: 16px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
 }

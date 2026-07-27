@@ -133,7 +133,7 @@ export class RatingAdminService {
     if (categoryId) where.categoryId = categoryId;
     if (regionId) where.regionId = regionId;
     if (status) where.status = status;
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.ratingItem.findMany({
@@ -181,8 +181,8 @@ export class RatingAdminService {
     if (scoreMax !== undefined) where.score = { ...(where.score || {}), lte: Number(scoreMax) };
     if (keyword) {
       where.OR = [
-        { content: { contains: keyword, mode: 'insensitive' } },
-        { User: { nickname: { contains: keyword, mode: 'insensitive' } } },
+        { content: { contains: keyword } },
+        { User: { nickname: { contains: keyword } } },
       ];
     }
 

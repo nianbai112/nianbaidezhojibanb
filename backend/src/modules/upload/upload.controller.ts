@@ -16,7 +16,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiConsumes, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle, Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request } from 'express';
-import { UploadService, UploadScene } from './upload.service';
+import { UploadFileKind, UploadService, UploadScene } from './upload.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
@@ -93,13 +93,21 @@ export class UploadController {
     private readonly prisma: PrismaService,
   ) {}
 
+  private resolveUserUploadKind(file: Express.Multer.File): UploadFileKind {
+    const mimetype = String(file?.mimetype || '').toLowerCase();
+    const ext = String(file?.originalname || '').split('.').pop()?.toLowerCase() || '';
+    if (mimetype.startsWith('audio/') || ['mp3', 'aac', 'm4a', 'amr', 'wav'].includes(ext)) return 'audio';
+    if (mimetype.startsWith('video/') || ['mp4', 'mov', 'webm'].includes(ext)) return 'video';
+    return 'image';
+  }
+
   // ===========================================================================
   // 用户端上传（JwtGuard → 仅需登录）
   // ===========================================================================
 
   /**
-   * 用户上传图片
-   * scene: avatar(2MB) | post(10MB)
+   * 用户上传图片/语音
+   * scene: avatar(2MB) | post(10MB) | message(20MB)
    */
   @Post('upload')
   @HttpCode(HttpStatus.OK)
@@ -109,18 +117,23 @@ export class UploadController {
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '用户上传图片' })
+  @ApiOperation({ summary: '用户上传图片/语音' })
   async uploadImage(
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('sub') userId: string,
     @Body('scene') scene?: UploadScene,
     @Req() req?: Request,
   ) {
-    // 用户只能使用 avatar / post 场景
-    const safeScene = scene === 'avatar' ? 'avatar' : 'post';
+    // 用户只能使用 avatar / post / message 场景
+    const uploadKind = this.resolveUserUploadKind(file);
+    const safeScene = uploadKind === 'audio' || scene === 'message'
+      ? 'message'
+      : scene === 'avatar'
+        ? 'avatar'
+        : 'post';
     const folder = this.uploadService.resolveFolder(safeScene, userId);
     const result = await this.uploadService.upload(file, {
-      type: 'image',
+      type: uploadKind,
       folder,
       scene: safeScene,
     });
@@ -206,7 +219,7 @@ export class UploadController {
     const safeScene = (
       normalizedScene.startsWith('region-') || normalizedScene === 'region'
         ? 'region'
-        : ['config', 'ad'].includes(normalizedScene)
+        : ['config', 'ad', 'marketing-popup', 'share-invite'].includes(normalizedScene)
           ? normalizedScene
           : 'admin'
     ) as UploadScene;
@@ -272,7 +285,7 @@ export class UploadController {
   ) {
     const where: any = {};
     if (type) where.fileType = type;
-    if (keyword) where.fileName = { contains: keyword, mode: 'insensitive' as const };
+    if (keyword) where.fileName = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.uploadRecord.findMany({

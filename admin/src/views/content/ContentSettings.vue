@@ -33,7 +33,6 @@
       <el-tab-pane label="笔记海报" name="poster" />
       <el-tab-pane label="内容奖励" name="reward" />
       <el-tab-pane label="内容徽章" name="badge" />
-      <el-tab-pane label="通知记录" name="notification" />
     </el-tabs>
 
     <div v-if="activeTab === 'note'" v-loading="loadingNote" class="settings-stack">
@@ -110,6 +109,7 @@
           <FieldSwitch label="允许图片" desc="发布页展示图片上传入口" v-model="noteForm.allow_images" />
           <FieldSwitch label="允许视频" desc="发布页展示视频上传入口" v-model="noteForm.allow_videos" />
           <FieldSwitch label="允许音频" desc="发布页展示音频上传入口" v-model="noteForm.allow_audio" />
+          <FieldSwitch label="开启 AI 校园回声" desc="AI 自动识别找搭子、吐槽和求助；关闭后该区域不生成轻互动" v-model="noteForm.enable_campus_echo" />
           <FieldSwitch label="允许匿名发布" desc="用户可用匿名身份发布笔记" v-model="noteForm.allow_anonymous_notes" />
           <FieldSwitch label="开启位置" desc="发布笔记时可以携带地理位置" v-model="noteForm.enable_note_location" />
           <FieldSwitch label="开启话题" desc="发布时可以绑定圈子话题" v-model="noteForm.enable_topics" />
@@ -118,6 +118,7 @@
           <FieldSwitch label="投票能力" desc="允许发布投票型笔记" v-model="noteForm.enable_vote" />
           <FieldSwitch label="共创笔记" desc="允许多人共创内容" v-model="noteForm.enable_co_create_note" />
           <FieldSwitch label="二维码过滤" desc="过滤笔记图片里的二维码" v-model="noteForm.enable_qrcode_filter" />
+          <FieldSwitch label="AI兜底识别" desc="普通二维码扫不出时，AI辅助识别小程序码、群码和海报码" v-model="noteForm.enable_ai_qrcode_fallback" />
           <div class="field">
             <label>每篇最多图片数</label>
             <el-input-number v-model="noteForm.max_images_per_note" :min="0" :max="30" controls-position="right" />
@@ -127,6 +128,16 @@
             <label>每篇最多话题数</label>
             <el-input-number v-model="noteForm.max_topics_per_note" :min="0" :max="20" controls-position="right" />
             <small>话题开启后生效</small>
+          </div>
+          <div class="field">
+            <label>回声聚合时段（小时）</label>
+            <el-input-number v-model="noteForm.campus_echo_window_hours" :min="1" :max="72" controls-position="right" />
+            <small>只聚合这个时间范围内的真实笔记</small>
+          </div>
+          <div class="field">
+            <label>最少参与人数</label>
+            <el-input-number v-model="noteForm.campus_echo_min_participants" :min="2" :max="20" controls-position="right" />
+            <small>未达到人数时首页不展示回声</small>
           </div>
           <div class="field">
             <label>图片压缩比例</label>
@@ -164,8 +175,13 @@
               <el-option label="AI 审核" value="ai" />
               <el-option label="不审核" value="none" />
             </el-select>
-            <small>AI 不确定或失败时建议进入人工审核</small>
+            <small>控制新笔记发布后由谁审核</small>
           </div>
+          <FieldSwitch
+            label="AI异常转人工"
+            desc="开启后 AI 失败/无法解析/建议复核会进人工待审；关闭后低风险自动通过，高风险自动拒绝"
+            v-model="noteForm.ai_review_failure_to_manual"
+          />
           <FieldSwitch label="发布绑定手机号" desc="发布前必须绑定手机号" v-model="noteForm.require_phone_before_publish" />
           <FieldSwitch label="发布需学生认证" desc="发布前必须完成学生认证" v-model="noteForm.require_student_auth_before_publish" />
           <FieldSwitch label="允许评论" desc="关闭后笔记详情不允许评论" v-model="noteForm.allow_comments" />
@@ -183,6 +199,7 @@
           <div class="field">
             <label>每篇最大评论数</label>
             <el-input-number v-model="noteForm.max_comments" :min="0" :max="10000" controls-position="right" />
+            <small>0 表示不限制；填多少，小程序和后端就按多少判断</small>
           </div>
           <div class="field">
             <label>评论字数上限</label>
@@ -331,8 +348,8 @@
           </div>
           <div class="field">
             <label>默认圈子 ID</label>
-            <el-input v-model="circleForm.default_circle_id" placeholder="留空则不指定默认圈子" />
-            <small>发布笔记未选圈子时可作为兜底</small>
+            <el-input v-model="circleForm.default_circle_id" placeholder="留空则显示为普通广场" />
+            <small>用户发布笔记时不选择圈子，将自动归入此圈子；留空则作为广场普通信息流展示。</small>
           </div>
           <div class="field field-wide">
             <label>圈子提示文案</label>
@@ -428,7 +445,8 @@
 
     <div v-if="activeTab === 'anonymous'">
       <div class="section-actions">
-        <el-button type="primary" @click="showAnonymousDialog = true">新增身份</el-button>
+        <span class="section-tip">{{ selectedRegion ? `${selectedRegion.name} 的匿名身份池` : '请先选择区域' }}</span>
+        <el-button type="primary" :disabled="!selectedRegionId" @click="showAnonymousDialog = true">新增身份</el-button>
       </div>
       <div class="glass-card table-card">
         <el-table :data="anonymousList" v-loading="loadingAnonymous" border stripe>
@@ -467,6 +485,18 @@
           <el-form-item label="海报 Logo">
             <ImageUploadBox v-model="posterForm.logoUrl" scene="config" shape="square" :max-size="2" placeholder="上传海报 Logo" tip="建议透明 PNG 或方形图片" />
           </el-form-item>
+          <el-form-item label="海报背景">
+            <ImageUploadBox v-model="posterForm.backgroundUrl" scene="config" shape="square" :max-size="5" placeholder="上传海报背景图" tip="建议 750 × 1200 图片" />
+          </el-form-item>
+          <el-form-item label="内容透明框">
+            <ImageUploadBox v-model="posterForm.frameUrl" scene="config" shape="square" :max-size="5" placeholder="上传透明 PNG 框" tip="覆盖在动态文字和图片上方的装饰框" />
+          </el-form-item>
+          <el-form-item label="纯文字占位">
+            <ImageUploadBox v-model="posterForm.textPlaceholderUrl" scene="config" shape="square" :max-size="5" placeholder="上传无图笔记占位图" tip="纯文字笔记会使用这张图" />
+          </el-form-item>
+          <el-form-item label="二维码外框">
+            <ImageUploadBox v-model="posterForm.qrcodeFrameUrl" scene="config" shape="square" :max-size="2" placeholder="上传二维码外框 PNG" tip="二维码会始终由系统动态生成" />
+          </el-form-item>
           <el-form-item label="尾部文案">
             <el-input v-model="posterForm.footerText" placeholder="扫码查看更多" />
           </el-form-item>
@@ -489,13 +519,12 @@
       <div class="settings-section narrow">
         <div class="section-title">
           <h3>内容奖励配置</h3>
-          <p>用积分奖励鼓励真实发布、互动和签到。</p>
+          <p>用积分奖励鼓励真实发布和互动；在线成长奖励在成长中心单独配置。</p>
         </div>
         <el-form :model="rewardForm" label-width="120px" class="simple-form">
           <el-form-item label="发帖奖励"><el-input-number v-model="rewardForm.postPublishReward" :min="0" /><span class="unit">积分</span></el-form-item>
           <el-form-item label="评论奖励"><el-input-number v-model="rewardForm.commentReward" :min="0" /><span class="unit">积分</span></el-form-item>
           <el-form-item label="首帖奖励"><el-input-number v-model="rewardForm.firstPostReward" :min="0" /><span class="unit">积分</span></el-form-item>
-          <el-form-item label="签到奖励"><el-input-number v-model="rewardForm.dailyCheckInReward" :min="0" /><span class="unit">积分</span></el-form-item>
           <el-form-item><el-button type="primary" @click="saveReward" :loading="savingReward">保存配置</el-button></el-form-item>
         </el-form>
       </div>
@@ -523,38 +552,6 @@
             </template>
           </el-table-column>
         </el-table>
-      </div>
-    </div>
-
-    <div v-if="activeTab === 'notification'">
-      <div class="glass-card table-card">
-        <el-table :data="notificationList" v-loading="loadingNotification" border stripe>
-          <el-table-column prop="title" label="标题" min-width="150" />
-          <el-table-column prop="content" label="内容" min-width="200" />
-          <el-table-column label="接收用户" width="120">
-            <template #default="{ row }">{{ row.user?.nickname || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="type" label="类型" width="100" />
-          <el-table-column label="时间" width="160">
-            <template #default="{ row }"><TimeText :time="row.createdAt" /></template>
-          </el-table-column>
-          <el-table-column label="操作" width="100" fixed="right">
-            <template #default="{ row }">
-              <el-button size="small" link type="danger" @click="deleteNotification(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="table-footer">
-          <el-pagination
-            v-model:current-page="notificationPage"
-            v-model:page-size="notificationPageSize"
-            :total="notificationTotal"
-            :page-sizes="[20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
-            @current-change="loadNotifications"
-            @size-change="loadNotifications"
-          />
-        </div>
       </div>
     </div>
 
@@ -642,9 +639,14 @@ const NOTE_DEFAULTS = {
   allow_download_image: 0,
   allow_videos: 1,
   allow_audio: 1,
+  enable_campus_echo: 1,
+  campus_echo_window_hours: 12,
+  campus_echo_min_participants: 2,
   allow_pure_text_notes: 1,
   image_compression_ratio: 0.8,
-  enable_qrcode_filter: 0,
+  enable_qrcode_filter: 1,
+  enable_ai_qrcode_fallback: 1,
+  ai_review_failure_to_manual: 1,
   qrcode_replace_image_url: '',
   qrcode_whitelist_user_ids: [] as string[],
   enable_topics: 1,
@@ -663,12 +665,12 @@ const NOTE_DEFAULTS = {
   default_note_prompt: '',
   content_declaration: '发布校园生活、经验和新鲜事',
   allow_comments: 1,
-  max_comments: 100,
+  max_comments: 0,
   comment_length_limit: 500,
   allow_anonymous_comments: 0,
   allow_author_pin_comment: 0,
   allow_manager_delete_comment: 1,
-  comment_approval_type: 'manual',
+  comment_approval_type: 'none',
   random_comment_enabled: 0,
   enable_ads: 0,
   card_ad_content: '',
@@ -685,7 +687,7 @@ const NOTE_DEFAULTS = {
   view_count_mode: 'unlimited',
   enable_report: 1,
   allow_friend_share: 1,
-  enable_comment_qrcode_filter: 0
+  enable_comment_qrcode_filter: 1
 }
 
 const cardAdImageValue = computed({
@@ -883,7 +885,6 @@ const refreshCurrent = async () => {
     else if (activeTab.value === 'poster') await loadPoster()
     else if (activeTab.value === 'reward') await loadReward()
     else if (activeTab.value === 'badge') await loadBadges()
-    else if (activeTab.value === 'notification') await loadNotifications()
   } finally {
     refreshing.value = false
   }
@@ -898,9 +899,10 @@ const editingAnonymous = ref<any>(null)
 const anonymousForm = reactive({ name: '', avatar: '' })
 
 const loadAnonymous = async () => {
+  if (!selectedRegionId.value) { anonymousList.value = []; return }
   loadingAnonymous.value = true
   try {
-    const res: any = await request.get('/admin/content-ext/anonymous-identities')
+    const res: any = await request.get('/admin/content-ext/anonymous-identities', { params: { regionId: selectedRegionId.value } })
     anonymousList.value = res.data?.list || res.list || []
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
   finally { loadingAnonymous.value = false }
@@ -914,14 +916,16 @@ const editAnonymous = (row: any) => {
 }
 
 const saveAnonymous = async () => {
+  if (!selectedRegionId.value) { ElMessage.warning('请先选择区域'); return }
   if (!anonymousForm.name) { ElMessage.warning('请输入名称'); return }
   savingAnonymous.value = true
   try {
+    const payload = { ...anonymousForm, regionId: selectedRegionId.value }
     if (editingAnonymous.value) {
-      await request.put(`/admin/content-ext/anonymous-identities/${editingAnonymous.value.id}`, anonymousForm)
+      await request.put(`/admin/content-ext/anonymous-identities/${editingAnonymous.value.id}`, payload)
       ElMessage.success('更新成功')
     } else {
-      await request.post('/admin/content-ext/anonymous-identities', anonymousForm)
+      await request.post('/admin/content-ext/anonymous-identities', payload)
       ElMessage.success('创建成功')
     }
     showAnonymousDialog.value = false
@@ -936,7 +940,7 @@ const saveAnonymous = async () => {
 const deleteAnonymous = async (row: any) => {
   try {
     await ElMessageBox.confirm(`确定删除"${row.name}"？`, '确认')
-    await request.delete(`/admin/content-ext/anonymous-identities/${row.id}`)
+    await request.delete(`/admin/content-ext/anonymous-identities/${row.id}`, { params: { regionId: selectedRegionId.value } })
     ElMessage.success('删除成功')
     loadAnonymous()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
@@ -944,7 +948,18 @@ const deleteAnonymous = async (row: any) => {
 
 // ========== 海报配置 ==========
 const savingPoster = ref(false)
-const posterForm = reactive({ bgColor: '#ffffff', logoUrl: '', footerText: '扫码查看更多', qrcodePosition: 'bottom-right' })
+const posterForm = reactive({
+  bgColor: '#ffffff',
+  logoUrl: '',
+  backgroundUrl: '',
+  frameUrl: '',
+  textPlaceholderUrl: '',
+  qrcodeFrameUrl: '',
+  footerText: '扫码查看更多',
+  ctaText: '扫码查看笔记',
+  qrcodePosition: 'bottom-right',
+  version: 1,
+})
 
 const loadPoster = async () => {
   try {
@@ -965,7 +980,7 @@ const savePoster = async () => {
 
 // ========== 奖励配置 ==========
 const savingReward = ref(false)
-const rewardForm = reactive({ postPublishReward: 5, commentReward: 2, firstPostReward: 50, dailyCheckInReward: 10 })
+const rewardForm = reactive({ postPublishReward: 5, commentReward: 2, firstPostReward: 50 })
 
 const loadReward = async () => {
   try {
@@ -1025,32 +1040,6 @@ const deleteBadge = async (row: any) => {
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
 }
 
-// ========== 通知记录 ==========
-const loadingNotification = ref(false)
-const notificationList = ref<any[]>([])
-const notificationTotal = ref(0)
-const notificationPage = ref(1)
-const notificationPageSize = ref(20)
-
-const loadNotifications = async () => {
-  loadingNotification.value = true
-  try {
-    const res: any = await request.get('/admin/content-ext/notifications', { params: { page: notificationPage.value, limit: notificationPageSize.value } })
-    notificationList.value = res.data?.list || res.list || []
-    notificationTotal.value = res.data?.total || res.total || 0
-  } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
-  finally { loadingNotification.value = false }
-}
-
-const deleteNotification = async (row: any) => {
-  try {
-    await ElMessageBox.confirm('确定删除该通知？', '确认')
-    await request.delete(`/admin/content-ext/notifications/${row.id}`)
-    ElMessage.success('删除成功')
-    loadNotifications()
-  } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
-}
-
 watch(activeTab, () => refreshCurrent())
 watch(selectedRegionId, (id) => { if (id) localStorage.setItem('LM_SELECTED_REGION_ID', id) })
 
@@ -1078,7 +1067,7 @@ onMounted(async () => {
   margin: 18px 0 22px;
   padding: 22px 24px;
   border: 1px solid var(--panel-border);
-  border-radius: 18px;
+  border-radius: 14px;
   background: linear-gradient(135deg, rgba(255, 255, 255, .94), rgba(236, 248, 255, .88));
   box-shadow: 0 18px 50px rgba(37, 99, 235, .10);
 }
@@ -1135,7 +1124,7 @@ onMounted(async () => {
 .glass-card {
   background: rgba(255, 255, 255, .92);
   border: 1px solid var(--panel-border);
-  border-radius: 18px;
+  border-radius: 14px;
   box-shadow: 0 18px 48px rgba(15, 23, 42, .07);
 }
 

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
@@ -11,6 +11,30 @@ export class RegionService {
     return Boolean(value);
   }
 
+  private toOptionalBool(value: any) {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    const text = String(value).trim().toLowerCase();
+    if (['0', 'false', 'no', 'off'].includes(text)) return false;
+    if (['1', 'true', 'yes', 'on'].includes(text)) return true;
+    return Boolean(value);
+  }
+
+  private toOptionalNumber(value: any) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+  }
+
+  private setIfDefined(target: Record<string, any>, key: string, value: any) {
+    if (value !== undefined) target[key] = value;
+  }
+
+  private isSwitchSupported(region: any) {
+    return this.toBool(region?.regionSwitchSupported, true);
+  }
+
   private normalizeMiniPath(path?: string) {
     const raw = String(path || '').trim();
     if (!raw || raw === 'custom') return '';
@@ -20,14 +44,15 @@ export class RegionService {
     const clean = raw.replace(/^\/+/, '');
     const aliases: Record<string, string> = {
       'pages/note/list': 'pagesB/post/post',
-      'pages/takeout/list': 'pagesA/selection/selection',
-      'pages/secondhand/list': 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease',
-      'pages/activity/list': 'pagesA/news/SharingCourtesy/SharingCourtesy',
+      'pages/takeout/list': 'pagesA/merchant/merchant',
+      'pagesA/selection/selection': 'pagesA/merchant/merchant',
+      'pages/secondhand/list': 'pages/tabbar/index/index?tab=secondhand',
+      'pages/activity/list': 'pagesA/selection/list/list?tabIndex=0',
       'pages/merchant/list': 'pagesA/merchant/merchant',
       note: 'pagesB/post/post',
-      takeout: 'pagesA/selection/selection',
-      secondhand: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease',
-      activity: 'pagesA/news/SharingCourtesy/SharingCourtesy',
+      takeout: 'pagesA/merchant/merchant',
+      secondhand: 'pages/tabbar/index/index?tab=secondhand',
+      activity: 'pagesA/selection/list/list?tabIndex=0',
       merchant: 'pagesA/merchant/merchant',
       circle: 'pages/tabbar/containers/containers',
     };
@@ -98,22 +123,109 @@ export class RegionService {
 
   private normalizeRegionTabs(tabs: any) {
     if (!Array.isArray(tabs)) return [];
+    const defaultIconMap: Record<string, string> = {
+      note: '/static/logo.jpg',
+      takeout: '/static/yw.png',
+      secondhand: '/static/yhq.png',
+      activity: '/static/tj.png',
+      rating: '/static/v.png',
+      checkin: '/static/icon-weizhi.png',
+    };
     return tabs.map((tab, index) => ({
       ...tab,
       id: this.getHomeTabId(tab, index),
+      icon: tab?.icon || tab?.iconUrl || defaultIconMap[String(tab?.type || '').toLowerCase()] || '/static/logo.jpg',
+      image: tab?.image || tab?.imageUrl || tab?.icon || defaultIconMap[String(tab?.type || '').toLowerCase()] || '/static/logo.jpg',
       enabled: tab?.enabled !== false,
       sortOrder: tab?.sortOrder ?? tab?.sort_order ?? index,
     }));
   }
 
-  private normalizeProfileLayoutItems(items: any) {
-    const defaultItems = [
-      { id: 'orders', title: '我的订单', description: '订单、配送和售后', main_image: '/static/logo.jpg', path: 'pagesA/order/order', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0 },
-      { id: 'wallet', title: '我的钱包', description: '余额、提现和流水', main_image: '/static/logo.jpg', path: 'pagesA/withdraw/withdraw', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1 },
-      { id: 'share', title: '分享有礼', description: '邀请同学加入', main_image: '/static/logo.jpg', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2 },
-      { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.jpg', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
-      { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.jpg', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4 },
+  private defaultHomeNavLayoutConfig() {
+    return [
+      { name: '笔记', subtitle: '', icon: '/static/logo.jpg', page: 'pagesB/post/post', path: 'pagesB/post/post', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 0 },
+      { name: '外卖', subtitle: '', icon: '/static/yw.png', page: 'pagesA/merchant/merchant', path: 'pagesA/merchant/merchant', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 1 },
+      { name: '二手', subtitle: '', icon: '/static/yhq.png', page: 'pages/tabbar/index/index?tab=secondhand', path: 'pages/tabbar/index/index?tab=secondhand', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 2 },
+      { name: '活动', subtitle: '', icon: '/static/tj.png', page: 'pagesA/selection/list/list?tabIndex=0', path: 'pagesA/selection/list/list?tabIndex=0', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 3 },
     ];
+  }
+
+  private normalizeNavigationPermission(permission: any) {
+    const value = String(permission ?? '').trim().toLowerCase();
+    const aliases: Record<string, string> = {
+      unlimited: 'unlimited',
+      all: 'unlimited',
+      public: 'unlimited',
+      region_manager: 'region_manager',
+      region_admin: 'region_manager',
+      manager: 'region_manager',
+      merchant: 'merchant',
+      shop: 'merchant',
+      merchant_owner: 'merchant_owner',
+      shop_owner: 'merchant_owner',
+      dorm_shop_owner: 'dorm_shop_owner',
+      dormitory_shop_owner: 'dorm_shop_owner',
+      dorm_merchant_owner: 'dorm_shop_owner',
+      dorm_shop: 'dorm_shop_owner',
+      '宿舍小店店主': 'dorm_shop_owner',
+      circle_owner: 'circle_owner',
+      circle_manager: 'circle_owner',
+      circle_master: 'circle_owner',
+      owner_circle: 'circle_owner',
+      '圈主': 'circle_owner',
+      '圈子管理员': 'circle_owner',
+      '圈子管理': 'circle_owner',
+      delivery_rider: 'delivery_rider',
+      rider: 'delivery_rider',
+      courier: 'delivery_rider',
+      runner: 'delivery_rider',
+      delivery: 'delivery_rider',
+      takeout_rider: 'delivery_rider',
+      takeaway_rider: 'delivery_rider',
+      waimai_rider: 'delivery_rider',
+      '外卖员': 'delivery_rider',
+      '骑手': 'delivery_rider',
+    };
+    return aliases[value] || 'unlimited';
+  }
+
+  private normalizeProfileLayoutItems(items: any) {
+    const normalizeProfileImage = (value: any) =>
+      String(value || '').trim() === '/static/logo.jpg' ? '/static/logo.png' : value || '/static/logo.png';
+    const defaultItems = [
+      { id: 'orders', title: '我的订单', description: '订单、配送和售后', main_image: '/static/logo.png', path: 'pagesA/order/order', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 0 },
+      { id: 'wallet', title: '我的钱包', description: '余额、提现和流水', main_image: '/static/logo.png', path: 'pagesA/withdraw/withdraw', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1 },
+      { id: 'share', title: '分享有礼', description: '邀请同学加入', main_image: '/static/logo.png', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2 },
+      { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.png', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
+      { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', main_image: '/static/logo.png', path: '/pagesA/DormShopOwner/DormShopOwner', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4 },
+      { id: 'second_hand_manage', title: '我的闲置', description: '发布、下架和处理二手交易', main_image: '/static/logo.png', path: '/pagesC/SecondHand/MySecondHand/MySecondHand', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 5 },
+      { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', main_image: '/static/logo.png', path: '/pages/B/circle-manage', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 6 },
+      { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.png', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 7 },
+    ];
+    const ensureRequiredItems = (sourceItems: any[]) => {
+      const hasDormShopOwner = sourceItems.some((item: any) => {
+        const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
+        return item?.id === 'dorm_shop_owner'
+          || this.normalizeNavigationPermission(item?.navigation_permission || item?.navigationPermission || '') === 'dorm_shop_owner'
+          || path.includes('DormShopOwner/DormShopOwner');
+      });
+      const hasCircleManage = sourceItems.some((item: any) => {
+        const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
+        return item?.id === 'circle_manage'
+          || this.normalizeNavigationPermission(item?.navigation_permission || item?.navigationPermission || '') === 'circle_owner'
+          || path.includes('pages/B/circle-manage');
+      });
+      const hasSecondHandManage = sourceItems.some((item: any) => {
+        const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
+        return item?.id === 'second_hand_manage' || path.includes('SecondHand/MySecondHand/MySecondHand');
+      });
+      const requiredItems = [
+        !hasDormShopOwner ? defaultItems.find((item) => item.id === 'dorm_shop_owner') : null,
+        !hasSecondHandManage ? defaultItems.find((item) => item.id === 'second_hand_manage') : null,
+        !hasCircleManage ? defaultItems.find((item) => item.id === 'circle_manage') : null,
+      ].filter(Boolean);
+      return requiredItems.length ? [...sourceItems, ...requiredItems] : sourceItems;
+    };
     const mapItems = (sourceItems: any[]) => sourceItems
       .filter((item: any) => {
         if (!item || item.enabled === false) return false;
@@ -146,8 +258,8 @@ export class RegionService {
           id: item.id || `profile_${index}`,
           title: item.title || item.name || '功能入口',
           description: item.description || item.subtitle || '',
-          main_image: item.main_image || item.mainImage || item.image || item.iconImage || item.icon || '/static/logo.jpg',
-          image: item.image || item.main_image || item.mainImage || item.iconImage || item.icon || '/static/logo.jpg',
+          main_image: normalizeProfileImage(item.main_image || item.mainImage || item.image || item.iconImage || item.icon),
+          image: normalizeProfileImage(item.image || item.main_image || item.mainImage || item.iconImage || item.icon),
           type,
           url: type === 'web_page' ? (item.url || fullPath) : fullPath,
           mini_program: {
@@ -155,13 +267,14 @@ export class RegionService {
             appid: appId,
             path: miniPath,
           },
-          navigation_permission: item.navigation_permission || item.navigationPermission || 'unlimited',
+          navigation_permission: this.normalizeNavigationPermission(item.navigation_permission || item.navigationPermission || 'unlimited'),
           enabled: item.enabled !== false,
           sortOrder: item.sortOrder ?? item.sort_order ?? index,
         };
       })
       .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-    const normalized = mapItems(Array.isArray(items) && items.length ? items : defaultItems);
+    const sourceItems = Array.isArray(items) && items.length ? ensureRequiredItems(items) : defaultItems;
+    const normalized = mapItems(sourceItems);
     return normalized.length ? normalized : mapItems(defaultItems);
   }
 
@@ -180,6 +293,9 @@ export class RegionService {
       image_url: image,
       image,
       icon: image,
+      mascot_image: item.mascot_image || item.mascotImage || image,
+      search_placeholder: item.search_placeholder || item.searchPlaceholder || item.placeholder || '',
+      placeholder: item.placeholder || item.search_placeholder || item.searchPlaceholder || '',
       link_url: item.link_url || this.toMiniLink(link),
       link: item.link || this.toMiniLink(link),
       sort_order: item.sortOrder ?? item.sort_order ?? index,
@@ -188,13 +304,33 @@ export class RegionService {
     };
   }
 
+  private isHomeHeroModule(item: any) {
+    const type = String(item?.module_type || item?.type || '').toLowerCase();
+    return type === 'hero' || type === 'home_hero' || type === 'campus_hero';
+  }
+
   private buildHomeContentFromRegion(region: any) {
     const items: any[] = [];
     const push = (item: any) => items.push(this.toHomeContentItem(item, items.length));
+    const carouselImages = Array.isArray(region.carouselImages) ? region.carouselImages : [];
+    const heroEntry = carouselImages.find((entry: any) => this.isHomeHeroModule(entry));
+
+    if (heroEntry && this.toBool(heroEntry.enabled ?? heroEntry.isShow, true)) {
+      const heroImage = heroEntry.mascot_image || heroEntry.mascotImage || heroEntry.image || heroEntry.imageUrl || heroEntry.image_url || heroEntry.url || '';
+      push({
+        ...heroEntry,
+        id: heroEntry.id || 'home_hero',
+        regionId: region.id,
+        module_type: 'hero',
+        type: 'hero',
+        image_url: heroImage,
+        image: heroImage,
+        sortOrder: -100,
+      });
+    }
 
     if (this.toBool(region.showCarousel, true)) {
-      const carouselImages = Array.isArray(region.carouselImages) ? region.carouselImages : [];
-      carouselImages.forEach((entry: any, index: number) => {
+      carouselImages.filter((entry: any) => !this.isHomeHeroModule(entry)).forEach((entry: any, index: number) => {
         const image = typeof entry === 'string' ? entry : entry?.image || entry?.imageUrl || entry?.url || entry?.cover || '';
         if (!image) return;
         push({
@@ -275,6 +411,17 @@ export class RegionService {
     const settings = (raw.settings || {}) as Record<string, any>;
     const noteConfig = (settings.noteConfig || {}) as Record<string, any>;
     const circleConfig = (settings.circleConfig || {}) as Record<string, any>;
+    const managerUser = raw.managerUser || null;
+    const managerId =
+      raw.managerUserId ||
+      managerUser?.id ||
+      settings.operator?.managerUserId ||
+      settings.operator?.manager_user_id ||
+      settings.operator?.managerId ||
+      settings.operator?.manager_id ||
+      '';
+    const managerNickname = managerUser?.nickname || raw.managerName || settings.operator?.managerName || '';
+    const managerAvatar = managerUser?.avatar || settings.operator?.managerAvatar || '';
     const region_type =
       raw.regionType ||
       (raw.studentOnly ? 'campus' : 'community') ||
@@ -301,7 +448,14 @@ export class RegionService {
       status: raw.isOpen ? 1 : 0,
       region_type,
       studentOnly: !!raw.studentOnly,
-      is_force_guidance: !!raw.isForceGuidance,
+      manager_id: managerId,
+      managerId,
+      manager_user_id: managerId,
+      managerUserId: managerId,
+      manager_nickname: managerNickname,
+      managerNickname,
+      manager_avatar: managerAvatar,
+      managerAvatar,
       // 新增字段
       is_hot: !!raw.isHot,
       region_cover_mode: raw.regionCoverMode || 'cover',
@@ -315,6 +469,10 @@ export class RegionService {
       self_unban_fee: raw.selfUnbanFee ? Number(raw.selfUnbanFee) : 0,
       show_hot_list: !!raw.showHotList,
       hot_featured_display: raw.hotFeaturedDisplay || 'none',
+      region_switch_supported: raw.regionSwitchSupported ?? true,
+      regionSwitchSupported: raw.regionSwitchSupported ?? true,
+      region_switch_notice_required: true,
+      region_switch_ad_unit_id: '',
       private_message_enabled: raw.privateMessageEnabled ?? true,
       contacts_require_student_auth: !!raw.contactsRequireStudentAuth,
       only_student_auth_users: !!raw.onlyStudentAuthUsers,
@@ -329,7 +487,7 @@ export class RegionService {
       message_icons: raw.messageIcons ?? {},
       message_navigation: raw.messageNavigation ?? { cards: [] },
       profile_layout_items: this.normalizeProfileLayoutItems(raw.profileLayoutItems),
-      home_nav_layout_config: raw.homeNavLayoutConfig ?? {},
+      home_nav_layout_config: Array.isArray(raw.homeNavLayoutConfig) && raw.homeNavLayoutConfig.length ? raw.homeNavLayoutConfig : this.defaultHomeNavLayoutConfig(),
       note_list_style: noteConfig.note_list_style || null,
       note_config: noteConfig,
       circle_config: circleConfig,
@@ -349,6 +507,16 @@ export class RegionService {
         noteConfig,
         circleConfig,
         ...settings,
+        operator: {
+          ...(settings.operator || {}),
+          managerName: raw.managerName || settings.operator?.managerName || '',
+          contactPhone: raw.managerPhone || settings.operator?.contactPhone || '',
+          managerWechat: raw.managerWechat || settings.operator?.managerWechat || '',
+          managerUserId: managerId,
+          managerId,
+          managerNickname,
+          managerAvatar,
+        },
       },
       sort: raw.sortOrder ?? 0,
       sortOrder: raw.sortOrder ?? 0,
@@ -358,9 +526,67 @@ export class RegionService {
     return result;
   }
 
+  async selectRegion(userId: string, regionId: string) {
+    const targetRegionId = String(regionId || '').trim();
+    if (!userId) {
+      throw new BadRequestException('用户身份不能为空');
+    }
+    if (!targetRegionId) {
+      throw new BadRequestException('区域不能为空');
+    }
+
+    const [user, targetRegion] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { profile: true },
+      }),
+      this.prisma.region.findUnique({ where: { id: targetRegionId } }),
+    ]);
+
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+    if (!targetRegion || !targetRegion.isOpen) {
+      throw new NotFoundException('区域不存在或未开放');
+    }
+
+    const currentRegionId = user.profile?.regionId || '';
+    if (currentRegionId && currentRegionId !== targetRegion.id) {
+      const currentRegion = await this.prisma.region.findUnique({ where: { id: currentRegionId } });
+      if (currentRegion && !this.isSwitchSupported(currentRegion)) {
+        throw new ForbiddenException('当前区域不允许用户自行切换，请联系管理员处理');
+      }
+    }
+
+    await this.prisma.userProfile.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        regionId: targetRegion.id,
+        region: targetRegion.name,
+      },
+      update: {
+        regionId: targetRegion.id,
+        region: targetRegion.name,
+      },
+    });
+
+    return {
+      success: true,
+      region_id: targetRegion.id,
+      regionId: targetRegion.id,
+      region_name: targetRegion.name,
+      regionName: targetRegion.name,
+      regionSource: 'profile',
+    };
+  }
+
   async list() {
     const regions = await this.prisma.region.findMany({
       where: { isOpen: true },
+      include: {
+        managerUser: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, status: true } },
+      },
       orderBy: { sortOrder: 'asc' },
     });
     return regions.map((r) => this.normalizeRegion(r));
@@ -373,10 +599,60 @@ export class RegionService {
         banners: { where: { isShow: true } },
         notices: { where: { isShow: true } },
         navs: { where: { isShow: true } },
+        managerUser: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, status: true } },
       },
     });
     if (!region) throw new NotFoundException('区域不存在');
     return this.normalizeRegion(region);
+  }
+
+  async updateManagerSettings(id: string, userId: string, dto: any) {
+    if (!userId) throw new BadRequestException('用户身份不能为空');
+    const region = await this.prisma.region.findUnique({
+      where: { id },
+      include: {
+        managerUser: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, status: true } },
+      },
+    });
+    if (!region) throw new NotFoundException('区域不存在');
+    if (region.managerUserId !== userId) {
+      throw new ForbiddenException('无权修改该区域配置');
+    }
+
+    const data: Record<string, any> = {};
+    this.setIfDefined(data, 'logo', dto.logo);
+    this.setIfDefined(data, 'name', dto.name);
+    this.setIfDefined(data, 'managerName', dto.manager_name ?? dto.managerName);
+    this.setIfDefined(data, 'managerPhone', dto.manager_phone ?? dto.managerPhone);
+    this.setIfDefined(data, 'description', dto.description);
+    this.setIfDefined(data, 'cover', dto.background_url ?? dto.backgroundUrl ?? dto.cover);
+    this.setIfDefined(data, 'isOpen', this.toOptionalBool(dto.status));
+    this.setIfDefined(data, 'showCarousel', this.toOptionalBool(dto.show_carousel ?? dto.showCarousel));
+    this.setIfDefined(data, 'showAnnouncement', this.toOptionalBool(dto.show_announcement ?? dto.showAnnouncement));
+    this.setIfDefined(data, 'showKingkong', this.toOptionalBool(dto.show_kingkong ?? dto.showKingkong));
+    this.setIfDefined(data, 'showHotList', this.toOptionalBool(dto.show_hot_list ?? dto.showHotList));
+    this.setIfDefined(data, 'hotFeaturedDisplay', dto.hot_featured_display ?? dto.hotFeaturedDisplay);
+    this.setIfDefined(data, 'homeFeatureStyle', dto.home_feature_style ?? dto.homeFeatureStyle);
+    this.setIfDefined(data, 'homeNavLayout', dto.home_nav_layout ?? dto.homeNavLayout);
+    this.setIfDefined(data, 'carouselImages', dto.carousel_images ?? dto.carouselImages);
+    this.setIfDefined(data, 'regionTabs', dto.region_tabs ?? dto.regionTabs);
+    this.setIfDefined(data, 'homeLeaderboard', dto.home_leaderboard ?? dto.homeLeaderboard);
+    this.setIfDefined(data, 'homeNavLayoutConfig', dto.home_nav_layout_config ?? dto.homeNavLayoutConfig);
+    this.setIfDefined(data, 'messagePageLayout', dto.message_page_layout ?? dto.messagePageLayout);
+    this.setIfDefined(data, 'profilePageLayout', dto.profile_page_layout ?? dto.profilePageLayout);
+    this.setIfDefined(data, 'privateMessageEnabled', this.toOptionalBool(dto.private_message_enabled ?? dto.privateMessageEnabled));
+    this.setIfDefined(data, 'isHot', this.toOptionalBool(dto.is_hot ?? dto.isHot));
+    this.setIfDefined(data, 'latitude', this.toOptionalNumber(dto.latitude));
+    this.setIfDefined(data, 'longitude', this.toOptionalNumber(dto.longitude));
+
+    const updated = await this.prisma.region.update({
+      where: { id },
+      data,
+      include: {
+        managerUser: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, status: true } },
+      },
+    });
+    return this.normalizeRegion(updated);
   }
 
   async getContentItems(id: string) {
@@ -412,6 +688,9 @@ export class RegionService {
     }
 
     const config = record.config as any;
+    const messageBadgeStyle = ['bubble', 'number', 'dot', 'none'].includes(config.messageBadgeStyle)
+      ? config.messageBadgeStyle
+      : 'bubble';
     const list = Array.isArray(config.list)
       ? config.list
       : Array.isArray(config.tabs)
@@ -422,6 +701,15 @@ export class RegionService {
       .filter((tab: any) => tab.enabled !== false)
       .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
       .slice(0, 5);
+    const configType = config.type === 'capsule' || config.type === 'bottom' ? config.type : '';
+    const navType = configType || (enabledTabs.some((tab: any) => tab.navType === 'capsule')
+        ? 'capsule'
+        : 'bottom');
+    const clampSize = (value: any, fallback: number, min: number, max: number) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return fallback;
+      return Math.min(max, Math.max(min, Math.round(number)));
+    };
 
     const tabs = enabledTabs.map((tab: any, index: number) => {
       let pagePath = tab.pagePath || '';
@@ -442,13 +730,13 @@ export class RegionService {
           unselected: tab.color || config.color || '#8A8A8A',
         },
         style: {
-          iconWidth: tab.width || 24,
-          iconHeight: tab.height || 24,
-          fontSize: tab.fontSize || 12,
+          iconWidth: clampSize(tab.width, 24, 16, 128),
+          iconHeight: clampSize(tab.height, 24, 16, 128),
+          fontSize: clampSize(tab.fontSize, 12, 8, 32),
         },
         hideText: !!tab.hideText,
         isAvatarMode: !!tab.avatarMode,
-        styleType: tab.navType === 'bottom' ? 2 : 1,
+        styleType: navType === 'bottom' ? 2 : 1,
         sortWeight: 0,
         index,
       };
@@ -458,10 +746,10 @@ export class RegionService {
       return this.getDefaultTabbar(id);
     }
 
-    const hasBottomNav = tabs.some((t: any) => t.styleType === 2);
     return {
       tabs,
-      type: hasBottomNav ? 'bottom' : 'capsule',
+      type: navType,
+      messageBadgeStyle,
       updateTime: Date.now(),
       ...(await this.getPublishConfig(id)),
     };
@@ -503,16 +791,45 @@ export class RegionService {
     return {
       tabs,
       type: 'bottom',
+      messageBadgeStyle: 'bubble',
       updateTime: Date.now(),
       ...(await this.getPublishConfig(regionId)),
     };
   }
 
+  private normalizePublishMenu(value: any) {
+    const source = value && typeof value === 'object' ? value : {};
+    const entries = source.entries && typeof source.entries === 'object' ? source.entries : {};
+    const text = (input: any, fallback: string) => typeof input === 'string' && input.trim() ? input.trim() : fallback;
+    const image = (input: any) => typeof input === 'string' ? input.trim() : '';
+    const entry = (key: 'note' | 'secondhand' | 'errand', title: string, subtitle: string) => {
+      const current = entries[key] && typeof entries[key] === 'object' ? entries[key] : {};
+      return {
+        enabled: current.enabled !== false,
+        title: text(current.title, title),
+        subtitle: text(current.subtitle, subtitle),
+        image: image(current.image),
+      };
+    };
+
+    return {
+      title: text(source.title, '今天想发点什么？'),
+      subtitle: text(source.subtitle, '选择你要发布的内容类型'),
+      heroImage: image(source.heroImage),
+      entries: {
+        note: entry('note', '发笔记', '发布校园生活、经验和新鲜事'),
+        secondhand: entry('secondhand', '出闲置', '发布你不再需要的物品'),
+        errand: entry('errand', '跑腿任务', '发布帮取快递、代买等需求'),
+      },
+    };
+  }
+
   private async getPublishConfig(regionId: string) {
-    const [noteSettings, secondHandSettings, errandConfig] = await Promise.all([
+    const [noteSettings, secondHandSettings, errandConfig, region] = await Promise.all([
       this.prisma.noteSettings.findUnique({ where: { regionId } }).catch(() => null),
       this.prisma.secondHandRegionSetting.findUnique({ where: { regionId } }).catch(() => null),
       this.prisma.errandConfig.findUnique({ where: { regionId } }).catch(() => null),
+      this.prisma.region.findUnique({ where: { id: regionId }, select: { settings: true } }).catch(() => null),
     ]);
 
     const noteEnabled =
@@ -530,10 +847,11 @@ export class RegionService {
         contentDeclaration: '发布校园生活、经验和新鲜事',
       },
       secondHandConfig: {
-        enabled: secondHandSettings?.enableSecondHand ?? false,
+        enabled: secondHandSettings?.enableSecondHand ?? true,
         noticeText: '发布你不再需要的物品',
       },
       errandServiceEnabled: errandConfig?.isOpen ?? false,
+      publishMenu: this.normalizePublishMenu((region?.settings as any)?.publishMenu),
     };
   }
 

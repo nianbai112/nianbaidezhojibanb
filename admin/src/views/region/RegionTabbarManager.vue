@@ -13,9 +13,9 @@
     </div>
 
     <div v-if="!filteredRegions.length" class="empty-state glass-card">
-      <el-empty description="暂无区域，请先在区域管理中新增区域">
+      <EmptyState description="暂无区域，请先在区域管理中新增区域">
         <el-button type="primary" @click="$router.push('/region/list')">前往区域管理</el-button>
-      </el-empty>
+      </EmptyState>
     </div>
 
     <div v-else class="region-grid">
@@ -37,7 +37,7 @@
         <div class="card-body">
           <div class="tabbar-preview">
             <div class="tabbar-phone">
-              <div class="tabbar-bar">
+              <div class="tabbar-bar" :class="`style-${getRegionTabbarType(r.id)}`">
                 <div v-for="tab in getPreviewTabs(r.id)" :key="tab.id" class="tabbar-item" :class="{ disabled: !tab.enabled }">
                   <div class="tabbar-icon" :style="{ color: tab.enabled ? (tab.selectedColor || '#1677ff') : '#ccc' }">
                     <el-icon :size="16"><component :is="getTabIcon(tab.id)" /></el-icon>
@@ -64,6 +64,10 @@
             <div class="editor-section">
               <div class="editor-section-title">全局样式</div>
               <div class="style-row">
+                <div class="style-field wide">
+                  <label>导航栏风格</label>
+                  <el-segmented v-model="editConfig.type" :options="tabbarStyleOptions" size="small" />
+                </div>
                 <div class="style-field">
                   <label>默认文字颜色</label>
                   <el-color-picker v-model="editConfig.color" />
@@ -75,6 +79,15 @@
                 <div class="style-field">
                   <label>背景颜色</label>
                   <el-color-picker v-model="editConfig.backgroundColor" />
+                </div>
+                <div class="style-field">
+                  <label>消息未读提示</label>
+                  <el-select v-model="editConfig.messageBadgeStyle" size="small">
+                    <el-option label="文字气泡" value="bubble" />
+                    <el-option label="数字红点" value="number" />
+                    <el-option label="小红点" value="dot" />
+                    <el-option label="不显示" value="none" />
+                  </el-select>
                 </div>
               </div>
             </div>
@@ -125,7 +138,7 @@
                           scene="tabbar-icon"
                           shape="square"
                           placeholder="上传普通图标"
-                          tip="建议 80x80"
+                          tip="建议 128x128，透明 PNG 更佳"
                           :max-size="1"
                         />
                       </div>
@@ -136,7 +149,7 @@
                           scene="tabbar-icon-active"
                           shape="square"
                           placeholder="上传选中图标"
-                          tip="建议 80x80"
+                          tip="建议 128x128，透明 PNG 更佳"
                           :max-size="1"
                         />
                       </div>
@@ -144,15 +157,15 @@
                     <div class="field-row">
                       <div class="field-item small">
                         <label>图标宽度</label>
-                        <el-input-number v-model="tab.width" :min="16" :max="64" size="small" />
+                        <el-input-number v-model="tab.width" :min="16" :max="128" size="small" />
                       </div>
                       <div class="field-item small">
                         <label>图标高度</label>
-                        <el-input-number v-model="tab.height" :min="16" :max="64" size="small" />
+                        <el-input-number v-model="tab.height" :min="16" :max="128" size="small" />
                       </div>
                       <div class="field-item small">
                         <label>字号</label>
-                        <el-input-number v-model="tab.fontSize" :min="8" :max="20" size="small" />
+                        <el-input-number v-model="tab.fontSize" :min="8" :max="32" size="small" />
                       </div>
                     </div>
                     <div class="field-row">
@@ -193,11 +206,36 @@
               <div class="preview-content">
                 <div class="preview-placeholder">小程序内容区域</div>
               </div>
-              <div class="preview-tabbar" :style="{ background: editConfig.backgroundColor || '#ffffff' }">
+              <div
+                class="preview-tabbar"
+                :class="`style-${editConfig.type}`"
+                :style="{ background: editConfig.backgroundColor || '#ffffff' }"
+              >
                 <div v-for="tab in editConfig.list" :key="tab.id" class="preview-tab-item" :class="{ disabled: !tab.enabled }">
-                  <div class="preview-tab-icon" :style="{ color: tab.enabled ? (tab.selectedColor || editConfig.selectedColor || '#1677ff') : '#ccc' }">
-                    <el-icon :size="20"><component :is="getTabIcon(tab.id)" /></el-icon>
+                  <div
+                    class="preview-tab-icon"
+                    :style="{
+                      color: tab.enabled ? (tab.selectedColor || editConfig.selectedColor || '#1677ff') : '#ccc',
+                      width: getPreviewIconSize(tab.width) + 'px',
+                      height: getPreviewIconSize(tab.height) + 'px'
+                    }"
+                  >
+                    <el-icon :size="getPreviewIconSize(Math.min(tab.width || 24, tab.height || 24))">
+                      <component :is="getTabIcon(tab.id)" />
+                    </el-icon>
                   </div>
+                  <span
+                    v-if="tab.id === 'message' && editConfig.messageBadgeStyle === 'bubble'"
+                    class="preview-message-tip"
+                  >有3条评论/回复</span>
+                  <span
+                    v-else-if="tab.id === 'message' && editConfig.messageBadgeStyle === 'number'"
+                    class="preview-message-badge"
+                  >3</span>
+                  <span
+                    v-else-if="tab.id === 'message' && editConfig.messageBadgeStyle === 'dot'"
+                    class="preview-message-badge dot"
+                  ></span>
                   <span v-if="!tab.hideText" class="preview-tab-text" :style="{ color: tab.enabled ? (tab.color || editConfig.color || '#8A8A8A') : '#ccc', fontSize: (tab.fontSize || 12) + 'px' }">
                     {{ tab.name }}
                   </span>
@@ -217,6 +255,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { Refresh, Search, Top, Bottom, Delete, HomeFilled, ChatDotRound, User, Position, Menu } from '@element-plus/icons-vue'
 import { fetchRegions, fetchRegionTabbar, saveRegionTabbar } from '@/api/admin'
 
@@ -229,10 +268,12 @@ const DEFAULT_TABS = [
 ]
 
 const DEFAULT_CONFIG = {
+  type: 'bottom',
   color: '#8A8A8A',
   selectedColor: '#1677ff',
   backgroundColor: '#ffffff',
   borderStyle: 'black',
+  messageBadgeStyle: 'bubble',
   list: JSON.parse(JSON.stringify(DEFAULT_TABS))
 }
 
@@ -243,12 +284,21 @@ const search = ref('')
 const drawerVisible = ref(false)
 const editingRegion = ref<any>(null)
 const saving = ref(false)
+const TAB_ICON_MIN_SIZE = 16
+const TAB_ICON_MAX_SIZE = 128
+const TAB_FONT_MAX_SIZE = 32
+const tabbarStyleOptions = [
+  { label: '传统底部', value: 'bottom' },
+  { label: '胶囊悬浮', value: 'capsule' }
+]
 
 const editConfig = reactive({
+  type: 'bottom',
   color: '#8A8A8A',
   selectedColor: '#1677ff',
   backgroundColor: '#ffffff',
   borderStyle: 'black',
+  messageBadgeStyle: 'bubble',
   list: [] as any[]
 })
 
@@ -263,10 +313,34 @@ function getTabIcon(id: string) {
   return map[id] || Menu
 }
 
+function clampTabNumber(value: any, fallback: number, min: number, max: number) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, Math.round(number)))
+}
+
+function getPreviewIconSize(value: any) {
+  return Math.round(clampTabNumber(value, 24, TAB_ICON_MIN_SIZE, TAB_ICON_MAX_SIZE) / 2)
+}
+
 function getPreviewTabs(regionId: string) {
   const config = tabbarCache.value[regionId]
   const list = config?.list || DEFAULT_TABS
   return list.filter((t: any) => t.enabled !== false).slice(0, 5)
+}
+
+function getRegionTabbarType(regionId: string) {
+  return resolveTabbarType(tabbarCache.value[regionId])
+}
+
+function normalizeTabbarType(value: any) {
+  return value === 'capsule' ? 'capsule' : 'bottom'
+}
+
+function resolveTabbarType(config: any) {
+  if (config?.type) return normalizeTabbarType(config.type)
+  const list = Array.isArray(config?.list) ? config.list : []
+  return list.some((tab: any) => tab?.navType === 'capsule') ? 'capsule' : 'bottom'
 }
 
 function getTabCount(regionId: string) {
@@ -309,10 +383,12 @@ async function openEditor(region: any) {
   editingRegion.value = region
   const cached = tabbarCache.value[region.id]
   if (cached?.list) {
+    editConfig.type = resolveTabbarType(cached)
     editConfig.color = cached.color || '#8A8A8A'
     editConfig.selectedColor = cached.selectedColor || '#1677ff'
     editConfig.backgroundColor = cached.backgroundColor || '#ffffff'
     editConfig.borderStyle = cached.borderStyle || 'black'
+    editConfig.messageBadgeStyle = cached.messageBadgeStyle || 'bubble'
     editConfig.list = JSON.parse(JSON.stringify(cached.list))
   } else {
     resetToDefault()
@@ -322,9 +398,11 @@ async function openEditor(region: any) {
 
 function resetToDefault() {
   editConfig.color = DEFAULT_CONFIG.color
+  editConfig.type = DEFAULT_CONFIG.type
   editConfig.selectedColor = DEFAULT_CONFIG.selectedColor
   editConfig.backgroundColor = DEFAULT_CONFIG.backgroundColor
   editConfig.borderStyle = DEFAULT_CONFIG.borderStyle
+  editConfig.messageBadgeStyle = DEFAULT_CONFIG.messageBadgeStyle
   editConfig.list = JSON.parse(JSON.stringify(DEFAULT_TABS))
 }
 
@@ -346,7 +424,7 @@ function addTab() {
     hideText: false,
     enabled: true,
     sortOrder: editConfig.list.length,
-    navType: 'bottom'
+    navType: normalizeTabbarType(editConfig.type)
   })
 }
 
@@ -362,12 +440,22 @@ async function saveConfig() {
   if (!editingRegion.value) return
   saving.value = true
   try {
+    const list = editConfig.list.map((tab: any, index: number) => ({
+      ...tab,
+      navType: normalizeTabbarType(editConfig.type),
+      width: clampTabNumber(tab.width, 24, TAB_ICON_MIN_SIZE, TAB_ICON_MAX_SIZE),
+      height: clampTabNumber(tab.height, 24, TAB_ICON_MIN_SIZE, TAB_ICON_MAX_SIZE),
+      fontSize: clampTabNumber(tab.fontSize, 12, 8, TAB_FONT_MAX_SIZE),
+      sortOrder: Number.isFinite(Number(tab.sortOrder)) ? Number(tab.sortOrder) : index
+    }))
     const config = {
+      type: normalizeTabbarType(editConfig.type),
       color: editConfig.color,
       selectedColor: editConfig.selectedColor,
       backgroundColor: editConfig.backgroundColor,
       borderStyle: editConfig.borderStyle,
-      list: JSON.parse(JSON.stringify(editConfig.list))
+      messageBadgeStyle: editConfig.messageBadgeStyle,
+      list: JSON.parse(JSON.stringify(list))
     }
     await saveRegionTabbar(editingRegion.value.id, config)
     tabbarCache.value[editingRegion.value.id] = config
@@ -415,12 +503,12 @@ onMounted(loadRegions)
 .region-logo {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #dbeafe, #60a5fa);
+  border-radius: 10px;
+  background: var(--el-color-primary-light-9);
   display: grid;
   place-items: center;
   font-weight: 900;
-  color: #1f6fff;
+  color: var(--el-color-primary);
   font-size: 18px;
   flex-shrink: 0;
 }
@@ -429,7 +517,7 @@ onMounted(loadRegions)
   font-size: 15px;
 }
 .region-code {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
   margin-top: 2px;
 }
@@ -438,17 +526,23 @@ onMounted(loadRegions)
   margin-bottom: 8px;
 }
 .tabbar-phone {
-  background: #f8fafc;
-  border-radius: 12px;
+  background: var(--mx-soft);
+  border-radius: 10px;
   padding: 10px;
 }
 .tabbar-bar {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  background: #fff;
+  background: var(--mx-card);
   border-radius: 10px;
   padding: 8px 4px;
+}
+.tabbar-bar.style-capsule {
+  width: calc(100% - 36px);
+  margin: 0 auto 8px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--mx-text) 8%, transparent);
 }
 .tabbar-item {
   display: flex;
@@ -468,12 +562,12 @@ onMounted(loadRegions)
 }
 .tabbar-text {
   font-size: 10px;
-  color: #64748b;
+  color: var(--mx-sub);
   white-space: nowrap;
 }
 
 .tabbar-summary {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 
@@ -512,9 +606,12 @@ onMounted(loadRegions)
   flex-direction: column;
   gap: 6px;
 }
+.style-field.wide {
+  min-width: 220px;
+}
 .style-field label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 700;
 }
 
@@ -523,22 +620,22 @@ onMounted(loadRegions)
   gap: 12px;
 }
 .tab-editor-item {
-  border: 1px solid rgba(226, 232, 240, .7);
+  border: 1px solid var(--mx-border);
   border-radius: 14px;
   overflow: hidden;
-  background: rgba(255, 255, 255, .6);
+  background: color-mix(in srgb, var(--mx-card) 60%, transparent);
 }
 .tab-editor-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: rgba(248, 250, 252, .8);
-  border-bottom: 1px solid rgba(226, 232, 240, .5);
+  background: color-mix(in srgb, var(--mx-soft) 80%, transparent);
+  border-bottom: 1px solid var(--mx-border);
 }
 .tab-drag {
   cursor: grab;
-  color: #94a3b8;
+  color: var(--mx-muted);
   user-select: none;
 }
 .tab-label {
@@ -579,7 +676,7 @@ onMounted(loadRegions)
 }
 .field-item label {
   font-size: 11px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 700;
 }
 
@@ -589,7 +686,7 @@ onMounted(loadRegions)
 
 .empty-tabs {
   text-align: center;
-  color: #94a3b8;
+  color: var(--mx-muted);
   padding: 24px;
   font-size: 13px;
 }
@@ -599,7 +696,7 @@ onMounted(loadRegions)
   justify-content: flex-end;
   gap: 10px;
   padding-top: 16px;
-  border-top: 1px solid rgba(226, 232, 240, .5);
+  border-top: 1px solid var(--mx-border);
 }
 
 /* Preview */
@@ -616,19 +713,19 @@ onMounted(loadRegions)
   width: 220px;
   margin: 0 auto;
   border-radius: 28px;
-  border: 2px solid #1f6fff;
-  background: #fff;
+  border: 2px solid var(--el-color-primary);
+  background: var(--mx-card);
   overflow: hidden;
-  box-shadow: 0 12px 32px rgba(37, 99, 235, .12);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--el-color-primary) 12%, transparent);
 }
 .preview-content {
   height: 320px;
-  background: linear-gradient(180deg, #f0f7ff, #fff);
+  background: var(--mx-soft);
   display: grid;
   place-items: center;
 }
 .preview-placeholder {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 .preview-tabbar {
@@ -636,7 +733,14 @@ onMounted(loadRegions)
   justify-content: space-around;
   align-items: center;
   padding: 6px 2px 10px;
-  border-top: 1px solid rgba(226, 232, 240, .5);
+  border-top: 1px solid var(--mx-border);
+}
+.preview-tabbar.style-capsule {
+  width: calc(100% - 36px);
+  margin: 0 auto 12px;
+  border: 1px solid var(--mx-border);
+  border-radius: 999px;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--mx-text) 10%, transparent);
 }
 .preview-tab-item {
   display: flex;
@@ -644,6 +748,7 @@ onMounted(loadRegions)
   align-items: center;
   gap: 2px;
   min-width: 0;
+  position: relative;
 }
 .preview-tab-item.disabled {
   opacity: 0.3;
@@ -657,6 +762,43 @@ onMounted(loadRegions)
 .preview-tab-text {
   white-space: nowrap;
   font-weight: 700;
+}
+.preview-message-tip {
+  position: absolute;
+  left: 50%;
+  bottom: 42px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: var(--mx-text);
+  color: var(--mx-card);
+  font-size: 10px;
+  font-weight: 800;
+}
+.preview-message-badge {
+  position: absolute;
+  top: -3px;
+  right: 12px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 2px solid var(--mx-card);
+  background: var(--el-color-danger);
+  color: var(--mx-card);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 900;
+}
+.preview-message-badge.dot {
+  min-width: 8px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  top: 0;
+  right: 16px;
 }
 
 .empty-state {

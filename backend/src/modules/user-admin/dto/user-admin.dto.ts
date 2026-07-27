@@ -1,5 +1,5 @@
 import { IsString, IsInt, IsOptional, IsBoolean, IsNumber, Min, Max, IsArray } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 // ==================== 用户等级 ====================
 
@@ -31,7 +31,11 @@ export class CreateUserLevelDto {
   @IsOptional() @Type(() => Number) @IsInt() prefixFontSize?: number;
   @IsOptional() @IsString() prefixTextColor?: string;
   @IsOptional() @IsString() levelDescription?: string;
-  @IsOptional() @IsString() levelBenefits?: string;
+  @IsOptional() @IsString() levelTitleId?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(20) contentBoostWeight?: number = 0;
+  @IsOptional() @IsString() levelIcon?: string;
+  @IsOptional() @IsString() levelBadgeImage?: string;
+  @IsOptional() @IsArray() levelBenefits?: any[];
 }
 
 export class UpdateUserLevelDto {
@@ -55,12 +59,17 @@ export class UpdateUserLevelDto {
   @IsOptional() @Type(() => Number) @IsInt() prefixFontSize?: number;
   @IsOptional() @IsString() prefixTextColor?: string;
   @IsOptional() @IsString() levelDescription?: string;
-  @IsOptional() @IsString() levelBenefits?: string;
+  @IsOptional() @IsString() levelTitleId?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(20) contentBoostWeight?: number;
+  @IsOptional() @IsString() levelIcon?: string;
+  @IsOptional() @IsString() levelBadgeImage?: string;
+  @IsOptional() @IsArray() levelBenefits?: any[];
 }
 
 // ==================== 用户经验 ====================
 
 export class UserExperienceQueryDto {
+  @IsOptional() @IsString() regionId?: string;
   @IsOptional() @IsString() userId?: string;
   @IsOptional() @IsString() keyword?: string;
   @IsOptional() @Type(() => Number) @IsInt() page?: number = 1;
@@ -69,6 +78,7 @@ export class UserExperienceQueryDto {
 
 export class CreateUserExperienceDto {
   @IsString() userId: string;
+  @IsString() regionId: string;
   @Type(() => Number) @IsInt() changeAmount: number;
   @IsOptional() @IsString() reason?: string;
 }
@@ -84,9 +94,13 @@ export class UserTagDefQueryDto {
 
 export class CreateUserTagDefDto {
   @IsOptional() @IsString() regionId?: string;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() description?: string;
+  @Transform(({ value, obj }) => value ?? obj?.name)
   @IsString() tagName: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(5) tagLevel: number = 1;
   @IsOptional() @IsString() tagColor?: string;
+  @Transform(({ value, obj }) => value ?? obj?.description)
   @IsOptional() @IsString() tagDesc?: string;
   @IsOptional() @IsBoolean() isSystem?: boolean;
   @IsOptional() @IsBoolean() isActive?: boolean = true;
@@ -106,9 +120,13 @@ export class CreateUserTagDefDto {
 
 export class UpdateUserTagDefDto {
   @IsOptional() @IsString() regionId?: string;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() description?: string;
+  @Transform(({ value, obj }) => value ?? obj?.name)
   @IsOptional() @IsString() tagName?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(5) tagLevel?: number;
   @IsOptional() @IsString() tagColor?: string;
+  @Transform(({ value, obj }) => value ?? obj?.description)
   @IsOptional() @IsString() tagDesc?: string;
   @IsOptional() @IsBoolean() isSystem?: boolean;
   @IsOptional() @IsBoolean() isActive?: boolean;

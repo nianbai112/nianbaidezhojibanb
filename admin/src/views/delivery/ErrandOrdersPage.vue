@@ -72,6 +72,7 @@
           <template #default="{ row }">
             <span>{{ row.riderName || '未分配' }}</span>
             <small v-if="row.riderPhone">{{ row.riderPhone }}</small>
+            <small v-if="row.riderName">{{ riderTypeLabel(row.riderType) }} · {{ displayModeLabel(row.deliveryDisplayMode) }}</small>
           </template>
         </el-table-column>
         <el-table-column label="金额" width="110">
@@ -119,12 +120,52 @@
           <dt>订单号</dt><dd>{{ detail.orderNo }}</dd>
           <dt>用户</dt><dd>{{ detail.userName || '-' }} {{ detail.userPhone || '' }}</dd>
           <dt>骑手</dt><dd>{{ detail.riderName || '未分配' }} {{ detail.riderPhone || '' }}</dd>
+          <dt>骑手类型</dt><dd>{{ riderTypeLabel(detail.riderType) }} / {{ displayModeLabel(detail.deliveryDisplayMode) }}</dd>
+          <dt>风控状态</dt><dd>{{ riskLevelLabel(detail.riskLevel) }}，违规 {{ detail.violationCount || 0 }} 次</dd>
           <dt>取件地址</dt><dd>{{ detail.pickupAddress || '-' }}</dd>
           <dt>送达地址</dt><dd>{{ detail.deliverAddress || '-' }}</dd>
           <dt>任务描述</dt><dd>{{ detail.description || '-' }}</dd>
           <dt>重量/距离</dt><dd>{{ detail.weight || '-' }} kg / {{ detail.distance || '-' }} km</dd>
           <dt>费用</dt><dd>基础 ¥{{ money(detail.price) }}，小费 ¥{{ money(detail.tip) }}，实付 ¥{{ money(detail.payAmount) }}</dd>
         </dl>
+        <section v-if="detail.tasks?.length" class="task-detail-section">
+          <h4>任务明细：{{ detail.taskSummary || `${detail.tasks.length} 个任务` }}</h4>
+          <div v-for="task in detail.tasks" :key="task.taskNo" class="task-card">
+            <div class="task-card-head">
+              <strong>{{ task.typeLabel || '跑腿任务' }} {{ task.taskNo }}</strong>
+              <el-tag size="small" type="info">{{ taskSizeName(task) }}</el-tag>
+            </div>
+            <dl>
+              <dt>{{ task.platform ? '外卖平台' : '快递公司' }}</dt><dd>{{ taskSource(task) }}</dd>
+              <dt>{{ task.platform ? '取餐点' : '取件点' }}</dt><dd>{{ taskPickupName(task) }}</dd>
+              <dt>{{ task.platform ? '取餐码' : '取件码' }}</dt><dd>{{ task.code || '-' }}</dd>
+              <dt>地点地址</dt><dd>{{ task.pickupPointAddress || '-' }}</dd>
+              <dt v-if="taskImages(task).length">图片</dt>
+              <dd v-if="taskImages(task).length" class="task-images">
+                <a v-for="(image, index) in taskImages(task)" :key="image" :href="image" target="_blank">图片{{ index + 1 }}</a>
+              </dd>
+            </dl>
+          </div>
+        </section>
+        <section v-if="deliveryNodes.length" class="delivery-node-section">
+          <h4>配送节点</h4>
+          <div v-for="node in deliveryNodes" :key="node.id || `${node.nodeType}-${node.createdAt}`" class="node-row">
+            <strong>{{ node.nodeLabel || deliveryNodeLabel(node.nodeType) }}</strong>
+            <span>{{ formatTime(node.createdAt) }}</span>
+            <small v-if="node.remark">{{ node.remark }}</small>
+            <small v-if="hasLocation(node)">送达坐标：{{ Number(node.lat).toFixed(6) }}, {{ Number(node.lng).toFixed(6) }}</small>
+            <div v-if="nodeProofImages(node).length" class="node-proofs">
+              <el-image v-for="image in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
+            </div>
+          </div>
+        </section>
+        <section v-if="detail.riskEvents?.length" class="delivery-node-section">
+          <h4>异常记录</h4>
+          <div v-for="event in detail.riskEvents" :key="event.id" class="node-row risk">
+            <strong>{{ event.description || event.eventType }}</strong>
+            <span>{{ formatTime(event.createdAt) }} · {{ event.handled ? '已处理' : '待处理' }}</span>
+          </div>
+        </section>
         <el-timeline>
           <el-timeline-item v-for="item in timelineRows" :key="item.label" :timestamp="formatTime(item.time)">
             {{ item.label }}
@@ -138,7 +179,7 @@
         <el-option
           v-for="rider in riders"
           :key="rider.id"
-          :label="`${rider.realName || rider.User?.nickname || '骑手'} ${rider.phone || ''}`"
+          :label="`${rider.realName || rider.User?.nickname || '骑手'} ${rider.phone || ''} ${riderTypeLabel(rider.riderType)}`"
           :value="rider.id"
         />
       </el-select>
@@ -191,7 +232,7 @@ const assignForm = reactive({ riderId: '' })
 
 const timelineRows = computed(() => {
   const source = timeline.value || detail.value || {}
-  return [
+  const baseRows = [
     { label: '下单', time: source.createdAt },
     { label: '接单', time: source.acceptTime },
     { label: '取件', time: source.pickupTime },
@@ -199,7 +240,16 @@ const timelineRows = computed(() => {
     { label: '完成', time: source.completeTime },
     { label: '取消', time: source.cancelTime },
   ].filter(item => item.time)
+  const nodeRows = (source.deliveryNodes || detail.value?.deliveryNodes || []).map((node: any) => ({
+    label: node.nodeLabel || deliveryNodeLabel(node.nodeType),
+    time: node.createdAt,
+  }))
+  return [...baseRows, ...nodeRows].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
 })
+
+const deliveryNodes = computed(() => detail.value?.deliveryNodes || timeline.value?.deliveryNodes || [])
+const hasLocation = (node: any) => node?.lat != null && node?.lng != null && Number.isFinite(Number(node.lat)) && Number.isFinite(Number(node.lng))
+const nodeProofImages = (node: any) => (node?.proofImages || node?.proof_images || []).filter((image: any) => typeof image === 'string' && image)
 
 function money(value: any) {
   const n = Number(value || 0)
@@ -217,6 +267,53 @@ function statusTone(status: string) {
   if (['refunding'].includes(status)) return 'danger'
   if (['pending_accept', 'accepted', 'in_progress', 'arrived'].includes(status)) return 'warning'
   return 'primary'
+}
+
+function riderTypeLabel(value?: string) {
+  return value === 'official' ? '官方骑手' : '兼职骑手'
+}
+
+function displayModeLabel(value?: string) {
+  return value === 'live_map' ? '实时轨迹' : '状态节点'
+}
+
+function riskLevelLabel(value?: string) {
+  const map: Record<string, string> = {
+    normal: '正常',
+    warning: '关注',
+    restricted: '限制接单',
+    banned: '封禁',
+  }
+  return map[value || 'normal'] || value || '正常'
+}
+
+function deliveryNodeLabel(value?: string) {
+  const map: Record<string, string> = {
+    accepted: '骑手已接单',
+    in_progress: '骑手已取货',
+    arrived: '骑手已送达',
+    completed: '订单已完成',
+    cancelled: '订单已取消',
+    admin_assigned: '后台已派单',
+    returned_pool: '订单退回接单池',
+  }
+  return map[value || ''] || '配送状态更新'
+}
+
+function taskSource(task: any) {
+  return task?.express_company || task?.platform || task?.item_description || task?.description || '-'
+}
+
+function taskPickupName(task: any) {
+  return task?.pickupPointName || task?.pickup_point_name || task?.pickup_point_id || '-'
+}
+
+function taskSizeName(task: any) {
+  return task?.itemSizeName || task?.item_size_name || task?.item_size_id || '未标注大小'
+}
+
+function taskImages(task: any) {
+  return task?.imageUrls || task?.image_urls || []
 }
 
 function canAssign(row: any) {
@@ -345,7 +442,7 @@ onMounted(async () => {
 }
 
 .table-card {
-  border-radius: 18px;
+  border-radius: 14px;
   border: 1px solid rgba(203, 213, 225, 0.78);
 }
 
@@ -417,6 +514,98 @@ small {
   margin: 0;
   color: #0f172a;
   font-weight: 700;
+}
+
+.detail-box .task-detail-section {
+  display: block;
+  margin: 8px 0 22px;
+}
+
+.task-detail-section h4 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.task-card {
+  padding: 14px;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  border-radius: 10px;
+  background: #f8fafc;
+  margin-bottom: 12px;
+}
+
+.task-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.task-card dl {
+  margin-bottom: 0;
+}
+
+.task-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-images a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.delivery-node-section {
+  display: block !important;
+  margin: 8px 0 22px;
+}
+
+.delivery-node-section h4 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.node-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.node-row strong {
+  color: #0f172a;
+}
+
+.node-row span,
+.node-row small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.node-row small {
+  grid-column: 1 / -1;
+}
+
+.node-proofs {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.node-proofs :deep(.el-image) {
+  width: 88px;
+  height: 88px;
+  border-radius: 6px;
+}
+
+.node-row.risk strong {
+  color: #dc2626;
 }
 
 @media (max-width: 1280px) {

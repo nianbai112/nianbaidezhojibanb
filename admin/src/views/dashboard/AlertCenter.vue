@@ -72,8 +72,8 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button-group size="small">
-              <el-button v-if="row.status === 'pending'" type="success" @click="handleResolve(row)">处理</el-button>
-              <el-button v-if="row.status === 'pending'" type="warning" @click="handleIgnore(row)">忽略</el-button>
+              <el-button v-if="hasHandlePermission && row.status === 'pending'" type="success" @click="handleResolve(row)">处理</el-button>
+              <el-button v-if="hasHandlePermission && row.status === 'pending'" type="warning" @click="handleIgnore(row)">忽略</el-button>
               <el-button v-if="row.businessId" type="primary" @click="goBusiness(row)">查看</el-button>
             </el-button-group>
           </template>
@@ -95,15 +95,21 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
+const hasHandlePermission = ref(auth.permissions.includes('dashboard:view') || auth.permissions.includes('ops:view'))
 const loading = ref(false)
+const route = useRoute()
+const router = useRouter()
 const alerts = ref<any[]>([])
 const summary = ref<any>({})
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
-const filters = reactive({ type: '', level: '', status: '' })
+const filters = reactive({ type: '', level: '', status: '', businessId: '' })
 
 const summaryCards = ref([
   { key: 'pendingAlertCount', label: '待处理异常', value: 0, color: '#e6a23c' },
@@ -159,6 +165,7 @@ function resetFilters() {
   filters.type = ''
   filters.level = ''
   filters.status = ''
+  filters.businessId = ''
   pagination.page = 1
   loadAlerts()
 }
@@ -191,11 +198,54 @@ async function handleIgnore(row: any) {
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
 }
 
+function alertDetail(row: any) {
+  return row?.detail && typeof row.detail === 'object' ? row.detail : {}
+}
+
 function goBusiness(row: any) {
-  ElMessage.info(`跳转到业务: ${row.businessId}`)
+  const detail = alertDetail(row)
+  const businessId = row.businessId ? String(row.businessId) : ''
+  const query: Record<string, string> = {
+    fromAlert: String(row.id || ''),
+  }
+  if (businessId) {
+    query.businessId = businessId
+    query.focusId = businessId
+    query.keyword = businessId
+  }
+  if (row.regionId) query.regionId = String(row.regionId)
+  if (detail.orderType || detail.type) query.orderType = String(detail.orderType || detail.type)
+  if (detail.status) query.status = String(detail.status)
+
+  const directPath = detail.adminPath || detail.adminRoute || detail.path
+  if (typeof directPath === 'string' && directPath.startsWith('/')) {
+    router.push({ path: directPath, query })
+    return
+  }
+
+  const targetMap: Record<string, { path: string; extra?: Record<string, string> }> = {
+    audit: { path: '/content/audit', extra: { tab: String(detail.targetType || detail.auditType || 'all') } },
+    refund: { path: '/finance/refunds' },
+    withdraw: { path: '/finance/withdrawals', extra: { status: String(detail.status || 'PENDING') } },
+    order: { path: '/order/center' },
+    ai_task: { path: '/ai/tasks' },
+    error_log: { path: '/system/monitor' },
+    operation: { path: '/system/operation-logs' },
+  }
+
+  const target = targetMap[row.type]
+  if (!target) {
+    ElMessage.warning('暂未配置该异常类型的业务跳转')
+    return
+  }
+  router.push({ path: target.path, query: { ...query, ...(target.extra || {}) } })
 }
 
 onMounted(() => {
+  if (route.query.type) filters.type = String(route.query.type)
+  if (route.query.status) filters.status = String(route.query.status)
+  if (route.query.level) filters.level = String(route.query.level)
+  if (route.query.businessId) filters.businessId = String(route.query.businessId)
   loadSummary()
   loadAlerts()
 })

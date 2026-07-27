@@ -2,15 +2,15 @@
   <div class="ai-config-page">
     <div class="page-head">
       <div>
-        <div class="breadcrumb">控制台 / AI 配置</div>
-        <h1>AI 配置</h1>
-        <p>配置模型服务、生成开关、风控频率和执行窗口，保存后影响 AI 任务链路。</p>
+        <div class="breadcrumb">AI运营中心 / AI / 机器人配置</div>
+        <h1>AI / 机器人配置</h1>
+        <p>统一配置模型服务、AI审核、机器人运营能力、风控频率和执行窗口。</p>
       </div>
       <div class="head-actions">
         <el-button :icon="Refresh" @click="loadConfig">刷新</el-button>
-        <el-button :icon="CircleCheckFilled" :loading="testing" @click="testConfig">诊断配置</el-button>
-        <el-button :icon="MagicStick" :loading="generating" @click="testGenerate">测试生成</el-button>
-        <el-button type="primary" :icon="Check" :loading="saving" @click="saveConfig">保存配置</el-button>
+        <el-button v-if="hasTestPermission" :icon="CircleCheckFilled" :loading="testing" @click="testConfig">诊断配置</el-button>
+        <el-button v-if="hasTestPermission" :icon="MagicStick" :loading="generating" @click="testGenerate">测试生成</el-button>
+        <el-button v-if="hasEditPermission" type="primary" :icon="Check" :loading="saving" @click="saveConfig">保存配置</el-button>
       </div>
     </div>
 
@@ -27,7 +27,7 @@
     <div class="config-layout">
       <section class="config-card main-card">
         <div class="card-head">
-          <h3>模型服务</h3>
+          <h3>AI / 机器人服务</h3>
           <span>不在前端明文展示已保存密钥，输入新密钥才会替换。</span>
         </div>
         <el-form label-position="top">
@@ -54,6 +54,12 @@
                 placeholder="留空或保持星号表示不修改已保存密钥"
               />
             </el-form-item>
+            <el-form-item label="温度">
+              <el-input-number v-model="config.temperature" :min="0" :max="2" :step="0.1" :precision="1" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="最大 Token 数">
+              <el-input-number v-model="config.maxTokens" :min="100" :max="32000" style="width: 100%" />
+            </el-form-item>
           </div>
           <el-form-item label="配置说明">
             <el-input v-model="config.remark" type="textarea" :rows="3" placeholder="记录本次配置变更，例如：启用新区域冷启动，降低评论频率。" />
@@ -64,7 +70,7 @@
       <section class="config-card status-card">
         <div class="status-main" :class="{ active: config.enabled }">
           <span>{{ config.enabled ? '已启用' : '未启用' }}</span>
-          <strong>AI 运营总开关</strong>
+          <strong>AI / 机器人总开关</strong>
           <el-switch v-model="config.enabled" />
         </div>
         <div class="mini-status">
@@ -83,8 +89,8 @@
     <div class="config-grid">
       <section class="config-card">
         <div class="card-head">
-          <h3>运营能力</h3>
-          <span>决定 AI 可以自动做哪些动作。</span>
+          <h3>AI审核与运营能力</h3>
+          <span>同时控制帖子/评论 AI 审核，以及机器人账号池可以自动做哪些动作。</span>
         </div>
         <div class="switch-list">
           <div v-for="item in capabilityItems" :key="item.key" class="switch-item">
@@ -99,8 +105,8 @@
 
       <section class="config-card">
         <div class="card-head">
-          <h3>风控频率</h3>
-          <span>让机器人像真实用户一样慢一点、稳一点。</span>
+          <h3>AI风控频率</h3>
+          <span>控制机器人动作、模型调用、成本和单用户调用上限。</span>
         </div>
         <div class="form-grid compact">
           <el-form-item label="每日最大发帖">
@@ -120,6 +126,18 @@
           </el-form-item>
           <el-form-item label="失败暂停分钟">
             <el-input-number v-model="config.riskControl.failurePauseMinutes" :min="0" :max="1440" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="每日调用上限">
+            <el-input-number v-model="config.riskControl.maxDailyCalls" :min="0" :max="100000" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="每日Token上限">
+            <el-input-number v-model="config.riskControl.maxDailyTokens" :min="0" :max="10000000" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="每日成本上限">
+            <el-input-number v-model="config.riskControl.maxDailyCost" :min="0" :max="100000" :precision="2" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="单用户AI日调用">
+            <el-input-number v-model="config.riskControl.maxMiniProgramCallsPerUserDay" :min="0" :max="1000" style="width:100%" />
           </el-form-item>
         </div>
       </section>
@@ -179,7 +197,11 @@ import { onMounted, reactive, ref } from 'vue'
 import { Check, CircleCheckFilled, MagicStick, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('ai:edit'))
+const hasTestPermission = ref(auth.permissions.includes('ai:edit'))  // AUD-P1-114: 测试也会消耗额度，需要 ai:edit
 const saving = ref(false)
 const testing = ref(false)
 const generating = ref(false)
@@ -191,6 +213,8 @@ const defaultConfig = () => ({
   apiBaseUrl: '',
   apiKey: '',
   model: 'deepseek-chat',
+  temperature: 0.7,
+  maxTokens: 1000,
   operationMode: 'standard',
   postGenerateEnabled: true,
   commentGenerateEnabled: true,
@@ -208,6 +232,10 @@ const defaultConfig = () => ({
     minInterval: 30,
     maxTasksPerBotPerDay: 8,
     failurePauseMinutes: 30,
+    maxDailyCalls: 0,
+    maxDailyTokens: 0,
+    maxDailyCost: 0,
+    maxMiniProgramCallsPerUserDay: 20,
   },
   scheduling: {
     batchSize: 5,
@@ -302,7 +330,7 @@ onMounted(loadConfig)
 <style scoped>
 .ai-config-page {
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .page-head {
@@ -314,7 +342,7 @@ onMounted(loadConfig)
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-muted);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -328,7 +356,7 @@ onMounted(loadConfig)
 
 .page-head p {
   margin: 10px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
@@ -352,15 +380,15 @@ onMounted(loadConfig)
 
 .config-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(300px, .9fr) repeat(2, minmax(380px, 1fr));
   gap: 18px;
 }
 
 .config-card {
-  border: 1px solid rgba(190, 207, 230, .72);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border-strong);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
   padding: 20px;
 }
@@ -377,7 +405,7 @@ onMounted(loadConfig)
 .card-head span,
 .switch-item span,
 .mini-status span {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
@@ -389,7 +417,38 @@ onMounted(loadConfig)
 }
 
 .form-grid.compact {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+:deep(.form-grid.compact .el-form-item) {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 188px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+:deep(.form-grid.compact .el-form-item__label) {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: var(--mx-text);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+:deep(.form-grid.compact .el-input-number),
+:deep(.form-grid.compact .el-select),
+:deep(.form-grid.compact .el-input) {
+  width: 188px !important;
+}
+
+:deep(.form-grid.compact .el-input-number .el-input__inner) {
+  min-width: 72px;
+  text-align: center;
 }
 
 .status-card {
@@ -404,14 +463,14 @@ onMounted(loadConfig)
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  border-radius: 18px;
+  border-radius: 14px;
   padding: 18px;
-  color: #fff;
-  background: linear-gradient(135deg, #94a3b8, #64748b);
+  color: var(--mx-card);
+  background: var(--el-color-info);
 }
 
 .status-main.active {
-  background: linear-gradient(135deg, #2563eb, #22c55e);
+  background: var(--el-color-primary);
 }
 
 .status-main span {
@@ -433,7 +492,7 @@ onMounted(loadConfig)
 .mini-status div {
   min-width: 0;
   border-radius: 14px;
-  background: #f8fafc;
+  background: var(--mx-soft);
   padding: 12px;
 }
 
@@ -459,9 +518,9 @@ onMounted(loadConfig)
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 15px;
-  background: #fbfdff;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-soft);
   padding: 14px;
 }
 
@@ -489,5 +548,16 @@ onMounted(loadConfig)
   .head-actions { flex-wrap: wrap; }
   .form-grid,
   .form-grid.compact { grid-template-columns: 1fr; }
+  :deep(.form-grid.compact .el-form-item) {
+    display: block;
+  }
+  :deep(.form-grid.compact .el-form-item__label) {
+    margin-bottom: 8px;
+  }
+  :deep(.form-grid.compact .el-input-number),
+  :deep(.form-grid.compact .el-select),
+  :deep(.form-grid.compact .el-input) {
+    width: 100% !important;
+  }
 }
 </style>

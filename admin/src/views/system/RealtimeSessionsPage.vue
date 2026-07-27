@@ -7,22 +7,54 @@
       </template>
     </GlassPageHeader>
 
-    <div class="realtime-stats">
-      <div class="stat-card glass-card">
-        <span>在线连接</span>
-        <strong>{{ stats.onlineCount }}</strong>
+    <StatGrid :items="statItems" />
+
+    <div class="glass-card realtime-health-card" v-loading="statusLoading">
+      <div class="health-head">
+        <div>
+          <h3>实时通信状态</h3>
+          <p>检测小程序 WebSocket、Redis 在线状态和客户部署入口。</p>
+        </div>
+        <div class="health-actions">
+          <el-button size="small" :icon="RefreshRight" :loading="statusLoading" @click="loadRealtimeStatus(true)">检测</el-button>
+          <el-button size="small" type="primary" plain :loading="wsProbeLoading" @click="testApiWebSocketProxy">测试转发</el-button>
+        </div>
       </div>
-      <div class="stat-card glass-card miniapp">
-        <span>小程序在线</span>
-        <strong>{{ stats.miniappOnlineCount }}</strong>
+      <div class="health-grid">
+        <div class="health-item">
+          <span>WebSocket</span>
+          <strong>{{ realtimeStatus.websocket?.localConnections ?? 0 }} 连接</strong>
+          <em>{{ realtimeStatus.websocket?.localUsers ?? 0 }} 个本机用户 · DB {{ realtimeStatus.websocket?.dbOnlineCount ?? 0 }}</em>
+        </div>
+        <div class="health-item" :class="{ danger: realtimeStatus.redis && !realtimeStatus.redis.ok }">
+          <span>Redis</span>
+          <strong>{{ realtimeStatus.redis?.ok ? '正常' : '异常' }}</strong>
+          <em>{{ realtimeStatus.redis?.onlineSockets ?? 0 }} socket · {{ realtimeStatus.redis?.onlineUsers ?? 0 }} 用户</em>
+        </div>
+        <div class="health-item">
+          <span>推送通道</span>
+          <strong>{{ realtimeStatus.redis?.pushChannel || '-' }}</strong>
+          <em>{{ realtimeStatus.websocket?.instanceId || '-' }}</em>
+        </div>
+        <div class="health-item">
+          <span>Nginx 入口</span>
+          <strong>{{ realtimeStatus.nginx?.expectedApiWebSocketPath || '/api/ws-native' }}</strong>
+          <em>转发到 {{ realtimeStatus.nginx?.backendNativePath || '/ws-native' }}</em>
+        </div>
       </div>
-      <div class="stat-card glass-card admin">
-        <span>后台在线</span>
-        <strong>{{ stats.adminOnlineCount }}</strong>
+      <div class="health-note">
+        <el-tag :type="realtimeStatus.redis?.ok ? 'success' : 'danger'" effect="plain">
+          {{ realtimeStatus.redis?.message || '等待检测' }}
+        </el-tag>
+        <el-tag v-if="wsProbe.status" :type="wsProbe.status === 'success' ? 'success' : 'danger'" effect="plain">
+          {{ wsProbe.message }}
+        </el-tag>
+        <span>{{ realtimeStatus.nginx?.note || '客户只需要配置 https://域名/api' }}</span>
       </div>
-      <div class="stat-card glass-card">
-        <span>当前列表</span>
-        <strong>{{ total }}</strong>
+      <div class="limit-row">
+        <span>{{ realtimeStatus.limits?.connect || '连接限流待检测' }}</span>
+        <span>{{ realtimeStatus.limits?.send || '发送限流待检测' }}</span>
+        <span>{{ realtimeStatus.limits?.operation || '操作限流待检测' }}</span>
       </div>
     </div>
 
@@ -109,7 +141,7 @@
       </div>
     </div>
 
-    <div class="glass-card official-card">
+    <div ref="officialCardRef" class="glass-card official-card">
       <div class="card-toolbar">
         <div>
           <h3>官方消息会话</h3>
@@ -122,8 +154,25 @@
             clearable
             @keyup.enter="loadOfficialConversations()"
           />
+          <el-select v-model="officialFilters.status" clearable placeholder="处理状态" @change="loadOfficialConversations()">
+            <el-option label="待处理" value="pending" />
+            <el-option label="处理中" value="processing" />
+            <el-option label="待用户补充" value="waiting_user" />
+            <el-option label="已解决" value="resolved" />
+            <el-option label="已驳回" value="rejected" />
+          </el-select>
           <el-button :loading="officialLoading" @click="loadOfficialConversations()">刷新会话</el-button>
         </div>
+      </div>
+      <div class="official-status-shortcuts" aria-label="官方会话处理状态筛选">
+        <el-button
+          v-for="item in officialStatusFilters"
+          :key="item.value || 'all'"
+          size="small"
+          :type="officialFilters.status === item.value ? item.type : 'info'"
+          :plain="officialFilters.status !== item.value"
+          @click="filterOfficialStatus(item.value)"
+        >{{ item.label }}</el-button>
       </div>
       <el-table :data="officialConversations" v-loading="officialLoading" stripe>
         <el-table-column label="用户" min-width="260">
@@ -139,10 +188,26 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="lastMessage" label="最后消息" min-width="320" show-overflow-tooltip />
+        <el-table-column label="咨询记录" min-width="230">
+          <template #default="{ row }">
+            <div v-if="row.ticket">
+              <div class="actor-name">{{ row.ticket.title }}</div>
+              <div class="actor-subtitle">{{ row.ticket.ticketNo }} · {{ officialStatusText(row.ticket.status) }}</div>
+            </div>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最后消息" min-width="320" show-overflow-tooltip>
+          <template #default="{ row }">{{ formatChatMessagePreview(row.rawLastMessage || row.lastMessage) }}</template>
+        </el-table-column>
         <el-table-column label="官方未读" width="110">
           <template #default="{ row }">
             <el-tag :type="row.unreadCount > 0 ? 'danger' : 'info'" effect="plain">{{ row.unreadCount || 0 }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="处理状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="officialStatusType(row.serviceStatus)" effect="plain">{{ officialStatusText(row.serviceStatus) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="lastMsgTime" label="最后互动" width="175">
@@ -168,23 +233,86 @@
             <el-avatar :size="30" :src="message.senderAvatar">{{ avatarText(message.senderName) }}</el-avatar>
             <div class="message-bubble">
               <div class="message-meta">{{ message.senderName }} · {{ formatTime(message.createdAt) }}</div>
-              <div class="message-content">{{ message.content }}</div>
+              <div class="message-content">
+                <el-image
+                  v-if="message.renderType === 'image' && message.mediaUrl"
+                  class="message-image"
+                  :src="message.mediaUrl"
+                  :preview-src-list="[message.mediaUrl]"
+                  fit="cover"
+                  preview-teleported
+                />
+                <video
+                  v-else-if="message.renderType === 'video' && message.mediaUrl"
+                  class="message-video"
+                  :src="message.mediaUrl"
+                  :poster="message.posterUrl"
+                  controls
+                />
+                <div v-else-if="message.renderType === 'audio' && message.mediaUrl" class="audio-card">
+                  <audio :src="message.mediaUrl" controls />
+                  <span v-if="message.duration">{{ message.duration }} 秒</span>
+                </div>
+                <div v-else-if="message.renderType === 'location'" class="location-card">
+                  <strong>{{ message.location?.name || '位置消息' }}</strong>
+                  <span>{{ message.location?.address || '-' }}</span>
+                  <em v-if="message.location?.latitude && message.location?.longitude">
+                    {{ message.location.latitude }}, {{ message.location.longitude }}
+                  </em>
+                </div>
+                <a
+                  v-else-if="message.renderType === 'file'"
+                  class="file-card"
+                  :href="message.mediaUrl || message.file?.url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <strong>{{ message.file?.name || '文件消息' }}</strong>
+                  <span v-if="message.file?.size">{{ formatFileSize(message.file.size) }}</span>
+                </a>
+                <div v-else-if="message.renderType === 'order'" class="order-card">
+                  <div class="order-card-head">
+                    <strong>{{ orderTypeText(message.order?.orderType) }}</strong>
+                    <el-tag size="small" effect="plain">{{ orderStatusText(message.order) }}</el-tag>
+                  </div>
+                  <div class="order-title">{{ message.order?.title || '订单问题' }}</div>
+                  <div class="order-meta">
+                    <span>订单号：{{ message.order?.orderNo || message.order?.orderId || '-' }}</span>
+                    <span v-if="formatOrderAmount(message.order?.amount)">金额：{{ formatOrderAmount(message.order?.amount) }}</span>
+                    <span v-if="message.order?.createdAt">下单：{{ formatTime(message.order.createdAt) }}</span>
+                  </div>
+                  <div v-if="message.order?.summary" class="order-summary">{{ message.order.summary }}</div>
+                </div>
+                <span v-else>{{ message.displayContent || message.content }}</span>
+              </div>
             </div>
           </div>
         </div>
-        <el-empty v-else description="暂无会话消息" />
+        <EmptyState v-else description="暂无会话消息" />
       </div>
       <template #footer>
         <div class="reply-box">
+          <div class="status-actions">
+            <span>处理状态：<el-tag :type="officialStatusType(selectedOfficialConversation?.serviceStatus)" effect="plain">{{ officialStatusText(selectedOfficialConversation?.serviceStatus) }}</el-tag></span>
+            <el-button size="small" :loading="updatingStatus" @click="updateConversationStatus('processing')">受理</el-button>
+            <el-button size="small" type="warning" plain :loading="updatingStatus" @click="updateConversationStatus('waiting_user')">待补充</el-button>
+            <el-button size="small" type="success" plain :loading="updatingStatus" @click="updateConversationStatus('resolved')">解决</el-button>
+            <el-button size="small" type="danger" plain :loading="updatingStatus" @click="updateConversationStatus('rejected')">驳回</el-button>
+          </div>
           <el-input
             v-model="replyContent"
             type="textarea"
             :rows="3"
             maxlength="500"
             show-word-limit
-            placeholder="输入官方回复，用户会在小程序官方会话里收到"
+            :placeholder="officialResolutionHint"
           />
-          <el-button type="primary" :loading="replying" @click="sendOfficialReply">发送回复</el-button>
+          <div class="reply-actions">
+            <el-upload accept="image/*" :show-file-list="false" :http-request="sendOfficialImage">
+              <el-button :loading="replying">发送图片</el-button>
+            </el-upload>
+            <el-button type="primary" :loading="replying" @click="sendOfficialReply">发送回复</el-button>
+          </div>
         </div>
       </template>
     </el-drawer>
@@ -192,24 +320,40 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import {
   fetchOfficialConversationMessages,
   fetchOfficialConversations,
   fetchRealtimeSessions,
+  fetchRealtimeStatus,
+  fetchRealtimeWsTestToken,
   replyOfficialConversation,
   testPushToUser,
+  updateOfficialConversationStatus,
+  uploadAdminFile,
 } from '@/api/admin'
+import { formatChatMessagePreview, normalizeChatMessage } from '@/utils/chatMessage'
 
 const loading = ref(false)
+const route = useRoute()
 const sessions = ref<any[]>([])
 const total = ref(0)
 const autoRefresh = ref(true)
 const lastRefreshAt = ref<Date | null>(null)
 let timer: number | undefined
+const statusLoading = ref(false)
+const realtimeStatus = ref<any>({})
+const wsProbeLoading = ref(false)
+const wsProbe = reactive({
+  status: '',
+  message: '',
+})
 
 const stats = reactive({
   onlineCount: 0,
@@ -228,6 +372,7 @@ const officialLoading = ref(false)
 const officialConversations = ref<any[]>([])
 const officialFilters = reactive({
   keyword: '',
+  status: '',
   page: 1,
   pageSize: 20,
 })
@@ -237,11 +382,29 @@ const officialMessages = ref<any[]>([])
 const messagesLoading = ref(false)
 const replyContent = ref('')
 const replying = ref(false)
+const updatingStatus = ref(false)
+const officialCardRef = ref<HTMLElement | null>(null)
+const officialStatusFilters = [
+  { value: '', label: '全部会话', type: 'info' },
+  { value: 'pending', label: '待处理', type: 'warning' },
+  { value: 'processing', label: '受理中', type: 'primary' },
+  { value: 'waiting_user', label: '待补充', type: 'warning' },
+  { value: 'resolved', label: '已解决', type: 'success' },
+  { value: 'rejected', label: '已驳回', type: 'danger' },
+]
 
 const lastRefreshText = computed(() => lastRefreshAt.value ? lastRefreshAt.value.toLocaleTimeString('zh-CN') : '-')
+
+const statItems = computed(() => [
+  { label: '在线连接', value: stats.onlineCount, icon: 'Connection' },
+  { label: '小程序在线', value: stats.miniappOnlineCount, tone: 'blue' as const, icon: 'Iphone' },
+  { label: '后台在线', value: stats.adminOnlineCount, tone: 'orange' as const, icon: 'Monitor' },
+  { label: '当前列表', value: total.value, tone: 'green' as const, icon: 'List' },
+])
 const officialDrawerTitle = computed(() => selectedOfficialConversation.value?.user?.name
   ? `官方会话：${selectedOfficialConversation.value.user.name}`
   : '官方会话')
+const officialResolutionHint = computed(() => '输入给用户的处理说明；待补充、解决、驳回时必填')
 
 function formatTime(t: string) {
   if (!t) return '-'
@@ -252,8 +415,64 @@ function avatarText(name?: string) {
   return (name || '?').slice(0, 1)
 }
 
+function formatFileSize(value?: number | string) {
+  const size = Number(value || 0)
+  if (!Number.isFinite(size) || size <= 0) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatOrderAmount(value?: number | string) {
+  const amount = Number(value || 0)
+  if (!Number.isFinite(amount) || amount <= 0) return ''
+  return `¥${amount.toFixed(2)}`
+}
+
+function orderTypeText(value?: string) {
+  const map: Record<string, string> = {
+    delivery: '外卖订单',
+    errand: '跑腿订单',
+    mall: '商城订单',
+    second_hand: '二手订单',
+    order: '订单',
+  }
+  return map[String(value || '')] || '订单'
+}
+
+function orderStatusText(order?: any) {
+  const map: Record<string, string> = {
+    pending: '待付款',
+    unpaid: '待付款',
+    paid: '已付款',
+    awaiting_delivery: '待配送',
+    delivering: '配送中',
+    completed: '已完成',
+    cancelled: '已取消',
+    refunded: '已退款',
+    confirmed: '待接单',
+    dispatched: '已接单',
+    picked_up: '已取货',
+    shipped: '已发货',
+    received: '已收货',
+  }
+  return order?.statusText || map[String(order?.status || '')] || order?.status || '待处理'
+}
+
+function officialStatusText(status?: string) {
+  return ({ pending: '待处理', processing: '处理中', waiting_user: '待用户补充', resolved: '已解决', rejected: '已驳回', closed: '已关闭' } as Record<string, string>)[String(status || 'pending')] || '待处理'
+}
+
+function officialStatusType(status?: string) {
+  return ({ pending: 'warning', processing: 'primary', waiting_user: 'warning', resolved: 'success', rejected: 'danger', closed: 'info' } as Record<string, string>)[String(status || 'pending')] || 'info'
+}
+
 function refreshHeaderStats() {
   window.dispatchEvent(new CustomEvent('admin-header-stats-refresh'))
+}
+
+function focusOfficialConversations() {
+  nextTick(() => officialCardRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 async function loadSessions(showSuccess = false) {
@@ -272,6 +491,82 @@ async function loadSessions(showSuccess = false) {
     ElMessage.error(e?.message || '加载实时连接失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRealtimeStatus(showSuccess = false) {
+  statusLoading.value = true
+  try {
+    const res: any = await fetchRealtimeStatus()
+    realtimeStatus.value = res?.data || res || {}
+    if (showSuccess) ElMessage.success('实时通信状态已刷新')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载实时通信状态失败')
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+function buildApiWebSocketUrl(token: string) {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/api/ws-native?token=${encodeURIComponent(token)}`
+}
+
+async function testApiWebSocketProxy() {
+  wsProbeLoading.value = true
+  wsProbe.status = ''
+  wsProbe.message = ''
+  let socket: WebSocket | null = null
+  try {
+    const res: any = await fetchRealtimeWsTestToken()
+    const token = res?.token || res?.data?.token
+    if (!token) throw new Error('测试 token 生成失败')
+    const url = buildApiWebSocketUrl(token)
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const timer = window.setTimeout(() => {
+        if (settled) return
+        settled = true
+        reject(new Error('/api/ws-native 连接超时，请检查 Nginx WebSocket 转发'))
+      }, 8000)
+      socket = new WebSocket(url)
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(String(event.data || '{}'))
+          if (data.event === 'connected' || data.status === 'connected') {
+            if (settled) return
+            settled = true
+            window.clearTimeout(timer)
+            resolve()
+          }
+        } catch {
+          // Ignore non-JSON probe frames.
+        }
+      }
+      socket.onerror = () => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        reject(new Error('/api/ws-native 连接失败，请检查域名 SSL 和 Nginx Upgrade 配置'))
+      }
+      socket.onclose = () => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        reject(new Error('/api/ws-native 连接被关闭，请检查后端 /ws-native 是否可用'))
+      }
+    })
+    wsProbe.status = 'success'
+    wsProbe.message = '/api/ws-native 转发正常'
+    ElMessage.success('WebSocket 转发测试通过')
+    loadRealtimeStatus()
+  } catch (e: any) {
+    wsProbe.status = 'failed'
+    wsProbe.message = e?.message || 'WebSocket 转发测试失败'
+    ElMessage.error(wsProbe.message)
+  } finally {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.close()
+    wsProbeLoading.value = false
   }
 }
 
@@ -321,6 +616,12 @@ async function loadOfficialConversations() {
   }
 }
 
+function filterOfficialStatus(status: string) {
+  officialFilters.status = status
+  officialFilters.page = 1
+  loadOfficialConversations()
+}
+
 async function openOfficialConversation(row: any) {
   selectedOfficialConversation.value = row
   officialDrawerVisible.value = true
@@ -333,7 +634,7 @@ async function loadOfficialMessages(conversationId: string) {
   messagesLoading.value = true
   try {
     const res: any = await fetchOfficialConversationMessages(conversationId, { page: 1, pageSize: 80 })
-    officialMessages.value = res?.messages || res?.data?.messages || []
+    officialMessages.value = (res?.messages || res?.data?.messages || []).map((item: any) => normalizeChatMessage(item))
     await loadOfficialConversations()
     refreshHeaderStats()
   } catch (e: any) {
@@ -367,16 +668,66 @@ async function sendOfficialReply() {
   }
 }
 
+async function sendOfficialImage(option: any) {
+  const conversationId = selectedOfficialConversation.value?.conversationId || selectedOfficialConversation.value?.id
+  if (!conversationId || !option?.file) return
+  replying.value = true
+  try {
+    const uploaded: any = await uploadAdminFile(option.file, 'official_chat')
+    const url = uploaded?.url || uploaded?.data?.url
+    if (!url) throw new Error('图片上传失败')
+    const res: any = await replyOfficialConversation(conversationId, `img:${url}`)
+    option.onSuccess?.(res)
+    ElMessage.success(res?.message || '官方图片已发送')
+    await loadOfficialMessages(conversationId)
+  } catch (e: any) {
+    option.onError?.(e)
+    ElMessage.error(e?.message || '图片发送失败')
+  } finally {
+    replying.value = false
+  }
+}
+
+async function updateConversationStatus(status: string) {
+  const conversationId = selectedOfficialConversation.value?.conversationId || selectedOfficialConversation.value?.id
+  if (!conversationId) return
+  const content = replyContent.value.trim()
+  if (['waiting_user', 'resolved', 'rejected'].includes(status) && !content) {
+    ElMessage.warning('请先填写给用户的处理说明')
+    return
+  }
+  updatingStatus.value = true
+  try {
+    const res: any = await updateOfficialConversationStatus(conversationId, status, content || undefined)
+    selectedOfficialConversation.value = { ...selectedOfficialConversation.value, serviceStatus: res?.status || status }
+    if (content) replyContent.value = ''
+    ElMessage.success(`已更新为${officialStatusText(res?.status || status)}`)
+    await loadOfficialMessages(conversationId)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '更新处理状态失败')
+  } finally {
+    updatingStatus.value = false
+  }
+}
+
 function setupTimer() {
   if (timer) window.clearInterval(timer)
-  if (autoRefresh.value) timer = window.setInterval(() => loadSessions(), 15000)
+  if (autoRefresh.value) timer = window.setInterval(() => {
+    loadSessions()
+    loadRealtimeStatus()
+  }, 15000)
 }
 
 watch(autoRefresh, setupTimer)
+watch(() => route.query.official, (value) => {
+  if (value === '1') focusOfficialConversations()
+})
 onMounted(() => {
   loadSessions()
+  loadRealtimeStatus()
   loadOfficialConversations()
   setupTimer()
+  if (route.query.official === '1') focusOfficialConversations()
 })
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer)
@@ -388,28 +739,100 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 18px;
 }
-.realtime-stats {
+.realtime-health-card {
+  padding: 16px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.health-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 16px;
 }
-.stat-card {
-  padding: 18px 20px;
-  display: grid;
-  gap: 8px;
-}
-.stat-card span {
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 800;
-}
-.stat-card strong {
-  color: #0f172a;
-  font-size: 30px;
+.health-head h3 {
+  margin: 0;
+  color: var(--mx-text);
+  font-size: 18px;
   font-weight: 950;
 }
-.stat-card.miniapp strong { color: #2563eb; }
-.stat-card.admin strong { color: #f59e0b; }
+.health-head p {
+  margin: 6px 0 0;
+  color: var(--mx-sub);
+  font-size: 13px;
+  font-weight: 700;
+}
+.health-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.health-item {
+  min-width: 0;
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  background: var(--mx-soft);
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+.health-item span,
+.limit-row span {
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-weight: 800;
+}
+.health-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mx-text);
+  font-size: 17px;
+  font-weight: 950;
+}
+.health-item em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+.health-item.danger {
+  border-color: var(--el-color-danger-light-7);
+  background: var(--el-color-danger-light-9);
+}
+.health-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--mx-sub);
+  font-size: 13px;
+  font-weight: 750;
+  flex-wrap: wrap;
+}
+.limit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.limit-row span {
+  border-radius: 999px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
+  padding: 5px 9px;
+}
 .filter-card {
   display: flex;
   align-items: center;
@@ -422,7 +845,7 @@ onBeforeUnmount(() => {
 }
 .refresh-hint {
   margin-left: auto;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
 }
@@ -441,13 +864,13 @@ onBeforeUnmount(() => {
 }
 .card-toolbar h3 {
   margin: 0;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 18px;
   font-weight: 950;
 }
 .card-toolbar p {
   margin: 6px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
@@ -456,8 +879,17 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
 }
+.official-status-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
 .official-actions .el-input {
   width: 260px;
+}
+.official-actions .el-select {
+  width: 120px;
 }
 .actor-cell {
   display: flex;
@@ -469,7 +901,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 .actor-name {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 14px;
   font-weight: 900;
   overflow: hidden;
@@ -478,7 +910,7 @@ onBeforeUnmount(() => {
 }
 .actor-subtitle {
   margin-top: 3px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 700;
   overflow: hidden;
@@ -492,6 +924,21 @@ onBeforeUnmount(() => {
 }
 .official-chat-drawer {
   min-height: 360px;
+}
+.status-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--mx-sub);
+  font-size: 13px;
+  font-weight: 800;
+}
+.reply-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
 }
 .message-list {
   display: grid;
@@ -508,23 +955,23 @@ onBeforeUnmount(() => {
 .message-bubble {
   max-width: 78%;
   padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--mx-border);
   border-radius: 14px;
-  background: rgba(248, 250, 252, 0.92);
+  background: var(--mx-soft);
 }
 .message-bubble-row.official .message-bubble {
-  color: #fff;
-  background: linear-gradient(135deg, #2563eb, #20b6d7);
+  color: var(--mx-card);
+  background: var(--el-color-primary);
   border-color: transparent;
 }
 .message-meta {
   margin-bottom: 5px;
   font-size: 11px;
   font-weight: 800;
-  color: #64748b;
+  color: var(--mx-sub);
 }
 .message-bubble-row.official .message-meta {
-  color: rgba(255, 255, 255, 0.82);
+  color: color-mix(in srgb, var(--mx-card) 82%, transparent);
 }
 .message-content {
   white-space: pre-wrap;
@@ -532,6 +979,84 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   font-size: 13px;
   font-weight: 700;
+}
+.message-image {
+  width: 180px;
+  max-width: 100%;
+  height: 130px;
+  border-radius: 6px;
+  border: 1px solid var(--mx-border);
+  background: var(--mx-soft);
+}
+.message-video {
+  width: 260px;
+  max-width: 100%;
+  border-radius: 6px;
+  background: var(--mx-text);
+}
+.audio-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.audio-card audio {
+  width: 260px;
+  max-width: 100%;
+}
+.audio-card span {
+  font-size: 12px;
+  opacity: 0.78;
+}
+.location-card,
+.file-card,
+.order-card {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 320px);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 6px;
+  background: var(--el-color-primary-light-9);
+  padding: 10px 12px;
+  color: var(--el-color-primary-dark-2);
+  text-decoration: none;
+}
+.location-card span,
+.file-card span,
+.order-card span,
+.location-card em {
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.order-card {
+  width: min(100%, 390px);
+  border-color: var(--mx-border);
+  background: var(--mx-card);
+  color: var(--mx-text);
+}
+
+.order-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.order-title {
+  color: var(--mx-text);
+  font-weight: 800;
+}
+
+.order-meta {
+  display: grid;
+  gap: 3px;
+}
+
+.order-summary {
+  color: var(--mx-sub);
+  font-size: 12px;
 }
 .reply-box {
   display: grid;
@@ -541,9 +1066,6 @@ onBeforeUnmount(() => {
   justify-self: end;
 }
 @media (max-width: 1000px) {
-  .realtime-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .refresh-hint {
     width: 100%;
     margin-left: 0;
@@ -555,11 +1077,6 @@ onBeforeUnmount(() => {
   }
   .official-actions .el-input {
     width: 100%;
-  }
-}
-@media (max-width: 640px) {
-  .realtime-stats {
-    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商品分类" subtitle="管理商品分类" icon="Menu" />
+    <PageHeader :title="pageTitle" :subtitle="pageSubtitle" icon="Menu" />
     <div class="filter-bar">
       <el-button type="primary" @click="showDialog = true; resetForm()">新增分类</el-button>
     </div>
@@ -8,7 +8,7 @@
       <el-table-column prop="name" label="分类名称" min-width="200" />
       <el-table-column prop="icon" label="图标" width="80">
         <template #default="{ row }">
-          <el-image v-if="row.icon" :src="row.icon" style="width: 30px; height: 30px; border-radius: 4px;" />
+          <el-image v-if="row.icon" :src="row.icon" style="width: 30px; height: 30px; border-radius: 6px;" />
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -42,10 +42,8 @@
         </el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sortOrder" :min="0" style="width: 100%" /></el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="form.type" style="width: 100%">
+          <el-select v-model="form.type" style="width: 100%" disabled>
             <el-option label="商品" value="product" />
-            <el-option label="帖子" value="post" />
-            <el-option label="圈子" value="circle" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
@@ -64,12 +62,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getCategories, createCategory, updateCategory, deleteCategory } from '@/api/merchant'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 
+const route = useRoute()
+const isDormShopPage = computed(() => route.path.includes('/dorm-'))
+const businessType = computed(() => isDormShopPage.value ? 'dorm_shop' : 'takeaway')
+const pageTitle = computed(() => isDormShopPage.value ? '小店分类' : '商品分类')
+const pageSubtitle = computed(() => isDormShopPage.value ? '管理宿舍小店商品分类，和正式外卖分类分开' : '管理正式外卖商家的商品分类')
 const loading = ref(false)
 const list = ref<any[]>([])
 const showDialog = ref(false)
@@ -88,7 +92,7 @@ const resetForm = () => {
 const loadData = async () => {
   loading.value = true
   try {
-    const res: any = await getCategories({ pageSize: 500 })
+    const res: any = await getCategories({ pageSize: 500, businessType: businessType.value, type: 'product' })
     list.value = res?.list || res?.data?.list || []
   } catch (e: any) {
     ElMessage.error(e?.message || '加载分类失败')
@@ -112,7 +116,7 @@ const submit = async () => {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   try {
-    const payload: any = { name: form.name, icon: form.icon, sortOrder: form.sortOrder, type: form.type, status: form.status }
+    const payload: any = { name: form.name, icon: form.icon, sortOrder: form.sortOrder, type: 'product', businessType: businessType.value, status: form.status }
     if (form.parentId) payload.parentId = form.parentId
     if (editing.value) {
       await updateCategory(editing.value.id, payload)
@@ -150,6 +154,11 @@ const del = async (row: any) => {
     if (e !== 'cancel') ElMessage.error(e?.message || '删除失败')
   }
 }
+
+watch(() => route.path, () => {
+  resetForm()
+  loadData()
+})
 
 onMounted(() => loadData())
 </script>

@@ -28,7 +28,7 @@
         </div>
         <el-button @click="editPersona(persona)">编辑人设</el-button>
       </article>
-      <el-empty v-if="!loading && !personas.length" description="暂无人设" />
+      <EmptyState v-if="!loading && !personas.length" description="暂无人设" />
     </div>
 
     <el-dialog v-model="dialogVisible" :title="editingPersona ? '编辑人设' : '创建人设'" width="760px">
@@ -87,6 +87,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -173,7 +174,7 @@ onMounted(loadPersonas)
 <style scoped>
 .ai-page {
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .page-head {
@@ -185,7 +186,7 @@ onMounted(loadPersonas)
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -198,7 +199,7 @@ onMounted(loadPersonas)
 
 .page-head p {
   margin: 8px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
@@ -210,10 +211,10 @@ onMounted(loadPersonas)
 }
 
 .persona-card {
-  border: 1px solid rgba(190, 207, 230, .72);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
   padding: 18px;
 }
@@ -233,7 +234,7 @@ onMounted(loadPersonas)
 .persona-top span,
 .persona-meta,
 .persona-card p {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }

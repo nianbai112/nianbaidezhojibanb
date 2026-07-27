@@ -13,12 +13,28 @@
         <el-option label="在线" value="online" />
         <el-option label="忙碌" value="busy" />
       </el-select>
+      <el-select v-model="filters.riderType" placeholder="骑手类型" clearable style="width: 120px" @change="loadData">
+        <el-option label="兼职骑手" value="part_time" />
+        <el-option label="官方骑手" value="official" />
+      </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="realName" label="姓名" width="100" />
       <el-table-column prop="phone" label="手机号" width="120" />
+      <el-table-column label="小程序用户" min-width="190">
+        <template #default="{ row }">
+          <div v-if="miniUser(row)" class="user-cell">
+            <el-avatar :size="32" :src="miniUser(row).avatar">{{ userInitial(miniUser(row)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ miniUser(row).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">{{ miniUser(row).phone || miniUser(row).id }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="verifyStatus" label="审核" width="90">
         <template #default="{ row }">
           <el-tag :type="auditTypeMap[row.verifyStatus]" size="small">{{ auditMap[row.verifyStatus] || row.verifyStatus }}</el-tag>
@@ -29,28 +45,70 @@
           <el-tag :type="statusTypeMap[row.status]" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="riderType" label="类型" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.riderType === 'official' ? 'success' : 'info'" size="small">{{ riderTypeLabel(row.riderType) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="riskLevel" label="风控" width="100">
+        <template #default="{ row }">
+          <el-tag :type="riskTypeMap[row.riskLevel || 'normal']" size="small">{{ riskMap[row.riskLevel || 'normal'] || row.riskLevel }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="rating" label="评分" width="80" />
       <el-table-column prop="totalOrders" label="总订单" width="80" />
       <el-table-column prop="todayOrders" label="今日订单" width="80" />
       <el-table-column prop="createdAt" label="注册时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN') }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" @click="viewDetail(row)">详情</el-button>
           <template v-if="row.verifyStatus === 'pending'">
             <el-button size="small" type="success" @click="audit(row, 'approved')">通过</el-button>
             <el-button size="small" type="danger" @click="audit(row, 'rejected')">拒绝</el-button>
           </template>
           <template v-else>
-            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'offline'" size="small" type="warning" @click="updateStatus(row, 'offline')">下线</el-button>
-            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'online'" size="small" type="success" @click="updateStatus(row, 'online')">上线</el-button>
-          </template>
+	            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'offline'" size="small" type="warning" @click="updateStatus(row, 'offline')">下线</el-button>
+	            <el-button v-if="row.verifyStatus === 'approved' && row.status !== 'online'" size="small" type="success" @click="updateStatus(row, 'online')">上线</el-button>
+	            <el-button v-if="row.riderType !== 'official'" size="small" type="primary" @click="updateRiderType(row, 'official')">设官方</el-button>
+	            <el-button v-if="row.riderType === 'official'" size="small" @click="updateRiderType(row, 'part_time')">设兼职</el-button>
+	          </template>
         </template>
       </el-table-column>
     </el-table>
     <div class="pagination-bar">
       <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50]" layout="total, sizes, prev, pager, next" @size-change="loadData" @current-change="loadData" />
     </div>
+
+    <el-dialog v-model="detailVisible" title="骑手详情" width="620px">
+      <el-descriptions v-if="detail" :column="2" border>
+        <el-descriptions-item label="小程序用户" :span="2">
+          <div v-if="miniUser(detail)" class="user-cell">
+            <el-avatar :size="36" :src="miniUser(detail).avatar">{{ userInitial(miniUser(detail)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ miniUser(detail).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">用户ID：{{ miniUser(detail).id }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定小程序用户</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="小程序手机号">{{ miniUser(detail)?.phone || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="骑手编号">{{ detail.id }}</el-descriptions-item>
+        <el-descriptions-item label="真实姓名">{{ detail.realName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="联系手机号">{{ detail.phone || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="审核状态">{{ auditMap[detail.verifyStatus] || detail.verifyStatus }}</el-descriptions-item>
+        <el-descriptions-item label="在线状态">{{ statusMap[detail.status] || detail.status }}</el-descriptions-item>
+        <el-descriptions-item label="骑手类型">{{ riderTypeLabel(detail.riderType) }}</el-descriptions-item>
+        <el-descriptions-item label="风控状态">{{ riskMap[detail.riskLevel || 'normal'] || detail.riskLevel }}</el-descriptions-item>
+        <el-descriptions-item label="违规次数">{{ detail.violationCount || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="最后定位">{{ formatDate(detail.locationUpdatedAt) }}</el-descriptions-item>
+        <el-descriptions-item label="评分">{{ detail.rating || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="总订单">{{ detail.totalOrders || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="今日订单">{{ detail.todayOrders || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="注册时间">{{ formatDate(detail.createdAt) }}</el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
   </div>
 </template>
 
@@ -64,24 +122,34 @@ const auditMap: Record<string, string> = { pending: '待审核', approved: '已�
 const auditTypeMap: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger' }
 const statusMap: Record<string, string> = { offline: '离线', online: '在线', busy: '忙碌' }
 const statusTypeMap: Record<string, string> = { offline: 'info', online: 'success', busy: 'warning' }
+const riskMap: Record<string, string> = { normal: '正常', warning: '关注', restricted: '限制接单', banned: '封禁' }
+const riskTypeMap: Record<string, string> = { normal: 'success', warning: 'warning', restricted: 'danger', banned: 'danger' }
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = reactive({ keyword: '', auditStatus: '', status: '' })
+const filters = reactive({ keyword: '', auditStatus: '', status: '', riderType: '' })
+const detailVisible = ref(false)
+const detail = ref<any>(null)
+
+const miniUser = (row: any) => row?.User || row?.user || row?.miniUser || null
+const userInitial = (user: any) => String(user?.nickname || '用').slice(0, 1)
+const formatDate = (d: any) => d ? new Date(d).toLocaleString('zh-CN') : '-'
+const riderTypeLabel = (value?: string) => value === 'official' ? '官方骑手' : '兼职骑手'
 
 const loadData = async () => {
   loading.value = true
-  try {
-    const res: any = await request.get('/admin/riders', { params: { page: page.value, pageSize: pageSize.value, ...filters } })
+	  try {
+	    const params: any = { page: page.value, pageSize: pageSize.value, ...filters }
+	    const res: any = await request.get('/admin/riders', { params })
     list.value = res?.list || res?.data?.list || []
     total.value = res?.total || res?.data?.total || 0
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') } finally { loading.value = false }
 }
 
 const resetFilters = () => {
-  Object.assign(filters, { keyword: '', auditStatus: '', status: '' })
+  Object.assign(filters, { keyword: '', auditStatus: '', status: '', riderType: '' })
   loadData()
 }
 
@@ -100,6 +168,26 @@ const updateStatus = async (row: any, status: string) => {
   } catch (e) { ElMessage.error('操作失败') }
 }
 
+const updateRiderType = async (row: any, riderType: string) => {
+  try {
+    await request.put(`/admin/riders/${row.id}/status`, { riderType })
+    ElMessage.success('骑手类型已更新')
+    loadData()
+  } catch (e) {
+    ElMessage.error('操作失败')
+  }
+}
+
+const viewDetail = async (row: any) => {
+  try {
+    const res: any = await request.get(`/admin/riders/${row.id}`)
+    detail.value = res?.data ?? res
+    detailVisible.value = true
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取骑手详情失败')
+  }
+}
+
 onMounted(() => loadData())
 </script>
 
@@ -107,4 +195,8 @@ onMounted(() => loadData())
 .page-shell { padding: 24px; }
 .filter-bar { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
+.user-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.user-meta { min-width: 0; line-height: 1.35; }
+.user-name { font-weight: 600; color: #172033; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-sub { color: #7b8798; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

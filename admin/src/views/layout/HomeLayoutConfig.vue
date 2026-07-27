@@ -1,8 +1,7 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>首页布局配置</h2>
-      <div class="header-actions">
+  <div class="page-shell">
+    <PageHeader title="首页布局配置">
+      <template #actions>
         <el-select v-model="selectedRegion" placeholder="选择区域" style="width: 200px" @change="loadLayout">
           <el-option label="全局配置" value="" />
           <el-option v-for="region in regions" :key="region.id" :label="region.name" :value="region.id" />
@@ -10,8 +9,8 @@
         <el-button @click="previewLayout" :disabled="!hasDraft">预览</el-button>
         <el-button type="success" @click="publishLayout" :disabled="!hasDraft">发布</el-button>
         <el-button type="primary" @click="saveDraft">保存草稿</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <div class="layout-builder">
       <div class="component-panel glass-card">
@@ -138,6 +137,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Top, Bottom, Delete, House, Search, Picture, Grid, Bell, TrendCharts, Trophy, Shop, List } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const selectedRegion = ref('')
 const regions = ref<any[]>([])
@@ -282,23 +282,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 .layout-builder {
   display: grid;
   grid-template-columns: 250px 320px 1fr;
@@ -332,7 +315,7 @@ onMounted(() => {
   gap: 8px;
   padding: 10px 12px;
   background: #f5f7fa;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: grab;
   transition: all 0.2s;
 }
@@ -361,7 +344,7 @@ onMounted(() => {
   padding: 8px;
   margin-bottom: 8px;
   border: 1px dashed #ddd;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
@@ -390,7 +373,7 @@ onMounted(() => {
 .component-preview {
   padding: 8px;
   background: #f9f9f9;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
   color: #666;
   text-align: center;
@@ -429,7 +412,7 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
 }
 </style>

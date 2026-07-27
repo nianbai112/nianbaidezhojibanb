@@ -30,7 +30,7 @@ const isDown = computed(() => props.delta?.startsWith('-') || props.delta?.start
 <style scoped>
 .metric-card {
   padding: 16px 20px;
-  border-radius: 16px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.6);
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.8);
@@ -42,7 +42,7 @@ const isDown = computed(() => props.delta?.startsWith('-') || props.delta?.start
 .metric-icon {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;

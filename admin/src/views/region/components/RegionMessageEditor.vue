@@ -1,30 +1,27 @@
 <template>
   <div class="section-card glass-card">
     <div class="section-head">
-      <div class="card-title">消息图标配置</div>
-      <div class="muted">控制消息页各 Tab 的图标样式</div>
+      <div class="card-title">消息分类配置</div>
+      <div class="muted">系统/聊天与互动是主入口，其余分类显示在互动内部</div>
     </div>
     <el-form label-position="top">
-      <div class="form-grid four relaxed">
-        <el-form-item label="点赞图标">
-          <el-input v-model="likeIcon" placeholder="icon-aixin" />
-        </el-form-item>
-        <el-form-item label="关注图标">
-          <el-input v-model="followIcon" placeholder="icon-guanzhu" />
-        </el-form-item>
-        <el-form-item label="评论图标">
-          <el-input v-model="commentIcon" placeholder="icon-pinglun" />
-        </el-form-item>
-        <el-form-item label="消息图标">
-          <el-input v-model="messageIcon" placeholder="icon-xiaoxi" />
-        </el-form-item>
+      <div class="message-category-grid">
+        <div v-for="item in categoryItems" :key="item.key" class="message-category-card">
+          <div class="message-category-title">{{ item.label }}</div>
+          <el-form-item label="名称"><el-input :model-value="item.name" @update:model-value="value => updateCategory(item, { name: value })" /></el-form-item>
+          <el-switch :model-value="item.enabled" active-text="显示" inactive-text="隐藏" @update:model-value="value => updateCategory(item, { enabled: value })" />
+          <el-form-item label="排序"><el-input-number :model-value="item.sortOrder" :min="0" :max="99" @update:model-value="value => updateCategory(item, { sortOrder: value })" /></el-form-item>
+        </div>
       </div>
     </el-form>
   </div>
 
   <div class="section-card glass-card" style="margin-top:24px">
     <div class="section-head">
-      <div class="card-title">消息导航卡片</div>
+      <div>
+        <div class="card-title">系统消息导航卡片</div>
+        <div class="muted">仅用于系统/聊天页的业务入口，不影响顶部文字分类</div>
+      </div>
       <div>
         <el-button size="small" @click="handleReset">恢复默认</el-button>
         <el-button size="small" type="primary" @click="addCard">添加卡片</el-button>
@@ -71,53 +68,87 @@ interface MessageCard {
   sortOrder: number
 }
 
+type MessageCategoryValue = string | {
+  name?: string
+  enabled?: boolean
+  sortOrder?: number
+}
+
+type MessageCategoryEvent = 'update:interactionIcon' | 'update:likeIcon' | 'update:followIcon' | 'update:commentIcon' | 'update:messageIcon' | 'update:squatIcon'
+
+interface MessageCategoryItem {
+  key: string
+  label: string
+  event: MessageCategoryEvent
+  value?: MessageCategoryValue
+  name: string
+  enabled: boolean
+  sortOrder: number
+}
+
 interface Props {
-  likeIcon?: string
-  followIcon?: string
-  commentIcon?: string
-  messageIcon?: string
+  interactionIcon?: MessageCategoryValue
+  likeIcon?: MessageCategoryValue
+  followIcon?: MessageCategoryValue
+  commentIcon?: MessageCategoryValue
+  messageIcon?: MessageCategoryValue
+  squatIcon?: MessageCategoryValue
   navCards?: MessageCard[]
   defaultNavCards?: MessageCard[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  likeIcon: '',
-  followIcon: '',
-  commentIcon: '',
-  messageIcon: '',
   navCards: () => [],
   defaultNavCards: () => [
     { id: 'notice', title: '系统通知', subtitle: '平台消息与审核通知', icon: 'notice', path: '/pages/tabbar/news/news', enabled: true, sortOrder: 0 }
   ]
 })
 
-const emit = defineEmits<{
-  'update:likeIcon': [value: string]
-  'update:followIcon': [value: string]
-  'update:commentIcon': [value: string]
-  'update:messageIcon': [value: string]
-  'update:navCards': [value: MessageCard[]]
-}>()
+const emit = defineEmits([
+  'update:likeIcon',
+  'update:interactionIcon',
+  'update:followIcon',
+  'update:commentIcon',
+  'update:messageIcon',
+  'update:squatIcon',
+  'update:navCards'
+])
 
-const likeIcon = computed({
-  get: () => props.likeIcon,
-  set: (val) => emit('update:likeIcon', val)
+function normalizeCategory(value: MessageCategoryValue | undefined, fallbackName: string) {
+  if (typeof value === 'string') {
+    return { name: fallbackName, enabled: true, sortOrder: 0 }
+  }
+
+  return {
+    name: value?.name || fallbackName,
+    enabled: value?.enabled !== false,
+    sortOrder: Number(value?.sortOrder || 0)
+  }
+}
+
+const categoryItems = computed<MessageCategoryItem[]>(() => {
+  const configs: Array<Omit<MessageCategoryItem, 'name' | 'enabled' | 'sortOrder'>> = [
+    { key: 'message', label: '系统/聊天', event: 'update:messageIcon', value: props.messageIcon },
+    { key: 'interaction', label: '互动', event: 'update:interactionIcon', value: props.interactionIcon },
+    { key: 'comment', label: '评论/回复', event: 'update:commentIcon', value: props.commentIcon },
+    { key: 'like', label: '喜欢', event: 'update:likeIcon', value: props.likeIcon },
+    { key: 'follow', label: '关注', event: 'update:followIcon', value: props.followIcon },
+    { key: 'squat', label: '蹲一蹲', event: 'update:squatIcon', value: props.squatIcon }
+  ]
+
+  return configs.map((item) => {
+    const normalized = normalizeCategory(item.value, item.label)
+    return { ...item, ...normalized }
+  })
 })
 
-const followIcon = computed({
-  get: () => props.followIcon,
-  set: (val) => emit('update:followIcon', val)
-})
-
-const commentIcon = computed({
-  get: () => props.commentIcon,
-  set: (val) => emit('update:commentIcon', val)
-})
-
-const messageIcon = computed({
-  get: () => props.messageIcon,
-  set: (val) => emit('update:messageIcon', val)
-})
+function updateCategory(item: MessageCategoryItem, patch: { name?: string; enabled?: boolean; sortOrder?: number }) {
+  emit(item.event, {
+    name: patch.name !== undefined ? patch.name : (item.name || item.label),
+    enabled: patch.enabled !== undefined ? patch.enabled : item.enabled,
+    sortOrder: patch.sortOrder !== undefined ? Number(patch.sortOrder) : item.sortOrder,
+  })
+}
 
 const navCards = computed({
   get: () => props.navCards,
@@ -178,6 +209,30 @@ function handleReset() {
   gap: 16px 24px;
 }
 
+.message-category-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.message-category-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(125, 189, 87, 0.18);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 250, 232, 0.82) 0%, rgba(255, 255, 255, 0.92) 100%);
+  box-shadow: 0 12px 28px rgba(80, 108, 52, 0.06);
+}
+
+.message-category-title {
+  color: #1f2a19;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .sortable-list {
   display: grid;
   gap: 8px;
@@ -190,14 +245,14 @@ function handleReset() {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.66);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  border: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
 }
 
 .sortable-grip {
   cursor: grab;
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 16px;
   user-select: none;
 }
@@ -220,13 +275,25 @@ function handleReset() {
 
 .empty-hint {
   text-align: center;
-  color: #94a3b8;
+  color: var(--mx-muted);
   padding: 24px;
   font-size: 13px;
 }
 
 .muted {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
+}
+
+@media (max-width: 1280px) {
+  .message-category-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .message-category-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

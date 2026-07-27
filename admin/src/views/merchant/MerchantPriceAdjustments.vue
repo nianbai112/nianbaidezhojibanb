@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="加价规则" subtitle="管理商品加价规则" icon="PriceTag" />
+    <PageHeader title="平台价格规则" subtitle="影响用户支付价格，仅限授权运营人员配置" icon="PriceTag" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索规则名称" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.scope" placeholder="适用范围" clearable style="width: 140px" @change="loadData">
@@ -15,7 +15,7 @@
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
-      <el-button type="success" @click="openEdit()">新增规则</el-button>
+      <el-button type="primary" @click="openEdit()">新增规则</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="name" label="规则名称" min-width="150" show-overflow-tooltip />

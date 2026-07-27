@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req, GoneException } from '@nestjs/common';
+import { Request } from 'express';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { OperationService } from './operation.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -19,8 +20,8 @@ export class OperationController {
   @Post('coupons/user/:id/claim')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  claimCoupon(@Param('id') id: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.claimCoupon(id, userId);
+  claimCoupon(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.claimCoupon(id, userId, dto);
   }
 
   @Get('coupons/user/my')
@@ -33,8 +34,19 @@ export class OperationController {
   @Post('coupons/user/redeem')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  redeemCoupon(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.redeemCoupon(userId, dto);
+  redeemCoupon(@CurrentUser('sub') userId: string, @Body() dto: any, @Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.operationService.redeemCoupon(userId, dto, ip);
+  }
+
+  @Get(['marketing/popups/runtime', 'api/marketing/popups/runtime'])
+  getRuntimePopups(@Query() query: any) {
+    return this.operationService.getRuntimePopups(query);
+  }
+
+  @Post(['marketing/popups/:id/track', 'api/marketing/popups/:id/track'])
+  trackRuntimePopup(@Param('id') id: string, @Body() dto: any) {
+    return this.operationService.trackRuntimePopup(id, dto);
   }
 
   @Get('second-hand/by-area/:areaId')
@@ -49,9 +61,44 @@ export class OperationController {
     return this.operationService.createSecondHand(userId, dto);
   }
 
+  @Get('second-hand/my/products')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMySecondHandProducts(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getMySecondHandProducts(userId, query);
+  }
+
+  @Get('second-hand/my/orders')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMySecondHandOrders(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getMySecondHandOrders(userId, query);
+  }
+
   @Get('second-hand/:id')
-  getSecondHandDetail(@Param('id') id: string) {
-    return this.operationService.getSecondHandDetail(id);
+  getSecondHandDetail(@Param('id') id: string, @Query('userId') userId?: string, @CurrentUser('sub') currentUserId?: string) {
+    return this.operationService.getSecondHandDetail(id, userId || currentUserId);
+  }
+
+  @Put('second-hand/:id')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  updateSecondHand(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.updateMySecondHandProduct(id, userId, dto);
+  }
+
+  @Post('second-hand/:id/status')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  updateSecondHandStatus(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.updateMySecondHandProductStatus(id, userId, dto);
+  }
+
+  @Post('second-hand/:id/report')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  reportSecondHand(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.reportSecondHandProduct(id, userId, dto);
   }
 
   @Post('second-hand/order/create')
@@ -61,78 +108,47 @@ export class OperationController {
     return this.operationService.createSecondHandOrder(userId, dto);
   }
 
-  @Get('api/drift-bottle/regions/:regionId/config')
-  getDriftBottleConfig(@Param('regionId') regionId: string) {
-    return this.operationService.getDriftBottleConfig(regionId);
-  }
-
-  @Post('api/drift-bottle/bottles')
+  @Put('second-hand/orders/:id/status')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  createDriftBottle(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.createDriftBottle(userId, dto);
+  updateSecondHandOrderStatus(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.updateSecondHandOrderStatus(id, userId, dto);
   }
 
-  @Post('api/drift-bottle/bottles/pick')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  pickDriftBottle(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.pickDriftBottle(userId, dto);
-  }
-
-  @Get('api/drift-bottle/bottles/mine')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getMyBottles(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getMyBottles(userId, query);
-  }
-
-  @Get('api/drift-bottle/bottles/pickups')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getMyPickups(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getMyPickups(userId, query);
-  }
-
-  @Patch('api/drift-bottle/bottles/:bottleId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  updateDriftBottle(@Param('bottleId') bottleId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.updateDriftBottle(bottleId, userId, dto);
-  }
-
-  @Get('api/drift-bottle/bottles/posters')
-  getDriftBottlePosters(@Query('limit') limit: number) {
-    return this.operationService.getDriftBottlePosters(limit);
-  }
-
-  @Get('api/region-signin/:regionId/config')
+  @Get(['api/region-signin/:regionId/config', 'region-signin/:regionId/config'])
   getSigninConfig(@Param('regionId') regionId: string) {
     return this.operationService.getSigninConfig(regionId);
   }
 
-  @Get('api/region-signin/:regionId/signin/status')
+  @Get(['api/region-signin/:regionId/signin/status', 'region-signin/:regionId/signin/status'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getSigninStatus(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string) {
     return this.operationService.getSigninStatus(regionId, userId);
   }
 
-  @Post('api/region-signin/:regionId/signin')
+  @Post(['api/region-signin/:regionId/online-heartbeat', 'region-signin/:regionId/online-heartbeat'])
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  onlineSigninHeartbeat(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.onlineSigninHeartbeat(regionId, userId, dto);
+  }
+
+  @Post(['api/region-signin/:regionId/signin', 'region-signin/:regionId/signin'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   signin(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string) {
     return this.operationService.signin(regionId, userId);
   }
 
-  @Post('api/region-signin/:regionId/signin/makeup')
+  @Post(['api/region-signin/:regionId/signin/makeup', 'region-signin/:regionId/signin/makeup'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   makeupSignin(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.operationService.makeupSignin(regionId, userId, dto);
   }
 
-  @Get('api/region-signin/:regionId/signin/rewards')
+  @Get(['api/region-signin/:regionId/signin/rewards', 'region-signin/:regionId/signin/rewards'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getSigninRewards(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string, @Query() query: any) {
@@ -333,6 +349,13 @@ export class OperationController {
     return this.operationService.getMyStickers(userId, query);
   }
 
+  @Post('api/stickers/my')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  addStickerToMine(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.addStickerToMine(userId, dto);
+  }
+
   @Get('api/stickers/shared')
   getSharedStickers(@Query() query: any) {
     return this.operationService.getSharedStickers(query);
@@ -353,8 +376,24 @@ export class OperationController {
   @Post('api/share/be-invited')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  beInvited(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.beInvited(userId, dto);
+  beInvited(@CurrentUser('sub') userId: string, @Body() dto: any, @Req() req: Request) {
+    return this.operationService.beInvited(userId, dto, {
+      ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '',
+      userAgent: (req.headers['user-agent'] as string) || '',
+      deviceId: (req.headers['x-device-id'] as string) || '',
+    });
+  }
+
+  @Post('api/share/claim-post-share')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '认领笔记分享带来的新用户奖励' })
+  claimPostShare(@CurrentUser('sub') userId: string, @Body() dto: any, @Req() req: Request) {
+    return this.operationService.claimPostShare(userId, String(dto?.code || dto?.share_code || ''), {
+      ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '',
+      userAgent: (req.headers['user-agent'] as string) || '',
+      deviceId: (req.headers['x-device-id'] as string) || dto?.device_id || dto?.deviceId || '',
+    });
   }
 
   @Get('api/share/invites')
@@ -365,8 +404,13 @@ export class OperationController {
   }
 
   @Get('AnonymousIdentity/random')
-  getRandomAnonymous() {
-    return this.operationService.getRandomAnonymous();
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getRandomAnonymous(@Query() query: any) {
+    return this.operationService.getRandomAnonymous(
+      String(query.region_id || query.regionId || '').trim(),
+      String(query.post_id || query.postId || '').trim(),
+    );
   }
 
   @Get('api/rankings')
@@ -422,6 +466,18 @@ export class OperationController {
     return this.operationService.deleteContact(id, userId);
   }
 
+  @Get('api/agreements/:type')
+  getAgreementDocument(@Param('type') type: string, @Query() query: any) {
+    return this.operationService.getAgreementDocument(type, query);
+  }
+
+  @Post('api/agreements/consent')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  acceptAgreement(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.acceptAgreement(userId, dto);
+  }
+
   @Get('api/rich-text-content')
   getRichTextContents(@Query() query: any) {
     return this.operationService.getRichTextContents(query);
@@ -442,6 +498,11 @@ export class OperationController {
     return this.operationService.getUserGuidancePages(regionId);
   }
 
+  @Get('api/user-guidance/settings')
+  getUserGuidanceSettings() {
+    return this.operationService.getUserGuidanceSettings();
+  }
+
   @Post('api/user-guidance/save-user-info')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -454,12 +515,12 @@ export class OperationController {
     return this.operationService.getNoteSettings(regionId);
   }
 
-  @Get('api/user-management/tags')
+  @Get(['api/user-management/tags', 'user-management/tags'])
   getUserTags(@Query('region_id') regionId: string) {
     return this.operationService.getUserTags(regionId);
   }
 
-  @Post('api/user-management/tag-relations')
+  @Post(['api/user-management/tag-relations', 'user-management/tag-relations'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   updateUserTagRelation(@CurrentUser('sub') userId: string, @Body() dto: any) {
@@ -491,8 +552,10 @@ export class OperationController {
   }
 
   @Get('api/dating/profile/list')
-  getDatingProfileList(@Query() query: any) {
-    return this.operationService.getDatingProfileList(query);
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getDatingProfileList(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getDatingProfileList(userId, query);
   }
 
   @Post('api/dating/matches/action')
@@ -512,6 +575,27 @@ export class OperationController {
   @ApiBearerAuth()
   createDatingOrder(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.operationService.createDatingOrder(userId, dto);
+  }
+
+  @Get('api/dating/matches/me')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMyDatingMatches(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getMyDatingMatches(userId, query);
+  }
+
+  @Post('api/dating/reports')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  reportDatingUser(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.reportDatingUser(userId, dto);
+  }
+
+  @Post('api/dating/block')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  blockDatingUser(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.blockDatingUser(userId, dto);
   }
 
   @Get('api/groupbuy/packages')
@@ -548,19 +632,22 @@ export class OperationController {
     return this.operationService.getUserTitles(query);
   }
 
+  // AUD-P1-048（2026-07-10）：用户端自助领取与购买入口已彻底关闭。
+  // 产品当前没有 UserTitle.price、订单或支付模型，付费称号支付系统尚未建设；
+  // 称号仅允许后台人工发放（supplement 后台 userTitle:create）与现有兑换码发放（redeem-codes/use）。
+  // 下方 claim 路由固定返回 410，绝不调用 operationService.claimTitle 写入 userTitleRecord；
+  // 历史 purchase 别名路由已删除（见下方注释）。结构化获取条件校验为独立更大项，本轮未做。
   @Post('circle/user-titles/claim/:titleId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  claimTitle(@Param('titleId') titleId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.claimTitle(titleId, userId);
+  @ApiOperation({ summary: 'AUD-P1-048：普通用户自助领取已关闭' })
+  async claimTitle(@Param('titleId') titleId: string, @CurrentUser('sub') userId: string) {
+    // 固定拒绝：不调用 operationService.claimTitle，绝不写入 userTitleRecord。
+    throw new GoneException('称号自助领取已关闭，请通过运营发放或兑换码获取');
   }
 
-  @Post('circle/user-titles/purchase/:titleId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  purchaseTitle(@Param('titleId') titleId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.claimTitle(titleId, userId);
-  }
+  // AUD-P1-048：已移除用户端 `POST circle/user-titles/purchase/:titleId` 直领路由（原 alias 直领 claimTitle）。
+  // 付费称号支付系统未建设，后续若上线应改为先创建价格订单并接入支付中心，仅在支付回调成功后写 `userTitleRecord`。
 
   @Post('circle/user-titles/wear/:titleId')
   @UseGuards(JwtGuard)
@@ -572,20 +659,20 @@ export class OperationController {
   @Post('circle/user-titles/unwear')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  unwearTitle(@CurrentUser('sub') userId: string) {
-    return this.operationService.unwearTitle(userId);
+  unwearTitle(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.unwearTitle(userId, query?.regionId || query?.region_id);
   }
 
   @Get('circle/user-titles/user/:userId')
-  getUserTitlesById(@Param('userId') userId: string) {
-    return this.operationService.getUserTitlesById(userId);
+  getUserTitlesById(@Param('userId') userId: string, @Query() query: any) {
+    return this.operationService.getUserTitlesById(userId, query);
   }
 
   @Get('circle/user-titles/current')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getCurrentTitle(@CurrentUser('sub') userId: string) {
-    return this.operationService.getCurrentTitle(userId);
+  getCurrentTitle(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getCurrentTitle(userId, query?.regionId || query?.region_id);
   }
 
   @Post('circle/user-titles/redeem-codes/use')
@@ -606,7 +693,9 @@ export class OperationController {
   }
 
   @Post('config/ai')
-  generateAIComments(@Body() dto: any) {
-    return this.operationService.generateAIComments(dto);
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  generateAIComments(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.operationService.generateAIComments(userId, dto);
   }
 }

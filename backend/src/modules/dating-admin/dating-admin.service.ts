@@ -18,6 +18,55 @@ export class DatingAdminService {
     private readonly redis: RedisService,
   ) {}
 
+  private cleanId(value?: string) {
+    const text = String(value || '').trim()
+    if (!text || text === 'undefined' || text === 'null') return undefined
+    return text
+  }
+
+  private todayRange() {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    return { start }
+  }
+
+  async getOverview(regionId?: string) {
+    const cleanRegionId = this.cleanId(regionId)
+    const { start } = this.todayRange()
+    const profileWhere: any = cleanRegionId ? { regionId: cleanRegionId } : {}
+    const matchWhere: any = cleanRegionId ? { regionId: cleanRegionId } : {}
+    const reportWhere: any = cleanRegionId
+      ? {
+          target: {
+            datingProfile: { is: { regionId: cleanRegionId } },
+          },
+        }
+      : {}
+    const orderWhere: any = cleanRegionId ? { package: { regionId: cleanRegionId } } : {}
+
+    const [totalProfiles, pendingProfiles, openedProfiles, todayLikes, matchedCount, pendingReports, paidOrders, paidAmount] = await Promise.all([
+      this.prisma.datingProfile.count({ where: profileWhere }),
+      this.prisma.datingProfile.count({ where: { ...profileWhere, auditStatus: 'pending' } }),
+      this.prisma.datingProfile.count({ where: { ...profileWhere, auditStatus: 'approved', isOpen: true } }),
+      this.prisma.match.count({ where: { ...matchWhere, status: { in: ['PENDING', 'MATCHED'] as any }, createdAt: { gte: start } } }),
+      this.prisma.match.count({ where: { ...matchWhere, status: 'MATCHED' as any } }),
+      this.prisma.datingReport.count({ where: { ...reportWhere, status: 'pending' } }),
+      this.prisma.datingOrder.count({ where: { ...orderWhere, status: 'paid' } }),
+      this.prisma.datingOrder.aggregate({ where: { ...orderWhere, status: 'paid' }, _sum: { amount: true } }),
+    ])
+
+    return {
+      totalProfiles,
+      pendingProfiles,
+      openedProfiles,
+      todayLikes,
+      matchedCount,
+      pendingReports,
+      paidOrders,
+      paidAmount: Number(paidAmount._sum.amount || 0),
+    }
+  }
+
   // ==================== Config ====================
 
   async getConfigs(query: DatingConfigQueryDto) {
@@ -31,6 +80,7 @@ export class DatingAdminService {
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
+        include: { region: { select: { id: true, name: true } } },
       }),
       this.prisma.datingConfig.count({ where }),
     ])
@@ -46,20 +96,19 @@ export class DatingAdminService {
   // ==================== Profile ====================
 
   async getProfiles(query: DatingProfileQueryDto) {
-    const { page = 1, pageSize = 20, keyword, auditStatus, gender } = query
+    const { page = 1, pageSize = 20, keyword, auditStatus, gender, regionId } = query
     const where: any = {}
     if (auditStatus) where.auditStatus = auditStatus
-    if (gender) {
-      where.user = { profile: { gender } }
-    }
+    if (gender) where.gender = gender
+    if (regionId) where.regionId = regionId
     if (keyword) {
-      where.user = {
-        ...where.user,
-        OR: [
-          { nickname: { contains: keyword, mode: 'insensitive' } },
-          { profile: { school: { contains: keyword, mode: 'insensitive' } } },
-        ],
-      }
+      where.OR = [
+        { displayName: { contains: keyword } },
+        { bio: { contains: keyword } },
+        { school: { contains: keyword } },
+        { major: { contains: keyword } },
+        { user: { nickname: { contains: keyword } } },
+      ]
     }
 
     const [list, total] = await Promise.all([
@@ -72,8 +121,10 @@ export class DatingAdminService {
           user: {
             select: {
               id: true,
+              uid: true,
               nickname: true,
               avatar: true,
+              phone: true,
               profile: {
                 select: {
                   gender: true,
@@ -86,6 +137,7 @@ export class DatingAdminService {
               },
             },
           },
+          region: { select: { id: true, name: true } },
         },
       }),
       this.prisma.datingProfile.count({ where }),
@@ -105,11 +157,12 @@ export class DatingAdminService {
   // ==================== Match ====================
 
   async getMatches(query: DatingMatchQueryDto) {
-    const { page = 1, pageSize = 20, userId, status, matchType, startDate, endDate } = query
+    const { page = 1, pageSize = 20, userId, status, matchType, startDate, endDate, regionId } = query as any
     const where: any = {}
     if (userId) where.OR = [{ userId }, { targetId: userId }]
     if (status) where.status = status
     if (matchType) where.matchType = matchType
+    if (regionId) where.regionId = regionId
     if (startDate || endDate) {
       where.createdAt = {}
       if (startDate) where.createdAt.gte = new Date(startDate)
@@ -123,8 +176,8 @@ export class DatingAdminService {
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
         include: {
-          user: { select: { id: true, nickname: true, avatar: true } },
-          target: { select: { id: true, nickname: true, avatar: true } },
+          user: { select: { id: true, uid: true, nickname: true, avatar: true, datingProfile: true } },
+          target: { select: { id: true, uid: true, nickname: true, avatar: true, datingProfile: true } },
         },
       }),
       this.prisma.match.count({ where }),
@@ -196,18 +249,65 @@ export class DatingAdminService {
   }
 
   async refundOrder(id: string, dto: RefundDatingOrderDto) {
-    return this.prisma.datingOrder.update({
+    const order = await this.prisma.datingOrder.findUnique({
       where: { id },
-      data: { status: 'refunded', refundReason: dto.reason, refundTime: new Date() },
+      include: { package: true },
+    })
+    if (!order) throw new BadRequestException('订单不存在')
+    if (order.status === 'refunded') return order
+
+    return this.prisma.$transaction(async (tx) => {
+      const amount = Number(order.amount || 0)
+      const packageCount = order.package?.matchCount || 0
+      const quota = await tx.datingQuota.findUnique({ where: { userId: order.userId } })
+      if (quota && packageCount > 0) {
+        await tx.datingQuota.update({
+          where: { userId: order.userId },
+          data: {
+            remainingCount: Math.max(0, quota.remainingCount - Math.min(quota.remainingCount, packageCount)),
+            totalPurchased: Math.max(0, quota.totalPurchased - packageCount),
+          },
+        })
+      }
+
+      if (amount > 0 && order.payChannel === 'balance') {
+        const beforeWallet = await tx.wallet.findUnique({ where: { userId: order.userId } })
+        const nextBalance = Number(beforeWallet?.balance || 0) + amount
+        await tx.wallet.upsert({
+          where: { userId: order.userId },
+          create: { userId: order.userId, balance: amount, totalIn: amount },
+          update: { balance: { increment: amount }, totalIn: { increment: amount } },
+        })
+        await tx.walletTransaction.create({
+          data: {
+            userId: order.userId,
+            type: 'REFUND',
+            amount,
+            balance: nextBalance,
+            channel: 'BALANCE',
+            orderNo: order.orderNo,
+            description: `对象匹配订单退款：${order.package?.name || order.orderNo}`,
+            status: 'SUCCESS',
+          } as any,
+        })
+      }
+
+      return tx.datingOrder.update({
+        where: { id },
+        data: { status: 'refunded', refundReason: dto.reason, refundTime: new Date() },
+      })
     })
   }
 
   // ==================== Report ====================
 
   async getReports(query: DatingReportQueryDto) {
-    const { page = 1, pageSize = 20, status } = query
+    const { page = 1, pageSize = 20, status, regionId } = query
     const where: any = {}
     if (status) where.status = status
+    if (regionId) {
+      where.target = { datingProfile: { is: { regionId } } }
+    }
 
     const [list, total] = await Promise.all([
       this.prisma.datingReport.findMany({
@@ -216,8 +316,8 @@ export class DatingAdminService {
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
         include: {
-          reporter: { select: { id: true, nickname: true, avatar: true } },
-          target: { select: { id: true, nickname: true, avatar: true } },
+          reporter: { select: { id: true, uid: true, nickname: true, avatar: true } },
+          target: { select: { id: true, uid: true, nickname: true, avatar: true, datingProfile: true } },
         },
       }),
       this.prisma.datingReport.count({ where }),

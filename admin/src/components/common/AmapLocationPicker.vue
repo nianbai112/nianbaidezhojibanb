@@ -2,24 +2,46 @@
   <el-dialog
     :model-value="visible"
     @update:model-value="$emit('update:visible', $event)"
-    title="选择位置"
-    width="800px"
+    width="960px"
+    class="location-picker-dialog"
+    modal-class="location-picker-modal"
+    append-to-body
+    align-center
     :close-on-click-modal="false"
+    :lock-scroll="true"
     @opened="initMap"
   >
+    <template #header>
+      <div class="dialog-head">
+        <div>
+          <div class="dialog-title">选择地图位置</div>
+          <div class="dialog-desc">搜索地点后选择，或直接点击地图微调区域中心点</div>
+        </div>
+      </div>
+    </template>
+
     <div class="amap-picker">
-      <div class="amap-search">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="搜索学校、商圈、地址..."
-          clearable
-          @input="onSearchInput"
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
+      <div class="picker-toolbar">
+        <div class="search-panel">
+          <el-input
+            v-model="searchKeyword"
+            placeholder="搜索学校、商圈、地址..."
+            clearable
+            @input="onSearchInput"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+        </div>
+        <div class="picker-hint">
+          拖动蓝色标记可微调
+        </div>
+      </div>
+
+      <div class="picker-layout">
         <div v-if="searchResults.length" class="search-results">
+          <div class="search-results-title">搜索结果</div>
           <div
             v-for="item in searchResults"
             :key="item.id"
@@ -30,9 +52,12 @@
             <div class="search-item-address">{{ item.address || item.district }}</div>
           </div>
         </div>
+        <div class="map-shell">
+          <div ref="mapContainer" class="amap-container"></div>
+        </div>
       </div>
-      <div ref="mapContainer" class="amap-container"></div>
-      <div class="amap-info">
+
+      <div class="location-summary">
         <div class="info-row">
           <span class="info-label">地址：</span>
           <span class="info-value">{{ selectedLocation.address || '未选择' }}</span>
@@ -50,10 +75,12 @@
       </div>
     </div>
     <template #footer>
-      <el-button @click="$emit('cancel')">取消</el-button>
-      <el-button type="primary" @click="confirmLocation" :disabled="!selectedLocation.longitude">
-        确认选择
-      </el-button>
+      <div class="dialog-footer">
+        <el-button @click="cancelPicker">取消</el-button>
+        <el-button type="primary" @click="confirmLocation" :disabled="!selectedLocation.longitude">
+          确认选择
+        </el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -62,7 +89,7 @@
 import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
-import { fetchAmapConfig } from '@/api/admin'
+import { amapPlaceSearch, amapRegeocode, fetchAmapRuntimeConfig } from '@/api/admin'
 
 interface LocationResult {
   longitude: number
@@ -115,16 +142,17 @@ const selectedLocation = reactive<LocationResult>({
 let map: any = null
 let marker: any = null
 let circle: any = null
-let autoComplete: any = null
-let placeSearch: any = null
-let geocoder: any = null
+let runtimeConfig: Record<string, any> = {}
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+let searchRequestSeq = 0
 
 async function initMap() {
   if (map) return
 
   try {
-    const configRes: any = await fetchAmapConfig()
+    const configRes: any = await fetchAmapRuntimeConfig()
     const config = configRes?.data || configRes || {}
+    runtimeConfig = config
 
     const jsApiKey = config.jsApiKey || ''
     const securityJsCode = config.securityJsCode || ''
@@ -135,16 +163,18 @@ async function initMap() {
       return
     }
 
-    if (securityJsCode) {
+    if (serviceHost) {
       (window as any)._AMapSecurityConfig = serviceHost
         ? { serviceHost }
-        : { securityJsCode }
+        : undefined
+    } else if (securityJsCode && securityJsCode !== jsApiKey && securityJsCode !== '******') {
+      (window as any)._AMapSecurityConfig = { securityJsCode }
     }
 
     const AMap = await AMapLoader.load({
       key: jsApiKey,
       version: '2.0',
-      plugins: ['AMap.Scale', 'AMap.ToolBar', 'AMap.AutoComplete', 'AMap.PlaceSearch', 'AMap.Geocoder']
+      plugins: ['AMap.Scale', 'AMap.ToolBar']
     })
 
     const center = props.defaultCenter
@@ -182,17 +212,6 @@ async function initMap() {
       map.add(circle)
     }
 
-    geocoder = new AMap.Geocoder()
-
-    autoComplete = new AMap.AutoComplete({
-      city: props.defaultCity || config.defaultCity || '全国'
-    })
-
-    placeSearch = new AMap.PlaceSearch({
-      city: props.defaultCity || config.defaultCity || '全国',
-      pageSize: 10
-    })
-
     map.on('click', (e: any) => {
       const lnglat = e.lnglat
       updateMarkerPosition(lnglat.lng, lnglat.lat)
@@ -211,7 +230,7 @@ async function initMap() {
   }
 }
 
-function updateMarkerPosition(lng: number, lat: number) {
+async function updateMarkerPosition(lng: number, lat: number) {
   marker.setPosition([lng, lat])
   if (circle) {
     circle.setCenter([lng, lat])
@@ -221,39 +240,52 @@ function updateMarkerPosition(lng: number, lat: number) {
   selectedLocation.longitude = lng
   selectedLocation.latitude = lat
 
-  geocoder.getAddress([lng, lat], (status: string, result: any) => {
-    if (status === 'complete' && result.regeocode) {
-      const addr = result.regeocode
-      selectedLocation.address = addr.formattedAddress || ''
-      selectedLocation.province = addr.addressComponent?.province || ''
-      selectedLocation.city = addr.addressComponent?.city || ''
-      selectedLocation.district = addr.addressComponent?.district || ''
-      selectedLocation.adcode = addr.addressComponent?.adcode || ''
-    }
-  })
+  try {
+    const res: any = await amapRegeocode(lng, lat)
+    if (res?.success === false) return
+    const addr = res?.data || res || {}
+    selectedLocation.address = normalizeLocationText(addr.formattedAddress || addr.address)
+    selectedLocation.province = normalizeLocationText(addr.province)
+    selectedLocation.city = normalizeLocationText(addr.city)
+    selectedLocation.district = normalizeLocationText(addr.district)
+    selectedLocation.adcode = normalizeLocationText(addr.adcode)
+  } catch {
+    // 地图选点已完成，逆地址解析失败时保留坐标，允许用户手动补地址。
+  }
 }
 
 function onSearchInput(value: string) {
-  if (!value.trim()) {
+  const keyword = value.trim()
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!keyword) {
     searchResults.value = []
     return
   }
 
-  autoComplete.search(value, (status: string, result: any) => {
-    if (status === 'complete' && result.tips) {
-      searchResults.value = result.tips
-        .filter((tip: any) => tip.location)
-        .map((tip: any) => ({
-          id: tip.id || Math.random().toString(),
-          name: tip.name,
-          address: tip.address,
-          district: tip.district,
-          location: tip.location
+  const requestSeq = ++searchRequestSeq
+  searchTimer = setTimeout(async () => {
+    try {
+      const city = props.defaultCity || runtimeConfig.defaultCity || '全国'
+      const res: any = await amapPlaceSearch(keyword, city)
+      if (requestSeq !== searchRequestSeq) return
+      if (res?.success === false) {
+        searchResults.value = []
+        return
+      }
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+      searchResults.value = list
+        .map((item: any, index: number) => ({
+          id: item.id || `${item.name || keyword}_${index}`,
+          name: normalizeLocationText(item.name) || keyword,
+          address: normalizeLocationText(item.address),
+          district: normalizeLocationText(item.district),
+          location: { lng: Number(item.longitude), lat: Number(item.latitude) }
         }))
-    } else {
+        .filter((item: SearchResult) => Number.isFinite(item.location.lng) && Number.isFinite(item.location.lat))
+    } catch {
       searchResults.value = []
     }
-  })
+  }, 300)
 }
 
 function selectSearchResult(item: SearchResult) {
@@ -271,14 +303,46 @@ function confirmLocation() {
   emit('update:visible', false)
 }
 
+function normalizeLocationText(value: any): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined && item !== null && String(item).trim())
+      .map((item) => String(item).trim())
+      .join(' ')
+  }
+  if (value === undefined || value === null) return ''
+  return String(value).trim()
+}
+
+function cancelPicker() {
+  emit('cancel')
+  emit('update:visible', false)
+}
+
+function applyDefaultCenter() {
+  if (!map || !marker || !props.defaultCenter) return
+  const [lng, lat] = props.defaultCenter
+  if (!Number.isFinite(lng) || !Number.isFinite(lat) || !lng || !lat) return
+  map.resize?.()
+  updateMarkerPosition(lng, lat)
+}
+
 watch(() => props.visible, (val) => {
   if (!val) {
     searchKeyword.value = ''
     searchResults.value = []
+    if (searchTimer) clearTimeout(searchTimer)
+  } else if (map) {
+    setTimeout(applyDefaultCenter, 0)
   }
 })
 
+watch(() => props.defaultCenter, () => {
+  if (props.visible && map) applyDefaultCenter()
+})
+
 onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
   if (map) {
     map.destroy()
     map = null
@@ -287,86 +351,226 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+:global(.location-picker-modal) {
+  backdrop-filter: blur(2px);
+}
+
+:global(.location-picker-dialog) {
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  margin: 0 !important;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+  display: flex;
+  flex-direction: column;
+}
+
+:global(.location-picker-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid #e7edf6;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+:global(.location-picker-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 24px 12px;
+  overflow: auto;
+}
+
+:global(.location-picker-dialog .el-dialog__footer) {
+  padding: 14px 24px 18px;
+  border-top: 1px solid #e8eef7;
+  background: #fff;
+}
+
+:global(.location-picker-dialog .el-dialog__headerbtn) {
+  top: 15px;
+  right: 18px;
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 36px;
+}
+
+.dialog-title {
+  color: #101828;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 24px;
+}
+
+.dialog-desc {
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  margin-top: 2px;
+}
+
 .amap-picker {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
-.amap-search {
-  position: relative;
+.picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f7faff;
+  border: 1px solid #e2ebf7;
+  border-radius: 10px;
+}
+
+.search-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.picker-hint {
+  flex: none;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 6px 10px;
+  background: #f5f8ff;
+  border: 1px solid #dbe7ff;
+  border-radius: 6px;
+}
+
+.picker-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
 }
 
 .search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
   background: #fff;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-  z-index: 100;
-  max-height: 240px;
+  border: 1px solid #d8e2f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  max-height: 132px;
   overflow-y: auto;
+  padding: 4px;
+}
+
+.search-results-title {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 4px 10px 6px;
 }
 
 .search-item {
-  padding: 10px 16px;
+  padding: 9px 10px;
   cursor: pointer;
-  border-bottom: 1px solid #f0f0f0;
+  border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .search-item:hover {
-  background: #f5f7fa;
-}
-
-.search-item:last-child {
-  border-bottom: none;
+  background: #f3f7ff;
 }
 
 .search-item-name {
   font-size: 14px;
   color: #303133;
   margin-bottom: 4px;
+  font-weight: 600;
 }
 
 .search-item-address {
   font-size: 12px;
-  color: #909399;
+  color: #7a8798;
+}
+
+.map-shell {
+  padding: 1px;
+  background: linear-gradient(180deg, #dbeafe, #eef4ff);
+  border-radius: 10px;
 }
 
 .amap-container {
-  height: 400px;
-  border-radius: 8px;
+  height: clamp(260px, 42vh, 360px);
+  border-radius: 10px;
   overflow: hidden;
-  border: 1px solid #dcdfe6;
+  background: #eef4ff;
 }
 
-.amap-info {
-  padding: 12px;
-  background: #f5f7fa;
-  border-radius: 8px;
+.location-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 18px;
+  padding: 14px 16px;
+  background: #f8fbff;
+  border: 1px solid #dfe8f5;
+  border-radius: 10px;
 }
 
 .info-row {
   display: flex;
-  margin-bottom: 8px;
+  align-items: flex-start;
+  min-width: 0;
 }
 
-.info-row:last-child {
-  margin-bottom: 0;
+.info-row:first-child {
+  grid-column: 1 / -1;
 }
 
 .info-label {
   color: #909399;
   font-size: 13px;
-  min-width: 60px;
+  min-width: 46px;
+  line-height: 20px;
 }
 
 .info-value {
   color: #303133;
   font-size: 13px;
+  line-height: 20px;
   word-break: break-all;
+  min-width: 0;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dialog-footer :deep(.el-button) {
+  min-width: 88px;
+}
+
+@media (max-width: 760px) {
+  .location-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .amap-container {
+    height: 300px;
+  }
+
+  .picker-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .picker-hint {
+    width: fit-content;
+  }
+
+  :global(.location-picker-dialog) {
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
 }
 </style>

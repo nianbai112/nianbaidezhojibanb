@@ -1,21 +1,18 @@
 <template>
-  <div class="page-header glass-card">
-    <div class="header-left">
-      <div class="header-icon" v-if="icon">
-        <el-icon :size="24"><component :is="icon" /></el-icon>
-      </div>
-      <div class="header-text">
-        <h1>{{ title }}</h1>
-        <p v-if="subtitle">{{ subtitle }}</p>
-      </div>
+  <div class="page-header">
+    <div class="ph-text">
+      <h1>{{ title }}</h1>
+      <p v-if="subtitle">{{ subtitle }}</p>
     </div>
-    <div class="header-actions">
+    <div v-if="$slots.actions" class="ph-actions">
       <slot name="actions" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+// P2 统一页头：纯排版（标题 + 副标题 + 右侧动作区）。
+// icon 保留仅为兼容旧调用，不再渲染渐变图标块。
 defineProps<{
   title: string
   subtitle?: string
@@ -27,50 +24,49 @@ defineProps<{
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  margin-bottom: 24px;
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(18px);
-  border-radius: 16px;
-  border: 1px solid rgba(219, 228, 240, 0.88);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.045);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 16px;
 }
 
-.header-icon {
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #2563eb, #0891b2);
-  border-radius: 14px;
-  color: white;
+.ph-text {
+  min-width: 0;
 }
 
-.header-text h1 {
+.ph-text h1 {
   margin: 0;
-  font-size: 23px;
-  font-weight: 760;
-  color: #0f172a;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--mx-text);
   letter-spacing: 0;
+  font-family: var(--mx-font-display);
 }
 
-.header-text p {
-  margin: 4px 0 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: #526174;
+.ph-text p {
+  margin: 5px 0 0;
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--mx-muted);
 }
 
-.header-actions {
+.ph-actions {
+  flex: 0 0 auto;
   display: flex;
-  gap: 8px;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ph-actions {
+    justify-content: flex-start;
+  }
 }
 </style>

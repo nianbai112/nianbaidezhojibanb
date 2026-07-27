@@ -1,9 +1,10 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>漏斗分析</h2>
-      <el-button type="primary" :loading="loading" @click="loadFunnel(true)">刷新</el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="漏斗分析">
+      <template #actions>
+        <el-button type="primary" :loading="loading" @click="loadFunnel(true)">刷新</el-button>
+      </template>
+    </PageHeader>
 
     <div class="glass-card" style="padding: 20px;">
       <div class="funnel-steps">
@@ -30,6 +31,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const stepsInput = ref('page_view,content_click,order_create,order_pay')
 const funnelData = ref([])
@@ -63,12 +65,10 @@ onMounted(() => loadFunnel())
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; }
 .funnel-result { margin-top: 24px; }
 .funnel-step { margin-bottom: 16px; position: relative; }
-.step-bar { background: linear-gradient(90deg, #3b82f6, #60a5fa); color: white; padding: 12px 16px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; min-width: 200px; transition: width 0.3s; }
+.step-bar { background: linear-gradient(90deg, #3b82f6, #60a5fa); color: white; padding: 12px 16px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; min-width: 200px; transition: width 0.3s; }
 .step-name { font-weight: 600; }
 .step-count { font-size: 14px; }
 .step-rate { position: absolute; right: -120px; top: 50%; transform: translateY(-50%); font-size: 12px; color: #666; }

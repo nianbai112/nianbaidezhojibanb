@@ -4,7 +4,7 @@ export type ModuleAction =
   | 'create' | 'update' | 'delete'
   | 'enable' | 'disable'
   | 'approve' | 'reject'
-  | 'complete' | 'cancel'
+  | 'complete' | 'cancel' | 'refund'
   | 'assign' | 'batchTag' | 'resetPassword'
   | 'batchEnable' | 'batchDisable'
   | 'batchApprove' | 'batchReject'
@@ -97,6 +97,20 @@ function statusText(v: any): string {
   return map[s] || s || '正常'
 }
 
+function userStatusValue(v: any): string {
+  const s = String(v ?? '').trim().toLowerCase()
+  const map: Record<string, string> = {
+    active: 'active',
+    enabled: 'active',
+    normal: 'active',
+    inactive: 'disabled',
+    disabled: 'disabled',
+    banned: 'banned',
+    ban: 'banned',
+  }
+  return map[s] || s || 'active'
+}
+
 function avatar(name: any, sub?: any, extra?: any) {
   return { name: text(name), sub: text(sub, extra, '') }
 }
@@ -114,7 +128,11 @@ function mapRow(moduleKey: string, row: any) {
         name: avatar(row.name, row.code || row.regionCode),
         code: text(row.code, row.regionCode, row.id),
         city: text(row.city, row.province, row.address),
-        admin: avatar(row.adminName || row.managerName || row.operatorName, row.adminPhone || row.phone),
+        admin: avatar(
+          row.adminName || row.managerName || row.managerAccount?.realName || row.managerAccount?.username || row.operatorName,
+          row.adminPhone || row.managerPhone || row.managerAccount?.phone || row.phone
+        ),
+        managerAccount: text(row.managerAccount?.username, row.managerAccountId),
         userCount: row.userCount,
         merchantCount: row.merchantCount,
         gmv: money(row.gmv, row.totalGmv),
@@ -123,20 +141,26 @@ function mapRow(moduleKey: string, row: any) {
       })
     case 'users':
     case 'verification':
+      const displayUid = text(row.uid, row.publicUid, row.public_uid, row.displayUid)
       return withMeta(moduleKey, row, {
         id: row.id,
+        uid: displayUid,
         nickname: row.nickname || row.name || row.username || '',
         avatar: row.avatar || '',
-        user: avatar(row.nickname || row.name || row.username, row.phone || row.openid),
+        user: avatar(row.nickname || row.name || row.username, displayUid ? `UID ${displayUid}` : row.phone || row.openid),
         phone: text(row.phone, row.mobile),
         openid: row.openid || '',
+        phoneBound: row.phoneBound ?? Boolean(row.phone || row.mobile),
+        wxBound: row.wxBound ?? !String(row.openid || '').startsWith('phone_login_'),
         userType: row.userType || 'miniapp',
         typeLabel: row.typeLabel || statusText(row.userType) || '小程序用户',
         regionId: row.regionId || '',
         regionName: row.regionName || row.region?.name || '',
         school: text(row.schoolName, row.school, row.university, row.region?.name),
         studentCertStatus: row.studentCertStatus || row.certStatus || 'none',
-        cert: statusText(row.studentCertStatus || row.certStatus),
+        cert: row.studentCardImage || row.cardImage || row.photo_url || row.photoUrl || row.certImage || row.materialImage || '',
+        certStatusText: statusText(row.studentCertStatus || row.certStatus),
+        studentCardImage: row.studentCardImage || row.cardImage || row.photo_url || row.photoUrl || row.certImage || '',
         realName: text(row.realName, row.name),
         studentNo: text(row.studentId, row.studentNo),
         studentId: row.studentId || row.studentNo || '',
@@ -150,9 +174,19 @@ function mapRow(moduleKey: string, row: any) {
         balance: money(row.balance, row.wallet?.balance, 0),
         freezeAmount: money(row.freezeAmount, row.wallet?.freeze, 0),
         amount: money(row.consumeAmount, row.totalAmount, row.balance),
-        status: statusText(row.status),
+        status: moduleKey === 'users' ? userStatusValue(row.status) : statusText(row.status),
+        membershipLabel: row.membershipLabel || '',
+        membershipExpiredAt: row.membershipExpiredAt || null,
+        tags: Array.isArray(row.tags) ? row.tags : [],
+        reportedCount: Number(row.reportedCount || 0),
         lastLoginAt: row.lastLoginAt || null,
         lastLoginIp: row.lastLoginIp || '',
+        lastLoginCountry: row.lastLoginCountry || '',
+        lastLoginProvince: row.lastLoginProvince || '',
+        lastLoginCity: row.lastLoginCity || '',
+        lastLoginDistrict: row.lastLoginDistrict || '',
+        lastLoginDevice: row.lastLoginDevice || '',
+        lastLoginUserAgent: row.lastLoginUserAgent || '',
         createdAt
       })
     case 'merchants':
@@ -281,10 +315,10 @@ function mapRow(moduleKey: string, row: any) {
     case 'admins':
       return withMeta(moduleKey, row, {
         id: row.id,
-        admin: avatar(row.nickname || row.name || row.username, row.phone),
+        admin: avatar(row.realName || row.nickname || row.name || row.username, row.phone),
         account: text(row.username, row.account),
-        role: text(row.roleName, row.role?.name),
-        scope: text(row.scope, row.dataScope, '全部数据'),
+        role: text(row.roleName, row.role?.name, Array.isArray(row.roles) ? row.roles.map((r: any) => r.name).join('、') : ''),
+        scope: text(row.scope, row.dataScope, row.regionName, '全部数据'),
         lastLogin: text(row.lastLoginAt, row.lastLoginTime),
         status: statusText(row.status)
       })
@@ -361,6 +395,10 @@ export async function fetchRiders(params: Record<string, any> = {}) {
 export async function fetchUserTags(params: Record<string, any> = {}) {
   const data = await request.get('/admin/user-tags', { params })
   return listOf(data)
+}
+
+export async function createUserTag(data: Record<string, any>) {
+  return request.post('/admin/user-tags', data)
 }
 
 export async function fetchRoles() {
@@ -450,10 +488,32 @@ export function persistAdminLoginPayload(payload: any) {
     localStorage.setItem('LM_ADMIN_TOKEN', token)
     localStorage.setItem('admin_token', token)
   }
+  if (Array.isArray(res?.permissions)) {
+    localStorage.setItem('LM_ADMIN_PERMISSIONS', JSON.stringify(res.permissions))
+  }
+  if (Array.isArray(res?.menus)) {
+    localStorage.setItem('LM_ADMIN_MENUS', JSON.stringify(res.menus))
+  }
   return res
 }
 
-export async function loginAdmin(data: { username: string; password: string }) {
+export async function fetchAdminCaptcha() {
+  const base = String(import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+  const response = await fetch(`${base}/auth/admin/captcha?t=${Date.now()}`, {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'same-origin'
+  })
+  if (!response.ok) throw new Error('验证码加载失败')
+  const svg = await response.text()
+  const captchaId = response.headers.get('X-Captcha-Id') || ''
+  return {
+    captchaId,
+    image: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  }
+}
+
+export async function loginAdmin(data: { username: string; password: string; captchaId?: string; captcha?: string; mfaCode?: string }) {
   const res: any = await request.post('/auth/admin/login', data)
   persistAdminLoginPayload(res)
   return res
@@ -577,6 +637,14 @@ export async function runModuleAction(moduleKey: string, action: ModuleAction, p
     if (moduleKey === 'refunds') return Promise.all(rows.map(row => request.put(`/admin/refunds/${idOf(row)}/complete`, { transferNo: data.transferNo || data.transactionId })))
     return Promise.all(rows.map(row => putStatus(moduleKey, row, 'completed')))
   }
+  if (action === 'refund') {
+    if (moduleKey !== 'orders' || rows.length !== 1) throw new Error('请从单个外卖订单发起退款')
+    const amount = Number(data.amount)
+    const reason = String(data.reason || payload.reason || '').trim()
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('请输入有效退款金额')
+    if (!reason) throw new Error('请填写退款原因')
+    return request.post('/wxpay/refund', { bizType: 'order', bizId: idOf(rows[0]), amount, reason })
+  }
   if (action === 'assign') {
     if (moduleKey !== 'delivery') throw new Error('只有跑腿配送订单支持派单')
     if (!data.riderId) throw new Error('请选择骑手')
@@ -627,12 +695,114 @@ export async function updateRegion(id: string | number, data: any) {
   return request.put(`/admin/regions/${id}`, data)
 }
 
+export async function fetchRegionCampusMap(regionId: string | number) {
+  return request.get(`/admin/campus-map/${regionId}`)
+}
+
+export async function saveRegionCampusMap(regionId: string | number, data: any) {
+  return request.put(`/admin/campus-map/${regionId}`, data)
+}
+
+export async function disableRegionCampusMap(regionId: string | number) {
+  return request.delete(`/admin/campus-map/${regionId}`)
+}
+
+export async function uploadRegionCampusMapImport(regionId: string | number, file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post(`/admin/campus-map/${regionId}/imports`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+}
+
+export async function fetchRegionCampusMapImports(regionId: string | number) {
+  return request.get(`/admin/campus-map/${regionId}/imports`)
+}
+
+export async function fetchRegionCampusMapImport(regionId: string | number, jobId: string) {
+  return request.get(`/admin/campus-map/${regionId}/imports/${jobId}`)
+}
+
+export async function retryRegionCampusMapImport(regionId: string | number, jobId: string) {
+  return request.post(`/admin/campus-map/${regionId}/imports/${jobId}/retry`)
+}
+
+export async function deleteRegionCampusMapImport(regionId: string | number, jobId: string) {
+  return request.delete(`/admin/campus-map/${regionId}/imports/${jobId}`)
+}
+
+export async function fetchCampusMapConverterStatus() {
+  return request.get('/admin/campus-map/converter/status')
+}
+
+export async function saveCampusMapConverterConfig(data: { converterPath?: string | null }) {
+  return request.put('/admin/campus-map/converter', data)
+}
+
 export async function fetchConfigGroup(group: string) {
   return request.get(`/admin/config-group/${group}`)
 }
 
 export async function saveConfigGroup(group: string, data: Record<string, any>) {
   return request.put(`/admin/config-group/${group}`, data)
+}
+
+export interface WebsiteInfo {
+  siteName?: string
+  siteShortName?: string
+  siteLogo?: string
+  logo?: string
+  favicon?: string
+  adminTitle?: string
+  adminSubtitle?: string
+  loginSlogan?: string
+  browserTitle?: string
+  siteSlogan?: string
+  siteDescription?: string
+  heroTitle?: string
+  heroSubtitle?: string
+  heroVideoUrl?: string
+  heroPosterUrl?: string
+  heroImageUrl?: string
+  mascotUrl?: string
+  previewImageUrl?: string
+  productPreviewImageUrl?: string
+  storyImageOneUrl?: string
+  storyImageTwoUrl?: string
+  storyImageThreeUrl?: string
+  cooperationImageUrl?: string
+  miniappQrUrl?: string
+  androidDownloadUrl?: string
+  iosDownloadUrl?: string
+  appStoreUrl?: string
+  apkUrl?: string
+  miniappUrl?: string
+  adminPath?: string
+  copyright?: string
+  icpNumber?: string
+  icp?: string
+  policeNumber?: string
+  policeLink?: string
+  contactEmail?: string
+  contactPhone?: string
+  contactWechat?: string
+  cooperationTitle?: string
+  cooperationSubtitle?: string
+  cooperationEmail?: string
+  cooperationPhone?: string
+}
+
+export async function fetchWebsiteInfo() {
+  return request.get<any, WebsiteInfo>('/config/website-info')
+}
+
+export async function fetchAdminWebsiteInfo() {
+  return request.get<any, WebsiteInfo>('/admin/website-info')
+}
+
+export async function saveAdminWebsiteInfo(data: WebsiteInfo) {
+  return request.put('/admin/website-info', data)
 }
 
 export async function fetchRegionTabbar(regionId: string | number) {
@@ -720,6 +890,37 @@ export async function testAiConfig() {
   return request.post('/admin/config/ai/test')
 }
 
+// ==================== 骑手算法分析 ====================
+
+export async function fetchRiderAnalytics(params: Record<string, any> = {}) {
+  return request.get('/admin/analytics/riders/algorithm', { params })
+}
+
+export async function fetchRiderAiConfig() {
+  const res: any = await request.get('/admin/analytics/riders/ai-config')
+  return res?.data || res
+}
+
+export async function saveRiderAiConfig(data: Record<string, any>) {
+  return request.put('/admin/analytics/riders/ai-config', data)
+}
+
+export async function runRiderAiAnalysis(data: Record<string, any> = {}) {
+  return request.post('/admin/analytics/riders/ai-run', data)
+}
+
+export async function fetchRiderAiSuggestions(params: Record<string, any> = {}) {
+  return request.get('/admin/analytics/riders/ai-suggestions', { params })
+}
+
+export async function updateRiderAiSuggestionStatus(id: string, data: Record<string, any>) {
+  return request.put(`/admin/analytics/riders/ai-suggestions/${id}/status`, data)
+}
+
+export async function fetchRiderAiRunLogs(params: Record<string, any> = {}) {
+  return request.get('/admin/analytics/riders/ai-run-logs', { params })
+}
+
 // ==================== 机器人配置 ====================
 
 export async function fetchRobotConfig() {
@@ -741,8 +942,60 @@ export async function createRobots(data: Record<string, any>) {
   return request.post('/admin/users/robots', data)
 }
 
+export async function fetchPrivateMessageConversations(params: Record<string, any> = {}) {
+  return request.get('/admin/private-messages/conversations', { params: { page: 1, pageSize: 20, ...params } })
+}
+
+export async function fetchPrivateConversationMessages(conversationId: string, params: Record<string, any> = {}) {
+  return request.get(`/admin/private-messages/conversations/${conversationId}/messages`, { params: { page: 1, pageSize: 80, ...params } })
+}
+
+export async function setPrivateConversationBlocked(conversationId: string, blocked: boolean) {
+  return request.put(`/admin/private-messages/conversations/${conversationId}/block`, { blocked })
+}
+
+export async function recallPrivateConversationMessage(messageId: string) {
+  return request.post(`/admin/private-messages/messages/${messageId}/recall`)
+}
+
 export async function fetchUserDetail(id: string) {
   return request.get(`/admin/users/${id}`)
+}
+
+export async function setUserTags(id: string, tagIds: string[]) {
+  return request.post(`/admin/users/${id}/tags`, { tagIds })
+}
+
+export async function adjustUserBalance(data: Record<string, any>) {
+  return request.post('/admin/users/balance-adjust', data)
+}
+
+export async function fetchUserCouponOptions() {
+  return request.get('/admin/users/coupon-options')
+}
+
+export async function grantUserCoupons(id: string, data: Record<string, any>) {
+  return request.post(`/admin/users/${id}/coupons`, data)
+}
+
+export async function grantUserMembershipBenefit(id: string, data: Record<string, any>) {
+  return request.post(`/admin/users/${id}/membership-benefits`, data)
+}
+
+export async function grantUserMembership(id: string, data: Record<string, any>) {
+  return request.post(`/admin/users/${id}/membership-grant`, data)
+}
+
+export async function updateUserRegion(id: string, data: Record<string, any>) {
+  return request.put(`/admin/users/${id}/region`, data)
+}
+
+export async function fetchMembershipPlans() {
+  return request.get('/admin/membership/plans')
+}
+
+export async function fetchMembershipBenefitCatalog() {
+  return request.get('/admin/membership/benefit-catalog')
 }
 
 // ==================== 微信 AccessToken ====================
@@ -802,6 +1055,11 @@ export async function fetchAmapConfig() {
   return res?.data || res
 }
 
+export async function fetchAmapRuntimeConfig() {
+  const res: any = await request.get('/admin/config/amap/runtime')
+  return res?.data || res
+}
+
 export async function saveAmapConfig(data: Record<string, any>) {
   return request.put('/admin/config/amap', data)
 }
@@ -812,6 +1070,15 @@ export async function testAmapWebKey() {
 
 export async function testAmapJsKey() {
   return request.post('/admin/config/amap/test-js')
+}
+
+export async function fetchFeieConfig() {
+  const res: any = await request.get('/admin/config/feie')
+  return res?.data || res
+}
+
+export async function saveFeieConfig(data: Record<string, any>) {
+  return request.put('/admin/config/feie', data)
 }
 
 // ==================== 高德地图代理服务 ====================
@@ -836,6 +1103,15 @@ export async function uploadImage(file: File, scene: string = 'default') {
   formData.append('scene', scene)
   return request.post('/admin/upload/image', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+export async function uploadVideo(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post('/admin/upload/video', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000
   })
 }
 
@@ -912,6 +1188,14 @@ export async function fetchRealtimeSessions(params: Record<string, any> = {}) {
   return request.get(`/admin/realtime/sessions${qs ? '?' + qs : ''}`)
 }
 
+export async function fetchRealtimeStatus() {
+  return request.get('/admin/realtime/status')
+}
+
+export async function fetchRealtimeWsTestToken() {
+  return request.get('/admin/realtime/ws-test-token')
+}
+
 export async function testPushToUser(userId: string, message: string) {
   return request.post('/admin/realtime/test-push', { userId, message })
 }
@@ -940,6 +1224,10 @@ export async function fetchOfficialConversationMessages(conversationId: string, 
 
 export async function replyOfficialConversation(conversationId: string, content: string) {
   return request.post(`/admin/realtime/official-conversations/${conversationId}/reply`, { content })
+}
+
+export async function updateOfficialConversationStatus(conversationId: string, status: string, content?: string) {
+  return request.put(`/admin/realtime/official-conversations/${conversationId}/status`, { status, content })
 }
 
 // ==================== 微信公众号 ====================
@@ -985,9 +1273,18 @@ export async function deleteOfficialBinding(id: string) {
 }
 
 export async function broadcastToAll(message: string, title?: string) {
-  return request.post('/admin/realtime/broadcast', { message, title })
+  return request.post('/admin/notifications/send', {
+    title: title || '系统广播',
+    content: message,
+    channelMask: { inApp: true, websocket: true },
+  })
 }
 
 export async function pushToRegion(regionId: string, message: string, title?: string) {
-  return request.post('/admin/realtime/push-region', { regionId, message, title })
+  return request.post('/admin/notifications/send', {
+    regionId,
+    title: title || '区域通知',
+    content: message,
+    channelMask: { inApp: true, websocket: true },
+  })
 }

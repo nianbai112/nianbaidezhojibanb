@@ -272,7 +272,7 @@ onMounted(() => loadDashboard())
   display: flex;
   justify-content: space-between;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(248, 250, 252, .8);
   color: #334155;
   font-weight: 850;

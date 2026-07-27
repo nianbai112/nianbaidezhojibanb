@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
-import { RequirePermission } from '../../decorators/require-permission.decorator';
+import { RequirePermission, RequirePermissionAny } from '../../decorators/require-permission.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 
 @ApiTags('审核中心')
@@ -14,7 +14,7 @@ export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
   @Get('admin/audit/stats')
-  @RequirePermission('content:audit')
+  @RequirePermissionAny('content:audit', 'audit:view', 'report:handle', 'post:audit', 'comment:audit')
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: '审核统计' })
   stats() {
@@ -22,7 +22,7 @@ export class AuditController {
   }
 
   @Get('admin/audit/pending-counts')
-  @RequirePermission('content:audit')
+  @RequirePermissionAny('content:audit', 'audit:view', 'report:handle', 'post:audit', 'comment:audit')
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: '各类型待审核数量' })
   pendingCounts() {
@@ -30,7 +30,7 @@ export class AuditController {
   }
 
   @Get('admin/audit/pending')
-  @RequirePermission('content:audit')
+  @RequirePermissionAny('content:audit', 'audit:view', 'report:handle', 'post:audit', 'comment:audit')
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: '待审核列表' })
   pendingList(@Query() query: any) {
@@ -43,5 +43,13 @@ export class AuditController {
   @ApiOperation({ summary: '批量审核' })
   batchAudit(@Body() dto: any, @CurrentUser('sub') reviewerId: string) {
     return this.auditService.batchAudit(dto, reviewerId);
+  }
+
+  @Post('admin/audit/ai-review')
+  @RequirePermission('content:audit')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: 'AI复审帖子或评论' })
+  aiReview(@Body() dto: any, @CurrentUser('sub') reviewerId: string) {
+    return this.auditService.aiReview(dto, reviewerId);
   }
 }

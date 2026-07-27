@@ -37,3 +37,12 @@ admin/.env.*.local
 
 # Local backups
 .local-backups/
+
+# Local inspection and generated artifacts
+.playwright-cli/
+.local-logs/
+output/
+.workbuddy/
+work/
+backend/storage/
+node_modules.stale*/

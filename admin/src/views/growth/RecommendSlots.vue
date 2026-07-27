@@ -1,9 +1,10 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>推荐位配置</h2>
-      <el-button type="primary" @click="showCreateDialog = true">添加推荐位</el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="推荐位配置">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true">添加推荐位</el-button>
+      </template>
+    </PageHeader>
 
     <div class="glass-card">
       <el-table :data="slots" v-loading="loading">
@@ -52,6 +53,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -111,7 +113,5 @@ onMounted(() => { loadSlots() })
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 20px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; padding: 20px; }
 </style>

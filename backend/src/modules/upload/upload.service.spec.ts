@@ -187,6 +187,19 @@ describe("UploadService", () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  it("should accept valid MP3 voice file", async () => {
+    const result = await service.upload(
+      makeFile({
+        originalname: "voice.mp3",
+        mimetype: "audio/mpeg",
+        buffer: Buffer.from("ID3mock-voice-data"),
+      }),
+      { type: "audio", folder: "users/u1/messages", scene: "message" },
+    );
+    expect(result.type).toBe("audio");
+    expect(result.key).toMatch(/^users\/u1\/messages\/\d+_[a-f0-9]{32}\.mp3$/);
+  });
+
   // ============ COS 配置缺失 ============
   it("should throw BadRequestException when COS_SECRET_ID missing", async () => {
     const badModule = await Test.createTestingModule({

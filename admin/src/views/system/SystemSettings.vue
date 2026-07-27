@@ -20,13 +20,14 @@
 <script setup lang="ts">
 import { ref, computed, shallowRef } from 'vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
-import { Setting, Lock, Bell, Warning, Upload, Connection } from '@element-plus/icons-vue'
+import { Setting, Lock, Bell, Warning, Upload, Connection, PictureFilled } from '@element-plus/icons-vue'
 import BasicSettingsPanel from './components/BasicSettingsPanel.vue'
 import PermissionSettingsPanel from './components/PermissionSettingsPanel.vue'
 import NotificationSettingsPanel from './components/NotificationSettingsPanel.vue'
 import SecuritySettingsPanel from './components/SecuritySettingsPanel.vue'
 import StorageUploadPanel from './components/StorageUploadPanel.vue'
 import ThirdPartySettingsPanel from './components/ThirdPartySettingsPanel.vue'
+import LoginPageVisualPanel from './components/LoginPageVisualPanel.vue'
 
 const tabs = [
   { key: 'basic', label: '基础设置', icon: Setting },
@@ -34,6 +35,7 @@ const tabs = [
   { key: 'notification', label: '消息通知', icon: Bell },
   { key: 'security', label: '安全策略', icon: Warning },
   { key: 'storage', label: '存储上传', icon: Upload },
+  { key: 'loginPage', label: '登录页视觉', icon: PictureFilled },
   { key: 'thirdParty', label: '第三方配置', icon: Connection }
 ]
 
@@ -45,7 +47,8 @@ const panelMap: Record<string, any> = {
   notification: NotificationSettingsPanel,
   security: SecuritySettingsPanel,
   storage: StorageUploadPanel,
-  thirdParty: ThirdPartySettingsPanel
+  thirdParty: ThirdPartySettingsPanel,
+  loginPage: LoginPageVisualPanel
 }
 
 const currentPanel = computed(() => panelMap[active.value] || BasicSettingsPanel)

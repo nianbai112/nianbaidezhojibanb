@@ -10,7 +10,7 @@ export class DistributorService {
   async getDistributorList(query: any) {
     const { page = 1, pageSize = 20, realName, phone, status, levelId } = query;
     const where: any = {};
-    if (realName) where.realName = { contains: realName, mode: 'insensitive' };
+    if (realName) where.realName = { contains: realName };
     if (phone) where.phone = { contains: phone };
     if (status) where.status = status;
     if (levelId) where.levelId = levelId;

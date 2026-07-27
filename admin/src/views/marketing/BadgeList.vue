@@ -1,9 +1,10 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>徽章配置</h2>
-      <el-button type="primary" @click="showCreateDialog = true">创建徽章</el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="徽章配置">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true">创建徽章</el-button>
+      </template>
+    </PageHeader>
 
     <div class="glass-card">
       <el-table :data="badges" v-loading="loading">
@@ -62,6 +63,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -123,7 +125,5 @@ onMounted(() => { loadBadges() })
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 20px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; padding: 20px; }
 </style>

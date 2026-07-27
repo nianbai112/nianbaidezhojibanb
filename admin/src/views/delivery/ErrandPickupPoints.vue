@@ -139,6 +139,11 @@ function regionName(id: string) {
   return regions.value.find(item => item.id === id)?.name || id || '-'
 }
 
+function toSubmitPayload(source: any) {
+  const { id, createdAt, updatedAt, ...payload } = source || {}
+  return payload
+}
+
 async function loadRegions() {
   regions.value = await fetchRegions()
 }
@@ -193,8 +198,7 @@ async function submit() {
   }
   saving.value = true
   try {
-    const payload = { ...form }
-    delete payload.id
+    const payload = toSubmitPayload(form)
     if (form.id) await updateErrandPickupPoint(form.id, payload)
     else await createErrandPickupPoint(payload)
     ElMessage.success('保存成功')
@@ -235,7 +239,7 @@ onMounted(async () => {
 }
 
 .table-card {
-  border-radius: 18px;
+  border-radius: 14px;
   border: 1px solid rgba(203, 213, 225, 0.78);
 }
 

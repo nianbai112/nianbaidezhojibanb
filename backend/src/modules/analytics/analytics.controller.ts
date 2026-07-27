@@ -1,6 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
+  Param,
+  Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -45,6 +49,13 @@ export class AnalyticsController {
     return this.analyticsService.getOrderAnalytics(query);
   }
 
+  @Get('second-hand')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '二手交易分析' })
+  getSecondHandAnalytics(@Query() query: any) {
+    return this.analyticsService.getSecondHandAnalytics(query);
+  }
+
   @Get('finance')
   @RequirePermission('analytics:view')
   @ApiOperation({ summary: '财务分析' })
@@ -71,6 +82,55 @@ export class AnalyticsController {
   @ApiOperation({ summary: '骑手分析' })
   getRiderAnalytics(@Query() query: any) {
     return this.analyticsService.getRiderAnalytics(query);
+  }
+
+  @Get('riders/algorithm')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '骑手算法分析' })
+  getRiderAlgorithmAnalytics(@Query() query: any) {
+    return this.analyticsService.getRiderAlgorithmAnalytics(query);
+  }
+
+  @Get('riders/ai-config')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '骑手算法 AI 配置' })
+  getRiderAiConfig() {
+    return this.analyticsService.getRiderAiConfig();
+  }
+
+  @Put('riders/ai-config')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '保存骑手算法 AI 配置' })
+  saveRiderAiConfig(@Body() dto: any) {
+    return this.analyticsService.saveRiderAiConfig(dto);
+  }
+
+  @Post('riders/ai-run')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '手动执行骑手算法 AI 分析' })
+  runRiderAiAnalysis(@Body() dto: any) {
+    return this.analyticsService.runRiderAiAnalysis(dto);
+  }
+
+  @Get('riders/ai-suggestions')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '骑手算法 AI 建议列表' })
+  getRiderAiSuggestions(@Query() query: any) {
+    return this.analyticsService.getRiderAiSuggestions(query);
+  }
+
+  @Put('riders/ai-suggestions/:id/status')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '更新骑手算法 AI 建议状态' })
+  updateRiderAiSuggestionStatus(@Param('id') id: string, @Body() dto: any) {
+    return this.analyticsService.updateRiderAiSuggestionStatus(id, dto);
+  }
+
+  @Get('riders/ai-run-logs')
+  @RequirePermission('analytics:view')
+  @ApiOperation({ summary: '骑手算法 AI 执行日志' })
+  getRiderAiRunLogs(@Query() query: any) {
+    return this.analyticsService.getRiderAiRunLogs(query);
   }
 
   @Get('funnel')

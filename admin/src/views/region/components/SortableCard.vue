@@ -24,14 +24,14 @@ defineProps<{ title:string; items:string[] }>()
 }
 .sort-list div {
   height: 40px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(248, 250, 252, .84);
   border: 1px solid rgba(226, 232, 240, .7);
   display: grid;
   grid-template-columns: 40px 1fr 28px;
   align-items: center;
   padding: 0 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   transition: .15s ease;
 }
 .sort-list div:hover {
@@ -41,10 +41,10 @@ defineProps<{ title:string; items:string[] }>()
 .sort-idx {
   font-weight: 800;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 .sort-list b {
-  color: #1e293b;
+  color: var(--mx-text);
   font-size: 13px;
 }
 .sort-grip {

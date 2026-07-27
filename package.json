@@ -1,20 +1,29 @@
 {
   "name": "lingmeng-platform",
-  "version": "1.0.1",
+  "version": "1.0.36",
   "private": true,
   "description": "灵萌 / Xiaoyi 后端服务与运营管理后台一体化工作区",
   "workspaces": [
     "backend",
-    "admin"
+    "admin",
+    "site"
   ],
   "scripts": {
+    "preinstall": "node utils/checkNodeVersion.js",
+    "preflight:node": "node utils/checkNodeVersion.js",
     "install:all": "npm install --workspaces",
     "dev:backend": "npm --workspace backend run start:dev",
     "dev:admin": "npm --workspace admin run dev",
-    "build": "npm run build:backend && npm run build:admin",
+    "dev:site": "npm --workspace site run dev",
+    "build": "npm run build:backend && npm run build:admin && npm run build:site",
     "build:backend": "npm --workspace backend run build",
     "build:admin": "npm --workspace admin run build",
+    "build:site": "npm --workspace site run build",
     "typecheck:admin": "npm --workspace admin run typecheck",
+    "lint:check": "npm --workspace backend run lint:check && npm --workspace admin run lint:check",
+    "lint:fix": "npm --workspace backend run lint:fix && npm --workspace admin run lint:fix",
+    "contract:api": "node utils/checkApiContract.js --strict",
+    "server:update": "node utils/updateAndInstall.js",
     "db:generate": "npm --workspace backend run db:generate",
     "db:migrate": "npm --workspace backend run db:migrate",
     "db:seed": "npm --workspace backend run db:seed",
@@ -22,5 +31,17 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "eslint-plugin-vue": "9.33.0",
+    "vue-eslint-parser": "9.4.3"
+  },
+  "overrides": {
+    "@nestjs/swagger": "11.4.5",
+    "engine.io": "6.6.9",
+    "form-data": "4.0.6",
+    "rxjs": "7.8.2",
+    "socket.io-adapter": "2.5.8",
+    "ws": "8.21.1"
   }
 }

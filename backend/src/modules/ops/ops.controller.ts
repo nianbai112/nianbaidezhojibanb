@@ -76,14 +76,14 @@ export class OpsController {
 
   @Get("admin/ops/alerts")
   @ApiOperation({ summary: "异常列表" })
-  async alerts(@Query() query: any) {
-    return this.opsService.getAlerts(query);
+  async alerts(@Query() query: any, @CurrentUser("sub") accountId: string) {
+    return this.opsService.getAlerts(query, accountId);
   }
 
   @Get("admin/ops/alerts/summary")
   @ApiOperation({ summary: "异常统计" })
-  async alertSummary() {
-    return this.opsService.getAlertSummary();
+  async alertSummary(@CurrentUser("sub") accountId: string) {
+    return this.opsService.getAlertSummary(accountId);
   }
 
   @Post("admin/ops/alerts/:id/resolve")

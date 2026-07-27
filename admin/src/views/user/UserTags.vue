@@ -5,8 +5,12 @@
       <el-button type="primary" @click="showDialog = true; resetForm()">新增标签</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
-      <el-table-column prop="name" label="标签名称" min-width="200" />
-      <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+      <el-table-column label="标签名称" min-width="200">
+        <template #default="{ row }">{{ row.tagName || row.name }}</template>
+      </el-table-column>
+      <el-table-column label="描述" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.tagDesc || row.description || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN') }}</template>
       </el-table-column>
@@ -43,7 +47,7 @@ const editing = ref<any>(null)
 const form = reactive({ name: '', description: '' })
 
 const resetForm = () => { form.name = ''; form.description = ''; editing.value = null }
-const edit = (row: any) => { editing.value = row; form.name = row.name; form.description = row.description || ''; showDialog.value = true }
+const edit = (row: any) => { editing.value = row; form.name = row.tagName || row.name; form.description = row.tagDesc || row.description || ''; showDialog.value = true }
 
 const loadData = async () => {
   loading.value = true
@@ -55,12 +59,18 @@ const loadData = async () => {
 
 const submit = async () => {
   if (!form.name.trim()) { ElMessage.warning('请输入标签名称'); return }
+  const payload = {
+    tagName: form.name.trim(),
+    tagDesc: form.description.trim(),
+    tagLevel: editing.value?.tagLevel || 1,
+    isActive: editing.value?.isActive ?? true,
+  }
   try {
     if (editing.value) {
-      await request.put(`/admin/user-tag-defs/${editing.value.id}`, form)
+      await request.put(`/admin/user-tag-defs/${editing.value.id}`, payload)
       ElMessage.success('更新成功')
     } else {
-      await request.post('/admin/user-tag-defs', form)
+      await request.post('/admin/user-tag-defs', payload)
       ElMessage.success('创建成功')
     }
     showDialog.value = false; resetForm(); loadData()

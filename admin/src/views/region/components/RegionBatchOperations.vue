@@ -137,7 +137,6 @@ const operationValues = reactive<Record<string, any>>({
   isOpen: true,
   isHot: false,
   showHotList: true,
-  isForceGuidance: false,
   privateMessageEnabled: true,
   contactsRequireStudentAuth: false,
   onlyStudentAuthUsers: false,
@@ -170,14 +169,6 @@ const operations = [
     description: '显示或隐藏首页热门榜单',
     icon: Star,
     color: '#8b5cf6',
-    type: 'switch'
-  },
-  {
-    key: 'isForceGuidance',
-    name: '强制引导',
-    description: '新用户是否必须完成资料填写',
-    icon: User,
-    color: '#ef4444',
     type: 'switch'
   },
   {
@@ -370,9 +361,9 @@ watch(visible, (val) => {
 
 .batch-section {
   background: #fff;
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 20px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--mx-border);
 }
 
 .section-title {
@@ -382,7 +373,7 @@ watch(visible, (val) => {
   font-weight: 600;
   font-size: 15px;
   margin-bottom: 16px;
-  color: #1e293b;
+  color: var(--mx-text);
 }
 
 .step-badge {
@@ -406,7 +397,7 @@ watch(visible, (val) => {
 
 .region-checkbox-item {
   padding: 8px 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--el-fill-color);
 }
 
 .region-checkbox-item:last-child {
@@ -422,7 +413,7 @@ watch(visible, (val) => {
 .region-logo-small {
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: linear-gradient(135deg, #dbeafe, #60a5fa);
   display: flex;
   align-items: center;
@@ -441,19 +432,19 @@ watch(visible, (val) => {
 .region-name-small {
   font-weight: 600;
   font-size: 14px;
-  color: #334155;
+  color: var(--el-text-color-regular);
 }
 
 .region-code-small {
   display: block;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 .selected-count {
   margin-top: 12px;
   font-size: 13px;
-  color: #64748b;
+  color: var(--mx-sub);
   text-align: right;
 }
 
@@ -469,18 +460,18 @@ watch(visible, (val) => {
   gap: 12px;
   padding: 12px 16px;
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--mx-border);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .operation-item:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: var(--mx-soft);
+  border-color: var(--mx-border-strong);
 }
 
 .operation-item.active {
-  background: #eff6ff;
+  background: var(--el-color-primary-light-9);
   border-color: #93c5fd;
 }
 
@@ -504,13 +495,13 @@ watch(visible, (val) => {
 .operation-name {
   font-weight: 600;
   font-size: 14px;
-  color: #334155;
+  color: var(--el-text-color-regular);
   margin-bottom: 2px;
 }
 
 .operation-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
 }
 
 .value-settings {
@@ -525,14 +516,14 @@ watch(visible, (val) => {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 16px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 }
 
 .value-label {
   font-weight: 500;
   font-size: 14px;
-  color: #475569;
+  color: var(--mx-sub);
 }
 
 .value-control {
@@ -546,7 +537,7 @@ watch(visible, (val) => {
   justify-content: flex-end;
   gap: 12px;
   padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--mx-border);
 }
 
 .execution-result {
@@ -556,12 +547,12 @@ watch(visible, (val) => {
 }
 
 .execution-result.success {
-  background: #f0fdf4;
+  background: var(--el-color-success-light-9);
   border: 1px solid #86efac;
 }
 
 .execution-result.error {
-  background: #fef2f2;
+  background: var(--el-color-danger-light-9);
   border: 1px solid #fca5a5;
 }
 
@@ -579,12 +570,12 @@ watch(visible, (val) => {
 }
 
 .error .result-header {
-  color: #dc2626;
+  color: var(--el-color-danger);
 }
 
 .result-detail {
   font-size: 13px;
-  color: #475569;
+  color: var(--mx-sub);
   line-height: 1.6;
 }
 
@@ -595,7 +586,7 @@ watch(visible, (val) => {
 }
 
 .error-item {
-  color: #dc2626;
+  color: var(--el-color-danger);
   font-size: 12px;
   padding: 2px 0;
 }

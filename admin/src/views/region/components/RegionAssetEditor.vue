@@ -162,8 +162,8 @@ function removeCarouselItem(idx: number) {
   gap: 12px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.6);
-  border-radius: 12px;
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--mx-border) 60%, transparent);
 }
 
 .carousel-card-preview {

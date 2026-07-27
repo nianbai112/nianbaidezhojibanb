@@ -39,7 +39,8 @@
                         <el-dropdown-item command="complete">完成</el-dropdown-item>
                         <el-dropdown-item command="assign">派单</el-dropdown-item>
                         <el-dropdown-item command="resetPassword">重置密码</el-dropdown-item>
-                        <el-dropdown-item command="cancel">取消</el-dropdown-item>
+                        <el-dropdown-item v-if="canCancel(row)" command="cancel">取消</el-dropdown-item>
+                        <el-dropdown-item v-else-if="canOpenRefund(row)" command="refund">发起退款</el-dropdown-item>
                         <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -66,10 +67,19 @@ import { computed, ref, watch } from 'vue'
 import { Setting, Filter } from '@element-plus/icons-vue'
 import FieldRender from './FieldRender.vue'
 import type { TableColumn } from '@/types/admin'
-const props = defineProps<{ title:string; columns: TableColumn[]; rows:any[]; total:number }>()
+const props = defineProps<{ title:string; columns: TableColumn[]; rows:any[]; total:number; moduleKey?:string }>()
 const emit = defineEmits<{ detail:[any]; edit:[any]; rowAction:[string, any]; selectionChange:[any[]] }>()
 const selectedKeys = ref<Set<string>>(new Set())
 const keyOf = (row: any) => String(row.id || row.orderNo || row.flowNo || row.__raw?.id || JSON.stringify(row))
+const rawStatus = (row: any) => String(row.__raw?.status || row.status || '').toUpperCase()
+const canCancel = (row: any) => props.moduleKey !== 'orders' || rawStatus(row) === 'PENDING_PAY'
+const canOpenRefund = (row: any) => {
+  if (props.moduleKey !== 'orders') return false
+  const status = rawStatus(row)
+  const raw = row.__raw || row
+  if (status === 'PAID') return !raw.merchantAcceptTime && !raw.merchant_accept_time
+  return ['DELIVERED', 'RECEIVED', 'COMPLETED'].includes(status)
+}
 const allChecked = computed(() => props.rows.length > 0 && props.rows.every(row => selectedKeys.value.has(keyOf(row))))
 const someChecked = computed(() => props.rows.some(row => selectedKeys.value.has(keyOf(row))) && !allChecked.value)
 function selectedRows() { return props.rows.filter(row => selectedKeys.value.has(keyOf(row))) }

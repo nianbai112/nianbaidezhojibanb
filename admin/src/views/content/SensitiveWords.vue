@@ -348,5 +348,5 @@ onMounted(() => {
 .stat-value { font-size: 24px; font-weight: 700; color: #1e293b; }
 .stat-label { font-size: 13px; color: #64748b; margin-top: 4px; }
 .table-footer { padding: 16px; display: flex; justify-content: flex-end; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border-radius: 16px; border: 1px solid rgba(255,255,255,0.8); }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border-radius: 14px; border: 1px solid rgba(255,255,255,0.8); }
 </style>

@@ -14,9 +14,19 @@ export class ShopController {
     return this.shopService.getByRegion(regionId, query);
   }
 
+  @Get('dorm-shops/region/:regionId')
+  getDormShopsByRegion(@Param('regionId') regionId: string, @Query() query: any) {
+    return this.shopService.getDormShopsByRegion(regionId, query);
+  }
+
   @Get('merchants/view/:merchantId')
   getDetail(@Param('merchantId') merchantId: string) {
     return this.shopService.getDetail(merchantId);
+  }
+
+  @Get('dorm-shops/view/:merchantId')
+  getDormShopDetail(@Param('merchantId') merchantId: string) {
+    return this.shopService.getDormShopDetail(merchantId);
   }
 
   @Get('merchants/categories_and_products/:merchantId')
@@ -24,9 +34,23 @@ export class ShopController {
     return this.shopService.getCategoriesAndProducts(merchantId);
   }
 
+  @Get('dorm-shops/categories_and_products/:merchantId')
+  getDormShopCategoriesAndProducts(@Param('merchantId') merchantId: string) {
+    return this.shopService.getCategoriesAndProducts(merchantId);
+  }
+
+  @Get('merchants/manage/categories_and_products/:merchantId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getManageCategoriesAndProducts(@Param('merchantId') merchantId: string, @CurrentUser('sub') userId: string) {
+    return this.shopService.getManageCategoriesAndProducts(merchantId, userId);
+  }
+
   @Get('merchants/list')
-  getList(@Query() query: any) {
-    return this.shopService.getList(query);
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getList(@Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.shopService.getList(query, userId);
   }
 
   @Get('merchants/orders/:merchantId')
@@ -46,8 +70,8 @@ export class ShopController {
   @Get('merchants/my-application')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getMyApplication(@CurrentUser('sub') userId: string) {
-    return this.shopService.getMyApplication(userId);
+  getMyApplication(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.shopService.getMyApplication(userId, query);
   }
 
   @Put('merchants/update/:merchantId')
@@ -67,8 +91,8 @@ export class ShopController {
   @Get('merchants/printer-config')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getPrinters(@Query('merchant_id') merchantId: string) {
-    return this.shopService.getPrinters(merchantId);
+  getPrinters(@Query('merchant_id') merchantId: string, @CurrentUser('sub') userId: string) {
+    return this.shopService.getPrinters(merchantId, userId);
   }
 
   @Post('merchants/printer-config')
@@ -95,13 +119,13 @@ export class ShopController {
   @Get('order/merchant/:merchantId/dashboard')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getMerchantDashboard(@Param('merchantId') merchantId: string, @Query() query: any) {
-    return this.shopService.getMerchantDashboard(merchantId, query);
+  getMerchantDashboard(@Param('merchantId') merchantId: string, @Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.shopService.getMerchantDashboard(merchantId, query, userId);
   }
 
   @Get('categories')
-  getCategories() {
-    return this.shopService.getCategories();
+  getCategories(@Query() query: any) {
+    return this.shopService.getCategories(query);
   }
 
   @Post('categories')
@@ -196,8 +220,8 @@ export class ShopController {
   @Delete('shopping-cart/clear')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  clearCart(@CurrentUser('sub') userId: string) {
-    return this.shopService.clearCart(userId);
+  clearCart(@CurrentUser('sub') userId: string, @Body() dto: any = {}) {
+    return this.shopService.clearCart(userId, dto);
   }
 
   @Get('shopping-cart/merchant/:merchantId')
@@ -212,6 +236,13 @@ export class ShopController {
   @ApiBearerAuth()
   createOrder(@Param('merchantId') merchantId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.shopService.createOrder(merchantId, userId, dto);
+  }
+
+  @Post('delivery-distance/:merchantId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getDeliveryDistance(@Param('merchantId') merchantId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.shopService.getDeliveryDistance(merchantId, userId, dto);
   }
 
   @Get('order/:orderId')
@@ -233,6 +264,27 @@ export class ShopController {
   @ApiBearerAuth()
   updateOrderStatus(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.shopService.updateOrderStatus(orderId, userId, dto);
+  }
+
+  @Post('order/:orderId/merchant/accept')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  acceptMerchantOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.shopService.acceptMerchantOrder(orderId, userId);
+  }
+
+  @Post('order/:orderId/merchant/ready')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  readyMerchantOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.shopService.readyMerchantOrder(orderId, userId);
+  }
+
+  @Post('order/:orderId/merchant/complete')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  completeMerchantOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.shopService.completeMerchantOrder(orderId, userId);
   }
 
   @Post('order/wx/notify')
@@ -273,6 +325,13 @@ export class ShopController {
   @ApiBearerAuth()
   submitReview(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.shopService.submitReview(userId, dto);
+  }
+
+  @Put('merchant/reviews/:id/reply')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  replyToReview(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.shopService.replyToReview(id, userId, dto);
   }
 
   @Get('merchant/reviews/tags/popular')

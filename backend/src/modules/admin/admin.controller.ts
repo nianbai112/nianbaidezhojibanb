@@ -9,13 +9,15 @@ import {
   Query,
   UseGuards,
   Req,
+  BadRequestException,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { Request } from "express";
 import { AdminService } from "./admin.service";
+import { CommentService } from "../comment/comment.service";
 import { JwtGuard } from "../../guards/jwt.guard";
 import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
-import { RequirePermission } from "../../decorators/require-permission.decorator";
+import { RequirePermission, RequirePermissionAny } from "../../decorators/require-permission.decorator";
 import { CurrentUser } from "../../decorators/current-user.decorator";
 
 @ApiTags("后台管理")
@@ -23,7 +25,10 @@ import { CurrentUser } from "../../decorators/current-user.decorator";
 @UseGuards(JwtGuard, AdminGuard)
 @ApiBearerAuth()
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly commentService: CommentService,
+  ) {}
 
   // ============ 仪表盘 ============
   @Get("admin/dashboard")
@@ -67,7 +72,7 @@ export class AdminController {
 
   @Get("admin/dashboard/todos")
   @ApiOperation({ summary: "仪表盘待办统计" })
-  getDashboardTodos() { return this.adminService.getDashboardTodos(); }
+  getDashboardTodos(@CurrentUser("sub") operatorId: string) { return this.adminService.getDashboardTodos(operatorId); }
 
   @Get("admin/dashboard/order-sources")
   @ApiOperation({ summary: "订单来源分布" })
@@ -94,6 +99,38 @@ export class AdminController {
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "帖子统计" })
   getPostsStats() { return this.adminService.getPostsStats(); }
+
+  @Get("admin/posts/text-cover-templates")
+  @RequirePermission("post:audit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "文字封面模板列表" })
+  textCoverTemplates(@Query() query: any) {
+    return this.adminService.textCoverTemplates(query);
+  }
+
+  @Post("admin/posts/text-cover-templates")
+  @RequirePermission("post:audit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "创建文字封面模板" })
+  createTextCoverTemplate(@Body() dto: any, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.createTextCoverTemplate(dto, operatorId, req.ip);
+  }
+
+  @Put("admin/posts/text-cover-templates/:id")
+  @RequirePermission("post:audit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "更新文字封面模板" })
+  updateTextCoverTemplate(@Param("id") id: string, @Body() dto: any, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.updateTextCoverTemplate(id, dto, operatorId, req.ip);
+  }
+
+  @Delete("admin/posts/text-cover-templates/:id")
+  @RequirePermission("post:audit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "删除文字封面模板" })
+  deleteTextCoverTemplate(@Param("id") id: string, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.deleteTextCoverTemplate(id, operatorId, req.ip);
+  }
 
   @Get("admin/refunds/stats")
   @RequirePermission("order:view")
@@ -145,30 +182,40 @@ export class AdminController {
 
   // ============ 区域运营工作台 ============
   @Get("admin/ops/regions/overview")
+  @RequirePermissionAny("system:config", "config:view")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域运营概览" })
   regionOpsOverview() {
     return this.adminService.regionOpsOverview();
   }
 
   @Get("admin/ops/regions/:regionId/launch-checklist")
+  @RequirePermissionAny("system:config", "config:view")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域启动清单" })
   regionLaunchChecklist(@Param("regionId") regionId: string) {
     return this.adminService.regionLaunchChecklist(regionId);
   }
 
   @Get("admin/ops/regions/:regionId/health-score")
+  @RequirePermissionAny("system:config", "config:view")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域健康评分" })
   regionHealthScore(@Param("regionId") regionId: string) {
     return this.adminService.regionHealthScore(regionId);
   }
 
   @Get("admin/ops/regions/:regionId/tasks")
+  @RequirePermissionAny("system:config", "config:view")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "区域运营任务" })
   regionOpsTasks(@Param("regionId") regionId: string) {
     return this.adminService.regionOpsTasks(regionId);
   }
 
   @Post("admin/ops/regions/:regionId/tasks/:taskId/complete")
+  @RequirePermission("system:config")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "完成运营任务" })
   completeRegionOpsTask(
     @Param("regionId") regionId: string,
@@ -178,6 +225,8 @@ export class AdminController {
   }
 
   @Post("admin/ops/regions/:regionId/tasks/generate")
+  @RequirePermission("system:config")
+  @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "生成运营任务" })
   generateRegionOpsTasks(@Param("regionId") regionId: string) {
     return this.adminService.generateRegionOpsTasks(regionId);
@@ -188,8 +237,8 @@ export class AdminController {
   @RequirePermission("user:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户列表" })
-  users(@Query() query: any) {
-    return this.adminService.users(query);
+  users(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.users(query, operatorId);
   }
 
   @Get("admin/users/stats")
@@ -210,6 +259,14 @@ export class AdminController {
     @Req() req: Request,
   ) {
     return this.adminService.createRobots(dto, operatorId, req.ip);
+  }
+
+  @Get("admin/users/coupon-options")
+  @RequirePermission("marketing:view")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "可发放优惠券列表" })
+  userCouponOptions() {
+    return this.adminService.userCouponOptions();
   }
 
   @Get("admin/users/:id")
@@ -239,16 +296,31 @@ export class AdminController {
   @ApiOperation({ summary: "更改用户状态" })
   userStatus(
     @Param("id") id: string,
-    @Body() dto: { status: string },
+    @Body() dto: { status: string; reason?: string },
     @CurrentUser("sub") operatorId: string,
     @Req() req: Request,
   ) {
-    return this.adminService.banUser(
-      id,
-      { banned: dto.status === "banned" || dto.status === "BANNED" },
-      operatorId,
-      req.ip,
-    );
+    // AUD-P1-181: DELETED 状态需走 user:delete 权限的独立删除端点，
+    // 不允许通过 user:ban 接口直接设为 DELETED
+    const reqStatus = String(dto?.status || "").trim().toLowerCase();
+    if (reqStatus === "deleted" || reqStatus === "delete") {
+      throw new BadRequestException("删除用户需使用独立删除接口（user:delete 权限）");
+    }
+
+    return this.adminService.setUserStatus(id, dto, operatorId, req.ip);
+  }
+
+  @Delete("admin/users/:id")
+  @RequirePermission("user:delete")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "删除用户（软删除）" })
+  deleteUser(
+    @Param("id") id: string,
+    @Body() dto: { reason?: string },
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.setUserStatus(id, { status: "deleted", reason: dto?.reason || "管理员删除" }, operatorId, req.ip);
   }
 
   @Put("admin/users/:id/cert")
@@ -280,12 +352,12 @@ export class AdminController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户余额变动记录" })
-  balanceLogs(@Param("id") id: string, @Query() q: any) {
-    return this.adminService.userBalanceLogs(id, q);
+  balanceLogs(@Param("id") id: string, @Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.userBalanceLogs(id, q, operatorId);
   }
 
   @Post("admin/users/balance-adjust")
-  @RequirePermission("finance:view")
+  @RequirePermission("finance:balance-adjust")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "调整用户余额" })
   balanceAdjust(
@@ -294,6 +366,58 @@ export class AdminController {
     @Req() req: Request,
   ) {
     return this.adminService.userBalanceAdjust(dto, operatorId, req.ip);
+  }
+
+  @Post("admin/users/:id/coupons")
+  @RequirePermission("marketing:view")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "给用户发放优惠券" })
+  grantUserCoupons(
+    @Param("id") id: string,
+    @Body() dto: any,
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.grantUserCoupons(id, dto, operatorId, req.ip);
+  }
+
+  @Post("admin/users/:id/membership-benefits")
+  @RequirePermission("membership:grant")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "给用户发放会员权益券" })
+  grantUserMembershipBenefit(
+    @Param("id") id: string,
+    @Body() dto: any,
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.grantUserMembershipBenefit(id, dto, operatorId, req.ip);
+  }
+
+  @Post("admin/users/:id/membership-grant")
+  @RequirePermission("membership:grant")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "给用户赠送会员" })
+  grantUserMembership(
+    @Param("id") id: string,
+    @Body() dto: any,
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.grantUserMembership(id, dto, operatorId, req.ip);
+  }
+
+  @Put("admin/users/:id/region")
+  @RequirePermission("user:edit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "变更用户归属区域" })
+  updateUserRegion(
+    @Param("id") id: string,
+    @Body() dto: any,
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.updateUserRegion(id, dto, operatorId, req.ip);
   }
 
   @Get("admin/users/:id/follows")
@@ -324,15 +448,15 @@ export class AdminController {
   @Get("admin/regions")
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
-  regions(@Query() query: any) {
-    return this.adminService.regions(query);
+  regions(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regions(query, operatorId);
   }
 
   @Post("admin/regions")
   @RequirePermission("region:edit")
   @UseGuards(AdminPermissionGuard)
-  createRegion(@Body() dto: any) {
-    return this.adminService.createRegion(dto);
+  createRegion(@Body() dto: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.createRegion(dto, operatorId);
   }
 
   // NOTE: admin/regions/:id routes are at the END of the region section
@@ -342,8 +466,8 @@ export class AdminController {
   @Get("admin/posts")
   @RequirePermission("post:audit")
   @UseGuards(AdminPermissionGuard)
-  posts(@Query() query: any) {
-    return this.adminService.posts(query);
+  posts(@Query() query: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.posts(query, operatorId);
   }
 
   @Get("admin/posts/hot")
@@ -357,8 +481,8 @@ export class AdminController {
   @Get("admin/posts/:id")
   @RequirePermission("post:audit")
   @UseGuards(AdminPermissionGuard)
-  postDetail(@Param("id") id: string) {
-    return this.adminService.postDetail(id);
+  postDetail(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.postDetail(id, operatorId);
   }
 
   @Put("admin/posts/:id/audit")
@@ -387,20 +511,20 @@ export class AdminController {
   @Put("admin/posts/:id/top")
   @RequirePermission("post:top")
   @UseGuards(AdminPermissionGuard)
-  toggleTop(@Param("id") id: string) {
-    return this.adminService.toggleTop(id);
+  toggleTop(@Param("id") id: string, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.toggleTop(id, operatorId, req.ip);
   }
 
   @Put("admin/posts/:id/essence")
   @RequirePermission("post:top")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "设置/取消精华" })
-  toggleEssence(@Param("id") id: string) {
-    return this.adminService.toggleEssence(id);
+  toggleEssence(@Param("id") id: string, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.toggleEssence(id, operatorId, req.ip);
   }
 
   @Post("admin/posts/batch")
-  @RequirePermission("post:audit")
+  @RequirePermissionAny("post:audit", "post:delete", "post:top")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "批量操作帖子" })
   batchPosts(
@@ -415,8 +539,8 @@ export class AdminController {
   @RequirePermission("post:top")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "更新热门帖子配置" })
-  updateHot(@Body() dto: any) {
-    return this.adminService.updateHot(dto);
+  updateHot(@Body() dto: any, @CurrentUser("sub") operatorId: string, @Req() req: Request) {
+    return this.adminService.updateHot(dto, operatorId, req.ip);
   }
 
   @Get("admin/comments/stats")
@@ -430,6 +554,38 @@ export class AdminController {
   @UseGuards(AdminPermissionGuard)
   comments(@Query() query: any) {
     return this.adminService.comments(query);
+  }
+
+  @Get("admin/comments/lotteries")
+  @RequirePermission("lottery:list")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "评论抽奖列表" })
+  commentLotteries(@Query() query: any) {
+    return this.commentService.getAdminLotteryList(query);
+  }
+
+  @Post("admin/comments/lotteries/:id/draw")
+  @RequirePermission("lottery:draw")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "后台手动评论抽奖开奖" })
+  drawCommentLottery(@Param("id") id: string) {
+    return this.commentService.adminDrawLottery(id);
+  }
+
+  @Post("admin/comments/lotteries/:id/cancel")
+  @RequirePermission("lottery:cancel")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "后台取消评论抽奖" })
+  cancelCommentLottery(@Param("id") id: string, @Body() dto: any) {
+    return this.commentService.adminCancelLottery(id, dto);
+  }
+
+  @Get("admin/comments/:id")
+  @RequirePermission("comment:audit")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "评论详情" })
+  commentDetail(@Param("id") id: string) {
+    return this.adminService.commentDetail(id);
   }
 
   @Delete("admin/comments/:id")
@@ -465,22 +621,32 @@ export class AdminController {
   @UseGuards(AdminPermissionGuard)
   handleReport(
     @Param("id") id: string,
-    @Body() dto: { status: string; result?: string },
+    @Body() dto: { status: string; result?: string; action?: string; muteDays?: number },
     @CurrentUser("sub") handlerId: string,
     @Req() req: Request,
   ) {
     return this.adminService.handleReport(id, dto, handlerId, req.ip);
   }
 
+  @Post("admin/content/repair-counters")
+  @RequirePermission("content:audit")
+  @UseGuards(AdminPermissionGuard)
+  repairContentCounters(
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.repairContentCounters(operatorId, req.ip);
+  }
+
   // ============ 商城：商家 ============
   @Get("admin/merchants")
-  merchants(@Query() q: any) {
-    return this.adminService.merchants(q);
+  merchants(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchants(q, operatorId);
   }
 
   @Get("admin/merchants/:id")
-  merchantDetail(@Param("id") id: string) {
-    return this.adminService.merchantDetail(id);
+  merchantDetail(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchantDetail(id, operatorId);
   }
 
   @Put("admin/merchants/:id/audit")
@@ -498,10 +664,11 @@ export class AdminController {
   @Put("admin/merchants/:id/status")
   @RequirePermission("merchant:audit")
   @UseGuards(AdminPermissionGuard)
-  merchantStatus(@Param("id") id: string, @Body() dto: { status: number }) {
+  merchantStatus(@Param("id") id: string, @Body() dto: { status: number; closedNotice?: string }) {
     return this.adminService.updateMerchantStatus(
       id,
       dto.status === 1 ? "approved" : "closed",
+      dto.closedNotice,
     );
   }
 
@@ -656,8 +823,8 @@ export class AdminController {
   @RequirePermission("review:manage")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "评价列表" })
-  reviews(@Query() q: any) {
-    return this.adminService.reviews(q);
+  reviews(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.reviews(q, operatorId);
   }
 
   @Delete("admin/reviews/:id")
@@ -772,15 +939,15 @@ export class AdminController {
   @Get("admin/orders")
   @RequirePermission("order:view")
   @UseGuards(AdminPermissionGuard)
-  orders(@Query() q: any) {
-    return this.adminService.orders(q);
+  orders(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.orders(q, operatorId);
   }
 
   @Get("admin/orders/:id")
   @RequirePermission("order:view")
   @UseGuards(AdminPermissionGuard)
-  orderDetail(@Param("id") id: string) {
-    return this.adminService.orderDetail(id);
+  orderDetail(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.orderDetail(id, operatorId);
   }
 
   @Put("admin/orders/:id/cancel")
@@ -807,8 +974,8 @@ export class AdminController {
   @Get("admin/refunds")
   @RequirePermission("order:view")
   @UseGuards(AdminPermissionGuard)
-  refunds(@Query() q: any) {
-    return this.adminService.refunds(q);
+  refunds(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.refunds(q, operatorId);
   }
 
   @Put("admin/refunds/:id/audit")
@@ -840,23 +1007,23 @@ export class AdminController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "财务退款汇总" })
-  refundsFinance(@Query() q: any) {
-    return this.adminService.refundsFinance(q);
+  refundsFinance(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.refundsFinance(q, operatorId);
   }
 
   // ============ 财务 ============
   @Get("admin/withdraws")
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
-  withdraws(@Query() q: any) {
-    return this.adminService.withdraws(q);
+  withdraws(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.withdraws(q, operatorId);
   }
 
   @Get("admin/withdraws/:id")
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
-  withdrawDetail(@Param("id") id: string) {
-    return this.adminService.withdrawDetail(id);
+  withdrawDetail(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.withdrawDetail(id, operatorId);
   }
 
   @Put("admin/withdraws/:id/audit")
@@ -894,8 +1061,8 @@ export class AdminController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "交易流水列表（充值/余额）" })
-  transactions(@Query() q: any) {
-    return this.adminService.transactions(q);
+  transactions(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.transactions(q, operatorId);
   }
 
   // ============ 商家结算 ============
@@ -903,8 +1070,8 @@ export class AdminController {
   @RequirePermission("finance:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "商家结算单列表" })
-  merchantSettlements(@Query() q: any) {
-    return this.adminService.merchantSettlements(q);
+  merchantSettlements(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.merchantSettlements(q, operatorId);
   }
 
   @Post("admin/settlements/generate")
@@ -938,44 +1105,6 @@ export class AdminController {
     @Req() req: Request,
   ) {
     return this.adminService.createReconciliation(dto, operatorId, req.ip);
-  }
-
-  // ============ 运营工具 ============
-  @Get("admin/notifications")
-  notifications(@Query() q: any) {
-    return this.adminService.notifications(q);
-  }
-
-  @Post("admin/notifications")
-  @RequirePermission("activity:edit")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "创建通知" })
-  createNotification(@Body() dto: any) {
-    return this.adminService.createNotification(dto);
-  }
-
-  @Put("admin/notifications/:id")
-  @RequirePermission("activity:edit")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "更新通知" })
-  updateNotification(@Param("id") id: string, @Body() dto: any) {
-    return this.adminService.updateNotification(id, dto);
-  }
-
-  @Put("admin/notifications/:id/send")
-  @RequirePermission("activity:edit")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "发送通知" })
-  sendNotification(@Param("id") id: string) {
-    return this.adminService.sendNotification(id);
-  }
-
-  @Delete("admin/notifications/:id")
-  @RequirePermission("activity:edit")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "删除通知" })
-  deleteNotification(@Param("id") id: string) {
-    return this.adminService.deleteNotification(id);
   }
 
   // ============ 运营工具：签到/徽章/团购/分享 ============
@@ -1380,18 +1509,18 @@ export class AdminController {
   }
 
   @Get("admin/operation-logs")
-  @RequirePermission("admin:view")
+  @RequirePermissionAny("admin:view", "system:config")
   @UseGuards(AdminPermissionGuard)
-  operationLogs(@Query() q: any) {
-    return this.adminService.auditLogs(q);
+  operationLogs(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.auditLogs(q, operatorId);
   }
 
   @Get("admin/login-logs")
-  @RequirePermission("admin:view")
+  @RequirePermissionAny("admin:view", "system:config")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "登录日志" })
-  loginLogs(@Query() q: any) {
-    return this.adminService.loginLogs(q);
+  loginLogs(@Query() q: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.loginLogs(q, operatorId);
   }
 
   @Get("admin/config/wechat-pay")
@@ -1500,8 +1629,8 @@ export class AdminController {
   }
 
   @Get("admin/regions/content-items")
-  regionContentItems(@Query("regionId") regionId: string) {
-    return this.adminService.regionContentItems(regionId);
+  regionContentItems(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionContentItems(regionId, operatorId);
   }
 
   @Post("admin/regions/content-items")
@@ -1544,8 +1673,8 @@ export class AdminController {
   }
 
   @Get("admin/regions/banners")
-  regionBanners(@Query("regionId") regionId: string) {
-    return this.adminService.regionBanners(regionId);
+  regionBanners(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionBanners(regionId, operatorId);
   }
 
   @Post("admin/regions/banners")
@@ -1583,8 +1712,8 @@ export class AdminController {
   }
 
   @Get("admin/regions/announcements")
-  regionAnnouncements(@Query("regionId") regionId: string) {
-    return this.adminService.regionAnnouncements(regionId);
+  regionAnnouncements(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionAnnouncements(regionId, operatorId);
   }
 
   @Post("admin/regions/announcements")
@@ -1627,8 +1756,8 @@ export class AdminController {
   }
 
   @Get("admin/regions/nav")
-  regionNav(@Query("regionId") regionId: string) {
-    return this.adminService.regionNav(regionId);
+  regionNav(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionNav(regionId, operatorId);
   }
 
   @Put("admin/regions/nav")
@@ -1643,8 +1772,8 @@ export class AdminController {
   }
 
   @Get("admin/regions/tabbar")
-  regionTabBar(@Query("regionId") regionId: string) {
-    return this.adminService.regionTabBar(regionId);
+  regionTabBar(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionTabBar(regionId, operatorId);
   }
 
   @Put("admin/regions/tabbar")
@@ -1662,8 +1791,8 @@ export class AdminController {
   @Get("admin/regions/custom-pages")
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
-  regionCustomPages(@Query("regionId") regionId: string) {
-    return this.adminService.regionCustomPages(regionId);
+  regionCustomPages(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionCustomPages(regionId, operatorId);
   }
 
   @Post("admin/regions/custom-pages")
@@ -1704,8 +1833,8 @@ export class AdminController {
   @Get("admin/regions/rich-texts")
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
-  regionRichTexts(@Query("regionId") regionId: string) {
-    return this.adminService.regionRichTexts(regionId);
+  regionRichTexts(@Query("regionId") regionId: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionRichTexts(regionId, operatorId);
   }
 
   @Post("admin/regions/rich-texts")
@@ -1745,22 +1874,26 @@ export class AdminController {
   @Get("admin/regions/:id")
   @RequirePermission("region:view")
   @UseGuards(AdminPermissionGuard)
-  regionDetail(@Param("id") id: string) {
-    return this.adminService.regionDetail(id);
+  regionDetail(@Param("id") id: string, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.regionDetail(id, operatorId);
   }
 
   @Put("admin/regions/:id")
   @RequirePermission("region:edit")
   @UseGuards(AdminPermissionGuard)
-  updateRegion(@Param("id") id: string, @Body() dto: any) {
-    return this.adminService.updateRegion(id, dto);
+  updateRegion(@Param("id") id: string, @Body() dto: any, @CurrentUser("sub") operatorId: string) {
+    return this.adminService.updateRegion(id, dto, operatorId);
   }
 
   @Put("admin/regions/:id/status")
   @RequirePermission("region:edit")
   @UseGuards(AdminPermissionGuard)
-  regionStatus(@Param("id") id: string, @Body() dto: { status: number }) {
-    return this.adminService.updateRegion(id, { isOpen: dto.status === 1 });
+  regionStatus(
+    @Param("id") id: string,
+    @Body() dto: { status: number },
+    @CurrentUser("sub") operatorId: string,
+  ) {
+    return this.adminService.updateRegion(id, { isOpen: dto.status === 1 }, operatorId);
   }
 
   @Delete("admin/regions/:id")
@@ -1903,13 +2036,18 @@ export class AdminController {
   @ApiOperation({ summary: "拒绝退款" })
   rejectRefund(
     @Param("id") id: string,
-    @Body() dto: { reason: string },
+    @Body() dto: any,
     @CurrentUser("sub") operatorId: string,
     @Req() req: Request,
   ) {
+    // AUD-P1-064: 兼容前端 remark 和后端 reason 两种字段名
+    const reason = dto.remark || dto.reason || '';
+    if (!reason || !reason.trim()) {
+      throw new BadRequestException('请填写拒绝原因');
+    }
     return this.adminService.auditRefund(
       id,
-      { status: "rejected", remark: dto.reason },
+      { status: "rejected", remark: reason },
       operatorId,
       req.ip,
     );

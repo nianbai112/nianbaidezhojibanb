@@ -54,7 +54,6 @@ export class PaymentController {
     if (!bizType || !bizId) {
       throw new BadRequestException('缺少业务类型或业务ID');
     }
-
     // 2. 查询业务订单，验证所有权并获取真实金额和订单号
     const bizOrder = await this.lookupBizOrder(bizType, bizId, userId);
 
@@ -64,6 +63,15 @@ export class PaymentController {
 
     if (bizOrder.userId !== userId) {
       throw new ForbiddenException('无权操作该订单');
+    }
+
+    if (bizType === 'order') {
+      if (bizOrder.status !== 'PENDING_PAY') {
+        throw new BadRequestException('订单状态不允许支付');
+      }
+      if (bizOrder.createdAt && bizOrder.createdAt.getTime() <= Date.now() - 15 * 60 * 1000) {
+        throw new BadRequestException('订单支付已超时，请重新下单');
+      }
     }
 
     // 3. 验证金额：客户端传入的 amount 必须与业务订单金额一致
@@ -139,9 +147,35 @@ export class PaymentController {
     @CurrentUser() adminUser: any,
   ) {
     const { bizType, bizId, amount, reason } = dto;
+    const refundAmount = Number(amount);
+    let claimedPendingShopOrder = false;
 
     if (!bizType || !bizId) {
       throw new BadRequestException('缺少业务类型或业务ID');
+    }
+    if (!String(reason || '').trim()) {
+      throw new BadRequestException('请填写退款原因');
+    }
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      throw new BadRequestException('退款金额无效');
+    }
+    if (bizType === 'order') {
+      const order = await this.prisma.order.findUnique({
+        where: { id: bizId },
+        select: { id: true, status: true, payAmount: true, merchantAcceptTime: true, refundStatus: true },
+      });
+      if (!order) throw new BadRequestException('订单不存在');
+      if (order.status === 'SHIPPED' || (order.status === 'PAID' && order.merchantAcceptTime)) {
+        throw new BadRequestException('商家备餐或骑手配送中的订单不能直接退款，请先完成履约处置');
+      }
+      if (order.status === 'PAID' && !order.merchantAcceptTime) {
+        const claimed = await this.prisma.order.updateMany({
+          where: { id: order.id, status: 'PAID', merchantAcceptTime: null, refundStatus: 'none' },
+          data: { refundStatus: 'refunding', refundAmount },
+        });
+        if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试');
+        claimedPendingShopOrder = true;
+      }
     }
 
     // 管理员审计日志
@@ -164,13 +198,186 @@ export class PaymentController {
       this.logger.warn(`审计日志写入失败: ${e.message}`);
     }
 
-    return this.paymentService.refund({
-      bizType,
-      bizId,
-      amount: Number(amount),
-      reason: reason || '管理员退款',
-      operatorId: adminUser.sub,
+    try {
+      return await this.paymentService.refund({
+        bizType,
+        bizId,
+        amount: refundAmount,
+        reason: String(reason).trim(),
+        operatorId: adminUser.sub,
+      });
+    } catch (error) {
+      if (claimedPendingShopOrder) {
+        await this.prisma.order.updateMany({
+          where: { id: bizId, refundStatus: 'refunding' },
+          data: { refundStatus: 'none', refundAmount: null },
+        });
+      }
+      throw error;
+    }
+  }
+
+  @ApiOperation({ summary: '商家退款' })
+  @UseGuards(JwtGuard)
+  @Post('wxpay/merchant-refund')
+  async merchantRefund(
+    @Body() dto: any,
+    @CurrentUser('sub') userId: string,
+  ) {
+    const orderId = String(dto.orderId || dto.order_id || '').trim();
+    if (!orderId) throw new BadRequestException('缺少订单ID');
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, orderNo: true, status: true, payAmount: true, merchantAcceptTime: true, riderId: true, refundStatus: true, merchant: { select: { userId: true } } },
     });
+    if (!order) throw new BadRequestException('订单不存在');
+    if (order.merchant.userId !== userId) throw new ForbiddenException('无权退款该订单');
+    if (order.status !== 'PAID' || order.merchantAcceptTime || order.riderId || order.refundStatus !== 'none') {
+      throw new BadRequestException('仅商家尚未接单的已付款订单可退款');
+    }
+
+    const amount = Number(dto.refundAmount ?? dto.refund_amount);
+    const payAmount = Number(order.payAmount);
+    const reason = String(dto.refundReason || dto.refund_reason || '').trim();
+    if (!reason) throw new BadRequestException('请填写退款原因');
+    if (payAmount <= 0) {
+      const result = await this.paymentService.cancelFreeShopOrder(order.id, `商家拒单：${reason}`, userId, 'merchant');
+      await this.prisma.auditLog.create({
+        data: { action: 'UPDATE', module: 'payment', targetId: order.id, userId,
+          detail: { bizType: 'order', bizId: order.id, amount: 0, reason: `商家拒单：${reason}`, operatorType: 'merchant', action: 'merchant_reject_free' } },
+      }).catch((error: any) => this.logger.warn(`商家零元订单取消审计写入失败: ${error.message}`));
+      return result;
+    }
+    if (!Number.isFinite(amount) || Math.round(amount * 100) !== Math.round(payAmount * 100)) {
+      throw new BadRequestException('商家拒单必须全额退款');
+    }
+    const refundReason = `商家拒单：${reason}`;
+
+    const claimed = await this.prisma.order.updateMany({
+      where: { id: order.id, status: 'PAID', merchantAcceptTime: null, riderId: null, refundStatus: 'none', merchant: { userId } },
+      data: { refundStatus: 'refunding', refundAmount: payAmount },
+    });
+    if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试');
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'UPDATE', module: 'payment', targetId: order.id, userId,
+        detail: { bizType: 'order', bizId: order.id, amount, reason: refundReason, operatorType: 'merchant', action: 'merchant_reject' },
+      },
+    }).catch((error: any) => this.logger.warn(`商家退款审计写入失败: ${error.message}`));
+
+    await this.prisma.orderLog.create({
+      data: {
+        orderId: order.id,
+        action: 'MERCHANT_REJECT',
+        fromStatus: 'PAID',
+        toStatus: 'PAID',
+        operatorId: userId,
+        operatorType: 'merchant',
+        remark: refundReason,
+      },
+    }).catch((error: any) => this.logger.warn(`商家拒单日志写入失败: ${error.message}`));
+
+    try {
+      return await this.paymentService.refund({
+        bizType: 'order', bizId: order.id, amount, reason: refundReason, operatorId: userId,
+      });
+    } catch (error) {
+      await this.prisma.order.updateMany({
+        where: { id: order.id, refundStatus: 'refunding' },
+        data: { refundStatus: 'none', refundAmount: null },
+      });
+      throw error;
+    }
+  }
+
+  @ApiOperation({ summary: '用户取消未接单的外卖订单并退款' })
+  @UseGuards(JwtGuard)
+  @Post('wxpay/user-order-refund')
+  async userOrderRefund(
+    @Body() dto: any,
+    @CurrentUser('sub') userId: string,
+  ) {
+    const orderId = String(dto.orderId || dto.order_id || '').trim();
+    const reason = String(dto.reason || dto.refundReason || dto.refund_reason || '').trim();
+    if (!orderId) throw new BadRequestException('缺少订单ID');
+    if (!reason) throw new BadRequestException('请填写退款原因');
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, userId: true, status: true, payAmount: true, merchantAcceptTime: true, refundStatus: true },
+    });
+    if (!order) throw new BadRequestException('订单不存在');
+    if (order.userId !== userId) throw new ForbiddenException('无权退款该订单');
+    if (order.status !== 'PAID' || order.merchantAcceptTime || order.refundStatus !== 'none') {
+      throw new BadRequestException('商家接单前的已付款订单才可自助退款');
+    }
+
+    const payAmount = Number(order.payAmount);
+    if (payAmount <= 0) {
+      const result = await this.paymentService.cancelFreeShopOrder(order.id, reason, userId, 'user');
+      await this.prisma.auditLog.create({
+        data: { action: 'UPDATE', module: 'payment', targetId: order.id, userId,
+          detail: { bizType: 'order', bizId: order.id, amount: 0, reason, operatorType: 'user', action: 'user_cancel_free' } },
+      }).catch((error: any) => this.logger.warn(`用户零元订单取消审计写入失败: ${error.message}`));
+      return result;
+    }
+    const claimed = await this.prisma.order.updateMany({
+      where: { id: order.id, userId, status: 'PAID', merchantAcceptTime: null, refundStatus: 'none' },
+      data: { refundStatus: 'refunding', refundAmount: payAmount },
+    });
+    if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试');
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'UPDATE', module: 'payment', targetId: order.id, userId,
+        detail: { bizType: 'order', bizId: order.id, amount: payAmount, reason, operatorType: 'user' },
+      },
+    }).catch((error: any) => this.logger.warn(`用户退款审计写入失败: ${error.message}`));
+
+    try {
+      return await this.paymentService.refund({
+        bizType: 'order', bizId: order.id, amount: payAmount, reason, operatorId: userId,
+      });
+    } catch (error) {
+      await this.prisma.order.updateMany({
+        where: { id: order.id, refundStatus: 'refunding' },
+        data: { refundStatus: 'none', refundAmount: null },
+      });
+      throw error;
+    }
+  }
+
+  @ApiOperation({ summary: '用户售后退款申请（商家接单后，进入平台审核）' })
+  @UseGuards(JwtGuard)
+  @Post('wxpay/order-refund/apply')
+  async applyOrderRefund(
+    @Body() dto: any,
+    @CurrentUser('sub') userId: string,
+  ) {
+    const orderId = String(dto.orderId || dto.order_id || '').trim();
+    const reason = String(dto.reason || dto.refundReason || dto.refund_reason || '').trim();
+    if (!orderId) throw new BadRequestException('缺少订单ID');
+    if (!reason) throw new BadRequestException('请填写退款原因');
+    return this.paymentService.applyShopOrderRefund(
+      orderId,
+      userId,
+      reason,
+      dto.amount ?? dto.refundAmount ?? dto.refund_amount,
+    );
+  }
+
+  @ApiOperation({ summary: '用户撤销售后退款申请' })
+  @UseGuards(JwtGuard)
+  @Post('wxpay/order-refund/cancel-apply')
+  async cancelOrderRefundApply(
+    @Body() dto: any,
+    @CurrentUser('sub') userId: string,
+  ) {
+    const orderId = String(dto.orderId || dto.order_id || '').trim();
+    if (!orderId) throw new BadRequestException('缺少订单ID');
+    return this.paymentService.cancelShopOrderRefundApplication(orderId, userId);
   }
 
   // ==================== 微信支付回调（公开·无鉴权） ====================
@@ -213,19 +420,23 @@ export class PaymentController {
     orderNo: string;
     realAmount: number;
     description: string;
+    status?: string;
+    createdAt?: Date;
   } | null> {
     switch (bizType) {
       case 'order': {
         const o = await this.prisma.order.findUnique({
           where: { id: bizId },
-          select: { userId: true, orderNo: true, payAmount: true },
+          select: { userId: true, orderNo: true, payAmount: true, status: true, createdAt: true },
         });
         if (!o) return null;
         return {
           userId: o.userId,
           orderNo: o.orderNo,
           realAmount: Number(o.payAmount),
-          description: `商城订单 ${o.orderNo}`,
+          description: `外卖订单 ${o.orderNo}`,
+          status: o.status,
+          createdAt: o.createdAt,
         };
       }
 
@@ -288,14 +499,42 @@ export class PaymentController {
       case 'topup': {
         const o = await this.prisma.topupOrder.findUnique({
           where: { id: bizId },
-          select: { userId: true, orderNo: true, amount: true, giveAmount: true },
+          select: { userId: true, orderNo: true, amount: true, packageName: true },
         });
         if (!o) return null;
         return {
           userId: o.userId,
           orderNo: o.orderNo,
           realAmount: Number(o.amount),
-          description: `流量充值 ${o.orderNo}`,
+          description: `笔记置顶 ${o.packageName || o.orderNo}`,
+        };
+      }
+
+      case 'second_hand': {
+        const o = await this.prisma.secondHandOrder.findUnique({
+          where: { id: bizId },
+          select: { userId: true, buyerId: true, orderNo: true, price: true },
+        });
+        if (!o) return null;
+        return {
+          userId: o.userId || o.buyerId,
+          orderNo: o.orderNo,
+          realAmount: Number(o.price),
+          description: `二手闲置 ${o.orderNo}`,
+        };
+      }
+
+      case 'membership_order': {
+        const o = await (this.prisma as any).membershipOrder.findUnique({
+          where: { id: bizId },
+          select: { userId: true, orderNo: true, amount: true, planName: true },
+        });
+        if (!o) return null;
+        return {
+          userId: o.userId,
+          orderNo: o.orderNo,
+          realAmount: Number(o.amount),
+          description: `会员开通 ${o.planName || o.orderNo}`,
         };
       }
 

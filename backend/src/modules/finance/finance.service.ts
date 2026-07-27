@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { PaymentChannel } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { RechargeDto, WithdrawDto, QueryDto } from './dto/finance.dto';
@@ -9,6 +10,16 @@ export class FinanceService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
   ) {}
+
+  private async runWithLock<T>(key: string, message: string, fn: () => Promise<T>, ttlSeconds = 30): Promise<T> {
+    const locked = await this.redis.getLock(key, ttlSeconds);
+    if (!locked) throw new BadRequestException(message);
+    try {
+      return await fn();
+    } finally {
+      await this.redis.releaseLock(key).catch(() => undefined);
+    }
+  }
 
   // ============ 钱包 ============
 
@@ -65,9 +76,28 @@ export class FinanceService {
 
   // ============ 提现 ============
 
+  private normalizeWithdraw(dto: any): WithdrawDto {
+    const amount = Number(dto?.amount);
+    const rawChannel = String(dto?.channel || dto?.withdraw_type || '').trim().toUpperCase();
+    const channel = rawChannel === 'WECHAT' || rawChannel === 'WX' ? PaymentChannel.WX_PAY
+      : rawChannel === 'ALIPAY' ? PaymentChannel.ALI_PAY
+      : rawChannel as PaymentChannel;
+    const account = String(dto?.account || dto?.receiver_name || dto?.wechat_name || dto?.wx_name || '').trim();
+    const realName = String(dto?.realName || dto?.receiver_name || '').trim() || undefined;
+
+    if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) !== amount * 100) {
+      throw new BadRequestException('提现金额必须为正数且最多两位小数');
+    }
+    if (!Object.values(PaymentChannel).includes(channel)) throw new BadRequestException('不支持的提现渠道');
+    if (!account) throw new BadRequestException('收款账号不能为空');
+    return { amount, channel, account, realName };
+  }
+
   async withdraw(userId: string, dto: WithdrawDto) {
+    return this.runWithLock(`finance:withdraw:${userId}`, '提现申请正在处理中，请稍后再试', async () => {
+    const request = this.normalizeWithdraw(dto);
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet || Number(wallet.balance) < Number(dto.amount)) {
+    if (!wallet || Number(wallet.balance) < request.amount) {
       throw new BadRequestException('余额不足');
     }
 
@@ -84,29 +114,30 @@ export class FinanceService {
       const w = await tx.withdraw.create({
         data: {
           userId,
-          amount: dto.amount,
-          channel: dto.channel,
-          account: dto.account,
-          realName: dto.realName,
+          amount: request.amount,
+          channel: request.channel,
+          account: request.account,
+          realName: request.realName,
         },
       });
 
-      await tx.wallet.update({
-        where: { userId },
+      const debited = await tx.wallet.updateMany({
+        where: { userId, balance: { gte: request.amount } },
         data: {
-          balance: { decrement: dto.amount },
-          freeze: { increment: dto.amount },
+          balance: { decrement: request.amount },
+          freeze: { increment: request.amount },
         },
       });
+      if (debited.count !== 1) throw new BadRequestException('余额不足');
 
       await tx.walletTransaction.create({
         data: {
           userId,
           type: 'WITHDRAW',
-          amount: dto.amount,
-          balance: Number(wallet.balance) - Number(dto.amount),
-          channel: dto.channel,
-          description: `提现申请: ${dto.account}`,
+          amount: request.amount,
+          balance: Number(wallet.balance) - request.amount,
+          channel: request.channel,
+          description: `提现申请: ${request.account}`,
           status: 'PENDING',
         },
       });
@@ -115,11 +146,13 @@ export class FinanceService {
     });
 
     return { ...withdraw, amount: Number(withdraw.amount) };
+    }, 60);
   }
 
   // ============ 支付回调处理充值 ============
 
   async completeRecharge(orderNo: string) {
+    return this.runWithLock(`finance:recharge:${orderNo}`, '充值单正在处理中，请稍后再试', async () => {
     const recharge = await this.prisma.recharge.findUnique({ where: { orderNo } });
     if (!recharge) throw new NotFoundException('充值单不存在');
     if (recharge.status === 'success') return recharge;
@@ -154,6 +187,7 @@ export class FinanceService {
     });
 
     return { success: true };
+    }, 60);
   }
 
   // ============ 平台财务统计 ============

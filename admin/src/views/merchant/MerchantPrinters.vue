@@ -1,6 +1,7 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="打印机配置" subtitle="管理商家打印机" icon="Printer" />
+    <PageHeader title="打印设备" subtitle="仅在协助商家配置或排障时使用；凭证不会回显" icon="Printer" />
+    <el-alert v-if="selectedMerchantName" class="merchant-context" type="info" :closable="false" show-icon :title="`当前仅显示「${selectedMerchantName}」的打印设备`" />
     <div class="filter-bar">
       <el-select v-model="filters.merchantId" placeholder="商家" clearable filterable style="width: 200px" @change="loadData">
         <el-option v-for="m in merchantList" :key="m.id" :label="m.name" :value="m.id" />
@@ -11,21 +12,13 @@
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
-      <el-button type="success" @click="openEdit()">新增打印机</el-button>
+      <el-button type="primary" @click="openEdit()">新增打印机</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="name" label="名称" min-width="140" />
-      <el-table-column prop="brand" label="品牌" width="100" />
+      <el-table-column prop="brand" label="品牌" width="100"><template #default="{ row }">{{ ({ feie: '飞鹅云', yly: '易联云', xpyun: '芯烨云', gprinter: '佳博云' }[row.brand] || row.brand) }}</template></el-table-column>
+      <el-table-column prop="connectionMode" label="设备归属" width="110"><template #default="{ row }">{{ row.connectionMode === 'platform_managed' ? '平台托管' : '商家自有' }}</template></el-table-column>
       <el-table-column prop="sn" label="SN" width="140" show-overflow-tooltip />
-      <el-table-column prop="key" label="密钥" width="160" show-overflow-tooltip>
-        <template #default="{ row }">
-          <span v-if="showKeys[row.id]">{{ row.key }}</span>
-          <span v-else>********</span>
-          <el-button size="small" text @click="showKeys[row.id] = !showKeys[row.id]">
-            {{ showKeys[row.id] ? '隐藏' : '显示' }}
-          </el-button>
-        </template>
-      </el-table-column>
       <el-table-column prop="autoPrint" label="自动打印" width="90">
         <template #default="{ row }">
           <el-tag :type="row.autoPrint ? 'success' : 'info'" size="small">{{ row.autoPrint ? '是' : '否' }}</el-tag>
@@ -61,15 +54,44 @@
           </el-select>
         </el-form-item>
         <el-form-item label="名称" prop="name"><el-input v-model="form.name" placeholder="打印机名称" /></el-form-item>
-        <el-form-item label="品牌" prop="brand"><el-input v-model="form.brand" placeholder="品牌，如：飞鹅、易联云" /></el-form-item>
-        <el-form-item label="SN" prop="sn"><el-input v-model="form.sn" placeholder="设备序列号" /></el-form-item>
-        <el-form-item label="密钥" prop="key">
-          <el-input v-model="form.key" placeholder="设备密钥" :type="showFormKey ? 'text' : 'password'">
-            <template #suffix>
-              <el-icon class="cursor-pointer" @click="showFormKey = !showFormKey"><View v-if="showFormKey" /><Hide v-else /></el-icon>
-            </template>
-          </el-input>
+        <el-form-item label="品牌">
+          <el-select v-model="form.brand" @change="onBrandChange">
+            <el-option label="飞鹅云" value="feie" />
+            <el-option label="易联云" value="yly" />
+            <el-option label="芯烨云" value="xpyun" />
+            <el-option label="佳博云" value="gprinter" />
+          </el-select>
         </el-form-item>
+        <el-form-item label="SN" prop="sn"><el-input v-model="form.sn" :placeholder="form.brand === 'yly' ? '易联云终端号 / machine_code' : form.brand === 'xpyun' ? '芯烨云设备 PID / SN' : form.brand === 'gprinter' ? '佳博云终端编号 / deviceID' : '飞鹅云已添加设备的机器号'" /></el-form-item>
+        <el-form-item label="设备归属">
+          <el-radio-group v-model="form.connectionMode">
+            <el-radio label="merchant_owned">商家自有</el-radio>
+            <el-radio label="platform_managed" :disabled="form.brand !== 'feie'">平台托管</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="form.connectionMode === 'merchant_owned' && form.brand === 'feie'">
+          <el-alert type="info" :closable="false" title="商家在飞鹅云开发者账号添加设备后，填写该商家自己的 USER、UKEY 与机器号；凭证会加密保存且不再返回页面。" />
+          <el-form-item label="USER"><el-input v-model="form.user" autocomplete="off" /></el-form-item>
+          <el-form-item label="UKEY"><el-input v-model="form.ukey" type="password" show-password autocomplete="new-password" placeholder="编辑时留空则保持原凭证" /></el-form-item>
+          <el-form-item label="设备密钥"><el-input v-model="form.deviceKey" type="password" show-password autocomplete="new-password" placeholder="可选，编辑时留空则保持原凭证" /></el-form-item>
+        </template>
+        <template v-else-if="form.connectionMode === 'merchant_owned' && form.brand === 'yly'">
+          <el-alert type="info" :closable="false" title="请在易联云开发者账号完成设备绑定后，填写该商家自己的 Client ID、Client Secret 与终端号；凭证会加密保存且不再返回页面。" />
+          <el-form-item label="Client ID"><el-input v-model="form.clientId" autocomplete="off" /></el-form-item>
+          <el-form-item label="Client Secret"><el-input v-model="form.clientSecret" type="password" show-password autocomplete="new-password" placeholder="编辑时留空则保持原凭证" /></el-form-item>
+          <el-form-item label="设备密钥"><el-input v-model="form.deviceKey" type="password" show-password autocomplete="new-password" placeholder="可选，编辑时留空则保持原凭证" /></el-form-item>
+        </template>
+        <template v-else-if="form.connectionMode === 'merchant_owned' && form.brand === 'xpyun'">
+          <el-alert type="info" :closable="false" title="芯烨云设备需先在芯烨云开放平台添加；填写商家自己的开发者 ID、UserKEY 与设备号，凭证会加密保存且不再返回页面。" />
+          <el-form-item label="开发者 ID"><el-input v-model="form.xpyUser" autocomplete="off" /></el-form-item>
+          <el-form-item label="UserKEY"><el-input v-model="form.xpyUserKey" type="password" show-password autocomplete="new-password" placeholder="编辑时留空则保持原凭证" /></el-form-item>
+        </template>
+        <template v-else-if="form.connectionMode === 'merchant_owned' && form.brand === 'gprinter'">
+          <el-alert type="info" :closable="false" title="佳博云设备需先在佳博云平台绑定；填写商家自己的商户编码、API 密钥与终端编号，凭证会加密保存且不再返回页面。" />
+          <el-form-item label="商户编码"><el-input v-model="form.gpMemberCode" autocomplete="off" /></el-form-item>
+          <el-form-item label="API 密钥"><el-input v-model="form.gpApiKey" type="password" show-password autocomplete="new-password" placeholder="编辑时留空则保持原凭证" /></el-form-item>
+        </template>
+        <el-alert v-else type="warning" :closable="false" title="仅飞鹅云支持平台托管：使用“系统设置 → 飞鹅云平台托管设备”中的全局账号；其他品牌均使用商家自有凭证。" />
         <el-form-item label="自动打印"><el-switch v-model="form.autoPrint" /></el-form-item>
         <el-form-item label="默认打印机"><el-switch v-model="form.isDefault" /></el-form-item>
         <el-form-item label="状态">
@@ -88,32 +110,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getPrinters, createPrinter, updatePrinter, deletePrinter, testPrint as apiTestPrint } from '@/api/merchant'
 import { getMerchants } from '@/api/merchant'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { View, Hide } from '@element-plus/icons-vue'
 
 const loading = ref(false)
+const route = useRoute()
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const filters = reactive({ merchantId: '', status: '' })
 const merchantList = ref<any[]>([])
-const showKeys = ref<Record<string, boolean>>({})
+const selectedMerchantName = computed(() => merchantList.value.find((item: any) => item.id === filters.merchantId)?.name || '')
 
 const editVisible = ref(false)
 const editingId = ref('')
-const form = reactive({ merchantId: '', name: '', brand: '', sn: '', key: '', autoPrint: true, isDefault: false, status: 'active' })
+const form = reactive({ merchantId: '', name: '', brand: 'feie', sn: '', connectionMode: 'merchant_owned', user: '', ukey: '', clientId: '', clientSecret: '', deviceKey: '', xpyUser: '', xpyUserKey: '', gpMemberCode: '', gpApiKey: '', autoPrint: true, isDefault: false, status: 'active' })
 const formRef = ref<any>(null)
-const showFormKey = ref(false)
 const rules = {
   merchantId: [{ required: true, message: '请选择商家', trigger: 'change' }],
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   sn: [{ required: true, message: '请输入SN', trigger: 'blur' }],
-  key: [{ required: true, message: '请输入密钥', trigger: 'blur' }],
 }
 
 const loadData = async () => {
@@ -147,11 +168,16 @@ const loadOptions = async () => {
 const openEdit = (row?: any) => {
   editingId.value = row?.id || ''
   if (row) {
-    Object.assign(form, { merchantId: row.merchantId, name: row.name, brand: row.brand, sn: row.sn, key: row.key, autoPrint: !!row.autoPrint, isDefault: !!row.isDefault, status: row.status || 'active' })
+    Object.assign(form, { merchantId: row.merchantId, name: row.name, brand: ['yly', 'xpyun', 'gprinter'].includes(row.brand) ? row.brand : 'feie', sn: row.sn, connectionMode: row.connectionMode || 'merchant_owned', user: '', ukey: '', clientId: '', clientSecret: '', deviceKey: '', xpyUser: '', xpyUserKey: '', gpMemberCode: '', gpApiKey: '', autoPrint: !!row.autoPrint, isDefault: !!row.isDefault, status: row.status || 'active' })
   } else {
-    Object.assign(form, { merchantId: '', name: '', brand: '', sn: '', key: '', autoPrint: true, isDefault: false, status: 'active' })
+    Object.assign(form, { merchantId: filters.merchantId || '', name: '', brand: 'feie', sn: '', connectionMode: 'merchant_owned', user: '', ukey: '', clientId: '', clientSecret: '', deviceKey: '', xpyUser: '', xpyUserKey: '', gpMemberCode: '', gpApiKey: '', autoPrint: true, isDefault: false, status: 'active' })
   }
   editVisible.value = true
+}
+
+const onBrandChange = () => {
+  if (form.brand !== 'feie') form.connectionMode = 'merchant_owned'
+  form.user = ''; form.ukey = ''; form.clientId = ''; form.clientSecret = ''; form.deviceKey = ''; form.xpyUser = ''; form.xpyUserKey = ''; form.gpMemberCode = ''; form.gpApiKey = ''
 }
 
 const submitEdit = async () => {
@@ -193,8 +219,22 @@ const del = async (row: any) => {
   }
 }
 
-onMounted(() => { loadData(); loadOptions() })
+const applyMerchantContext = () => {
+  filters.merchantId = typeof route.query.merchantId === 'string' ? route.query.merchantId : ''
+}
+
+watch(() => route.query.merchantId, () => {
+  applyMerchantContext()
+  page.value = 1
+  loadData()
+})
+
+onMounted(() => { applyMerchantContext(); loadData(); loadOptions() })
 </script>
+
+<style scoped>
+.merchant-context { margin-bottom: 16px; }
+</style>
 
 <style scoped>
 .page-shell { padding: 24px; }

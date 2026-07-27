@@ -6,7 +6,7 @@
         <h2>优惠券管理</h2>
         <p>真实读取优惠券、领取量和使用量，支持创建、编辑、启停。</p>
       </div>
-      <el-button type="primary" @click="openCreate">创建优惠券</el-button>
+      <el-button v-if="hasEditPermission" type="primary" @click="openCreate">创建优惠券</el-button>
     </div>
 
     <div class="filter-card">
@@ -14,6 +14,12 @@
       <el-select v-model="filters.status" clearable placeholder="状态">
         <el-option label="启用" value="active" />
         <el-option label="禁用" value="inactive" />
+      </el-select>
+      <el-select v-model="filters.businessScope" clearable placeholder="适用板块">
+        <el-option v-for="item in businessScopeOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
+      <el-select v-model="filters.regionId" clearable filterable placeholder="区域">
+        <el-option v-for="region in regions" :key="region.id" :label="region.name" :value="region.id" />
       </el-select>
       <el-button type="primary" @click="loadCoupons">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
@@ -33,6 +39,20 @@
         <el-table-column label="门槛" width="110">
           <template #default="{ row }">{{ formatMoney(row.minAmount) }}</template>
         </el-table-column>
+        <el-table-column label="适用板块" width="120">
+          <template #default="{ row }">
+            <el-tag size="small" type="warning" effect="plain">{{ businessScopeLabel(row.businessScope) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="适用范围" min-width="170">
+          <template #default="{ row }">
+            <div class="scope-cell">
+              <el-tag v-if="row.region?.name" size="small" effect="plain">{{ row.region.name }}</el-tag>
+              <el-tag v-if="row.merchant?.name" size="small" type="success" effect="plain">{{ row.merchant.name }}</el-tag>
+              <span v-if="!row.region?.name && !row.merchant?.name">全平台</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="totalCount" label="总量" width="90" />
         <el-table-column prop="receivedCount" label="已领" width="90" />
         <el-table-column prop="usedCount" label="已用" width="90" />
@@ -48,8 +68,8 @@
         </el-table-column>
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="editCoupon(row)">编辑</el-button>
-            <el-button size="small" :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleStatus(row)">
+            <el-button v-if="hasEditPermission" size="small" @click="editCoupon(row)">编辑</el-button>
+            <el-button v-if="hasEditPermission" size="small" :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleStatus(row)">
               {{ row.status === 'active' ? '禁用' : '启用' }}
             </el-button>
           </template>
@@ -93,6 +113,23 @@
             <el-input-number v-model="form.limitPerUser" :min="1" />
           </el-form-item>
         </div>
+        <div class="dialog-grid">
+          <el-form-item label="适用板块">
+            <el-select v-model="form.businessScope" style="width: 100%">
+              <el-option v-for="item in businessScopeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="适用区域">
+            <el-select v-model="form.regionId" clearable filterable placeholder="不选则全区域" style="width: 100%" @change="handleRegionFilterChange">
+              <el-option v-for="region in regions" :key="region.id" :label="region.name" :value="region.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="适用商家">
+            <el-select v-model="form.merchantId" clearable filterable placeholder="不选则不限商家" style="width: 100%" :loading="loadingMerchants">
+              <el-option v-for="merchant in merchants" :key="merchant.id" :label="merchant.name || merchant.shopName" :value="merchant.id" />
+            </el-select>
+          </el-form-item>
+        </div>
         <el-form-item label="有效期" required>
           <el-date-picker
             v-model="form.dateRange"
@@ -117,25 +154,45 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import { fetchRegions } from '@/api/admin'
 import { cleanPayload, dateRangeFrom, errorMessage, formatMoney, formatTime, unwrapPage } from './utils'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('coupon:view') || auth.permissions.includes('marketing:view'))
+const route = useRoute()
 const loading = ref(false)
 const submitting = ref(false)
 const showDialog = ref(false)
 const editingCoupon = ref<any>(null)
 const coupons = ref<any[]>([])
+const regions = ref<any[]>([])
+const merchants = ref<any[]>([])
+const loadingMerchants = ref(false)
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
-const filters = reactive({ keyword: '', status: '' })
+const filters = reactive({ keyword: '', status: '', businessScope: '', regionId: '' })
+const businessScopeOptions = [
+  { label: '通用', value: 'all' },
+  { label: '外卖/小店', value: 'shop' },
+  { label: '商城', value: 'mall' },
+  { label: '跑腿', value: 'errand' },
+  { label: '活动', value: 'activity' },
+  { label: '会员权益', value: 'membership' },
+]
 
 const form = reactive({
   name: '',
   type: 'DISCOUNT',
+  businessScope: 'all',
   value: 0,
   minAmount: 0,
   totalCount: 100,
   limitPerUser: 1,
+  regionId: '',
+  merchantId: '',
   dateRange: null as any,
   description: '',
 })
@@ -156,22 +213,77 @@ function displayValue(row: any) {
   return String(row.type).toUpperCase() === 'DISCOUNT' ? `${Number(row.value || 0)} 折` : formatMoney(row.value)
 }
 
+function businessScopeLabel(scope: string) {
+  return businessScopeOptions.find((item) => item.value === String(scope || 'all'))?.label || '通用'
+}
+
 function resetForm() {
   Object.assign(form, {
     name: '',
     type: 'DISCOUNT',
+    businessScope: 'all',
     value: 0,
     minAmount: 0,
     totalCount: 100,
     limitPerUser: 1,
+    regionId: '',
+    merchantId: '',
     dateRange: null,
     description: '',
   })
 }
 
-function openCreate() {
+function applyTemplate(template: any) {
+  if (!template) return
+  const now = new Date()
+  const end = new Date(now)
+  end.setDate(end.getDate() + 30)
+  const presets: Record<string, any> = {
+    'new-user': {
+      name: '新用户注册礼包',
+      type: 'FULL_REDUCTION',
+      value: 5,
+      minAmount: 0,
+      totalCount: 1000,
+      limitPerUser: 1,
+      businessScope: 'all',
+      description: '新用户注册后可领取，适合新区域冷启动。',
+    },
+    'first-order': {
+      name: '首单立减券',
+      type: 'FULL_REDUCTION',
+      value: 3,
+      minAmount: 0,
+      totalCount: 1000,
+      limitPerUser: 1,
+      businessScope: 'all',
+      description: '用于首单转化，可结合配送补贴展示。',
+    },
+    merchant: {
+      name: '指定商家促单券',
+      type: 'FULL_REDUCTION',
+      value: 5,
+      minAmount: 20,
+      totalCount: 300,
+      limitPerUser: 1,
+      businessScope: 'shop',
+      merchantId: '__select__',
+      description: '用于指定商家促单，保存后请在适用商家中绑定目标商家。',
+    },
+  }
+  const preset = presets[String(template)] || null
+  if (!preset) return
+  Object.assign(form, {
+    ...preset,
+    merchantId: preset.merchantId === '__select__' ? '' : (preset.merchantId || form.merchantId),
+    dateRange: [now, end],
+  })
+}
+
+function openCreate(template?: any) {
   editingCoupon.value = null
   resetForm()
+  applyTemplate(template)
   showDialog.value = true
 }
 
@@ -194,6 +306,8 @@ async function loadCoupons() {
 function resetFilters() {
   filters.keyword = ''
   filters.status = ''
+  filters.businessScope = ''
+  filters.regionId = ''
   pagination.page = 1
   loadCoupons()
 }
@@ -203,13 +317,17 @@ function editCoupon(coupon: any) {
   Object.assign(form, {
     name: coupon.name,
     type: coupon.type || 'DISCOUNT',
+    businessScope: coupon.businessScope || 'all',
     value: Number(coupon.value || 0),
     minAmount: Number(coupon.minAmount || 0),
     totalCount: Number(coupon.totalCount || 1),
     limitPerUser: Number(coupon.limitPerUser || 1),
+    regionId: coupon.regionId || '',
+    merchantId: coupon.merchantId || '',
     dateRange: dateRangeFrom(coupon),
     description: coupon.description || '',
   })
+  loadMerchants(coupon.regionId || '')
   showDialog.value = true
 }
 
@@ -227,10 +345,13 @@ async function submitCoupon() {
     const payload = cleanPayload({
       name: form.name.trim(),
       type: form.type,
+      businessScope: form.businessScope || 'all',
       value: form.value,
       minAmount: form.minAmount,
       totalCount: form.totalCount,
       limitPerUser: form.limitPerUser,
+      regionId: form.regionId || null,
+      merchantId: form.merchantId || null,
       startAt: form.dateRange[0].toISOString(),
       endAt: form.dateRange[1].toISOString(),
       description: form.description,
@@ -263,7 +384,44 @@ async function toggleStatus(coupon: any) {
   }
 }
 
-onMounted(loadCoupons)
+async function loadRegions() {
+  try {
+    regions.value = await fetchRegions()
+  } catch {
+    regions.value = []
+  }
+}
+
+async function loadMerchants(regionId = '') {
+  loadingMerchants.value = true
+  try {
+    const res = await request.get('/admin/merchants', {
+      params: {
+        page: 1,
+        pageSize: 100,
+        status: 'approved',
+        regionId: regionId || undefined,
+      },
+    })
+    merchants.value = unwrapPage(res).list
+  } catch {
+    merchants.value = []
+  } finally {
+    loadingMerchants.value = false
+  }
+}
+
+async function handleRegionFilterChange() {
+  form.merchantId = ''
+  await loadMerchants(form.regionId)
+}
+
+onMounted(async () => {
+  await Promise.all([loadRegions(), loadMerchants(), loadCoupons()])
+  if (route.query.create === '1') {
+    openCreate(route.query.template)
+  }
+})
 </script>
 
 <style scoped>
@@ -281,17 +439,18 @@ onMounted(loadCoupons)
 .data-card {
   background: rgba(255,255,255,0.86);
   border: 1px solid #dbe7f5;
-  border-radius: 16px;
+  border-radius: 14px;
   box-shadow: 0 14px 36px rgba(37, 99, 235, .08);
 }
 .filter-card {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 180px auto auto;
+  grid-template-columns: minmax(220px, 1fr) 150px 150px 180px auto auto;
   gap: 12px;
   padding: 16px;
   margin-bottom: 18px;
 }
 .data-card { padding: 18px; }
+.scope-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: #94a3b8; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
 .dialog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 @media (max-width: 900px) {

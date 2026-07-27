@@ -1,9 +1,10 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>埋点事件</h2>
-      <el-button type="primary" @click="loadEvents(true)">刷新</el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="埋点事件">
+      <template #actions>
+        <el-button type="primary" @click="loadEvents(true)">刷新</el-button>
+      </template>
+    </PageHeader>
 
     <div class="filter-bar glass-card">
       <el-select v-model="filters.eventName" placeholder="事件类型" clearable style="width: 150px">
@@ -39,6 +40,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const events = ref([])
@@ -51,13 +53,16 @@ const filters = reactive({ eventName: '', pagePath: '' })
 const formatDate = (date: string) => date ? new Date(date).toLocaleString('zh-CN') : '-'
 const unwrapPage = (res: any) => res?.data ?? res ?? {}
 
+import { formatDateRangeParams } from '@/utils/date'
+
 const loadEvents = async (showSuccess = false) => {
   loading.value = true
   try {
     const params: any = { page: page.value, pageSize: pageSize.value, ...filters }
     if (dateRange.value?.length === 2) {
-      params.startDate = dateRange.value[0]?.toISOString()
-      params.endDate = dateRange.value[1]?.toISOString()
+      const { startDate, endDate } = formatDateRangeParams(dateRange.value)
+      if (startDate) params.startDate = startDate
+      if (endDate) params.endDate = endDate
     }
     const res = await request.get('/admin/tracking/events', { params })
     const data = unwrapPage(res)
@@ -76,9 +81,7 @@ onMounted(() => loadEvents())
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .filter-bar { display: flex; gap: 12px; padding: 16px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; }
 .el-pagination { margin-top: 16px; justify-content: flex-end; }
 </style>

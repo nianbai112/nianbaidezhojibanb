@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
@@ -8,46 +8,78 @@ export class ContentExtService {
   // =================== 匿名身份 ===================
   async getAnonymousIdentities(query: any) {
     const { page = 1, limit = 20 } = query;
+    const regionId = String(query.regionId || query.region_id || '').trim();
+    if (!regionId) throw new BadRequestException('请选择区域');
+    const where = { regionId };
     const [list, total] = await Promise.all([
       this.prisma.anonymousIdentity.findMany({
+        where,
         skip: (page - 1) * limit,
         take: Number(limit),
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.anonymousIdentity.count(),
+      this.prisma.anonymousIdentity.count({ where }),
     ]);
     return { list, total, page: Number(page), pageSize: Number(limit) };
   }
 
-  async createAnonymousIdentity(dto: { name: string; avatar?: string }) {
+  async createAnonymousIdentity(dto: { name: string; avatar?: string; regionId?: string; region_id?: string }) {
     if (!dto.name) throw new BadRequestException('名称不能为空');
-    return this.prisma.anonymousIdentity.create({ data: dto });
+    const regionId = String(dto.regionId || dto.region_id || '').trim();
+    if (!regionId) throw new BadRequestException('请选择区域');
+    return this.prisma.anonymousIdentity.create({ data: { name: dto.name.trim(), avatar: dto.avatar || null, regionId } });
   }
 
-  async updateAnonymousIdentity(id: string, dto: { name?: string; avatar?: string }) {
-    return this.prisma.anonymousIdentity.update({ where: { id }, data: dto });
+  async updateAnonymousIdentity(id: string, dto: { name?: string; avatar?: string; regionId?: string; region_id?: string }) {
+    const regionId = String(dto.regionId || dto.region_id || '').trim();
+    if (!regionId) throw new BadRequestException('请选择区域');
+    const result = await this.prisma.anonymousIdentity.updateMany({
+      where: { id, regionId },
+      data: { ...(dto.name ? { name: dto.name.trim() } : {}), ...(dto.avatar !== undefined ? { avatar: dto.avatar || null } : {}) },
+    });
+    if (!result.count) throw new NotFoundException('匿名身份不存在或不属于当前区域');
+    return this.prisma.anonymousIdentity.findFirst({ where: { id, regionId } });
   }
 
-  async deleteAnonymousIdentity(id: string) {
-    return this.prisma.anonymousIdentity.delete({ where: { id } });
+  async deleteAnonymousIdentity(id: string, regionId: string) {
+    if (!regionId) throw new BadRequestException('请选择区域');
+    const result = await this.prisma.anonymousIdentity.deleteMany({ where: { id, regionId } });
+    if (!result.count) throw new NotFoundException('匿名身份不存在或不属于当前区域');
+    return { success: true };
   }
 
   // =================== 笔记海报配置 ===================
-  async getPosterConfig() {
-    const cfg = await this.prisma.config.findUnique({ where: { key: 'content.poster_config' } });
-    return (cfg?.value as any) || {
-      bgColor: '#ffffff',
-      logoUrl: '',
-      footerText: '扫码查看更多',
-      qrcodePosition: 'bottom-right',
+  private normalizePosterConfig(value: any = {}) {
+    const raw = value && typeof value === 'object' ? value : {};
+    return {
+      version: Math.max(1, Number(raw.version) || 1),
+      bgColor: String(raw.bgColor || '#ffffff'),
+      backgroundUrl: String(raw.backgroundUrl || ''),
+      frameUrl: String(raw.frameUrl || ''),
+      logoUrl: String(raw.logoUrl || ''),
+      textPlaceholderUrl: String(raw.textPlaceholderUrl || ''),
+      qrcodeFrameUrl: String(raw.qrcodeFrameUrl || ''),
+      ctaText: String(raw.ctaText || raw.footerText || '扫码查看笔记'),
+      footerText: String(raw.footerText || raw.ctaText || '扫码查看笔记'),
+      qrcodePosition: String(raw.qrcodePosition || 'bottom-right'),
+      safeAreas: raw.safeAreas && typeof raw.safeAreas === 'object' ? raw.safeAreas : {},
+      regionOverrides: raw.regionOverrides && typeof raw.regionOverrides === 'object' ? raw.regionOverrides : {},
     };
   }
 
+  async getPosterConfig() {
+    const cfg = await this.prisma.config.findUnique({ where: { key: 'content.poster_config' } });
+    return this.normalizePosterConfig(cfg?.value);
+  }
+
   async updatePosterConfig(dto: any) {
+    const current = await this.getPosterConfig();
+    const next = this.normalizePosterConfig({ ...current, ...(dto || {}) });
+    next.version = current.version + 1;
     await this.prisma.config.upsert({
       where: { key: 'content.poster_config' },
-      update: { value: dto },
-      create: { key: 'content.poster_config', value: dto, group: 'content', desc: '笔记海报配置' },
+      update: { value: next },
+      create: { key: 'content.poster_config', value: next, group: 'content', desc: '笔记海报配置' },
     });
     return { success: true };
   }
@@ -56,8 +88,6 @@ export class ContentExtService {
   async getRewardConfig() {
     const cfg = await this.prisma.config.findUnique({ where: { key: 'content.reward_config' } });
     return (cfg?.value as any) || {
-      dailyCheckInReward: 10,
-      continuousBonus: [0, 0, 0, 5, 5, 5, 20], // 连续7天奖励加成
       postPublishReward: 5,
       commentReward: 2,
       firstPostReward: 50,
@@ -65,10 +95,13 @@ export class ContentExtService {
   }
 
   async updateRewardConfig(dto: any) {
+    const contentRewards = { ...(dto || {}) };
+    delete contentRewards.dailyCheckInReward;
+    delete contentRewards.continuousBonus;
     await this.prisma.config.upsert({
       where: { key: 'content.reward_config' },
-      update: { value: dto },
-      create: { key: 'content.reward_config', value: dto, group: 'content', desc: '用户奖励设置' },
+      update: { value: contentRewards },
+      create: { key: 'content.reward_config', value: contentRewards, group: 'content', desc: '用户奖励设置' },
     });
     return { success: true };
   }
@@ -116,6 +149,7 @@ export class ContentExtService {
   }
 
   async deleteNotification(id: string) {
-    return this.prisma.notification.delete({ where: { id } });
+    void id;
+    throw new BadRequestException('通知属于投递历史，后台不可物理删除');
   }
 }

@@ -1,15 +1,14 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>消息页布局配置</h2>
-      <div class="header-actions">
+  <div class="page-shell">
+    <PageHeader title="消息页布局配置">
+      <template #actions>
         <el-select v-model="selectedRegion" placeholder="选择区域" style="width: 200px" @change="loadLayout">
           <el-option label="全局配置" value="" />
           <el-option v-for="region in regions" :key="region.id" :label="region.name" :value="region.id" />
         </el-select>
         <el-button type="primary" @click="saveLayout">保存配置</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <div class="config-grid">
       <div class="glass-card">
@@ -45,6 +44,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, User, Bell, Service, Notification } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const selectedRegion = ref('')
 const regions = ref<any[]>([])
@@ -119,13 +119,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.header-actions { display: flex; gap: 12px; align-items: center; }
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 20px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; padding: 20px; }
 .glass-card h3 { margin-bottom: 16px; font-size: 16px; font-weight: 600; }
 .component-list { display: flex; flex-direction: column; gap: 12px; }
-.component-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f5f7fa; border-radius: 8px; }
+.component-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f5f7fa; border-radius: 6px; }
 .component-info { display: flex; align-items: center; gap: 8px; }
 </style>

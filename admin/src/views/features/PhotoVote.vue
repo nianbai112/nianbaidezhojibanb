@@ -67,7 +67,7 @@
           </el-table-column>
           <el-table-column prop="imageUrl" label="照片" width="100">
             <template #default="{ row }">
-              <el-image v-if="row.imageUrl" :src="row.imageUrl" style="width:60px;height:60px;border-radius:8px" fit="cover" :preview-src-list="[row.imageUrl]" />
+              <el-image v-if="row.imageUrl" :src="row.imageUrl" style="width:60px;height:60px;border-radius: 6px" fit="cover" :preview-src-list="[row.imageUrl]" />
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -152,7 +152,7 @@
           </el-table-column>
           <el-table-column prop="entry.imageUrl" label="照片" width="100">
             <template #default="{ row }">
-              <el-image v-if="row.entry?.imageUrl" :src="row.entry.imageUrl" style="width:60px;height:60px;border-radius:8px" fit="cover" />
+              <el-image v-if="row.entry?.imageUrl" :src="row.entry.imageUrl" style="width:60px;height:60px;border-radius: 6px" fit="cover" />
             </template>
           </el-table-column>
           <el-table-column prop="winnerRank" label="名次" width="80" />
@@ -183,7 +183,7 @@
           <el-form-item label="每人每天投票上限"><el-input-number v-model="regionSettingForm.maxVotesPerUserDaily" :min="1" /></el-form-item>
           <el-form-item label="需要审核"><el-switch v-model="regionSettingForm.requirePhotoApproval" /></el-form-item>
         </el-form>
-        <el-empty v-else description="请先选择要配置的区域" />
+        <EmptyState v-else description="请先选择要配置的区域" />
       </el-tab-pane>
     </el-tabs>
 
@@ -228,6 +228,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 
 const activeTab = ref('contests')
 const saving = ref(false)

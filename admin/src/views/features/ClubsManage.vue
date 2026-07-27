@@ -14,7 +14,7 @@
             <el-option label="已关闭" value="closed" />
             <el-option label="待审核" value="pending" />
           </el-select>
-          <el-button type="primary" @click="openClubDialog()">创建社团</el-button>
+          <el-button v-if="hasEditPermission" type="primary" @click="openClubDialog()">创建社团</el-button>
           <el-button @click="loadClubs" :loading="clubLoading">刷新</el-button>
         </div>
 
@@ -48,10 +48,10 @@
           <el-table-column label="操作" width="250" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" link @click="viewClub(row)">详情</el-button>
-              <el-button size="small" type="primary" link @click="openClubDialog(row)">编辑</el-button>
-              <el-button v-if="row.status === 'pending'" size="small" type="success" link @click="setClubStatus(row.id, 'active')">审核通过</el-button>
-              <el-button v-if="row.status === 'active'" size="small" type="warning" link @click="setClubStatus(row.id, 'closed')">关闭</el-button>
-              <el-popconfirm title="确定删除？" @confirm="deleteClub(row.id)">
+              <el-button v-if="hasEditPermission" size="small" type="primary" link @click="openClubDialog(row)">编辑</el-button>
+              <el-button v-if="hasEditPermission && row.status === 'pending'" size="small" type="success" link @click="setClubStatus(row.id, 'active')">审核通过</el-button>
+              <el-button v-if="hasEditPermission && row.status === 'active'" size="small" type="warning" link @click="setClubStatus(row.id, 'closed')">关闭</el-button>
+              <el-popconfirm v-if="hasDeletePermission" title="确定删除？" @confirm="deleteClub(row.id)">
                 <template #reference><el-button size="small" type="danger" link>删除</el-button></template>
               </el-popconfirm>
             </template>
@@ -181,11 +181,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { request } from '@/api/request'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
-import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('club:list') || auth.permissions.includes('club:edit'))
+const hasDeletePermission = ref(auth.permissions.includes('club:edit'))
 
 const activeTab = ref('clubs')
 const saving = ref(false)

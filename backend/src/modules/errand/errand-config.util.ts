@@ -1,3 +1,9 @@
+import {
+  DEFAULT_ERRAND_ORDER_TAKING_POLICY,
+  normalizeErrandOrderTakingPolicy,
+  policyToSnakeCase,
+} from './errand-order-taking-policy'
+
 export const ERRAND_EXTENDED_CONFIG_GROUP = 'errand'
 
 export function errandExtendedConfigKey(regionId: string) {
@@ -33,6 +39,38 @@ export const DEFAULT_ERRAND_BANNERS = [
 
 export const DEFAULT_ERRAND_TIP_OPTIONS = ['不需要', '¥2', '¥5', '¥10', '其他']
 export const DEFAULT_ERRAND_CUSTOM_TIP_OPTIONS = ['¥2', '¥5', '¥10', '¥15', '其他']
+
+export const DEFAULT_ERRAND_RISK_TAG_CONFIG: Record<string, any[]> = {
+  express_pickup: [
+    { key: 'large', label: '包裹大件', desc: '箱子/大包裹', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '包裹较重', desc: '桶装/重物', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'fragile', label: '易碎标识', desc: '玻璃/陶瓷', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'valuable', label: '贵重包裹', desc: '手机/电脑', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+  ],
+  express_send: [
+    { key: 'valuable', label: '贵重物品', desc: '手机/电脑/证件', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'fragile', label: '易碎物品', desc: '玻璃/陶瓷', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'large', label: '大件包裹', desc: '箱子/大包', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '重物包裹', desc: '较重需搬运', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'liquid', label: '液体粉末', desc: '需确认可寄', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'prohibited', label: '疑似禁寄', desc: '需人工确认', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 0 },
+  ],
+  food_delivery: [
+    { key: 'cake', label: '蛋糕', desc: '需平放', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 8 },
+    { key: 'liquid', label: '汤水/奶茶', desc: '易洒漏', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'hot', label: '热餐热饮', desc: '注意保温', enabled: true, requiresApprovedRider: false, extraEtaMinutes: 2 },
+    { key: 'cold', label: '冷饮冷食', desc: '注意时效', enabled: true, requiresApprovedRider: false, extraEtaMinutes: 2 },
+    { key: 'large', label: '多人餐', desc: '餐品较多', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+  ],
+  custom_task: [
+    { key: 'valuable', label: '贵重物品', desc: '需当面交接', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'fragile', label: '易碎物品', desc: '需轻拿轻放', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 4 },
+    { key: 'large', label: '大件任务', desc: '搬运/大包', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'heavy', label: '重物任务', desc: '搬运较重', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 6 },
+    { key: 'liquid', label: '液体物品', desc: '易洒漏', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 5 },
+    { key: 'prohibited', label: '不确定风险', desc: '需平台确认', enabled: true, requiresApprovedRider: true, extraEtaMinutes: 0 },
+  ],
+}
 
 export const ERRAND_CONFIG_SCALAR_FIELDS = [
   'basePrice',
@@ -70,6 +108,41 @@ function normalizeBanner(item: any) {
   }
 }
 
+function normalizeRiskTagOption(item: any) {
+  if (!item || typeof item !== 'object') return null
+  const key = String(item.key || item.value || '').trim()
+  const label = String(item.label || item.title || '').trim()
+  if (!key || !label) return null
+  return {
+    key,
+    label,
+    desc: String(item.desc || item.description || '').trim(),
+    description: String(item.desc || item.description || '').trim(),
+    enabled: item.enabled === undefined ? true : toBoolean(item.enabled, true),
+    requiresApprovedRider: toBoolean(
+      item.requiresApprovedRider ?? item.requires_approved_rider,
+      key === 'hot' || key === 'cold' ? false : true,
+    ),
+    requires_approved_rider: toBoolean(
+      item.requiresApprovedRider ?? item.requires_approved_rider,
+      key === 'hot' || key === 'cold' ? false : true,
+    ),
+    extraEtaMinutes: toNumber(item.extraEtaMinutes ?? item.extra_eta_minutes, 0),
+    extra_eta_minutes: toNumber(item.extraEtaMinutes ?? item.extra_eta_minutes, 0),
+  }
+}
+
+export function normalizeErrandRiskTagConfig(value: any = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return Object.fromEntries(
+    Object.keys(ERRAND_SERVICE_TITLES).map(serviceKey => {
+      const raw = Array.isArray(source[serviceKey]) ? source[serviceKey] : DEFAULT_ERRAND_RISK_TAG_CONFIG[serviceKey] || []
+      const normalized = raw.map(normalizeRiskTagOption).filter(Boolean)
+      return [serviceKey, normalized.length ? normalized : DEFAULT_ERRAND_RISK_TAG_CONFIG[serviceKey]]
+    }),
+  )
+}
+
 function deepMerge<T extends Record<string, any>>(base: T, patch: any): T {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return base
   const result: any = { ...base }
@@ -100,6 +173,8 @@ export function normalizeErrandExtendedConfig(value: any = {}, basePrice = 0) {
   const rawDescriptions = source.serviceDescriptions || source.service_descriptions || {}
   const rawBaseFees = source.baseFees || source.base_fees || {}
   const rawSwitches = source.serviceSwitches || source.service_switches || {}
+  const rawOrderTakingPolicy = source.orderTakingPolicy || source.order_taking_policy || DEFAULT_ERRAND_ORDER_TAKING_POLICY
+  const rawRiskTagConfig = source.riskTagConfig || source.risk_tag_config || DEFAULT_ERRAND_RISK_TAG_CONFIG
 
   const baseFees = Object.fromEntries(
     Object.keys(ERRAND_SERVICE_TITLES).map(key => [
@@ -125,6 +200,11 @@ export function normalizeErrandExtendedConfig(value: any = {}, basePrice = 0) {
   const customTaskTipOptions = Array.isArray(source.customTaskTipOptions) && source.customTaskTipOptions.length
     ? source.customTaskTipOptions
     : DEFAULT_ERRAND_CUSTOM_TIP_OPTIONS
+  const orderTakingPolicy = normalizeErrandOrderTakingPolicy(rawOrderTakingPolicy)
+  const riskTagConfig = normalizeErrandRiskTagConfig(rawRiskTagConfig)
+  const closureVersion = Math.max(1, Math.floor(toNumber(source.closureVersion ?? source.closure_version, 2)))
+  const autoReceiptEnabled = toBoolean(source.autoReceiptEnabled ?? source.auto_receipt_enabled, true)
+  const settlementV2Enabled = toBoolean(source.settlementV2Enabled ?? source.settlement_v2_enabled, true)
 
   return {
     banners,
@@ -137,6 +217,16 @@ export function normalizeErrandExtendedConfig(value: any = {}, basePrice = 0) {
     serviceSwitches,
     tipOptions,
     customTaskTipOptions,
+    orderTakingPolicy,
+    order_taking_policy: policyToSnakeCase(orderTakingPolicy),
+    riskTagConfig,
+    risk_tag_config: riskTagConfig,
+    closureVersion,
+    closure_version: closureVersion,
+    autoReceiptEnabled,
+    auto_receipt_enabled: autoReceiptEnabled,
+    settlementV2Enabled,
+    settlement_v2_enabled: settlementV2Enabled,
     pageConfig: source.pageConfig || {},
   }
 }
@@ -189,6 +279,26 @@ export function mergeErrandExtendedConfig(current: any, patch: any, basePrice = 
   }
   if ('tipOptions' in source) merged.tipOptions = source.tipOptions
   if ('customTaskTipOptions' in source) merged.customTaskTipOptions = source.customTaskTipOptions
+  if ('orderTakingPolicy' in source || 'order_taking_policy' in source) {
+    merged.orderTakingPolicy = normalizeErrandOrderTakingPolicy(source.orderTakingPolicy || source.order_taking_policy)
+    merged.order_taking_policy = policyToSnakeCase(merged.orderTakingPolicy)
+  }
+  if ('riskTagConfig' in source || 'risk_tag_config' in source) {
+    merged.riskTagConfig = normalizeErrandRiskTagConfig(source.riskTagConfig || source.risk_tag_config)
+    merged.risk_tag_config = merged.riskTagConfig
+  }
+  if ('closureVersion' in source || 'closure_version' in source) {
+    merged.closureVersion = source.closureVersion ?? source.closure_version
+    merged.closure_version = merged.closureVersion
+  }
+  if ('autoReceiptEnabled' in source || 'auto_receipt_enabled' in source) {
+    merged.autoReceiptEnabled = source.autoReceiptEnabled ?? source.auto_receipt_enabled
+    merged.auto_receipt_enabled = merged.autoReceiptEnabled
+  }
+  if ('settlementV2Enabled' in source || 'settlement_v2_enabled' in source) {
+    merged.settlementV2Enabled = source.settlementV2Enabled ?? source.settlement_v2_enabled
+    merged.settlement_v2_enabled = merged.settlementV2Enabled
+  }
   if ('pageConfig' in source) {
     merged.pageConfig = {
       ...(base.pageConfig || {}),
@@ -213,7 +323,7 @@ export function miniErrandStatus(status?: string) {
   const map: Record<string, string> = {
     pending_pay: 'confirmed',
     pending_accept: 'confirmed',
-    accepted: 'accepted',
+    accepted: 'dispatched',
     in_progress: 'picked_up',
     arrived: 'delivered',
     completed: 'completed',
@@ -247,13 +357,40 @@ export function buildMiniErrandConfig(config: any, extended: any) {
     base_fees: normalized.baseFees,
     tip_options: normalized.tipOptions,
     custom_task_tip_options: normalized.customTaskTipOptions,
+    order_taking_policy: normalized.order_taking_policy,
+    risk_tag_config: normalized.riskTagConfig,
+    closure_version: normalized.closureVersion,
+    auto_receipt_enabled: normalized.autoReceiptEnabled,
+    settlement_v2_enabled: normalized.settlementV2Enabled,
+    riskTagConfig: normalized.riskTagConfig,
+    ordinary_user_enabled: normalized.orderTakingPolicy.ordinaryUserEnabled,
+    ordinary_user_order_taking_enabled: normalized.orderTakingPolicy.ordinaryUserEnabled ? 1 : 0,
+    receiver_choice_enabled: normalized.orderTakingPolicy.receiverChoiceEnabled,
+    ordinary_user_fallback_enabled: normalized.orderTakingPolicy.ordinaryUserFallbackEnabled,
+    ordinary_user_fallback_minutes: normalized.orderTakingPolicy.ordinaryUserFallbackMinutes,
+    approved_rider_surcharge_amount: normalized.orderTakingPolicy.approvedRiderSurchargeAmount,
   }
 }
 
 export function defaultErrandMiniPageConfig(pageConfig: any = {}, extended: any = {}) {
   const pageNotice = pageConfig?.notice || '急事找同学帮忙，跑腿更快一步'
   const orderTips = pageConfig?.orderTips || '请填写清楚取件码、取件点和送达地址'
+  const normalized = normalizeErrandExtendedConfig(extended, 0)
   const defaultConfig = {
+    orderTakingPolicy: normalized.orderTakingPolicy,
+    order_taking_policy: normalized.order_taking_policy,
+    riskTagConfig: normalized.riskTagConfig,
+    risk_tag_config: normalized.riskTagConfig,
+    ordinary_user_enabled: normalized.orderTakingPolicy.ordinaryUserEnabled,
+    ordinaryUserOrderTakingEnabled: normalized.orderTakingPolicy.ordinaryUserEnabled,
+    receiverChoiceEnabled: normalized.orderTakingPolicy.receiverChoiceEnabled,
+    receiver_choice_enabled: normalized.orderTakingPolicy.receiverChoiceEnabled,
+    ordinaryUserFallbackEnabled: normalized.orderTakingPolicy.ordinaryUserFallbackEnabled,
+    ordinary_user_fallback_enabled: normalized.orderTakingPolicy.ordinaryUserFallbackEnabled,
+    ordinaryUserFallbackMinutes: normalized.orderTakingPolicy.ordinaryUserFallbackMinutes,
+    ordinary_user_fallback_minutes: normalized.orderTakingPolicy.ordinaryUserFallbackMinutes,
+    approvedRiderSurchargeAmount: normalized.orderTakingPolicy.approvedRiderSurchargeAmount,
+    approved_rider_surcharge_amount: normalized.orderTakingPolicy.approvedRiderSurchargeAmount,
     page: {
       title: '跑腿代拿',
       navbar: {

@@ -5,6 +5,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 export class NotificationQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() type?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() regionId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() unreadOnly?: string;
   @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @IsInt() page?: number = 1;
   @ApiPropertyOptional({ default: 20 }) @IsOptional() @Type(() => Number) @IsInt() pageSize?: number = 20;
 }

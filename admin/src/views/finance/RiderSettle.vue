@@ -2,6 +2,24 @@
   <div class="page-shell">
     <PageHeader title="骑手结算" subtitle="管理骑手结算记录，支持生成、确认、打款、驳回" icon="Van" />
 
+    <div class="summary-grid">
+      <el-card shadow="never">
+        <div class="summary-label">未结算骑手收益</div>
+        <div class="summary-value">¥{{ Number(pendingSummary.amount || 0).toFixed(2) }}</div>
+        <div class="summary-sub">{{ pendingSummary.orderCount || 0 }} 单 / {{ pendingSummary.riderCount || 0 }} 位骑手</div>
+      </el-card>
+      <el-card shadow="never">
+        <div class="summary-label">待确认结算单</div>
+        <div class="summary-value">{{ pendingCount }}</div>
+        <div class="summary-sub">生成后需要财务确认</div>
+      </el-card>
+      <el-card shadow="never">
+        <div class="summary-label">已打款结算单</div>
+        <div class="summary-value">{{ paidCount }}</div>
+        <div class="summary-sub">打款后写入骑手钱包流水</div>
+      </el-card>
+    </div>
+
     <div class="filter-bar">
       <el-select v-model="filters.status" placeholder="状态筛选" clearable style="width: 140px" @change="loadData">
         <el-option label="待确认" value="PENDING" />
@@ -11,7 +29,7 @@
       </el-select>
       <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 260px" @change="loadData" />
       <el-button type="primary" @click="loadData" :loading="loading">刷新</el-button>
-      <el-button type="success" @click="showGenerateDialog = true">生成结算单</el-button>
+      <el-button type="success" @click="openGenerateDialog">按未结算订单生成</el-button>
     </div>
 
     <el-table :data="list" v-loading="loading" border stripe empty-text="暂无结算记录">
@@ -104,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
@@ -119,24 +137,51 @@ const pageSize = ref(20)
 const total = ref(0)
 const dateRange = ref<any>(null)
 const filters = reactive({ status: '' })
+const pendingSummary = ref<any>({})
 
 const drawerVisible = ref(false)
 const detail = ref<any>(null)
 
 const showGenerateDialog = ref(false)
 const generating = ref(false)
-const generateForm = reactive({ periodStart: '', periodEnd: '' })
+const defaultStart = () => {
+  const d = new Date()
+  d.setDate(d.getDate() - 30)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+const generateForm = reactive<any>({ periodStart: defaultStart(), periodEnd: new Date() })
 
 const formatDate = (d: string) => d ? new Date(d).toLocaleDateString('zh-CN') : '-'
+const pendingCount = computed(() => list.value.filter(item => item.status === 'PENDING').length)
+const paidCount = computed(() => list.value.filter(item => item.status === 'PAID').length)
+
+const loadPendingSummary = async () => {
+  try {
+    const res: any = await request.get('/admin/rider-settlements/pending-summary')
+    pendingSummary.value = res?.data || res || {}
+  } catch {
+    pendingSummary.value = {}
+  }
+}
+
+const openGenerateDialog = () => {
+  generateForm.periodStart = defaultStart()
+  generateForm.periodEnd = new Date()
+  showGenerateDialog.value = true
+}
+
+import { formatDateRangeParams } from '@/utils/date'
 
 const loadData = async () => {
   loading.value = true
   try {
     const params: any = { page: page.value, pageSize: pageSize.value }
     if (filters.status) params.status = filters.status
-    if (dateRange.value) {
-      params.startDate = dateRange.value[0]?.toISOString()
-      params.endDate = dateRange.value[1]?.toISOString()
+    if (dateRange.value?.length === 2) {
+      const { startDate, endDate } = formatDateRangeParams(dateRange.value)
+      if (startDate) params.startDate = startDate
+      if (endDate) params.endDate = endDate
     }
     const res: any = await request.get('/admin/rider-settlements', { params })
     list.value = res?.list || res?.data?.list || []
@@ -165,7 +210,7 @@ const confirmSettlement = async (id: string) => {
     await ElMessageBox.confirm('确认此结算单？', '确认操作')
     await request.put(`/admin/rider-settlements/${id}/confirm`, {})
     ElMessage.success('结算已确认')
-    loadData()
+    await Promise.all([loadData(), loadPendingSummary()])
   } catch (e: any) {
     if (e !== 'cancel') ElMessage.error(e?.message || '确认失败')
   }
@@ -176,7 +221,7 @@ const paySettlement = async (id: string) => {
     await ElMessageBox.confirm('确认打款此结算单？将写入钱包流水。', '打款确认')
     await request.put(`/admin/rider-settlements/${id}/pay`, {})
     ElMessage.success('打款成功')
-    loadData()
+    await Promise.all([loadData(), loadPendingSummary()])
   } catch (e: any) {
     if (e !== 'cancel') ElMessage.error(e?.message || '打款失败')
   }
@@ -187,7 +232,7 @@ const rejectSettlement = async (id: string) => {
     const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回结算', { inputPattern: /.+/, inputErrorMessage: '驳回原因不能为空' })
     await request.put(`/admin/rider-settlements/${id}/reject`, { reason: value })
     ElMessage.success('已驳回')
-    loadData()
+    await Promise.all([loadData(), loadPendingSummary()])
   } catch (e: any) {
     if (e !== 'cancel' && e?.action !== 'cancel') ElMessage.error(e?.message || '驳回失败')
   }
@@ -206,7 +251,7 @@ const doGenerate = async () => {
     })
     ElMessage.success(res?.message || `成功生成 ${res?.count || 0} 条结算单`)
     showGenerateDialog.value = false
-    loadData()
+    await Promise.all([loadData(), loadPendingSummary()])
   } catch (e: any) {
     ElMessage.error(e?.message || '生成失败')
   } finally {
@@ -214,11 +259,15 @@ const doGenerate = async () => {
   }
 }
 
-onMounted(() => loadData())
+onMounted(() => Promise.all([loadData(), loadPendingSummary()]))
 </script>
 
 <style scoped>
 .page-shell { padding: 24px; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.summary-label { color: #667085; font-size: 13px; }
+.summary-value { color: #101828; font-size: 26px; font-weight: 700; margin-top: 8px; }
+.summary-sub { color: #98a2b3; font-size: 12px; margin-top: 6px; }
 .filter-bar { display: flex; gap: 12px; margin: 16px 0; align-items: center; }
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
 </style>

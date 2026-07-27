@@ -140,7 +140,11 @@
                 <span>小程序内容区域</span>
               </div>
             </div>
-            <div class="tabbar-preview" :style="{ background: tabbarConfig.backgroundColor || '#fff' }">
+            <div
+              class="tabbar-preview"
+              :class="`style-${tabbarConfig.type === 'capsule' ? 'capsule' : 'bottom'}`"
+              :style="{ background: tabbarConfig.backgroundColor || '#fff' }"
+            >
               <div v-for="(tab, idx) in tabbarList" :key="idx" class="tabbar-item" :class="{ disabled: !tab.enabled }">
                 <div class="tabbar-icon" :style="{ color: tab.enabled ? (tab.selectedColor || '#1677ff') : '#ccc' }">
                   <el-icon><component :is="getTabIcon(tab.id)" /></el-icon>
@@ -347,7 +351,7 @@ function getTabIcon(id: string) {
 
 .preview-banner {
   height: 120px;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   margin-bottom: 12px;
   background: linear-gradient(135deg, #bfdbfe, #60a5fa);
@@ -365,7 +369,7 @@ function getTabIcon(id: string) {
   gap: 8px;
   padding: 10px 12px;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
   margin-bottom: 12px;
   color: #999;
   font-size: 14px;
@@ -385,13 +389,13 @@ function getTabIcon(id: string) {
   gap: 6px;
   padding: 12px 8px;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .grid-icon {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: linear-gradient(135deg, #93c5fd, #3b82f6);
 }
 
@@ -411,7 +415,7 @@ function getTabIcon(id: string) {
   gap: 10px;
   padding: 12px;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .feed-avatar {
@@ -432,14 +436,14 @@ function getTabIcon(id: string) {
 .feed-title {
   height: 14px;
   background: #e2e8f0;
-  border-radius: 4px;
+  border-radius: 6px;
   width: 80%;
 }
 
 .feed-desc {
   height: 10px;
   background: #f1f5f9;
-  border-radius: 4px;
+  border-radius: 6px;
   width: 60%;
 }
 
@@ -463,7 +467,7 @@ function getTabIcon(id: string) {
 .message-icon {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -498,7 +502,7 @@ function getTabIcon(id: string) {
   gap: 14px;
   padding: 16px;
   background: #fff;
-  border-radius: 12px;
+  border-radius: 10px;
   margin-bottom: 12px;
 }
 
@@ -527,7 +531,7 @@ function getTabIcon(id: string) {
 
 .profile-menu {
   background: #fff;
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
 }
 
@@ -584,6 +588,14 @@ function getTabIcon(id: string) {
   background: #fff;
 }
 
+.tabbar-preview.style-capsule {
+  width: calc(100% - 44px);
+  margin: 0 auto 14px;
+  border: 1px solid #eee;
+  border-radius: 999px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .1);
+}
+
 .tabbar-item {
   display: flex;
   flex-direction: column;
@@ -616,7 +628,7 @@ function getTabIcon(id: string) {
 
 .share-card {
   background: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid #e5e5e5;
   overflow: hidden;
   margin-bottom: 16px;
@@ -693,12 +705,12 @@ function getTabIcon(id: string) {
   width: 16px;
   height: 16px;
   background: #07c160;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .share-context {
   background: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 12px;
   display: flex;
   flex-direction: column;

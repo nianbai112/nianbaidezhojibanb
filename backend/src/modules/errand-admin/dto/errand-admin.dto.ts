@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray } from 'class-validator'
+import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 
@@ -30,6 +30,10 @@ export class RiderQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   regionId?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  riderType?: string
 }
 
 export class AuditRiderDto {
@@ -45,8 +49,19 @@ export class AuditRiderDto {
 
 export class RiderStatusDto {
   @ApiProperty({ description: 'offline | online | busy' })
+  @IsOptional()
   @IsString()
-  status: string
+  status?: string
+
+  @ApiProperty({ required: false, description: 'official | part_time' })
+  @IsOptional()
+  @IsString()
+  riderType?: string
+
+  @ApiProperty({ required: false, description: 'normal | warning | restricted | banned' })
+  @IsOptional()
+  @IsString()
+  riskLevel?: string
 }
 
 // ==================== Order ====================
@@ -65,6 +80,14 @@ export class DeliveryOrderQueryDto {
   @ApiProperty({ required: false })
   @IsOptional()
   orderNo?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  keyword?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  rider?: string
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -113,6 +136,22 @@ export class CancelOrderDto {
 // ==================== Fee Config ====================
 
 export class UpdateFeeConfigDto {
+  @Allow()
+  @IsOptional()
+  id?: string
+
+  @Allow()
+  @IsOptional()
+  regionId?: string
+
+  @Allow()
+  @IsOptional()
+  createdAt?: any
+
+  @Allow()
+  @IsOptional()
+  updatedAt?: any
+
   @ApiProperty({ required: false })
   @IsOptional()
   @Type(() => Number)
@@ -219,12 +258,64 @@ export class UpdateFeeConfigDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsObject()
+  orderTakingPolicy?: Record<string, any>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  order_taking_policy?: Record<string, any>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  riskTagConfig?: Record<string, any>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
+  risk_tag_config?: Record<string, any>
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  closureVersion?: number
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  autoReceiptEnabled?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  settlementV2Enabled?: boolean
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsObject()
   pageConfig?: Record<string, any>
 }
 
 // ==================== Page Config ====================
 
 export class UpdatePageConfigDto {
+  @Allow()
+  @IsOptional()
+  id?: string
+
+  @Allow()
+  @IsOptional()
+  regionId?: string
+
+  @Allow()
+  @IsOptional()
+  createdAt?: any
+
+  @Allow()
+  @IsOptional()
+  updatedAt?: any
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
@@ -249,6 +340,22 @@ export class UpdatePageConfigDto {
 // ==================== Reward/Punish ====================
 
 export class UpdateRewardPunishDto {
+  @Allow()
+  @IsOptional()
+  id?: string
+
+  @Allow()
+  @IsOptional()
+  regionId?: string
+
+  @Allow()
+  @IsOptional()
+  createdAt?: any
+
+  @Allow()
+  @IsOptional()
+  updatedAt?: any
+
   @ApiProperty({ required: false })
   @IsOptional()
   @Type(() => Number)

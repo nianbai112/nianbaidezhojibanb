@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { CommentService } from './comment.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -10,8 +10,8 @@ export class CommentController {
   constructor(private readonly commentService: CommentService) {}
 
   @Get('comments/v2/post/:postId/comments')
-  getCommentsV2(@Param('postId') postId: string, @Query() query: any) {
-    return this.commentService.getCommentsV2(postId, query);
+  getCommentsV2(@Param('postId') postId: string, @Query() query: any, @Req() req: any) {
+    return this.commentService.getCommentsV2(postId, query, req?.user?.sub || req?.user?.id);
   }
 
   @Get('comments/my')
@@ -28,6 +28,13 @@ export class CommentController {
     return this.commentService.createLottery(userId, dto);
   }
 
+  @Post('comments/report/:commentId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  reportComment(@Param('commentId') commentId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.commentService.reportComment(commentId, userId, dto);
+  }
+
   @Post('comments/:postId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -42,11 +49,25 @@ export class CommentController {
     return this.commentService.deleteComment(commentId, userId);
   }
 
+  @Post('comments/:commentId/like')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  likeComment(@Param('commentId') commentId: string, @CurrentUser('sub') userId: string) {
+    return this.commentService.likeComment(commentId, userId);
+  }
+
+  @Delete('comments/:commentId/like')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  unlikeComment(@Param('commentId') commentId: string, @CurrentUser('sub') userId: string) {
+    return this.commentService.unlikeComment(commentId, userId);
+  }
+
   @Put('comments/pin/:commentId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  pinComment(@Param('commentId') commentId: string, @Body() dto: any) {
-    return this.commentService.pinComment(commentId, dto);
+  pinComment(@Param('commentId') commentId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.commentService.pinComment(commentId, userId, dto);
   }
 
   @Get('comments/lottery/:postId')
@@ -57,14 +78,14 @@ export class CommentController {
   @Post('comments/lottery/:lotteryId/cancel')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  cancelLottery(@Param('lotteryId') lotteryId: string, @Body() dto: any) {
-    return this.commentService.cancelLottery(lotteryId, dto);
+  cancelLottery(@Param('lotteryId') lotteryId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.commentService.cancelLottery(lotteryId, userId, dto);
   }
 
   @Post('comments/lottery/:lotteryId/draw')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  drawLottery(@Param('lotteryId') lotteryId: string) {
-    return this.commentService.drawLottery(lotteryId);
+  drawLottery(@Param('lotteryId') lotteryId: string, @CurrentUser('sub') userId: string) {
+    return this.commentService.drawLottery(lotteryId, userId);
   }
 }

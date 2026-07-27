@@ -1,0 +1,3 @@
+ALTER TABLE "orders"
+  ADD COLUMN IF NOT EXISTS "merchant_accept_time" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "ready_time" TIMESTAMP(3);

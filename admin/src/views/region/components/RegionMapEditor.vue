@@ -1,34 +1,38 @@
 <template>
   <div class="section-card glass-card">
     <div class="section-head">
-      <div class="card-title">地理位置与服务范围</div>
-      <el-button type="primary" @click="showAmapPicker = true">从高德地图选择</el-button>
+      <div>
+        <div class="card-title">地理位置与服务范围</div>
+        <div class="card-subtitle">用于判断用户是否在运营区域内，并作为跑腿接单的服务中心点。</div>
+      </div>
+      <el-button type="primary" @click="showAmapPicker = true">
+        <el-icon><Location /></el-icon>
+        从高德地图选择
+      </el-button>
     </div>
 
-    <div class="location-info" v-if="latitude && longitude">
-      <div class="location-detail">
-        <div class="location-row">
-          <span class="location-label">地址：</span>
-          <span class="location-value">{{ address || '未获取' }}</span>
-        </div>
-        <div class="location-row">
-          <span class="location-label">坐标：</span>
-          <span class="location-value">{{ longitude }}, {{ latitude }}</span>
+    <div class="location-panel">
+      <div class="location-state" :class="{ active: latitude && longitude }">
+        <el-icon><Location /></el-icon>
+      </div>
+      <div class="location-main">
+        <div class="location-kicker">{{ latitude && longitude ? '已完成定位' : '尚未定位' }}</div>
+        <div class="location-address">{{ address || '请选择地图位置，或手动填写详细地址' }}</div>
+        <div class="location-meta">
+          <span>经度 {{ longitude || '-' }}</span>
+          <span>纬度 {{ latitude || '-' }}</span>
+          <span>服务半径 {{ serviceRadius || 0 }} 米</span>
         </div>
       </div>
     </div>
-    <div v-else class="location-empty">
-      <el-icon><Location /></el-icon>
-      <span>未选择位置，请点击上方按钮从地图选择</span>
-    </div>
 
     <el-form label-position="top" style="margin-top: 16px">
-      <div class="form-grid three relaxed">
-        <el-form-item label="纬度">
-          <el-input-number v-model="latitude" :precision="6" :step="0.001" style="width:100%" />
-        </el-form-item>
+      <div class="location-form-grid">
         <el-form-item label="经度">
           <el-input-number v-model="longitude" :precision="6" :step="0.001" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="纬度">
+          <el-input-number v-model="latitude" :precision="6" :step="0.001" style="width:100%" />
         </el-form-item>
         <el-form-item label="服务半径（米）">
           <el-slider v-model="serviceRadius" :min="500" :max="50000" :step="500" show-input :format-tooltip="(v: number) => `${v}米`" />
@@ -121,66 +125,121 @@ function onAmapConfirm(location: any) {
 .section-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
-  padding: 20px 24px 4px;
+  padding: 22px 24px 12px;
 }
 
-.location-info {
-  padding: 16px 24px;
+.card-title {
+  color: var(--mx-text);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 24px;
 }
 
-.location-detail {
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 12px;
+.card-subtitle {
+  color: var(--mx-sub);
+  font-size: 13px;
+  line-height: 20px;
+  margin-top: 4px;
+}
+
+.location-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  margin: 0 24px;
   padding: 16px;
-  border: 1px solid rgba(226, 232, 240, 0.6);
+  background: linear-gradient(180deg, var(--mx-soft), #ffffff);
+  border: 1px solid var(--mx-border-strong);
+  border-radius: 10px;
 }
 
-.location-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-}
-
-.location-row:not(:last-child) {
-  border-bottom: 1px solid rgba(226, 232, 240, 0.4);
-}
-
-.location-label {
-  color: #64748b;
-  font-size: 13px;
-  min-width: 60px;
-}
-
-.location-value {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.location-empty {
+.location-state {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--mx-muted);
+  background: var(--el-fill-color);
+  font-size: 20px;
+}
+
+.location-state.active {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.location-main {
+  min-width: 0;
+}
+
+.location-kicker {
+  color: var(--mx-sub);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.location-address {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 24px;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.location-meta {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 32px 24px;
-  color: #94a3b8;
-  font-size: 14px;
+  margin-top: 10px;
+}
+
+.location-meta span {
+  color: #42526b;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 3px 8px;
+  background: #f1f5fb;
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
 }
 
 .section-card :deep(.el-form) {
   padding: 16px 24px 24px;
 }
 
-.relaxed {
-  gap: 16px 24px;
+.location-form-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(160px, 220px) minmax(280px, 1fr);
+  gap: 14px 18px;
+  align-items: start;
+}
+
+.location-form-grid .el-form-item:nth-child(4) {
+  grid-column: 1 / 3;
 }
 
 .form-tip {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
   margin-top: 4px;
+}
+
+@media (max-width: 960px) {
+  .section-head {
+    flex-direction: column;
+  }
+
+  .location-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-form-grid .el-form-item:nth-child(4) {
+    grid-column: auto;
+  }
 }
 </style>

@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商家设置" subtitle="区域商家运营配置" icon="Setting" />
+    <PageHeader title="外卖区域规则" subtitle="配置区域抽成、配送范围、审核与结算规则" icon="Setting" />
     <div class="filter-bar">
       <el-select v-model="selectedRegionId" placeholder="选择区域" clearable filterable style="width: 240px" @change="loadDetail">
         <el-option v-for="r in regionList" :key="r.id" :label="r.name" :value="r.id" />
@@ -89,12 +89,13 @@
         </el-row>
       </el-form>
     </el-card>
-    <el-empty v-else description="请先选择区域" />
+    <EmptyState v-else description="请先选择区域" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getRegionMerchantSettings, getRegionMerchantSettingDetail, saveRegionMerchantSettings } from '@/api/merchant'
 import { fetchRegions } from '@/api/admin'

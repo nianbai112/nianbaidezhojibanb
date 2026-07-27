@@ -132,6 +132,11 @@ function applyToLabel(value: string) {
   return applyToOptions.find(item => item.value === value)?.label || value || '-'
 }
 
+function toSubmitPayload(source: any) {
+  const { id, createdAt, updatedAt, ...payload } = source || {}
+  return payload
+}
+
 async function loadRegions() {
   regions.value = await fetchRegions()
 }
@@ -179,8 +184,7 @@ async function submit() {
   }
   saving.value = true
   try {
-    const payload = { ...form }
-    delete payload.id
+    const payload = toSubmitPayload(form)
     if (form.id) await updateErrandItemSize(form.id, payload)
     else await createErrandItemSize(payload)
     ElMessage.success('保存成功')
@@ -221,7 +225,7 @@ onMounted(async () => {
 }
 
 .table-card {
-  border-radius: 18px;
+  border-radius: 14px;
   border: 1px solid rgba(203, 213, 225, 0.78);
 }
 

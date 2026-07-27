@@ -9,17 +9,17 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class ActivityController {
   constructor(private readonly activityService: ActivityService) {}
 
-  @Get('activity/activities')
+  @Get(['activity/activities', 'miniapp/activity/activities'])
   getActivities(@Query() query: any) {
     return this.activityService.getActivities(query);
   }
 
-  @Get('activity/activities/:activityId')
+  @Get(['activity/activities/:activityId', 'miniapp/activity/activities/:activityId'])
   getActivityDetail(@Param('activityId') activityId: string) {
     return this.activityService.getActivityDetail(activityId);
   }
 
-  @Get('activity/activities/:activityId/participants')
+  @Get(['activity/activities/:activityId/participants', 'miniapp/activity/activities/:activityId/participants'])
   getParticipants(@Param('activityId') activityId: string, @Query() query: any) {
     return this.activityService.getParticipants(activityId, query);
   }
@@ -29,6 +29,27 @@ export class ActivityController {
   @ApiBearerAuth()
   createOrderWithPayment(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.activityService.createOrderWithPayment(userId, dto);
+  }
+
+  @Post(['activity/activities/:activityId/join', 'miniapp/activity/activities/:activityId/join'])
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  joinFreeActivity(@CurrentUser('sub') userId: string, @Param('activityId') activityId: string) {
+    return this.activityService.joinFreeActivity(userId, activityId);
+  }
+
+  @Get('activity/orders/my')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMyOrders(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.activityService.getMyOrders(userId, query);
+  }
+
+  @Get('activity/tickets/my')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getMyTickets(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.activityService.getMyTickets(userId, query);
   }
 
   @Get('activity/clubs/:clubId')

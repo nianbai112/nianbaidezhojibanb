@@ -44,7 +44,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && !strategies.length" description="暂无推荐策略，请先新增策略或重建推荐池时使用默认策略" />
+      <EmptyState v-if="!loading && !strategies.length" description="暂无推荐策略，请先新增策略或重建推荐池时使用默认策略" />
     </div>
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑推荐策略' : '新增推荐策略'" width="760px">
@@ -118,6 +118,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, RefreshRight } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { request } from '@/api/request'
 
 const loading = ref(false)
@@ -239,8 +240,8 @@ onMounted(() => loadStrategies())
 .weight-line span {
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(37, 99, 235, .08);
-  color: #2563eb;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
   font-size: 12px;
   font-weight: 850;
 }
@@ -257,14 +258,14 @@ onMounted(() => loadStrategies())
 .section-title {
   margin: 8px 0 14px;
   padding-left: 10px;
-  border-left: 4px solid #2f7cff;
-  color: #0f172a;
+  border-left: 4px solid var(--el-color-primary);
+  color: var(--mx-text);
   font-size: 15px;
   font-weight: 950;
 }
 .unit {
   margin-left: 8px;
-  color: #64748b;
+  color: var(--mx-muted);
   font-size: 12px;
   font-weight: 750;
 }

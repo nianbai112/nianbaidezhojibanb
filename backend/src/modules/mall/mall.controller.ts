@@ -2,6 +2,8 @@ import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuard
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { MallService } from './mall.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
+import { RequirePermission } from '../../decorators/require-permission.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 
 @ApiTags('商城')
@@ -314,32 +316,36 @@ export class MallController {
   // ==================== 客服管理 ====================
 
   @Get('api/mall/service/admin/staff/list')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @ApiBearerAuth()
+  @RequirePermission('mall:view')
   @ApiOperation({ summary: '客服列表' })
   getServiceStaffList(@Query() query: any) {
     return this.mallService.getServiceStaffList(query);
   }
 
   @Post('api/mall/service/admin/staff/create')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @ApiBearerAuth()
+  @RequirePermission('mall:edit')
   @ApiOperation({ summary: '创建客服' })
   createServiceStaff(@Body() dto: any) {
     return this.mallService.createServiceStaff(dto);
   }
 
   @Patch('api/mall/service/admin/staff/:id')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @ApiBearerAuth()
+  @RequirePermission('mall:edit')
   @ApiOperation({ summary: '更新客服' })
   updateServiceStaff(@Param('id') id: string, @Body() dto: any) {
     return this.mallService.updateServiceStaff(id, dto);
   }
 
   @Delete('api/mall/service/admin/staff/:id')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @ApiBearerAuth()
+  @RequirePermission('mall:edit')
   @ApiOperation({ summary: '删除客服' })
   deleteServiceStaff(@Param('id') id: string) {
     return this.mallService.deleteServiceStaff(id);

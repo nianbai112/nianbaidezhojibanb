@@ -20,7 +20,7 @@ export const endpoints = {
   topics: '/content/topics',
   coupons: '/marketing/coupons',
   groupBuys: '/marketing/group-buys',
-  activities: '/activity/activities',
+  activities: '/admin/activity/activities',
   deliveryOrders: '/delivery/orders',
   riders: '/delivery/riders',
   systemSettings: '/system/systemSetting',

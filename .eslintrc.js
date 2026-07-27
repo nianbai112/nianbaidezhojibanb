@@ -15,6 +15,19 @@ module.exports = {
     ecmaVersion: 2021,
     sourceType: 'module',
   },
+  overrides: [
+    {
+      files: ['*.vue'],
+      parser: 'vue-eslint-parser',
+      parserOptions: {
+        parser: '@typescript-eslint/parser',
+        ecmaVersion: 2021,
+        sourceType: 'module',
+        extraFileExtensions: ['.vue'],
+      },
+      extends: ['plugin:vue/base'],
+    },
+  ],
   ignorePatterns: [
     'node_modules/',
     'dist/',
@@ -30,7 +43,12 @@ module.exports = {
     '@typescript-eslint/no-unused-vars': 'warn',
     '@typescript-eslint/ban-ts-comment': 'off',
     '@typescript-eslint/ban-types': 'off',
+    '@typescript-eslint/no-var-requires': 'warn',
     'no-empty': 'warn',
     'no-constant-condition': 'warn',
+    'no-mixed-spaces-and-tabs': 'warn',
+    'no-case-declarations': 'warn',
+    'no-extra-boolean-cast': 'warn',
+    'prefer-const': 'warn',
   },
 };

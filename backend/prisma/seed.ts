@@ -67,6 +67,18 @@ async function main() {
     },
   });
 
+  const regionManagerRole = await prisma.adminRole.upsert({
+    where: { code: 'region_manager' },
+    update: {},
+    create: {
+      name: '区域负责人',
+      code: 'region_manager',
+      description: '管理指定区域的小程序运营账号',
+      isSystem: true,
+      sortOrder: 5,
+    },
+  });
+
   const merchantAdminRole = await prisma.adminRole.upsert({
     where: { code: 'merchant_admin' },
     update: {},
@@ -75,7 +87,7 @@ async function main() {
       code: 'merchant_admin',
       description: '商家后台管理员',
       isSystem: true,
-      sortOrder: 5,
+      sortOrder: 6,
     },
   });
 
@@ -141,6 +153,7 @@ async function main() {
 
     // 财务
     { code: 'finance:view', name: '查看财务', module: 'finance', action: 'view' },
+    { code: 'finance:balance-adjust', name: '调整用户余额', module: 'finance', action: 'balance-adjust' },
     { code: 'withdraw:view', name: '查看提现', module: 'withdraw', action: 'view' },
     { code: 'withdraw:audit', name: '审核提现', module: 'withdraw', action: 'audit' },
     { code: 'withdraw:complete', name: '打款确认', module: 'withdraw', action: 'complete' },
@@ -193,6 +206,9 @@ async function main() {
     { code: 'coupon:view', name: '查看优惠券', module: 'coupon', action: 'view' },
     { code: 'coupon:edit', name: '管理优惠券', module: 'coupon', action: 'edit' },
     { code: 'coupon:records', name: '查看优惠券使用记录', module: 'coupon', action: 'records' },
+    { code: 'coupon:redeem-code:view', name: '查看卡券兑换码', module: 'coupon', action: 'redeem-code:view' },
+    { code: 'coupon:redeem-code:create', name: '生成卡券兑换码', module: 'coupon', action: 'redeem-code:create' },
+    { code: 'coupon:redeem-code:edit', name: '管理卡券兑换码', module: 'coupon', action: 'redeem-code:edit' },
     { code: 'activity:view', name: '查看活动', module: 'activity', action: 'view' },
     { code: 'activity:edit', name: '管理活动', module: 'activity', action: 'edit' },
     { code: 'activity:audit', name: '审核活动订单', module: 'activity', action: 'audit' },
@@ -243,9 +259,6 @@ async function main() {
     { code: 'secondhand:audit', name: '审核二手交易', module: 'secondhand', action: 'audit' },
     { code: 'secondhand:config', name: '二手配置', module: 'secondhand', action: 'config' },
 
-    // 漂流瓶
-    { code: 'driftBottle:list', name: '查看漂流瓶列表', module: 'driftBottle', action: 'list' },
-    { code: 'driftBottle:delete', name: '删除漂流瓶', module: 'driftBottle', action: 'delete' },
 
     // 打卡管理
     { code: 'punchIn:location:list', name: '查看打卡点列表', module: 'punchIn', action: 'location:list' },
@@ -288,12 +301,23 @@ async function main() {
     { code: 'dating:config', name: '配置对象匹配', module: 'dating', action: 'config' },
     { code: 'dating:list', name: '查看对象匹配列表', module: 'dating', action: 'list' },
 
-    // 充值管理
-    { code: 'topup:package:list', name: '查看充值套餐', module: 'topup', action: 'package:list' },
-    { code: 'topup:package:create', name: '创建充值套餐', module: 'topup', action: 'package:create' },
-    { code: 'topup:package:update', name: '更新充值套餐', module: 'topup', action: 'package:update' },
-    { code: 'topup:package:delete', name: '删除充值套餐', module: 'topup', action: 'package:delete' },
-    { code: 'topup:order:list', name: '查看充值订单', module: 'topup', action: 'order:list' },
+    // 平台会员
+    { code: 'membership:list', name: '查看会员概览', module: 'membership', action: 'list' },
+    { code: 'membership:plan:list', name: '查看会员套餐', module: 'membership', action: 'plan:list' },
+    { code: 'membership:plan:create', name: '创建会员套餐', module: 'membership', action: 'plan:create' },
+    { code: 'membership:plan:update', name: '更新会员套餐', module: 'membership', action: 'plan:update' },
+    { code: 'membership:plan:delete', name: '删除会员套餐', module: 'membership', action: 'plan:delete' },
+    { code: 'membership:order:list', name: '查看会员订单', module: 'membership', action: 'order:list' },
+    { code: 'membership:user:list', name: '查看会员用户', module: 'membership', action: 'user:list' },
+    { code: 'membership:usage:list', name: '查看会员权益使用记录', module: 'membership', action: 'usage:list' },
+    { code: 'membership:grant', name: '赠送会员', module: 'membership', action: 'grant' },
+
+    // 笔记付费置顶
+    { code: 'topup:package:list', name: '查看置顶套餐', module: 'topup', action: 'package:list' },
+    { code: 'topup:package:create', name: '创建置顶套餐', module: 'topup', action: 'package:create' },
+    { code: 'topup:package:update', name: '更新置顶套餐', module: 'topup', action: 'package:update' },
+    { code: 'topup:package:delete', name: '删除置顶套餐', module: 'topup', action: 'package:delete' },
+    { code: 'topup:order:list', name: '查看置顶订单', module: 'topup', action: 'order:list' },
 
     // 社团管理
     { code: 'club:list', name: '查看社团列表', module: 'club', action: 'list' },
@@ -308,6 +332,8 @@ async function main() {
     // 评论抽奖
     { code: 'lottery:list', name: '查看抽奖列表', module: 'lottery', action: 'list' },
     { code: 'lottery:detail', name: '查看抽奖详情', module: 'lottery', action: 'detail' },
+    { code: 'lottery:draw', name: '执行评论抽奖开奖', module: 'lottery', action: 'draw' },
+    { code: 'lottery:cancel', name: '取消评论抽奖', module: 'lottery', action: 'cancel' },
     { code: 'lottery:delete', name: '删除抽奖', module: 'lottery', action: 'delete' },
     { code: 'lottery:record:list', name: '查看中奖记录', module: 'lottery', action: 'record:list' },
 
@@ -452,20 +478,19 @@ async function main() {
     'errand:item-size:view', 'errand:item-size:create', 'errand:item-size:update', 'errand:item-size:delete',
     'errand:pickup-point:view', 'errand:pickup-point:create', 'errand:pickup-point:update', 'errand:pickup-point:delete',
     'errand:stats:view', 'errand:view', 'errand:config',
-    'coupon:view', 'coupon:edit', 'coupon:records', 'activity:view', 'activity:edit', 'activity:audit', 'activity:order',
+    'coupon:view', 'coupon:edit', 'coupon:records', 'coupon:redeem-code:view', 'coupon:redeem-code:create', 'coupon:redeem-code:edit', 'activity:view', 'activity:edit', 'activity:audit', 'activity:order',
     'groupbuy:view', 'groupbuy:edit', 'groupbuy:order', 'groupbuy:config',
     'finance:view', 'finance:transfer', 'finance:reconciliation', 'finance:settlement',
     'withdraw:view', 'withdraw:audit', 'withdraw:complete',
     'message:view', 'robot:view', 'robot:post', 'robot:comment',
     'dashboard:view',
     'secondhand:view', 'secondhand:audit', 'secondhand:config',
-    'driftBottle:list',
     'punchIn:location:list', 'punchIn:location:create', 'punchIn:location:update', 'punchIn:location:delete', 'punchIn:record:list',
     'netdisk:view', 'netdisk:edit', 'netdisk:audit', 'netdisk:config',
     'dating:view', 'dating:audit', 'dating:config',
     'topup:package:list', 'topup:order:list',
     'club:list', 'club:detail', 'club:create', 'club:update', 'club:audit', 'club:delete', 'club:member:list', 'club:member:delete',
-    'lottery:list', 'lottery:detail', 'lottery:record:list',
+    'lottery:list', 'lottery:detail', 'lottery:draw', 'lottery:cancel', 'lottery:record:list',
     'ranking:list', 'ranking:create', 'ranking:update',
     'userGuidance:list', 'userGuidance:create', 'userGuidance:update',
     'contacts:category:list', 'contacts:category:create', 'contacts:category:update', 'contacts:list', 'contacts:create', 'contacts:update',
@@ -492,7 +517,7 @@ async function main() {
   }
 
   // 财务
-  const finPermissions = ['finance:view', 'withdraw:view', 'withdraw:audit', 'withdraw:complete', 'order:view', 'order:refund', 'finance:reconciliation', 'finance:transfer', 'finance:settlement', 'dashboard:view', 'topup:order:list'];
+  const finPermissions = ['finance:view', 'finance:balance-adjust', 'withdraw:view', 'withdraw:audit', 'withdraw:complete', 'order:view', 'order:refund', 'finance:reconciliation', 'finance:transfer', 'finance:settlement', 'dashboard:view', 'topup:order:list'];
   for (const code of finPermissions) {
     const perm = permissions[code];
     if (perm) {
@@ -505,7 +530,7 @@ async function main() {
   }
 
   // 审核人员
-  const audPermissions = ['post:view', 'post:audit', 'comment:view', 'comment:audit', 'comment:delete', 'merchant:view', 'merchant:audit', 'report:handle', 'dashboard:view', 'photoContest:view', 'photoContest:audit', 'activity:view', 'activity:order', 'club:audit', 'sticker:update', 'driftBottle:list'];
+  const audPermissions = ['post:view', 'post:audit', 'comment:view', 'comment:audit', 'comment:delete', 'merchant:view', 'merchant:audit', 'report:handle', 'dashboard:view', 'photoContest:view', 'photoContest:audit', 'activity:view', 'activity:order', 'club:audit', 'sticker:update'];
   for (const code of audPermissions) {
     const perm = permissions[code];
     if (perm) {
@@ -526,6 +551,40 @@ async function main() {
         where: { roleId_permissionId: { roleId: cityAgentRole.id, permissionId: perm.id } },
         update: {},
         create: { roleId: cityAgentRole.id, permissionId: perm.id },
+      });
+    }
+  }
+
+  // 区域负责人
+  const regionManagerPermissions = [
+    'dashboard:view',
+    'region:view',
+    'region:edit',
+    'user:view',
+    'post:view',
+    'post:audit',
+    'comment:view',
+    'merchant:view',
+    'merchant:audit',
+    'product:view',
+    'order:view',
+    'delivery:view',
+    'errand:view',
+    'errand:config:view',
+    'coupon:view',
+    'activity:view',
+    'message:view',
+    'notification:view',
+    'notification:send',
+    'system:upload',
+  ];
+  for (const code of regionManagerPermissions) {
+    const perm = permissions[code];
+    if (perm) {
+      await prisma.adminRolePermission.upsert({
+        where: { roleId_permissionId: { roleId: regionManagerRole.id, permissionId: perm.id } },
+        update: {},
+        create: { roleId: regionManagerRole.id, permissionId: perm.id },
       });
     }
   }
@@ -629,8 +688,6 @@ async function main() {
     { name: '商品管理', path: '/second-hand/products', parentPath: '/second-hand', sortOrder: 0 },
     { name: '订单管理', path: '/second-hand/orders', parentPath: '/second-hand', sortOrder: 1 },
     { name: '区域配置', path: '/second-hand/settings', parentPath: '/second-hand', sortOrder: 2 },
-    { name: '漂流瓶管理', path: '/drift-bottle', icon: 'MailOutlined', sortOrder: 12 },
-    { name: '瓶子列表', path: '/drift-bottle/bottles', parentPath: '/drift-bottle', sortOrder: 0 },
     { name: '打卡管理', path: '/punch-in', icon: 'EnvironmentOutlined', sortOrder: 13 },
     { name: '分类管理', path: '/punch-in/categories', parentPath: '/punch-in', sortOrder: 0 },
     { name: '地点管理', path: '/punch-in/locations', parentPath: '/punch-in', sortOrder: 1 },
@@ -658,9 +715,11 @@ async function main() {
     { name: '举报管理', path: '/dating/reports', parentPath: '/dating', sortOrder: 4 },
     { name: '配置管理', path: '/dating/config', parentPath: '/dating', sortOrder: 5 },
     { name: '缓存管理', path: '/dating/cache', parentPath: '/dating', sortOrder: 6 },
-    { name: '充值管理', path: '/topup', icon: 'DollarOutlined', sortOrder: 17 },
+    { name: '会员运营', path: '/membership', icon: 'CrownOutlined', sortOrder: 16 },
+    { name: '会员概览', path: '/membership/overview', parentPath: '/membership', sortOrder: 0 },
+    { name: '付费置顶', path: '/topup', icon: 'DollarOutlined', sortOrder: 17 },
     { name: '套餐配置', path: '/topup/packages', parentPath: '/topup', sortOrder: 0 },
-    { name: '充值订单', path: '/topup/orders', parentPath: '/topup', sortOrder: 1 },
+    { name: '置顶订单', path: '/topup/orders', parentPath: '/topup', sortOrder: 1 },
     { name: '社群管理', path: '/community', icon: 'UsergroupAddOutlined', sortOrder: 14 },
     { name: '社群列表', path: '/community/circles', parentPath: '/community', sortOrder: 0 },
     { name: '购买记录', path: '/community/payments', parentPath: '/community', sortOrder: 1 },
@@ -761,7 +820,6 @@ async function main() {
     '/system', '/system/admins', '/system/roles', '/system/logs', '/system/config', '/system/website-config', '/system/email-config', '/system/storage', '/system/wechat-pay', '/system/files', '/system/map-picker',
     '/miniapp', '/miniapp/upload', '/miniapp/qrcode', '/miniapp/pages', '/miniapp/subscribe',
     '/second-hand', '/second-hand/products', '/second-hand/orders', '/second-hand/settings',
-    '/drift-bottle', '/drift-bottle/bottles',
     '/punch-in', '/punch-in/categories', '/punch-in/locations', '/punch-in/records', '/punch-in/comments', '/punch-in/stats', '/punch-in/config',
     '/share', '/share/activity', '/share/invites', '/share/rewards',
     '/netdisk', '/netdisk/categories', '/netdisk/platforms', '/netdisk/resources', '/netdisk/reports', '/netdisk/comments', '/netdisk/downloads', '/netdisk/profit-config',

@@ -1,8 +1,6 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>评价管理</h2>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="评价管理" />
 
     <div class="filter-bar">
       <el-input
@@ -151,6 +149,7 @@
 import { ref, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const reviews = ref<any[]>([])
@@ -239,17 +238,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
 .filter-bar {
   display: flex;
   gap: 12px;

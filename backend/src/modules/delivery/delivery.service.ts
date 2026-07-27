@@ -3,12 +3,14 @@ import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { CreateDeliveryOrderDto, UpdateLocationDto, DeliveryQueryDto } from './dto/delivery.dto';
 import { DeliveryOrderStatus } from '@prisma/client';
+import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
 
 @Injectable()
 export class DeliveryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly userAccess: UserAccessPolicyService,
   ) {}
 
   async myOrders(userId: string, query: DeliveryQueryDto) {
@@ -48,6 +50,7 @@ export class DeliveryService {
   }
 
   async createOrder(userId: string, dto: CreateDeliveryOrderDto) {
+    await this.userAccess.assertStudentProtectedAction(userId, (dto as any).regionId || (dto as any).region_id, '创建配送订单');
     const orderNo = `DEL${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
     const order = await this.prisma.deliveryOrder.create({

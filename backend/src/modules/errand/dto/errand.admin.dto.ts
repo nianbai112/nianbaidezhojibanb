@@ -1,7 +1,23 @@
-import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsObject } from 'class-validator';
+import { Allow, IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateErrandConfigDto {
+  @Allow()
+  @IsOptional()
+  id?: string;
+
+  @Allow()
+  @IsOptional()
+  regionId?: string;
+
+  @Allow()
+  @IsOptional()
+  createdAt?: any;
+
+  @Allow()
+  @IsOptional()
+  updatedAt?: any;
+
   @IsNumber()
   @IsOptional()
   basePrice?: number;
@@ -80,6 +96,22 @@ export class UpdateErrandConfigDto {
 
   @IsObject()
   @IsOptional()
+  orderTakingPolicy?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  order_taking_policy?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  riskTagConfig?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  risk_tag_config?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
   pageConfig?: Record<string, any>;
 }
 
@@ -112,6 +144,10 @@ export class CreateErrandItemSizeDto {
 }
 
 export class UpdateErrandItemSizeDto {
+  @IsString()
+  @IsOptional()
+  regionId?: string;
+
   @IsString()
   @IsOptional()
   name?: string;
@@ -166,6 +202,10 @@ export class CreateErrandPickupPointDto {
 }
 
 export class UpdateErrandPickupPointDto {
+  @IsString()
+  @IsOptional()
+  regionId?: string;
+
   @IsString()
   @IsOptional()
   name?: string;

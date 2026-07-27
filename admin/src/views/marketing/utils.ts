@@ -6,10 +6,18 @@ export function unwrapData<T = any>(res: any, fallback: T): T {
 export function unwrapPage(res: any) {
   const data = unwrapData<any>(res, {})
   if (Array.isArray(data)) return { list: data, total: data.length, page: 1, pageSize: data.length }
-  const list = Array.isArray(data?.list) ? data.list : []
+  const list = Array.isArray(data?.list)
+    ? data.list
+    : Array.isArray(data?.rows)
+      ? data.rows
+      : Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.records)
+          ? data.records
+          : []
   return {
     list,
-    total: Number(data?.total ?? list.length ?? 0),
+    total: Number(data?.total ?? data?.count ?? data?.pagination?.total ?? list.length ?? 0),
     page: Number(data?.page ?? 1),
     pageSize: Number(data?.pageSize ?? list.length ?? 20),
   }

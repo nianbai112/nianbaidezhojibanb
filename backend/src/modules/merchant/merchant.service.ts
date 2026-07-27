@@ -1,9 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { PrintService } from '../print/print.service';
 
 @Injectable()
 export class MerchantService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly printService: PrintService,
+  ) {}
 
   // ==================== 打印机配置 ====================
 
@@ -22,23 +26,23 @@ export class MerchantService {
       }),
       this.prisma.printerConfig.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    return { list: list.map((item) => this.maskPrinter(item)), total, page: Number(page), pageSize: Number(pageSize) };
   }
 
   async getPrinter(id: string) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
     if (!p) throw new NotFoundException('打印机不存在');
-    return p;
+    return this.maskPrinter(p);
   }
 
   async createPrinter(dto: any) {
-    return this.prisma.printerConfig.create({ data: dto as any });
+    return this.maskPrinter(await this.prisma.printerConfig.create({ data: this.normalizePrinter(dto) }));
   }
 
   async updatePrinter(id: string, dto: any) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
     if (!p) throw new NotFoundException('打印机不存在');
-    return this.prisma.printerConfig.update({ where: { id }, data: dto as any });
+    return this.maskPrinter(await this.prisma.printerConfig.update({ where: { id }, data: this.normalizePrinter(dto, p) }));
   }
 
   async deletePrinter(id: string) {
@@ -50,7 +54,32 @@ export class MerchantService {
   async testPrint(id: string, dto: any) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
     if (!p) throw new NotFoundException('打印机不存在');
-    return { success: true, message: '打印任务已提交', printer: p.name, content: dto.content || dto.orderId || '测试打印' };
+    return this.printService.testPrinter(id, dto?.content);
+  }
+
+  private normalizePrinter(dto: any, current?: any) {
+    const brand = ['yly', 'xpyun', 'gprinter'].includes(dto?.brand) ? dto.brand : 'feie';
+    const data: any = { ...dto, brand };
+    delete data.key;
+    delete data.user;
+    delete data.ukey;
+    delete data.appId;
+    delete data.appSecret;
+    delete data.clientId;
+    delete data.clientSecret;
+    delete data.deviceKey;
+    delete data.xpyUser;
+    delete data.xpyUserKey;
+    delete data.gpMemberCode;
+    delete data.gpApiKey;
+    delete data.credentials;
+    Object.assign(data, this.printService.prepareConnection(brand, dto, current));
+    return data;
+  }
+
+  private maskPrinter(printer: any) {
+    const { key, credentialCiphertext, ...safe } = printer;
+    return { ...safe, keyConfigured: Boolean(key), credentialConfigured: Boolean(credentialCiphertext) };
   }
 
   // ==================== 商品加价规则 ====================
@@ -111,7 +140,7 @@ export class MerchantService {
   async getProductCollection(query: any) {
     const { page = 1, pageSize = 20, keyword, categoryId, merchantId, regionId, status, minPrice, maxPrice } = query;
     const where: any = {};
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
     if (categoryId) where.categoryId = categoryId;
     if (merchantId) where.merchantId = merchantId;
     if (status) where.status = status;

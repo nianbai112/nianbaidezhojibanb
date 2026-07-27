@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商品采集" subtitle="批量采集商品到目标商家" icon="DocumentCopy" />
+    <PageHeader title="商品批量复制" subtitle="将已获授权的商品复制到目标商家" icon="DocumentCopy" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索商品名称" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.categoryId" placeholder="分类" clearable filterable style="width: 140px" @change="loadData">
@@ -29,7 +29,7 @@
       <el-table-column type="selection" width="55" />
       <el-table-column prop="images" label="商品图" width="80">
         <template #default="{ row }">
-          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 50px; height: 50px; border-radius: 4px;" />
+          <el-image v-if="Array.isArray(row.images) && row.images.length" :src="row.images[0]" style="width: 50px; height: 50px; border-radius: 6px;" />
           <span v-else>-</span>
         </template>
       </el-table-column>

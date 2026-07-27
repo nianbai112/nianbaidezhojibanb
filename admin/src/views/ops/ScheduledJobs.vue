@@ -1,9 +1,10 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>任务调度</h2>
-      <el-button type="primary" @click="showCreateDialog = true">创建任务</el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="任务调度">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true">创建任务</el-button>
+      </template>
+    </PageHeader>
 
     <div class="glass-card" style="padding: 20px;">
       <el-table :data="jobs" v-loading="loading">
@@ -89,6 +90,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const loadingLogs = ref(false)
@@ -153,7 +155,5 @@ onMounted(() => loadJobs())
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; }
 </style>

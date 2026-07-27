@@ -77,6 +77,92 @@ export class MarketingAdminController {
     return this.marketingAdminService.getCouponRecords(query);
   }
 
+  @Get('coupon-redeem-codes')
+  @RequirePermission('coupon:redeem-code:view')
+  @ApiOperation({ summary: '优惠券兑换码列表' })
+  getCouponRedeemCodes(@Query() query: any) {
+    return this.marketingAdminService.getCouponRedeemCodes(query);
+  }
+
+  @Post('coupon-redeem-codes')
+  @RequirePermission('coupon:redeem-code:create')
+  @ApiOperation({ summary: '生成优惠券兑换码' })
+  createCouponRedeemCodes(
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.createCouponRedeemCodes(body, operatorId, ip);
+  }
+
+  @Put('coupon-redeem-codes/:id/status')
+  @RequirePermission('coupon:redeem-code:edit')
+  @ApiOperation({ summary: '更新优惠券兑换码状态' })
+  updateCouponRedeemCodeStatus(
+    @Param('id') id: string,
+    @Body() body: { status: string },
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.updateCouponRedeemCodeStatus(id, body.status, operatorId, ip);
+  }
+
+  @Get('coupon-redeem-records')
+  @RequirePermission('coupon:redeem-code:view')
+  @ApiOperation({ summary: '优惠券兑换记录' })
+  getCouponRedeemRecords(@Query() query: any) {
+    return this.marketingAdminService.getCouponRedeemRecords(query);
+  }
+
+  // ==================== 运营活动 ====================
+
+  @Get('campaigns')
+  @RequirePermission('marketing:view')
+  @ApiOperation({ summary: '运营活动列表' })
+  getCampaigns(@Query() query: any) {
+    return this.marketingAdminService.getCampaigns(query);
+  }
+
+  @Post('campaigns')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '创建运营活动' })
+  createCampaign(
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.createCampaign(body, operatorId, ip);
+  }
+
+  @Put('campaigns/:id')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '更新运营活动' })
+  updateCampaign(
+    @Param('id') id: string,
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.updateCampaign(id, body, operatorId, ip);
+  }
+
+  @Put('campaigns/:id/status')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '更新运营活动状态' })
+  updateCampaignStatus(
+    @Param('id') id: string,
+    @Body() body: { status: string },
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.updateCampaignStatus(id, body.status, operatorId, ip);
+  }
+
   // ==================== 签到配置 ====================
 
   @Get('sign/config')
@@ -151,6 +237,39 @@ export class MarketingAdminController {
     return this.marketingAdminService.deleteBadge(id, operatorId, ip);
   }
 
+  @Get('users/:userId/badges')
+  @RequirePermission('marketing:view')
+  @ApiOperation({ summary: '用户已获得徽章' })
+  getUserBadges(@Param('userId') userId: string) {
+    return this.marketingAdminService.getUserBadges(userId);
+  }
+
+  @Post('badges/:id/grant')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '给用户发放徽章' })
+  grantBadgeToUser(
+    @Param('id') id: string,
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.grantBadgeToUser(id, body, operatorId, ip);
+  }
+
+  @Delete('badges/:id/users/:userId')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '撤销用户徽章' })
+  revokeBadgeFromUser(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.revokeBadgeFromUser(id, userId, operatorId, ip);
+  }
+
   // ==================== 称号配置 ====================
 
   @Get('titles')
@@ -185,13 +304,25 @@ export class MarketingAdminController {
     return this.marketingAdminService.updateTitle(id, body, operatorId, ip);
   }
 
+  @Delete('titles/:id')
+  @RequirePermission('marketing:edit')
+  @ApiOperation({ summary: '删除称号' })
+  deleteTitle(
+    @Param('id') id: string,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.marketingAdminService.deleteTitle(id, operatorId, ip);
+  }
+
   // ==================== 分享有礼 ====================
 
   @Get('share-invite/config')
   @RequirePermission('marketing:view')
   @ApiOperation({ summary: '获取分享有礼配置' })
-  getShareInviteConfig() {
-    return this.marketingAdminService.getShareInviteConfig();
+  getShareInviteConfig(@Query('regionId') regionId?: string) {
+    return this.marketingAdminService.getShareInviteConfig(regionId);
   }
 
   @Put('share-invite/config')
@@ -302,18 +433,18 @@ export class MarketingAdminController {
     return this.marketingAdminService.getGroupBuyOrders(id, query);
   }
 
-  // ==================== 弹窗广告 ====================
+  // ==================== 首页权益卡片 ====================
 
   @Get('popups')
   @RequirePermission('marketing:view')
-  @ApiOperation({ summary: '弹窗广告列表' })
+  @ApiOperation({ summary: '首页权益卡片列表' })
   getPopups(@Query() query: any) {
     return this.marketingAdminService.getPopups(query);
   }
 
   @Post('popups')
   @RequirePermission('marketing:edit')
-  @ApiOperation({ summary: '创建弹窗广告' })
+  @ApiOperation({ summary: '创建首页权益卡片' })
   createPopup(
     @Body() body: any,
     @CurrentUser('sub') operatorId: string,
@@ -325,7 +456,7 @@ export class MarketingAdminController {
 
   @Put('popups/:id')
   @RequirePermission('marketing:edit')
-  @ApiOperation({ summary: '更新弹窗广告' })
+  @ApiOperation({ summary: '更新首页权益卡片' })
   updatePopup(
     @Param('id') id: string,
     @Body() body: any,
@@ -338,7 +469,7 @@ export class MarketingAdminController {
 
   @Delete('popups/:id')
   @RequirePermission('marketing:edit')
-  @ApiOperation({ summary: '删除弹窗广告' })
+  @ApiOperation({ summary: '删除首页权益卡片' })
   deletePopup(
     @Param('id') id: string,
     @CurrentUser('sub') operatorId: string,
@@ -346,39 +477,5 @@ export class MarketingAdminController {
   ) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     return this.marketingAdminService.deletePopup(id, operatorId, ip);
-  }
-}
-
-@ApiTags('系统通知')
-@Controller('admin/notifications')
-@UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
-@ApiBearerAuth()
-export class NotificationAdminController {
-  constructor(private readonly marketingAdminService: MarketingAdminService) {}
-
-  @Get()
-  @RequirePermission('notification:view')
-  @ApiOperation({ summary: '通知列表' })
-  getNotifications(@Query() query: any) {
-    return this.marketingAdminService.getNotifications(query);
-  }
-
-  @Post('send')
-  @RequirePermission('notification:send')
-  @ApiOperation({ summary: '发送通知' })
-  sendNotification(
-    @Body() body: any,
-    @CurrentUser('sub') operatorId: string,
-    @Req() req: Request,
-  ) {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
-    return this.marketingAdminService.sendNotification(body, operatorId, ip);
-  }
-
-  @Get('records')
-  @RequirePermission('notification:view')
-  @ApiOperation({ summary: '发送记录' })
-  getNotificationRecords(@Query() query: any) {
-    return this.marketingAdminService.getNotificationRecords(query);
   }
 }

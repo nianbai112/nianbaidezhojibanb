@@ -47,6 +47,7 @@ export const moduleConfigs: Record<string, ModuleConfig> = {
     actions:['添加机器人','批量启用','批量禁用','批量封禁','导出数据'],
     columns:[
       {prop:'user',label:'头像/昵称',type:'avatar',minWidth:180},
+      {prop:'uid',label:'UID',minWidth:90},
       {prop:'phone',label:'手机号',minWidth:130},
       {prop:'userType',label:'用户类型',type:'tag',minWidth:100},
       {prop:'regionName',label:'所属区域',minWidth:120},
@@ -209,7 +210,7 @@ export const moduleConfigs: Record<string, ModuleConfig> = {
       {label:'风险操作',value:0,delta:'-',tone:'red',icon:'Warning',key:'risks'}
     ],
     search:[{key:'keyword',label:'姓名/账号',type:'input'},{key:'role',label:'角色',type:'input'},{key:'status',label:'状态',type:'select',options:statusOptions}], actions:['新增管理员','创建角色','批量禁用','导出日志'],
-    columns:[{prop:'admin',label:'管理员',type:'avatar',minWidth:180},{prop:'account',label:'账号',minWidth:130},{prop:'role',label:'角色',type:'tag',minWidth:120},{prop:'scope',label:'数据范围',minWidth:150},{prop:'lastLogin',label:'最近登录',type:'date',minWidth:160},{prop:'status',label:'状态',type:'tag',minWidth:100}],
+    columns:[{prop:'admin',label:'管理员',type:'avatar',minWidth:180},{prop:'account',label:'账号',minWidth:130},{prop:'role',label:'角色',type:'tag',minWidth:120},{prop:'scope',label:'负责区域',minWidth:150},{prop:'lastLogin',label:'最近登录',type:'date',minWidth:160},{prop:'status',label:'状态',type:'tag',minWidth:100}],
     sideTitle:'权限审计', sideMetrics:[{title:'高危权限',value:0,desc:'含财务/删除'},{title:'异地登录',value:0,desc:'需确认'}], chartTitle:'管理员登录趋势', detailTabs:['账号信息','角色权限','数据范围','操作日志']
   },
   files: {

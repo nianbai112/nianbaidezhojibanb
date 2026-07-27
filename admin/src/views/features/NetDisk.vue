@@ -14,7 +14,7 @@
             <el-option label="已下架" value="inactive" />
             <el-option label="待审核" value="pending" />
           </el-select>
-          <el-button type="primary" @click="openResourceDialog()">新增资源</el-button>
+          <el-button v-if="hasEditPermission" type="primary" @click="openResourceDialog()">新增资源</el-button>
           <el-button @click="loadResources" :loading="resLoading">刷新</el-button>
         </div>
         <el-table :data="resources" v-loading="resLoading" stripe>
@@ -49,10 +49,10 @@
           </el-table-column>
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" type="primary" link @click="openResourceDialog(row)">编辑</el-button>
-              <el-button v-if="row.status !== 'active'" size="small" type="success" link @click="setResourceStatus(row.id, 'active')">上架</el-button>
-              <el-button v-if="row.status === 'active'" size="small" type="warning" link @click="setResourceStatus(row.id, 'inactive')">下架</el-button>
-              <el-popconfirm title="确定删除？" @confirm="deleteResource(row.id)">
+              <el-button v-if="hasEditPermission" size="small" type="primary" link @click="openResourceDialog(row)">编辑</el-button>
+              <el-button v-if="hasEditPermission && row.status !== 'active'" size="small" type="success" link @click="setResourceStatus(row.id, 'active')">上架</el-button>
+              <el-button v-if="hasEditPermission && row.status === 'active'" size="small" type="warning" link @click="setResourceStatus(row.id, 'inactive')">下架</el-button>
+              <el-popconfirm v-if="hasEditPermission" title="确定删除？" @confirm="deleteResource(row.id)">
                 <template #reference><el-button size="small" type="danger" link>删除</el-button></template>
               </el-popconfirm>
             </template>
@@ -315,11 +315,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { request } from '@/api/request'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
-import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const hasEditPermission = ref(auth.permissions.includes('netdisk:view') || auth.permissions.includes('netdisk:edit'))
 
 const activeTab = ref('resources')
 const saving = ref(false)
@@ -734,8 +737,8 @@ onMounted(async () => {
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
 .media-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .media-main { min-width: 0; }
-.thumb { width: 58px; height: 42px; border-radius: 8px; flex-shrink: 0; background: #eef5ff; }
-.icon-thumb { width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0; background: #eef5ff; }
+.thumb { width: 58px; height: 42px; border-radius: 6px; flex-shrink: 0; background: #eef5ff; }
+.icon-thumb { width: 34px; height: 34px; border-radius: 6px; flex-shrink: 0; background: #eef5ff; }
 .thumb-empty { display: flex; align-items: center; justify-content: center; color: #8aa4c7; font-size: 12px; }
 .cell-title { font-weight: 600; color: #1f2d3d; }
 .cell-sub { max-width: 440px; margin-top: 4px; color: #8a98ac; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

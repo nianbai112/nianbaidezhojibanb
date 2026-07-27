@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
+import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
 import * as os from "os";
 import * as childProcess from "child_process";
 import * as util from "util";
@@ -36,7 +37,25 @@ export class OpsService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly redis: RedisService,
+    private readonly adminDataScope: AdminDataScopeService,
   ) {}
+
+  private async logAdminOperation(accountId: string, action: string, targetId: string, detail: any = {}) {
+    try {
+      await this.prisma.adminOperationLog.create({
+        data: {
+          accountId,
+          action,
+          module: "ops_alert",
+          targetId,
+          targetType: "system_alert",
+          detail,
+        },
+      });
+    } catch {
+      // 运维处理日志失败不影响处理动作。
+    }
+  }
 
   private hasConfigValue(value: any): boolean {
     if (value === undefined || value === null) return false;
@@ -541,14 +560,16 @@ export class OpsService {
     }
   }
 
-  async getAlerts(query: any) {
-    const { page = 1, pageSize = 20, type, level, status, regionId, startTime, endTime } = query;
-    const where: any = {};
+  async getAlerts(query: any, operatorId?: string) {
+    const { page = 1, pageSize = 20, type, level, status, regionId, businessId, startTime, endTime } = query;
+    const where: any = {
+      ...(await this.adminDataScope.regionFieldWhere("regionId", operatorId, regionId)),
+    };
 
     if (type) where.type = type;
     if (level) where.level = level;
     if (status) where.status = status;
-    if (regionId) where.regionId = regionId;
+    if (businessId) where.businessId = String(businessId);
     if (startTime || endTime) {
       where.createdAt = {};
       if (startTime) where.createdAt.gte = new Date(startTime);
@@ -569,9 +590,11 @@ export class OpsService {
     return { list, total, page: +page, pageSize: +pageSize };
   }
 
-  async getAlertSummary() {
+  async getAlertSummary(operatorId?: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const alertRegionWhere = await this.adminDataScope.regionFieldWhere("regionId", operatorId);
+    const postRegionWhere = await this.adminDataScope.regionFieldWhere("regionId", operatorId);
 
     const [
       pendingAuditCount,
@@ -583,14 +606,14 @@ export class OpsService {
       pendingAlertCount,
       highRiskAlertCount,
     ] = await Promise.all([
-      this.prisma.post.count({ where: { status: "PENDING" } }).catch(() => 0),
+      this.prisma.post.count({ where: { status: "PENDING", ...postRegionWhere } }).catch(() => 0),
       this.prisma.refund.count({ where: { status: "PENDING" } }).catch(() => 0),
       this.prisma.withdraw.count({ where: { status: "PENDING" } }).catch(() => 0),
       this.prisma.order.count({ where: { status: "REFUNDING" } }).catch(() => 0),
       this.prisma.botPostTask.count({ where: { status: "failed" } }).catch(() => 0),
       this.prisma.serverLog.count({ where: { level: "error", createdAt: { gte: todayStart } } }),
-      this.prisma.systemAlert.count({ where: { status: "pending" } }),
-      this.prisma.systemAlert.count({ where: { level: "high", status: "pending" } }),
+      this.prisma.systemAlert.count({ where: { status: "pending", ...alertRegionWhere } }),
+      this.prisma.systemAlert.count({ where: { level: { in: ["high", "critical"] }, status: "pending", ...alertRegionWhere } }),
     ]);
 
     return {
@@ -608,11 +631,13 @@ export class OpsService {
   async resolveAlert(id: string, accountId: string, note?: string) {
     const alert = await this.prisma.systemAlert.findUnique({ where: { id } });
     if (!alert) throw new BadRequestException("异常记录不存在");
+    await this.adminDataScope.assertRegionAccess(accountId, alert.regionId);
 
     await this.prisma.systemAlert.update({
       where: { id },
       data: { status: "resolved", resolvedBy: accountId, resolvedAt: new Date(), resolveNote: note },
     });
+    await this.logAdminOperation(accountId, "RESOLVE", id, { regionId: alert.regionId, type: alert.type, level: alert.level, note });
 
     return { success: true };
   }
@@ -620,11 +645,13 @@ export class OpsService {
   async ignoreAlert(id: string, accountId: string, reason?: string) {
     const alert = await this.prisma.systemAlert.findUnique({ where: { id } });
     if (!alert) throw new BadRequestException("异常记录不存在");
+    await this.adminDataScope.assertRegionAccess(accountId, alert.regionId);
 
     await this.prisma.systemAlert.update({
       where: { id },
       data: { status: "ignored", resolvedBy: accountId, resolvedAt: new Date(), resolveNote: reason },
     });
+    await this.logAdminOperation(accountId, "IGNORE", id, { regionId: alert.regionId, type: alert.type, level: alert.level, reason });
 
     return { success: true };
   }

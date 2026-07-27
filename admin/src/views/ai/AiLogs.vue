@@ -19,10 +19,11 @@
         />
       </el-select>
       <el-select v-model="query.action" clearable placeholder="动作">
+        <el-option label="生成草稿" value="generate_draft" />
         <el-option label="发布笔记" value="create_post" />
         <el-option label="发表评论" value="create_comment" />
         <el-option label="点赞互动" value="like" />
-        <el-option label="执行失败" value="error" />
+        <el-option label="任务失败" value="task_failed" />
       </el-select>
       <el-date-picker
         v-model="dateRange"
@@ -48,7 +49,7 @@
         </el-table-column>
         <el-table-column label="动作" width="130">
           <template #default="{ row }">
-            <el-tag size="small">{{ actionLabel(row.action) }}</el-tag>
+            <el-tag :type="actionTagType(row)" size="small">{{ actionLabel(row.action) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
@@ -59,10 +60,15 @@
           </template>
         </el-table-column>
         <el-table-column label="对象" width="180">
-          <template #default="{ row }">{{ row.targetType || '-' }} {{ row.targetId || '' }}</template>
+          <template #default="{ row }">
+            <div class="target-cell">
+              <b>{{ targetTypeLabel(row.targetType) }}</b>
+              <small v-if="row.targetId">编号：{{ shortId(row.targetId) }}</small>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="日志内容" min-width="260" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.message || stringifyDetail(row.detail) || '-' }}</template>
+          <template #default="{ row }">{{ friendlyMessage(row) }}</template>
         </el-table-column>
         <el-table-column label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
@@ -88,7 +94,10 @@ import { onMounted, reactive, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
+const hasViewPermission = ref(auth.permissions.includes('ai:view'))
 const loading = ref(false)
 const logs = ref<any[]>([])
 const bots = ref<any[]>([])
@@ -136,17 +145,73 @@ const resetQuery = () => {
 }
 
 const actionLabel = (action: string) => ({
+  generate_draft: '生成草稿',
   create_post: '发布笔记',
   create_comment: '发表评论',
   like: '点赞互动',
   login: '登录',
   error: '执行失败',
+  failed: '执行失败',
+  task_failed: '任务失败',
 }[action] || action || '-')
+
+const actionTagType = (row: any) => {
+  const action = String(row?.action || '').toLowerCase()
+  if (row?.status === 'failed' || action.includes('fail') || action === 'error') return 'danger'
+  if (action === 'generate_draft') return 'info'
+  return 'success'
+}
+
+const targetTypeLabel = (type: string) => ({
+  ai_task: 'AI任务',
+  post: '笔记',
+  note: '笔记',
+  comment: '评论',
+  user: '用户',
+  bot: '机器人',
+}[type] || '业务对象')
+
+const shortId = (value: string) => {
+  const text = String(value || '')
+  if (!text) return ''
+  return text.length > 14 ? `${text.slice(0, 8)}...${text.slice(-4)}` : text
+}
+
+const translateTechnicalText = (value: string) => {
+  const text = String(value || '').trim()
+  const lower = text.toLowerCase()
+  if (!text) return ''
+  if (lower.includes('fetch failed') || lower.includes('network error')) {
+    return 'AI服务连接失败，请检查模型配置、网络或服务商接口状态'
+  }
+  if (lower.includes('tx.comment.create')) {
+    return '发布评论失败：评论数据写入异常，请联系技术处理'
+  }
+  if (lower.includes('tx.post.create')) {
+    return '发布笔记失败：笔记数据写入异常，请联系技术处理'
+  }
+  if (text.includes('目标帖子不存在')) return '目标帖子不存在，无法发布评论'
+  if (lower.includes('api key') || text.includes('密钥')) return 'AI密钥未配置或不可用，请检查AI配置'
+  if (lower.includes('timeout') || text.includes('超时')) return 'AI服务响应超时，请稍后重试'
+  return text.length > 90 ? `${text.slice(0, 90)}...` : text
+}
 
 const stringifyDetail = (detail: any) => {
   if (!detail) return ''
-  if (typeof detail === 'string') return detail
-  return detail.message || detail.error || JSON.stringify(detail)
+  if (typeof detail === 'string') return translateTechnicalText(detail)
+  const text = detail.message || detail.error || detail.content || detail.summary
+  return text ? translateTechnicalText(text) : ''
+}
+
+const friendlyMessage = (row: any) => {
+  if (row?.message) return translateTechnicalText(row.message)
+  const action = String(row?.action || '').toLowerCase()
+  const detail = row?.detail || {}
+  if (action === 'generate_draft') return detail.title ? `已生成草稿：${detail.title}` : '已生成AI草稿'
+  if (action === 'create_post') return `已发布 ${Number(detail.createdCount || 1)} 篇笔记`
+  if (action === 'create_comment') return `已发布 ${Number(detail.createdCount || 1)} 条评论`
+  if (action.includes('fail') || action === 'error') return `任务执行失败：${stringifyDetail(detail) || '请查看任务详情'}`
+  return stringifyDetail(detail) || '已记录一次机器人操作'
 }
 
 const formatTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
@@ -160,7 +225,7 @@ onMounted(() => {
 <style scoped>
 .ai-page {
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .page-head {
@@ -172,7 +237,7 @@ onMounted(() => {
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -185,17 +250,17 @@ onMounted(() => {
 
 .page-head p {
   margin: 8px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
 
 .filter-card,
 .table-card {
-  border: 1px solid rgba(190, 207, 230, .72);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
 }
 
@@ -217,13 +282,30 @@ onMounted(() => {
   gap: 10px;
 }
 
+.target-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.2;
+}
+
+.target-cell b {
+  color: var(--mx-text);
+  font-size: 13px;
+}
+
+.target-cell small {
+  color: var(--mx-muted);
+  font-size: 12px;
+}
+
 .pagination-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding-top: 16px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
 }

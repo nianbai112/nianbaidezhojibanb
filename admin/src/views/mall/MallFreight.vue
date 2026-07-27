@@ -1,12 +1,13 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>运费模板</h2>
-      <el-button type="primary" @click="showCreateDialog = true; resetForm()">
-        <el-icon><Plus /></el-icon>
-        新增模板
-      </el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="运费模板">
+      <template #actions>
+        <el-button type="primary" @click="showCreateDialog = true; resetForm()">
+          <el-icon><Plus /></el-icon>
+          新增模板
+        </el-button>
+      </template>
+    </PageHeader>
 
     <el-table :data="templates" v-loading="loading" border stripe>
       <el-table-column prop="name" label="模板名称" min-width="200" />
@@ -121,6 +122,7 @@
 import { ref, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const templates = ref<any[]>([])
@@ -280,17 +282,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
 .pagination-bar {
   display: flex;
   justify-content: flex-end;

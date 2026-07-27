@@ -4,11 +4,13 @@
       <div>
         <div class="breadcrumb">控制台 / AI 运营中心</div>
         <h1>AI 运营中心</h1>
-        <p>统一查看机器人、内容任务、执行日志和模型配置状态，避免 AI 运营变成黑盒。</p>
+        <p>统一查看 AI 审核、机器人任务、执行日志和模型配置状态，避免 AI 运营变成黑盒。</p>
       </div>
       <div class="hero-actions">
         <el-button :icon="Refresh" :loading="loading" @click="loadDashboard">刷新</el-button>
-        <el-button type="primary" :icon="Setting" @click="router.push('/ai/config')">配置 AI</el-button>
+        <el-button :icon="Warning" @click="router.push('/ai/governance?tab=moderation')">AI治理中心</el-button>
+        <el-button :icon="Warning" @click="router.push('/content/audit')">人工审核台</el-button>
+        <el-button v-if="hasEditPermission" type="primary" :icon="Setting" @click="router.push('/ai/config')">配置 AI</el-button>
       </div>
     </div>
 
@@ -66,7 +68,7 @@
             <span>{{ warning }}</span>
           </div>
         </div>
-        <el-empty v-else description="当前 AI 运营状态正常" :image-size="90" />
+        <EmptyState v-else description="当前 AI 运营状态正常" :image-size="90" />
       </section>
 
       <section class="panel">
@@ -139,7 +141,7 @@
             </div>
             <em>{{ bot.taskCount }} 任务</em>
           </div>
-          <el-empty v-if="!dashboard.botPool.length" description="暂无启用机器人" :image-size="80" />
+          <EmptyState v-if="!dashboard.botPool.length" description="暂无启用机器人" :image-size="80" />
         </div>
       </section>
     </div>
@@ -164,7 +166,7 @@
           </el-tag>
           <time>{{ formatTime(log.createdAt) }}</time>
         </div>
-        <el-empty v-if="!dashboard.recentLogs.length" description="暂无执行日志" :image-size="90" />
+        <EmptyState v-if="!dashboard.recentLogs.length" description="暂无执行日志" :image-size="90" />
       </div>
     </section>
   </div>
@@ -186,8 +188,13 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+import EmptyState from '@/components/common/EmptyState.vue'
 
 const router = useRouter()
+const auth = useAuthStore()
+const hasViewPermission = ref(auth.permissions.includes('ai:view'))
+const hasEditPermission = ref(auth.permissions.includes('ai:edit'))
 const loading = ref(false)
 
 const dashboard = reactive<any>({
@@ -289,7 +296,7 @@ onMounted(loadDashboard)
 .ai-dashboard {
   min-height: 100%;
   padding: 28px;
-  color: #10213d;
+  color: var(--mx-text);
 }
 
 .ai-hero {
@@ -301,7 +308,7 @@ onMounted(loadDashboard)
 }
 
 .breadcrumb {
-  color: #6b7d99;
+  color: var(--mx-muted);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 8px;
@@ -316,7 +323,7 @@ onMounted(loadDashboard)
 
 .ai-hero p {
   margin: 10px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 15px;
   font-weight: 700;
 }
@@ -330,9 +337,9 @@ onMounted(loadDashboard)
 .health-panel,
 .metric-card,
 .panel {
-  border: 1px solid rgba(190, 207, 230, .72);
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 18px 44px rgba(69, 108, 168, .12);
+  border: 1px solid var(--mx-border-strong);
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
   backdrop-filter: blur(14px);
 }
 
@@ -342,7 +349,7 @@ onMounted(loadDashboard)
   align-items: center;
   gap: 18px;
   padding: 18px;
-  border-radius: 18px;
+  border-radius: 14px;
   margin-bottom: 18px;
 }
 
@@ -352,12 +359,12 @@ onMounted(loadDashboard)
   width: 96px;
   height: 96px;
   border-radius: 24px;
-  color: #fff;
-  background: linear-gradient(135deg, #2563eb, #22c55e);
+  color: var(--mx-card);
+  background: var(--el-color-success);
 }
 
-.health-score.warn { background: linear-gradient(135deg, #f59e0b, #2563eb); }
-.health-score.bad { background: linear-gradient(135deg, #f43f5e, #f97316); }
+.health-score.warn { background: var(--el-color-warning); }
+.health-score.bad { background: var(--el-color-danger); }
 .health-score span { font-size: 12px; font-weight: 900; opacity: .9; }
 .health-score strong { font-size: 34px; line-height: 1; }
 
@@ -377,7 +384,7 @@ onMounted(loadDashboard)
 .bot-item span,
 .log-item span,
 .metric-card small {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
@@ -401,7 +408,7 @@ onMounted(loadDashboard)
   align-items: center;
   gap: 14px;
   padding: 18px;
-  border-radius: 16px;
+  border-radius: 14px;
 }
 
 .metric-icon {
@@ -409,21 +416,21 @@ onMounted(loadDashboard)
   place-items: center;
   width: 46px;
   height: 46px;
-  border-radius: 15px;
-  color: #fff;
+  border-radius: 14px;
+  color: var(--mx-card);
   font-size: 22px;
-  background: #2563eb;
+  background: var(--el-color-primary);
 }
 
-.metric-icon.violet { background: linear-gradient(135deg, #7c3aed, #38bdf8); }
-.metric-icon.green { background: linear-gradient(135deg, #16a34a, #22c55e); }
-.metric-icon.orange { background: linear-gradient(135deg, #f97316, #facc15); }
-.metric-icon.red { background: linear-gradient(135deg, #f43f5e, #fb7185); }
-.metric-icon.cyan { background: linear-gradient(135deg, #0891b2, #22d3ee); }
+.metric-icon.violet { background: var(--mx-purple); }
+.metric-icon.green { background: var(--el-color-success); }
+.metric-icon.orange { background: var(--el-color-warning); }
+.metric-icon.red { background: var(--el-color-danger); }
+.metric-icon.cyan { background: var(--mx-cyan); }
 
 .metric-card span {
   display: block;
-  color: #52637d;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 900;
 }
@@ -446,7 +453,7 @@ onMounted(loadDashboard)
 }
 
 .panel {
-  border-radius: 18px;
+  border-radius: 14px;
   overflow: hidden;
 }
 
@@ -456,7 +463,7 @@ onMounted(loadDashboard)
   justify-content: space-between;
   gap: 14px;
   padding: 18px 20px;
-  border-bottom: 1px solid rgba(200, 215, 235, .7);
+  border-bottom: 1px solid var(--mx-border);
 }
 
 .panel-head h3 {
@@ -477,8 +484,8 @@ onMounted(loadDashboard)
   gap: 10px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: #fff7ed;
-  color: #c2410c;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
   font-weight: 900;
 }
 
@@ -494,7 +501,7 @@ onMounted(loadDashboard)
   display: flex;
   justify-content: space-between;
   margin-bottom: 7px;
-  color: #475569;
+  color: var(--mx-sub);
   font-weight: 900;
 }
 
@@ -502,24 +509,24 @@ onMounted(loadDashboard)
   height: 10px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e8eef7;
+  background: var(--mx-border);
 }
 
 .bar i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #2563eb;
+  background: var(--el-color-primary);
 }
 
-.bar i.completed { background: #22c55e; }
-.bar i.failed { background: #ef4444; }
-.bar i.running { background: #06b6d4; }
-.bar i.approved { background: #f59e0b; }
+.bar i.completed { background: var(--el-color-success); }
+.bar i.failed { background: var(--el-color-danger); }
+.bar i.running { background: var(--mx-cyan); }
+.bar i.approved { background: var(--el-color-warning); }
 
 .task-title {
   font-weight: 900;
-  color: #0f172a;
+  color: var(--mx-text);
 }
 
 .bot-item,
@@ -529,7 +536,7 @@ onMounted(loadDashboard)
   align-items: center;
   gap: 12px;
   padding: 12px 0;
-  border-bottom: 1px solid #e8eef7;
+  border-bottom: 1px solid var(--mx-border);
 }
 
 .bot-item:last-child,
@@ -553,7 +560,7 @@ onMounted(loadDashboard)
 }
 
 .bot-item em {
-  color: #2563eb;
+  color: var(--el-color-primary);
   font-style: normal;
   font-weight: 900;
 }
@@ -563,7 +570,7 @@ onMounted(loadDashboard)
 }
 
 .log-item time {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 800;
   text-align: right;

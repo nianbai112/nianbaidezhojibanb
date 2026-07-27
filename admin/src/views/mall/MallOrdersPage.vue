@@ -1,12 +1,13 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>商城订单管理</h2>
-      <el-button @click="exportOrders">
-        <el-icon><Download /></el-icon>
-        导出订单
-      </el-button>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="商城订单管理">
+      <template #actions>
+        <el-button @click="exportOrders">
+          <el-icon><Download /></el-icon>
+          导出订单
+        </el-button>
+      </template>
+    </PageHeader>
 
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索订单号/收货人" clearable style="width: 200px" @clear="loadOrders" @keyup.enter="loadOrders" />
@@ -58,7 +59,7 @@
         <template #default="{ row }">
           <el-button size="small" @click="viewDetail(row)">详情</el-button>
           <el-button v-if="row.status === 'paid'" size="small" type="success" @click="deliverOrder(row)">发货</el-button>
-          <el-button v-if="row.status === 'paid' || row.status === 'pending_pay'" size="small" type="warning" @click="cancelOrder(row)">取消</el-button>
+          <el-button v-if="row.status === 'pending_pay'" size="small" type="warning" @click="cancelOrder(row)">取消</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -150,6 +151,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -290,12 +292,18 @@ const submitDeliver = async () => {
 
 const cancelOrder = async (order: any) => {
   try {
-    await ElMessageBox.confirm('确定取消该订单吗？取消后将恢复库存。', '确认取消', { type: 'warning' })
-    await request.put(`/mall/orders/admin/${order.id}/status`, { status: 'cancelled', reason: '后台取消' })
-    ElMessage.success('订单已取消')
+    await ElMessageBox.confirm('确定取消该待支付订单吗？取消后将恢复预占的库存、优惠券与会员权益。', '确认取消', { type: 'warning' })
+    const { value: reason } = await ElMessageBox.prompt('请填写取消原因（将记入操作日志）', '取消原因', {
+      inputValue: '后台取消',
+      confirmButtonText: '确定取消',
+      cancelButtonText: '返回',
+      inputValidator: (v) => (v && v.trim().length > 0 ? true : '取消原因不能为空'),
+    })
+    await request.put(`/mall/orders/admin/${order.id}/status`, { status: 'cancelled', reason: reason.trim() })
+    ElMessage.success('订单已取消，预占资源已恢复')
     loadOrders()
   } catch (error) {
-    if (error !== 'cancel') {
+    if (error !== 'cancel' && error !== 'close') {
       ElMessage.error('操作失败')
     }
   }
@@ -330,15 +338,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
 .filter-bar {
   display: flex;
   gap: 12px;

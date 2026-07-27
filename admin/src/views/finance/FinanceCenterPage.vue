@@ -1,8 +1,6 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>财务中心</h2>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="财务中心" />
 
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
       <el-tab-pane label="支付订单" name="payments" />
@@ -53,7 +51,7 @@
         <el-table-column prop="merchantName" label="商户" width="120" />
         <el-table-column prop="amount" label="退款金额" width="100">
           <template #default="{ row }">
-            ¥{{ (row.amount / 100).toFixed(2) }}
+            ¥{{ Number(row.amount || 0).toFixed(2) }}
           </template>
         </el-table-column>
         <el-table-column prop="reason" label="原因" min-width="150" />
@@ -206,6 +204,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const activeTab = ref('payments')
 const loading = ref(false)
@@ -355,12 +354,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-.page-header {
-  margin-bottom: 20px;
-}
 .filter-bar {
   display: flex;
   gap: 12px;

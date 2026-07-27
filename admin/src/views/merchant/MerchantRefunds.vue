@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="退款售后" subtitle="管理退款申请" icon="Money" />
+    <PageHeader title="售后处理" subtitle="先核对订单与履约证据，再处理退款申请" icon="Money" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索退款单号/订单号" clearable style="width: 240px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
@@ -41,8 +41,9 @@
       <el-table-column prop="refundedAt" label="处理时间" width="170">
         <template #default="{ row }">{{ formatDate(row.refundedAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="270" fixed="right">
         <template #default="{ row }">
+          <el-button v-if="row.bizType === 'order' && row.bizId" link type="primary" @click="viewOrderEvidence(row)">履约证据</el-button>
           <template v-if="row.status === 'pending'">
             <el-button size="small" type="success" @click="approve(row)">同意</el-button>
             <el-button size="small" type="danger" @click="reject(row)">拒绝</el-button>
@@ -59,20 +60,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getRefunds, approveRefund, rejectRefund, completeRefund } from '@/api/merchant'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const statusMap: Record<string, string> = { pending: '待处理', processing: '处理中', success: '成功', failed: '失败' }
 const statusTypeMap: Record<string, string> = { pending: 'warning', processing: 'primary', success: 'success', failed: 'danger' }
+const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = reactive({ keyword: '', status: '' })
+const filters = reactive({ keyword: String(route.query.keyword || ''), status: '' })
 
 const formatDate = (d: any) => d ? new Date(d).toLocaleString('zh-CN') : '-'
 
@@ -94,6 +98,8 @@ const resetFilters = () => {
   page.value = 1
   loadData()
 }
+
+const viewOrderEvidence = (row: any) => router.push({ path: '/order/center', query: { focusId: row.bizId, orderType: 'order' } })
 
 const approve = async (row: any) => {
   try {
@@ -129,6 +135,11 @@ const complete = async (row: any) => {
 }
 
 onMounted(() => loadData())
+watch(() => route.query.keyword, (keyword) => {
+  filters.keyword = String(keyword || '')
+  page.value = 1
+  loadData()
+})
 </script>
 
 <style scoped>

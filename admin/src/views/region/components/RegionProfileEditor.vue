@@ -46,6 +46,9 @@
               <el-option label="区域管理员可见" value="region_manager" />
               <el-option label="商家可见" value="merchant" />
               <el-option label="商家店主可见" value="merchant_owner" />
+              <el-option label="仅宿舍小店店主可见" value="dorm_shop_owner" />
+              <el-option label="仅圈主可见" value="circle_owner" />
+              <el-option label="仅骑手可见" value="delivery_rider" />
             </el-select>
           </div>
           <div class="field-row">
@@ -95,7 +98,7 @@ interface ProfileItem {
   query?: string
   appId?: string
   type: 'internal_jump' | 'external_jump' | 'web_page' | 'popup'
-  navigation_permission?: 'unlimited' | 'region_manager' | 'merchant' | 'merchant_owner'
+  navigation_permission?: 'unlimited' | 'region_manager' | 'merchant' | 'merchant_owner' | 'dorm_shop_owner' | 'circle_owner' | 'delivery_rider'
   enabled: boolean
   sortOrder: number
   requireLogin: boolean
@@ -111,7 +114,9 @@ const fallbackItems: ProfileItem[] = [
   { id: 'wallet', title: '我的钱包', description: '余额、提现和交易流水', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/withdraw/withdraw', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1, requireLogin: true },
   { id: 'share', title: '分享有礼', description: '邀请同学加入本地生活圈', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/news/SharingCourtesy/SharingCourtesy', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2, requireLogin: true },
   { id: 'merchant', title: '商家中心', description: '商家入驻与店铺管理', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/MerchantManagement/managerial', query: '', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3, requireLogin: true },
-  { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4, requireLogin: false }
+  { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/DormShopOwner/DormShopOwner', query: '', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4, requireLogin: true },
+  { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', icon: '', main_image: '/static/logo.jpg', path: '/pages/B/circle-manage', query: '', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 5, requireLogin: true },
+  { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 6, requireLogin: false }
 ]
 
 const props = withDefaults(defineProps<Props>(), {
@@ -189,7 +194,7 @@ function handleReset() {
 }
 
 .form-tip {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   margin-top: 6px;
 }
@@ -207,7 +212,7 @@ function handleReset() {
   align-items: center;
   padding: 16px;
   border: 1px solid rgba(191, 207, 230, 0.72);
-  border-radius: 16px;
+  border-radius: 14px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(248, 251, 255, 0.72));
 }
 
@@ -215,14 +220,14 @@ function handleReset() {
   display: grid;
   gap: 8px;
   justify-items: center;
-  color: #64748b;
+  color: var(--mx-sub);
 
   span {
     width: 28px;
     height: 28px;
     border-radius: 50%;
     background: #eaf2ff;
-    color: #1d4ed8;
+    color: var(--el-color-primary-dark-2);
     display: grid;
     place-items: center;
     font-weight: 800;
@@ -231,7 +236,7 @@ function handleReset() {
 
 .drag-mark {
   font-size: 15px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 .entry-image {
@@ -263,7 +268,7 @@ function handleReset() {
 
 .empty-hint {
   text-align: center;
-  color: #64748b;
+  color: var(--mx-sub);
   padding: 28px 24px 34px;
   font-size: 14px;
 }

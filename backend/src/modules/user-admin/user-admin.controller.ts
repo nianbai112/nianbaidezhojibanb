@@ -41,6 +41,20 @@ export class UserAdminController {
     return this.svc.getLevelList(q);
   }
 
+  @Get('user-levels/region-options')
+  @RequirePermission('user:view')
+  @ApiOperation({ summary: '成长等级可选区域' })
+  getLevelRegionOptions() {
+    return this.svc.getLevelRegionOptions();
+  }
+
+  @Get('user-levels/title-options')
+  @RequirePermission('user:view')
+  @ApiOperation({ summary: '成长等级可绑定称号' })
+  getLevelTitleOptions(@Query('regionId') regionId?: string) {
+    return this.svc.getLevelTitleOptions(regionId);
+  }
+
   @Get('user-levels/all')
   @RequirePermission('user:view')
   @ApiOperation({ summary: '获取所有等级' })
@@ -161,6 +175,20 @@ export class UserAdminController {
     return this.svc.getGuidanceList(q);
   }
 
+  @Get('user-guidance/settings')
+  @RequirePermission('userguidance:view')
+  @ApiOperation({ summary: '获取用户引导总开关' })
+  getGuidanceSettings() {
+    return this.svc.getGuidanceSettings();
+  }
+
+  @Put('user-guidance/settings')
+  @RequirePermission('userguidance:edit')
+  @ApiOperation({ summary: '保存用户引导总开关' })
+  saveGuidanceSettings(@Body() dto: Record<string, any>) {
+    return this.svc.saveGuidanceSettings(dto);
+  }
+
   @Get('user-guidance/region/:regionId')
   @RequirePermission('userguidance:view')
   @ApiOperation({ summary: '获取区域引导配置' })
@@ -169,21 +197,21 @@ export class UserAdminController {
   }
 
   @Post('user-guidance')
-  @RequirePermission('userguidance:view')
+  @RequirePermission('userguidance:edit')
   @ApiOperation({ summary: '创建引导页' })
   createGuidance(@Body() dto: CreateUserGuidanceDto) {
     return this.svc.createGuidance(dto);
   }
 
   @Put('user-guidance/:id')
-  @RequirePermission('userguidance:view')
+  @RequirePermission('userguidance:edit')
   @ApiOperation({ summary: '更新引导页' })
   updateGuidance(@Param('id') id: string, @Body() dto: UpdateUserGuidanceDto) {
     return this.svc.updateGuidance(id, dto);
   }
 
   @Delete('user-guidance/:id')
-  @RequirePermission('userguidance:view')
+  @RequirePermission('userguidance:edit')
   @ApiOperation({ summary: '删除引导页' })
   deleteGuidance(@Param('id') id: string) {
     return this.svc.deleteGuidance(id);

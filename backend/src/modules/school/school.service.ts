@@ -20,11 +20,7 @@ export class SchoolService {
 
     if (query.keyword) {
       const keyword = query.keyword.trim();
-      where.OR = [
-        { name: { contains: keyword, mode: 'insensitive' } },
-        { shortName: { contains: keyword, mode: 'insensitive' } },
-        { campusName: { contains: keyword, mode: 'insensitive' } },
-      ];
+      where.OR = this.buildKeywordFilters(keyword);
     }
 
     if (query.region_id) {
@@ -32,7 +28,7 @@ export class SchoolService {
     }
 
     if (query.city) {
-      where.city = { contains: query.city, mode: 'insensitive' };
+      where.city = { contains: query.city.trim() };
     }
 
     if (query.type) {
@@ -72,11 +68,7 @@ export class SchoolService {
 
     if (query.keyword) {
       const keyword = query.keyword.trim();
-      where.OR = [
-        { name: { contains: keyword, mode: 'insensitive' } },
-        { shortName: { contains: keyword, mode: 'insensitive' } },
-        { campusName: { contains: keyword, mode: 'insensitive' } },
-      ];
+      where.OR = this.buildKeywordFilters(keyword);
     }
 
     if (query.regionId) {
@@ -84,7 +76,7 @@ export class SchoolService {
     }
 
     if (query.city) {
-      where.city = { contains: query.city, mode: 'insensitive' };
+      where.city = { contains: query.city.trim() };
     }
 
     if (query.type) {
@@ -254,6 +246,16 @@ export class SchoolService {
   }
 
   // ==================== 序列化 ====================
+
+  private buildKeywordFilters(keyword: string) {
+    return [
+      { name: { contains: keyword } },
+      { shortName: { contains: keyword } },
+      { campusName: { contains: keyword } },
+      { province: { contains: keyword } },
+      { city: { contains: keyword } },
+    ];
+  }
 
   private toPublicSchool(s: any) {
     return {

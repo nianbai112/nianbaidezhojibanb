@@ -1,17 +1,7 @@
 <template>
   <div class="page-shell">
     <PageHeader title="营销概览" subtitle="查看营销数据概览" icon="DataLine" />
-    <el-row :gutter="20" style="margin-top: 20px" v-loading="loading">
-      <el-col :span="6" v-for="card in statCards" :key="card.label">
-        <el-card shadow="hover" class="overview-stat-card">
-          <div class="overview-stat">
-            <div class="overview-stat-value">{{ card.value }}</div>
-            <div class="overview-stat-label">{{ card.label }}</div>
-            <div class="overview-stat-source">{{ card.source }}</div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <StatGrid :items="statItems" v-loading="loading" />
     <el-row :gutter="20" style="margin-top: 20px">
       <el-col :span="12">
         <el-card>
@@ -42,14 +32,16 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
+import type { StatItem } from '@/types/admin'
 import { request } from '@/api/request'
 
 const loading = ref(false)
-const statCards = ref([
-  { label: '优惠券总数', value: '0', source: '优惠券表' },
-  { label: '活动总数', value: '0', source: '活动表' },
-  { label: '团购活动', value: '0', source: '团购套餐表' },
-  { label: '弹窗广告', value: '0', source: '广告位表' },
+const statItems = ref<StatItem[]>([
+  { label: '优惠券总数', value: '0', sub: '优惠券表', icon: 'Ticket', tone: 'blue' },
+  { label: '活动总数', value: '0', sub: '活动表', icon: 'Flag', tone: 'red' },
+  { label: '团购活动', value: '0', sub: '团购套餐表', icon: 'ShoppingCart', tone: 'orange' },
+  { label: '首页权益卡片', value: '0', sub: '广告位表', icon: 'Monitor', tone: 'blue' },
 ])
 const recentCoupons = ref<any[]>([])
 const recentActivities = ref<any[]>([])
@@ -74,18 +66,18 @@ async function loadOverview() {
     if (couponsRes.status === 'fulfilled') {
       const d = getPagePayload(couponsRes.value)
       recentCoupons.value = d.list
-      statCards.value[0].value = String(d.total)
+      statItems.value[0].value = String(d.total)
     }
     if (activitiesRes.status === 'fulfilled') {
       const d = getPagePayload(activitiesRes.value)
       recentActivities.value = d.list
-      statCards.value[1].value = String(d.total)
+      statItems.value[1].value = String(d.total)
     }
     if (groupBuysRes.status === 'fulfilled') {
-      statCards.value[2].value = String(getPagePayload(groupBuysRes.value).total)
+      statItems.value[2].value = String(getPagePayload(groupBuysRes.value).total)
     }
     if (popupsRes.status === 'fulfilled') {
-      statCards.value[3].value = String(getPagePayload(popupsRes.value).total)
+      statItems.value[3].value = String(getPagePayload(popupsRes.value).total)
     }
     const failed = [couponsRes, activitiesRes, groupBuysRes, popupsRes].some(r => r.status === 'rejected')
     if (failed) ElMessage.warning('部分营销数据加载失败，已保留为 0')
@@ -101,9 +93,4 @@ onMounted(loadOverview)
 
 <style scoped>
 .page-shell { padding: 24px; }
-.overview-stat-card :deep(.el-card__body) { padding: 20px; }
-.overview-stat { text-align: center; }
-.overview-stat-value { font-size: 28px; font-weight: 900; color: #1f2937; line-height: 1; }
-.overview-stat-label { font-size: 14px; color: #64748b; margin-top: 10px; font-weight: 800; }
-.overview-stat-source { font-size: 12px; color: #94a3b8; margin-top: 6px; }
 </style>

@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="商家审核" subtitle="审核商家入驻申请" icon="Checked" />
+    <PageHeader :title="isDormShopPage ? '小店审核' : '商家审核'" :subtitle="isDormShopPage ? '审核学生宿舍小店入驻申请' : '审核商家入驻申请'" icon="Checked" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索商家名称" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="审核状态" clearable style="width: 120px" @change="loadData">
@@ -14,12 +14,29 @@
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="name" label="商家名称" min-width="150" />
+      <el-table-column :label="isDormShopPage ? '店主小程序用户' : '商家小程序用户'" min-width="190">
+        <template #default="{ row }">
+          <div v-if="merchantOwner(row)" class="user-cell">
+            <el-avatar :size="32" :src="merchantOwner(row).avatar">{{ userInitial(merchantOwner(row)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ merchantOwner(row).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">{{ merchantOwner(row).phone || `UID ${merchantOwner(row).uid || merchantOwner(row).id}` }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="danger" size="small">未绑定</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="contactPerson" label="联系人" width="100" />
       <el-table-column prop="phone" label="电话" width="120" />
       <el-table-column prop="address" label="地址" min-width="150" show-overflow-tooltip />
+      <el-table-column v-if="isDormShopPage" prop="dormBuilding" label="宿舍楼" width="90" />
+      <el-table-column v-if="isDormShopPage" prop="dormRoom" label="房间" width="90" />
+      <el-table-column v-if="isDormShopPage" prop="deliveryMode" label="配送方式" width="110">
+        <template #default>店主自送</template>
+      </el-table-column>
       <el-table-column prop="status" label="状态" width="80">
         <template #default="{ row }">
-          <el-tag :type="statusTypeMap[row.status]" size="small">{{ statusMap[row.status] || row.status }}</el-tag>
+          <el-tag :type="statusTypeMap[rowStatus(row)]" size="small">{{ statusMap[rowStatus(row)] || rowStatus(row) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="申请时间" width="170">
@@ -27,12 +44,12 @@
       </el-table-column>
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
-          <template v-if="row.status === 'pending'">
+          <template v-if="rowStatus(row) === 'pending'">
             <el-button size="small" type="success" @click="audit(row, 'approved')">通过</el-button>
             <el-button size="small" type="danger" @click="audit(row, 'rejected')">拒绝</el-button>
           </template>
-          <el-button v-if="row.status === 'approved'" size="small" type="warning" @click="audit(row, 'closed')">关闭</el-button>
-          <span v-if="row.status === 'rejected' || row.status === 'closed'">-</span>
+          <el-button v-if="rowStatus(row) === 'approved'" size="small" type="warning" @click="audit(row, 'closed')">关闭</el-button>
+          <span v-if="rowStatus(row) === 'rejected' || rowStatus(row) === 'closed'">-</span>
         </template>
       </el-table-column>
     </el-table>
@@ -43,24 +60,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const statusMap: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝', closed: '已关闭' }
 const statusTypeMap: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger', closed: 'info' }
+const route = useRoute()
+const isDormShopPage = computed(() => route.path.includes('/dorm-'))
+const businessType = computed(() => isDormShopPage.value ? 'dorm_shop' : 'takeaway')
 const loading = ref(false)
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const filters = reactive({ keyword: '', status: '' })
+const merchantOwner = (row: any) => row?.ownerUser || row?.user || null
+const userInitial = (user: any) => String(user?.nickname || '用').slice(0, 1)
+const rowStatus = (row: any) => row?.auditStatus || row?.status
 
 const loadData = async () => {
   loading.value = true
   try {
-    const res: any = await request.get('/admin/merchants', { params: { page: page.value, pageSize: pageSize.value, ...filters } })
+    const res: any = await request.get('/admin/merchants', { params: { page: page.value, pageSize: pageSize.value, businessType: businessType.value, ...filters } })
     list.value = res?.list || res?.data?.list || []
     total.value = res?.total || res?.data?.total || 0
   } catch (e: any) {
@@ -97,4 +121,8 @@ onMounted(() => loadData())
 .page-shell { padding: 24px; }
 .filter-bar { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
+.user-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.user-meta { min-width: 0; line-height: 1.35; }
+.user-name { font-weight: 600; color: #172033; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-sub { color: #7b8798; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

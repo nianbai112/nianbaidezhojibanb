@@ -21,6 +21,13 @@ import {
 export class DatingAdminController {
   constructor(private readonly service: DatingAdminService) {}
 
+  @Get('overview')
+  @RequirePermission('dating:view')
+  @ApiOperation({ summary: '对象匹配运营总览' })
+  getOverview(@Query('regionId') regionId?: string) {
+    return this.service.getOverview(regionId)
+  }
+
   // ==================== Config ====================
 
   @Get('configs')

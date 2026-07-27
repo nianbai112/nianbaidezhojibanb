@@ -4,10 +4,160 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { PrismaService } from "../../common/services/prisma.service";
+import { RedisService } from "../../common/services/redis.service";
+import { WalletService } from "../../common/services/wallet.service";
+import { MembershipService } from "../membership/membership.service";
+import { UserAccessPolicyService } from "../../common/services/user-access-policy.service";
+import { PaymentService } from "../payment/payment.service";
 
 @Injectable()
 export class MallService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+    private readonly membershipService: MembershipService,
+    private readonly userAccess: UserAccessPolicyService,
+    private readonly paymentService: PaymentService,
+    private readonly walletService: WalletService,
+  ) {}
+
+  private async runWithLock<T>(key: string, message: string, fn: () => Promise<T>, ttlSeconds = 30): Promise<T> {
+    const locked = await this.redis.getLock(key, ttlSeconds);
+    if (!locked) throw new BadRequestException(message);
+    try {
+      return await fn();
+    } finally {
+      await this.redis.releaseLock(key).catch(() => undefined);
+    }
+  }
+
+  private money(value: any) {
+    const n = Number(value || 0);
+    return Math.max(0, Math.round(n * 100) / 100);
+  }
+
+  private subsidyNo() {
+    return `SUB${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  }
+
+  private dayStart() {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }
+
+  private async resolveCouponCampaign(tx: any, couponId: string) {
+    const config = await tx.config.findUnique({ where: { key: 'marketing_campaigns_config' } }).catch(() => null);
+    const value = config?.value as any;
+    const list = Array.isArray(value?.list) ? value.list : Array.isArray(value) ? value : [];
+    const now = new Date();
+    return list.find((item: any) => {
+      if (!item || item.status !== 'active') return false;
+      if (String(item.couponId || '') !== String(couponId)) return false;
+      if (item.startAt && now < new Date(item.startAt)) return false;
+      if (item.endAt && now > new Date(item.endAt)) return false;
+      return true;
+    }) || null;
+  }
+
+  private couponDiscountAmount(coupon: any, amount: number) {
+    const value = this.money(coupon?.value);
+    if (amount <= 0 || value <= 0) return 0;
+    const type = String(coupon?.type || '').toUpperCase();
+    if (type === 'DISCOUNT') {
+      if (value <= 0 || value >= 10) return 0;
+      return this.money(amount - amount * (value / 10));
+    }
+    return Math.min(value, amount);
+  }
+
+  private async assertCampaignRules(tx: any, campaign: any, userId: string, couponId: string, discountAmount: number) {
+    if (!campaign || discountAmount <= 0) return;
+    if (campaign.firstOrderOnly) {
+      const orderCount = await tx.mallOrder.count({
+        where: { userId, status: { not: 'cancelled' } },
+      });
+      if (orderCount > 0) throw new BadRequestException('该活动仅限首单使用');
+    }
+    if (campaign.newUserOnly) {
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
+      const days = Number(campaign.newUserDays || 7);
+      if (!user || Date.now() - user.createdAt.getTime() > days * 24 * 60 * 60 * 1000) {
+        throw new BadRequestException('该活动仅限新用户使用');
+      }
+    }
+
+    const baseWhere: any = {
+      status: { not: 'cancelled' },
+      OR: [
+        { campaignId: campaign.id },
+        { sourceType: 'coupon', sourceId: couponId },
+      ],
+    };
+    const [totalAgg, todayAgg, userAgg] = await Promise.all([
+      tx.subsidyLedger.aggregate({ where: baseWhere, _sum: { amount: true } }),
+      tx.subsidyLedger.aggregate({ where: { ...baseWhere, createdAt: { gte: this.dayStart() } }, _sum: { amount: true } }),
+      tx.subsidyLedger.aggregate({ where: { ...baseWhere, userId }, _sum: { amount: true }, _count: true }),
+    ]);
+    const totalSpent = Number(totalAgg?._sum?.amount || 0);
+    const todaySpent = Number(todayAgg?._sum?.amount || 0);
+    const userSpent = Number(userAgg?._sum?.amount || 0);
+    if (Number(campaign.totalBudget || 0) > 0 && totalSpent + discountAmount > Number(campaign.totalBudget)) {
+      throw new BadRequestException('活动总预算已不足');
+    }
+    if (Number(campaign.dailyBudget || 0) > 0 && todaySpent + discountAmount > Number(campaign.dailyBudget)) {
+      throw new BadRequestException('活动今日预算已不足');
+    }
+    if (Number(campaign.perUserBudget || 0) > 0 && userSpent + discountAmount > Number(campaign.perUserBudget)) {
+      throw new BadRequestException('已达到个人活动补贴上限');
+    }
+    if (Number(campaign.userLimit || 0) > 0 && Number(userAgg?._count || 0) >= Number(campaign.userLimit)) {
+      throw new BadRequestException('已达到个人活动参与次数上限');
+    }
+  }
+
+  private async resolveUserCoupon(tx: any, userId: string, userCouponId: any, amount: number, merchant: any) {
+    if (!userCouponId) return { discountAmount: 0, receive: null, coupon: null };
+    const receive = await tx.couponReceive.findFirst({
+      where: { id: String(userCouponId), userId },
+      include: { coupon: true },
+    });
+    if (!receive) throw new BadRequestException('优惠券不存在');
+    if (receive.status !== 'unused') throw new BadRequestException('优惠券已使用或已失效');
+    const coupon = receive.coupon;
+    if (!coupon || coupon.status !== 'active') throw new BadRequestException('优惠券已下架');
+    const now = new Date();
+    if (coupon.startAt && now < coupon.startAt) throw new BadRequestException('优惠券未到可用时间');
+    if (coupon.endAt && now > coupon.endAt) throw new BadRequestException('优惠券已过期');
+    const scope = String(coupon.businessScope || 'all').toLowerCase();
+    if (!['all', 'mall'].includes(scope)) throw new BadRequestException('该优惠券不适用于商城订单');
+    if (Number(coupon.minAmount || 0) > amount) throw new BadRequestException(`订单满 ¥${Number(coupon.minAmount).toFixed(2)} 才可使用该券`);
+    if (coupon.regionId && String(coupon.regionId) !== String(merchant?.regionId || '')) {
+      throw new BadRequestException('该优惠券不适用于当前区域');
+    }
+    if (coupon.merchantId) {
+      throw new BadRequestException('该优惠券为外卖商家专属券，不适用于当前商城订单');
+    }
+    const discountAmount = this.couponDiscountAmount(coupon, amount);
+    const campaign = await this.resolveCouponCampaign(tx, coupon.id);
+    await this.assertCampaignRules(tx, campaign, userId, coupon.id, discountAmount);
+    return {
+      discountAmount,
+      receive,
+      coupon,
+      campaign,
+    };
+  }
+
+  private async resolveMallMemberPrice(userId: string, amount: number) {
+    const grant = await this.membershipService.getActiveBenefitGrant(userId, "mall_member_price").catch(() => null);
+    const rate = Number(grant?.discountRate || 0);
+    if (!grant || !rate || rate >= 10 || amount <= 0) {
+      return { discountAmount: 0, rate: null, grant: null };
+    }
+    const discountAmount = this.money(amount - amount * (rate / 10));
+    return { discountAmount, rate, grant };
+  }
 
   async getBanners(query: any) {
     return this.prisma.mallBanner.findMany({
@@ -36,7 +186,7 @@ export class MallService {
     const where: any = { status: "on_sale" };
     if (category_id) where.categoryId = category_id;
     if (merchant_id) where.merchantId = merchant_id;
-    if (keyword) where.name = { contains: keyword, mode: "insensitive" };
+    if (keyword) where.name = { contains: keyword };
 
     const orderBy: any = { createdAt: "desc" };
     if (sort_by === "sales") orderBy.saleCount = "desc";
@@ -172,6 +322,18 @@ export class MallService {
   }
 
   async submitOrder(userId: string, dto: any) {
+    const productIds = Array.isArray(dto?.items)
+      ? dto.items.map((item: any) => String(item?.product_id || '')).filter(Boolean).sort()
+      : [];
+    return this.runWithLock(
+      `mall:submit:${dto?.merchant_id || 'unknown'}:${productIds.join(',') || userId}`,
+      '订单正在创建中，请勿重复提交',
+      () => this.submitOrderUnlocked(userId, dto),
+      45,
+    );
+  }
+
+  private async submitOrderUnlocked(userId: string, dto: any) {
     const {
       merchant_id,
       items = [],
@@ -191,6 +353,12 @@ export class MallService {
     if (!receiver_full_address) throw new BadRequestException("收货地址必填");
 
     return this.prisma.$transaction(async (tx) => {
+      const merchant = await tx.mallMerchant.findUnique({
+        where: { id: String(merchant_id) },
+      });
+      if (!merchant) throw new NotFoundException('商户不存在');
+      await this.userAccess.assertStudentProtectedAction(userId, merchant.regionId, '提交商城订单');
+
       // 校验商品库存并扣减
       let productAmount = 0;
       const orderItems = [];
@@ -224,17 +392,21 @@ export class MallService {
         });
       }
 
+      const memberPrice = await this.resolveMallMemberPrice(userId, productAmount);
+      const couponBenefit = await this.resolveUserCoupon(tx, userId, user_coupon_id, productAmount, merchant);
+
       // 创建订单
       const orderNo = `MALL${Date.now()}${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
       const freightAmount = dto.freight_amount || 0;
-      const discountAmount = dto.discount_amount || 0;
-      const payAmount = productAmount + Number(freightAmount) - Number(discountAmount);
+      const baseDiscountAmount = couponBenefit.discountAmount;
+      const discountAmount = this.money(baseDiscountAmount + memberPrice.discountAmount);
+      const payAmount = this.money(productAmount + Number(freightAmount) - discountAmount);
 
       const order = await tx.mallOrder.create({
         data: {
           orderNo,
           userId,
-          merchantId: merchant_id,
+          merchantId: String(merchant_id),
           status: "pending_pay",
           totalAmount: payAmount,
           productAmount,
@@ -260,6 +432,96 @@ export class MallService {
           productId: { in: items.map((i: any) => i.product_id) },
         },
       });
+
+      if (couponBenefit.discountAmount > 0 && couponBenefit.receive && couponBenefit.coupon) {
+        // AUD-P1-065: 原子条件更新 — 只有 status='unused' 且属于当前用户才能核销
+        const couponUpdated = await tx.couponReceive.updateMany({
+          where: { id: couponBenefit.receive.id, userId, status: 'unused' },
+          data: { status: 'used', usedAt: new Date(), orderNo },
+        });
+        if (couponUpdated.count === 0) {
+          throw new BadRequestException('优惠券已被使用或不可用，请重新下单');
+        }
+        await tx.coupon.update({
+          where: { id: couponBenefit.coupon.id },
+          data: { usedCount: { increment: 1 } },
+        });
+        await tx.subsidyLedger.create({
+          data: {
+            subsidyNo: this.subsidyNo(),
+            sourceType: 'coupon',
+            sourceId: couponBenefit.coupon.id,
+            benefitKey: couponBenefit.coupon.type,
+            campaignId: couponBenefit.campaign?.id || null,
+            orderType: 'mall_order',
+            orderId: order.id,
+            orderNo,
+            userId,
+            payerType: couponBenefit.campaign?.payerType || (couponBenefit.coupon.merchantId ? 'merchant' : couponBenefit.coupon.regionId ? 'region' : 'platform'),
+            payerId: couponBenefit.coupon.merchantId || couponBenefit.coupon.regionId || null,
+            receiverType: 'merchant',
+            receiverId: String(merchant_id),
+            amount: couponBenefit.discountAmount,
+            status: 'pending',
+            description: `${couponBenefit.campaign?.title ? `活动${couponBenefit.campaign.title}，` : ''}优惠券核销：${couponBenefit.coupon.name}`,
+            metadata: {
+              couponReceiveId: couponBenefit.receive.id,
+              couponName: couponBenefit.coupon.name,
+              couponType: couponBenefit.coupon.type,
+              campaignTitle: couponBenefit.campaign?.title || null,
+              productAmount,
+              freightAmount,
+              payAmount,
+            },
+          },
+        }).catch(() => undefined);
+      }
+
+      if (memberPrice.discountAmount > 0 && memberPrice.grant) {
+        await tx.membershipBenefitUsage.create({
+          data: {
+            userId,
+            grantId: memberPrice.grant.id,
+            benefitKey: "mall_member_price",
+            benefitName: memberPrice.grant.benefitName,
+            category: memberPrice.grant.category,
+            targetType: "mall_order",
+            targetId: order.id,
+            amount: memberPrice.discountAmount,
+            quantity: 1,
+            metadata: {
+              orderNo,
+              productAmount,
+              discountRate: memberPrice.rate,
+              baseDiscountAmount,
+            },
+          },
+        });
+        await tx.subsidyLedger.create({
+          data: {
+            subsidyNo: this.subsidyNo(),
+            sourceType: "membership",
+            sourceId: memberPrice.grant.id,
+            benefitKey: "mall_member_price",
+            orderType: "mall_order",
+            orderId: order.id,
+            orderNo,
+            userId,
+            payerType: "platform",
+            receiverType: "merchant",
+            receiverId: merchant_id,
+            amount: memberPrice.discountAmount,
+            status: "pending",
+            description: "会员商城/外卖会员价平台补贴",
+            metadata: {
+              productAmount,
+              discountRate: memberPrice.rate,
+              baseDiscountAmount,
+              payAmount,
+            },
+          },
+        });
+      }
 
       return order;
     });
@@ -295,39 +557,145 @@ export class MallService {
   }
 
   async payOrder(id: string, userId: string, dto?: any) {
-    return this.prisma.$transaction(async (tx) => {
-      const order = await tx.mallOrder.findUnique({ where: { id } });
-      if (!order) throw new NotFoundException("订单不存在");
-      if (order.userId !== userId)
-        throw new BadRequestException("无权操作该订单");
-      if (order.status !== "pending_pay")
-        throw new BadRequestException(`订单状态为 ${order.status}，无法支付`);
-
-      return tx.mallOrder.update({
-        where: { id },
-        data: {
-          status: "paid",
-          payTime: new Date(),
-          payChannel: dto?.payment_method || "balance",
-        },
-      });
-    });
+    return this.runWithLock(
+      `mall:order:${id}`,
+      '订单正在处理中，请稍后再试',
+      () => this.payOrderUnlocked(id, userId, dto),
+    );
   }
 
-  async cancelOrder(id: string, userId: string, dto?: any) {
+  private async payOrderUnlocked(id: string, userId: string, dto?: any) {
+    // 先查询订单基本信息（事务外读取，避免嵌套事务）
+    const order = await this.prisma.mallOrder.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException("订单不存在");
+    if (order.userId !== userId)
+      throw new BadRequestException("无权操作该订单");
+    if (order.status !== "pending_pay")
+      throw new BadRequestException(`订单状态为 ${order.status}，无法支付`);
+
+    const payChannel = dto?.payment_method || dto?.payChannel || "balance";
+    const amount = Number(order.payAmount || order.totalAmount || 0);
+
+    // AUD-P0-002 + AUD-P1-184: 余额支付 - 原子条件扣款，余额不足或并发透支由数据库约束拒绝
+    if (payChannel === "balance") {
+      return this.prisma.$transaction(async (tx) => {
+        const paymentNo = `PAY${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+        // 原子条件扣款：balance >= amount 才扣减，扣后真实余额写入流水
+        await this.walletService.deductBalanceAtomic(
+          userId,
+          amount,
+          {
+            type: "PAY",
+            channel: "BALANCE",
+            description: `商城订单支付: ${order.orderNo || id}`,
+            orderNo: order.orderNo || id,
+          },
+          tx,
+        );
+
+        // 创建支付单（真实扣款记录）
+        await tx.paymentOrder.create({
+          data: {
+            paymentNo,
+            bizType: "mall_order",
+            bizId: order.id,
+            orderNo: order.orderNo || id,
+            userId,
+            amount,
+            channel: "balance",
+            status: "paid",
+            payTime: new Date(),
+          },
+        });
+
+        return tx.mallOrder.update({
+          where: { id },
+          data: {
+            status: "paid",
+            payTime: new Date(),
+            payChannel: "balance",
+          },
+        });
+      });
+    }
+
+    // AUD-P0-002: 微信支付 - 必须走支付中心（wxUnifiedOrder 内部有独立事务，不能嵌套）
+    if (payChannel === "wx_pay" || payChannel === "wechat") {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { openid: true },
+      });
+      if (!user?.openid) {
+        throw new BadRequestException("未绑定微信，无法使用微信支付");
+      }
+
+      const paymentResult = await this.paymentService.wxUnifiedOrder({
+        bizType: "mall_order",
+        bizId: order.id,
+        orderNo: order.orderNo || id,
+        amount,
+        description: `商城订单-${order.orderNo || id}`,
+        openid: user.openid,
+        userId,
+      });
+      return {
+        success: true,
+        message: "已生成微信支付单，请完成支付",
+        paymentInfo: paymentResult,
+      };
+    }
+
+    throw new BadRequestException(`不支持的支付方式: ${payChannel}`);
+  }
+
+  // AUD-P1-185: 事务性“待支付订单取消”资源回滚方法。
+  // 用户侧取消（MallService.cancelOrder）与后台取消（MallAdminService.updateOrderStatus
+  // 的 cancelled 动作）共用此方法，避免两套逻辑分叉导致库存/优惠券/会员权益/补贴账本与
+  // 订单状态分叉。它只处理 pending_pay 订单，统一恢复：商品库存与销量、已核销优惠券、
+  // 会员权益使用、补贴台账，并写入 AdminOperationLog（后台操作时由调用方写入）。
+  // 绝不可用于 paid/refunding/refunded 等资金终态订单（那必须走退款状态机）。
+  async cancelPendingPayOrder(
+    id: string,
+    operator: {
+      type: "user" | "admin" | "system";
+      userId?: string;
+      operatorId?: string;
+      reason?: string;
+    },
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.mallOrder.findUnique({
         where: { id },
         include: { items: true },
       });
       if (!order) throw new NotFoundException("订单不存在");
-      if (order.userId !== userId)
-        throw new BadRequestException("无权操作该订单");
-      const cancellableStatuses = ["pending_pay", "paid"];
-      if (!cancellableStatuses.includes(order.status))
-        throw new BadRequestException(`订单状态为 ${order.status}，无法取消`);
+      if (order.status !== "pending_pay") {
+        throw new BadRequestException(
+          `订单状态为 [${order.status}]，仅待支付订单可取消并恢复预占资源`,
+        );
+      }
+      if (operator.type === "user") {
+        if (!operator.userId || order.userId !== operator.userId) {
+          throw new BadRequestException("无权操作该订单");
+        }
+      }
 
-      // 恢复库存
+      const reason =
+        operator.reason || (operator.type === "user" ? "用户取消" : operator.type === "admin" ? "后台取消" : "支付超时自动取消");
+      const cancelTime = new Date();
+
+      // 用订单状态本身抢占取消权，不能依赖后台路径没有覆盖的 Redis 锁。
+      // 同一订单的第二个请求会在这里命中 0 行，绝不能再回滚库存、券或权益。
+      const claimed = await tx.mallOrder.updateMany({
+        where: { id, status: "pending_pay" },
+        data: { status: "cancelled", cancelTime, cancelReason: reason },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException("订单已被取消或状态已变化，请刷新后重试");
+      }
+
+      // 恢复预占库存与销量
       for (const item of order.items) {
         await tx.mallProduct.update({
           where: { id: item.productId },
@@ -338,15 +706,64 @@ export class MallService {
         });
       }
 
+      // 恢复已核销优惠券与对应优惠券补贴台账
+      const usedCoupon = await tx.couponReceive.findFirst({
+        where: { userId: order.userId, orderNo: order.orderNo, status: "used" },
+      });
+      if (usedCoupon) {
+        await tx.couponReceive.update({
+          where: { id: usedCoupon.id },
+          data: { status: "unused", usedAt: null, orderNo: null },
+        });
+        await tx.coupon
+          .update({
+            where: { id: usedCoupon.couponId },
+            data: { usedCount: { decrement: 1 } },
+          })
+          .catch(() => undefined);
+        await tx.subsidyLedger
+          .updateMany({
+            where: { sourceType: "coupon", orderType: "mall_order", orderId: order.id },
+            data: { status: "cancelled" },
+          })
+          .catch(() => undefined);
+      }
+
+      // 恢复会员权益使用与会员价补贴台账
+      await this.membershipService.restoreBenefitUsagesForTarget("mall_order", order.id, tx);
+      await tx.subsidyLedger
+        .updateMany({
+          where: { sourceType: "membership", orderType: "mall_order", orderId: order.id },
+          data: { status: "cancelled" },
+        })
+        .catch(() => undefined);
+
       return tx.mallOrder.update({
         where: { id },
         data: {
           status: "cancelled",
-          cancelTime: new Date(),
-          cancelReason: dto?.cancel_reason || "用户取消",
+          cancelTime,
+          cancelReason: reason,
         },
       });
     });
+  }
+
+  async expirePendingPayment(id: string) {
+    return this.cancelPendingPayOrder(id, { type: "system", reason: "支付超时自动取消" });
+  }
+
+  async cancelOrder(id: string, userId: string, dto?: any) {
+    return this.runWithLock(
+      `mall:order:${id}`,
+      "订单正在处理中，请稍后再试",
+      () =>
+        this.cancelPendingPayOrder(id, {
+          type: "user",
+          userId,
+          reason: dto?.cancel_reason,
+        }),
+    );
   }
 
   async addFavorite(userId: string, dto: any) {
@@ -358,6 +775,7 @@ export class MallService {
       where: { id: product_id },
     });
     if (!product) throw new NotFoundException("商品不存在");
+    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, "收藏商品");
 
     const existing = await this.prisma.favorite.findFirst({
       where: { userId, targetType: "mall_product", targetId: product_id },
@@ -525,6 +943,7 @@ export class MallService {
   }
 
   async createReview(userId: string, dto: any) {
+    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, "评价商品");
     return this.prisma.mallReview.create({
       data: {
         userId,
@@ -539,6 +958,15 @@ export class MallService {
   }
 
   async applyRefund(userId: string, dto: any) {
+    return this.runWithLock(
+      `mall:refund:${dto?.order_id || 'unknown'}:${userId}`,
+      '退款申请正在处理中，请勿重复提交',
+      () => this.applyRefundUnlocked(userId, dto),
+      60,
+    );
+  }
+
+  private async applyRefundUnlocked(userId: string, dto: any) {
     const {
       order_id,
       order_item_id,
@@ -551,8 +979,17 @@ export class MallService {
     } = dto;
 
     if (!order_id) throw new BadRequestException("order_id 必填");
-    if (!reason) throw new BadRequestException("退款原因必填");
-    if (!refund_amount) throw new BadRequestException("退款金额必填");
+    if (!order_item_id) throw new BadRequestException("order_item_id 必填");
+    if (!String(reason || '').trim()) throw new BadRequestException("退款原因必填");
+
+    const amount = Number(refund_amount);
+    const quantity = Number(refund_quantity);
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      throw new BadRequestException("退款金额必须是最多两位小数的正数");
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new BadRequestException("退款数量必须是正整数");
+    }
 
     // 校验订单存在性和所有权
     const order = await this.prisma.mallOrder.findUnique({
@@ -560,8 +997,26 @@ export class MallService {
     });
     if (!order) throw new NotFoundException("订单不存在");
     if (order.userId !== userId) throw new BadRequestException("无权操作该订单");
+    if (!['paid', 'shipped', 'received', 'completed'].includes(order.status)) {
+      throw new BadRequestException("当前订单状态不支持申请退款");
+    }
+
+    const orderItem = await this.prisma.mallOrderItem.findFirst({
+      where: { id: order_item_id, orderId: order_id },
+    });
+    if (!orderItem) throw new BadRequestException("退款商品不属于该订单");
+    if (quantity > orderItem.quantity) throw new BadRequestException("退款数量超过已购数量");
+    const maxAmount = Math.round(Number(orderItem.price) * quantity * 100) / 100;
+    if (amount > maxAmount) throw new BadRequestException("退款金额超过该商品可退金额");
+
+    const activeRefund = await this.prisma.mallRefund.findFirst({
+      where: { orderId: order_id, status: { in: ['applying', 'approved', 'merchant_approved', 'processing'] } },
+      select: { id: true },
+    });
+    if (activeRefund) throw new BadRequestException("该订单已有处理中退款申请");
 
     const refundNo = `REF${Date.now()}${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+    const priority = await this.membershipService.hasBenefit(userId, "refund_priority").catch(() => false);
 
     return this.prisma.mallRefund.create({
       data: {
@@ -569,10 +1024,10 @@ export class MallService {
         orderItemId: order_item_id,
         refundNo,
         refundType: refund_type,
-        amount: refund_amount,
-        quantity: refund_quantity,
-        reason,
-        description,
+        amount,
+        quantity,
+        reason: priority ? `[会员优先] ${reason}` : reason,
+        description: priority ? `[会员优先售后] ${description || ""}`.trim() : description,
         images: images || [],
         status: "applying",
       },
@@ -706,6 +1161,14 @@ export class MallService {
   }
 
   async cancelRefund(id: string, userId: string) {
+    return this.runWithLock(
+      `mall:refund:cancel:${id}`,
+      '退款记录正在处理中，请稍后再试',
+      () => this.cancelRefundUnlocked(id, userId),
+    );
+  }
+
+  private async cancelRefundUnlocked(id: string, userId: string) {
     const refund = await this.prisma.mallRefund.findUnique({
       where: { id },
     });
@@ -727,6 +1190,14 @@ export class MallService {
   }
 
   async receiveOrder(id: string, userId: string) {
+    return this.runWithLock(
+      `mall:order:${id}`,
+      '订单正在处理中，请稍后再试',
+      () => this.receiveOrderUnlocked(id, userId),
+    );
+  }
+
+  private async receiveOrderUnlocked(id: string, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.mallOrder.findUnique({ where: { id } });
       if (!order) throw new NotFoundException("订单不存在");
@@ -744,6 +1215,14 @@ export class MallService {
   }
 
   async shipOrder(id: string, userId: string, dto: any) {
+    return this.runWithLock(
+      `mall:order:${id}`,
+      '订单正在处理中，请稍后再试',
+      () => this.shipOrderUnlocked(id, userId, dto),
+    );
+  }
+
+  private async shipOrderUnlocked(id: string, userId: string, dto: any) {
     const order = await this.prisma.mallOrder.findUnique({
       where: { id },
     });
@@ -774,23 +1253,19 @@ export class MallService {
     const targetStatus = dto.target_status || dto.status;
     if (!targetStatus) throw new BadRequestException("target_status 必填");
 
+    // AUD-P0-002: 用户端只允许确认收货(received)和取消(cancelled)。其他终态必须由支付中心/退款状态机/商户履约推进。
     if (targetStatus === "received") {
       return this.receiveOrder(id, userId);
     }
 
-    const order = await this.prisma.mallOrder.findUnique({
-      where: { id },
-    });
-    if (!order) throw new NotFoundException("订单不存在");
-    if (order.userId !== userId) throw new BadRequestException("无权操作该订单");
+    if (targetStatus === "cancelled") {
+      return this.cancelOrder(id, userId, dto);
+    }
 
-    return this.prisma.mallOrder.update({
-      where: { id },
-      data: {
-        status: targetStatus,
-        completeTime: targetStatus === "completed" ? new Date() : undefined,
-      },
-    });
+    throw new BadRequestException(
+      `用户端不支持将订单状态更新为 "${targetStatus}"。` +
+      `已支付订单请通过确认收货完成；退款请联系客服处理。`,
+    );
   }
 
   async getMerchantOrders(userId: string, query: any) {

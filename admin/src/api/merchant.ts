@@ -19,8 +19,11 @@ export async function deleteMerchant(id: string) {
 export async function auditMerchant(id: string, data: { status: string; remark?: string }) {
   return putAction(`/admin/merchants/${id}/audit`, data)
 }
-export async function updateMerchantStatus(id: string, status: string) {
-  return putAction(`/admin/merchants/${id}/status`, { status: status === 'approved' ? 1 : 0 })
+export async function updateMerchantStatus(id: string, status: string, closedNotice?: string | null) {
+  return putAction(`/admin/merchants/${id}/status`, {
+    status: status === 'approved' ? 1 : 0,
+    closedNotice,
+  })
 }
 
 // ==================== 商品管理 ====================
@@ -67,6 +70,9 @@ export async function getMerchantOrders(params: Record<string, any> = {}) {
 export async function getMerchantOrderDetail(id: string) {
   return request.get(`/admin/order-center/orders/${id}`)
 }
+export async function releaseMerchantOrderRider(id: string) {
+  return postAction(`/admin/order-center/orders/${id}/release-rider`, {})
+}
 
 // ==================== 退款售后 ====================
 export async function getRefunds(params: Record<string, any> = {}) {
@@ -102,6 +108,12 @@ export async function getMerchantSettlements(params: Record<string, any> = {}) {
 }
 export async function confirmMerchantSettlement(id: string, remark?: string) {
   return putAction(`/admin/merchant-settlements/${id}/confirm`, { remark })
+}
+export async function payMerchantSettlement(id: string, transferNo: string, remark?: string) {
+  return putAction(`/admin/merchant-settlements/${id}/pay`, { transferNo, remark })
+}
+export async function offsetMerchantSettlement(id: string, reference: string) {
+  return putAction(`/admin/merchant-settlements/${id}/offset`, { reference })
 }
 
 // ==================== 打印机配置 ====================

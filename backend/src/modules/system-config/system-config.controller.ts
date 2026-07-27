@@ -31,6 +31,22 @@ export class SystemConfigController {
     private readonly redis: RedisService,
   ) {}
 
+  @Get('admin/config/login-page')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '获取小程序登录页视觉配置' })
+  getLoginPageConfig() {
+    return this.systemConfigService.getLoginPageConfig();
+  }
+
+  @Put('admin/config/login-page')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '保存小程序登录页视觉配置' })
+  saveLoginPageConfig(@Body() dto: any, @CurrentUser('sub') operatorId: string, @Req() req: Request) {
+    return this.systemConfigService.saveLoginPageConfig(dto, operatorId, req.ip);
+  }
+
   @Get("admin/configs")
   @RequirePermission("system:config")
   @UseGuards(AdminPermissionGuard)
@@ -245,6 +261,14 @@ export class SystemConfigController {
     return this.systemConfigService.getAmapConfig();
   }
 
+  @Get("admin/config/amap/runtime")
+  @RequirePermission("system:config")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "获取高德地图运行时配置" })
+  async getAmapRuntimeConfig() {
+    return this.systemConfigService.getAmapRuntimeConfig();
+  }
+
   @Put("admin/config/amap")
   @RequirePermission("system:config")
   @UseGuards(AdminPermissionGuard)
@@ -255,6 +279,22 @@ export class SystemConfigController {
     @Req() req: Request,
   ) {
     return this.systemConfigService.saveAmapConfig(dto, operatorId, req.ip);
+  }
+
+  @Get('admin/config/feie')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '获取飞鹅云打印配置' })
+  getFeieConfig() {
+    return this.systemConfigService.getFeieConfig();
+  }
+
+  @Put('admin/config/feie')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '保存飞鹅云打印配置' })
+  saveFeieConfig(@Body() dto: any, @CurrentUser('sub') operatorId: string, @Req() req: Request) {
+    return this.systemConfigService.saveFeieConfig(dto, operatorId, req.ip);
   }
 
   @Post("admin/config/amap/test-web")
@@ -495,5 +535,17 @@ export class SystemConfigController {
   async refreshWechatToken() {
     await this.redis.del("wechat:access_token");
     return { success: true, message: "微信 Token 缓存已清除，下次请求将自动刷新" };
+  }
+}
+
+@ApiTags('小程序公开配置')
+@Controller()
+export class LoginPageConfigPublicController {
+  constructor(private readonly systemConfigService: SystemConfigService) {}
+
+  @Get('platform/login-page-config')
+  @ApiOperation({ summary: '获取小程序登录页视觉配置' })
+  getLoginPageConfig() {
+    return this.systemConfigService.getLoginPageConfig();
   }
 }

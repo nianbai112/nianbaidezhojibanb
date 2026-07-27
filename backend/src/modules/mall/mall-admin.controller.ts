@@ -311,18 +311,6 @@ export class MallAdminController {
     );
   }
 
-  @Patch("orders/admin/:id/status")
-  @RequirePermission("mall:edit")
-  @ApiOperation({ summary: "更新订单状态" })
-  patchOrderStatus(
-    @Param("id") id: string,
-    @Body() dto: { status: string; reason?: string },
-    @CurrentUser("sub") operatorId: string,
-    @Req() req: Request,
-  ) {
-    return this.updateOrderStatus(id, dto, operatorId, req);
-  }
-
   @Put("orders/admin/:id/delivery")
   @Patch("orders/admin/:id/delivery")
   @RequirePermission("mall:edit")

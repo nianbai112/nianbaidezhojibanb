@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 
 @Injectable()
 export class RecommendService {
+  private readonly recommendCacheTtl = 60;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -41,6 +43,33 @@ export class RecommendService {
     return map[targetType] || targetType;
   }
 
+  private stablePayload(value: any): string {
+    if (value === null || value === undefined) return '';
+    if (typeof value !== 'object') return String(value);
+    if (Array.isArray(value)) return `[${value.map((item) => this.stablePayload(item)).join(',')}]`;
+    return Object.keys(value)
+      .sort()
+      .map((key) => `${key}:${this.stablePayload(value[key])}`)
+      .join('|');
+  }
+
+  private cacheKey(scope: string, query: any, userId?: string) {
+    const raw = this.stablePayload({ query: query || {}, userId: userId || '' });
+    return `recommend:${scope}:${Buffer.from(raw).toString('base64url')}`;
+  }
+
+  private async getCached<T>(key: string): Promise<T | null> {
+    return this.redis.getJson<T>(key).catch(() => null);
+  }
+
+  private async setCached(key: string, value: unknown, ttl = this.recommendCacheTtl) {
+    await this.redis.setJson(key, value, ttl).catch(() => undefined);
+  }
+
+  private async clearRecommendCache() {
+    await this.redis.delPattern('recommend:*').catch(() => undefined);
+  }
+
   private targetTypeLabel(type: string) {
     const map: Record<string, string> = {
       post: '笔记/帖子',
@@ -73,6 +102,7 @@ export class RecommendService {
       update: { value: { list }, group: 'recommend', updatedBy: operatorId },
       create: { key: 'recommend_slots', value: { list }, group: 'recommend', createdBy: operatorId, updatedBy: operatorId },
     });
+    await this.clearRecommendCache();
     return list;
   }
 
@@ -254,6 +284,10 @@ export class RecommendService {
   }
 
   async getFeed(query: any, userId?: string) {
+    const cacheKey = this.cacheKey('feed', query, userId);
+    const cached = await this.getCached<any>(cacheKey);
+    if (cached) return cached;
+
     const { regionId, page = 1, pageSize = 20 } = query;
     const strategy = await this.getStrategyForTarget('post', regionId);
     const controls = await this.getManualControls('post', regionId);
@@ -301,12 +335,14 @@ export class RecommendService {
       .sort((a, b) => b.score - a.score)
       .slice(0, Number(pageSize));
 
-    return {
+    const result = {
       list: filtered,
       total: filtered.length,
       page: Number(page),
       pageSize: Number(pageSize),
     };
+    await this.setCached(cacheKey, result);
+    return result;
   }
 
   async getRecommendPosts(query: any, userId?: string) {
@@ -314,6 +350,10 @@ export class RecommendService {
   }
 
   async getRecommendMerchants(query: any, userId?: string) {
+    const cacheKey = this.cacheKey('merchants', query, userId);
+    const cached = await this.getCached<any>(cacheKey);
+    if (cached) return cached;
+
     const { regionId, page = 1, pageSize = 20 } = query;
 
     const where: any = { status: 'approved' };
@@ -329,10 +369,16 @@ export class RecommendService {
       this.prisma.merchant.count({ where }),
     ]);
 
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    const result = { list, total, page: Number(page), pageSize: Number(pageSize) };
+    await this.setCached(cacheKey, result);
+    return result;
   }
 
   async getRecommendProducts(query: any, userId?: string) {
+    const cacheKey = this.cacheKey('products', query, userId);
+    const cached = await this.getCached<any>(cacheKey);
+    if (cached) return cached;
+
     const { regionId, page = 1, pageSize = 20 } = query;
 
     const where: any = { status: 'active' };
@@ -349,7 +395,9 @@ export class RecommendService {
       this.prisma.product.count({ where }),
     ]);
 
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    const result = { list, total, page: Number(page), pageSize: Number(pageSize) };
+    await this.setCached(cacheKey, result);
+    return result;
   }
 
   async getRecommendTopics(query: any, userId?: string) {
@@ -357,6 +405,10 @@ export class RecommendService {
   }
 
   async getTopics(query: any) {
+    const cacheKey = this.cacheKey('topics', query);
+    const cached = await this.getCached<any>(cacheKey);
+    if (cached) return cached;
+
     const { regionId, page = 1, pageSize = 20 } = query;
     const region_id = query.region_id || regionId;
     const circle_id = query.circle_id;
@@ -402,7 +454,9 @@ export class RecommendService {
     ]);
 
     const data = list.map((topic) => this.toMiniTopic(topic));
-    return { data, list: data, total, page: pageNum, pageSize: take };
+    const result = { data, list: data, total, page: pageNum, pageSize: take };
+    await this.setCached(cacheKey, result);
+    return result;
   }
 
   async getTopicDetail(id: string) {
@@ -417,7 +471,25 @@ export class RecommendService {
     return topic ? this.toMiniTopic(topic) : null;
   }
 
-  async updateTopic(id: string, dto: any) {
+  async updateTopic(id: string, dto: any, userId?: string) {
+    const existing = await this.prisma.topic.findUnique({
+      where: { id },
+      include: { circles: { select: { circleId: true } } },
+    });
+    if (!existing) throw new NotFoundException('话题不存在');
+    const circleIds = (existing.circles || []).map((item) => item.circleId).filter(Boolean);
+    const manager = userId && circleIds.length
+      ? await this.prisma.circleMember.findFirst({
+          where: {
+            userId,
+            circleId: { in: circleIds },
+            role: { in: ['OWNER', 'ADMIN'] },
+            status: { in: ['active', 'muted'] },
+          },
+          select: { id: true },
+        })
+      : null;
+    if (!manager) throw new ForbiddenException('只有圈主或管理员可以修改话题');
     const topic = await this.prisma.topic.update({
       where: { id },
       data: {
@@ -433,6 +505,7 @@ export class RecommendService {
         },
       },
     });
+    await this.clearRecommendCache();
     return this.toMiniTopic(topic);
   }
 
@@ -489,6 +562,7 @@ export class RecommendService {
       });
     }
 
+    await this.clearRecommendCache();
     return { success: true };
   }
 
@@ -704,6 +778,7 @@ export class RecommendService {
       });
     }
 
+    await this.clearRecommendCache();
     return { success: true, count: items.length };
   }
 
@@ -758,6 +833,7 @@ export class RecommendService {
       },
     });
 
+    await this.clearRecommendCache();
     return { success: true };
   }
 

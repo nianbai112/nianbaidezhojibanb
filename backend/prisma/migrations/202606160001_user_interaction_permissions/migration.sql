@@ -1,0 +1,5 @@
+ALTER TABLE "user_settings"
+  ADD COLUMN "commentPermission" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "replyPermission" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "mentionPermission" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "coCreatePermission" INTEGER NOT NULL DEFAULT 0;

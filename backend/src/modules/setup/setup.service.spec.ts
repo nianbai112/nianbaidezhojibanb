@@ -51,10 +51,16 @@ describe('SetupService - 安全测试', () => {
     redis = mockRedis();
   });
 
-  // ===== 1. SETUP_TOKEN 缺失时拒绝 =====
+  // ===== 1. SETUP_TOKEN 校验 =====
   describe('SETUP_TOKEN 校验', () => {
-    it('SETUP_TOKEN 未配置时生产 init 拒绝', async () => {
-      const cfg = mockConfig({ NODE_ENV: 'production', SETUP_TOKEN: '' });
+    it('生产安装向导未配置 SETUP_TOKEN 时拒绝环境检查', async () => {
+      const cfg = mockConfig({ NODE_ENV: 'production', SETUP_TOKEN: '', DB_IS_INSTALLED: '0', SETUP_WIZARD: 'true' });
+      const svc = new SetupService(cfg, prisma, redis);
+      await expect(svc.checkEnvironment('')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('非首次安装模式下 SETUP_TOKEN 未配置时生产 init 拒绝', async () => {
+      const cfg = mockConfig({ NODE_ENV: 'production', SETUP_TOKEN: '', DB_IS_INSTALLED: '1', SETUP_WIZARD: 'false' });
       const svc = new SetupService(cfg, prisma, redis);
       await expect(svc.init({ adminUsername: 'admin', adminPassword: 'Admin@123' }, 'any-token'))
         .rejects.toThrow(ForbiddenException);

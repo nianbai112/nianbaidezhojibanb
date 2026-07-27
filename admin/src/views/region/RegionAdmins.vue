@@ -5,14 +5,16 @@
       <el-button type="primary" @click="loadData">刷新</el-button>
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
-      <el-table-column prop="user.nickname" label="管理员" width="120">
-        <template #default="{ row }">{{ row.user?.nickname || row.userId }}</template>
+      <el-table-column prop="adminName" label="负责人" min-width="140">
+        <template #default="{ row }">{{ row.adminName || row.username }}</template>
       </el-table-column>
-      <el-table-column prop="role.name" label="角色" width="120">
-        <template #default="{ row }">{{ row.role?.name || row.roleId }}</template>
+      <el-table-column prop="username" label="后台账号" min-width="140" />
+      <el-table-column prop="phone" label="手机号" min-width="120" />
+      <el-table-column prop="roleName" label="角色" min-width="120">
+        <template #default="{ row }">{{ row.roleName || row.roleCode }}</template>
       </el-table-column>
-      <el-table-column prop="region.name" label="所属区域" width="150">
-        <template #default="{ row }">{{ row.region?.name || row.regionId || '全局' }}</template>
+      <el-table-column prop="regionName" label="负责区域" min-width="160">
+        <template #default="{ row }">{{ row.regionName || row.regionId || '全局' }}</template>
       </el-table-column>
       <el-table-column prop="createdAt" label="分配时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN') }}</template>
@@ -40,8 +42,25 @@ const loadData = async () => {
   loading.value = true
   try {
     const res: any = await request.get('/admin/admins', { params: { page: page.value, pageSize: pageSize.value } })
-    list.value = res?.list || res?.data?.list || []
-    total.value = res?.total || res?.data?.total || 0
+    const accounts = res?.list || res?.data?.list || []
+    list.value = accounts.flatMap((account: any) => {
+      const roles = Array.isArray(account.roles) ? account.roles : []
+      const regionRoles = roles.filter((role: any) => role.regionId || ['region_manager', 'region_admin', 'REGION_ADMIN'].includes(String(role.code || '')))
+      return regionRoles.map((role: any) => ({
+        id: `${account.id}_${role.id}_${role.regionId || 'global'}`,
+        accountId: account.id,
+        username: account.username,
+        adminName: account.realName || account.username,
+        phone: account.phone || '',
+        roleId: role.id,
+        roleName: role.name,
+        roleCode: role.code,
+        regionId: role.regionId || account.regionId || '',
+        regionName: role.regionName || account.regionName || '',
+        createdAt: account.createdAt
+      }))
+    })
+    total.value = list.value.length
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') } finally { loading.value = false }
 }
 

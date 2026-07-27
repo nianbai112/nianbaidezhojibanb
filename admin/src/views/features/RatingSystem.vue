@@ -4,12 +4,7 @@
 
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
       <el-tab-pane label="概览" name="dashboard">
-        <div class="stat-cards">
-          <el-card v-for="s in dashStats" :key="s.label" shadow="hover" class="stat-card">
-            <div class="stat-value">{{ s.value ?? '-' }}</div>
-            <div class="stat-label">{{ s.label }}</div>
-          </el-card>
-        </div>
+        <StatGrid :items="statItems" />
       </el-tab-pane>
 
       <el-tab-pane label="区域设置" name="settings">
@@ -24,7 +19,7 @@
           <el-form-item label="启用动态"><el-switch v-model="settingForm.enableDynamic" /></el-form-item>
           <el-form-item label="评分需登录"><el-switch v-model="settingForm.requireLoginToRate" /></el-form-item>
         </el-form>
-        <el-empty v-else description="请先选择区域" />
+        <EmptyState v-else description="请先选择区域" />
       </el-tab-pane>
 
       <el-tab-pane label="分类管理" name="categories">
@@ -38,7 +33,7 @@
         <el-table :data="categories" v-loading="catLoading" stripe>
           <el-table-column prop="icon" label="图标" width="80">
             <template #default="{ row }">
-              <el-image v-if="row.icon" :src="row.icon" style="width:36px;height:36px;border-radius:8px" fit="cover" />
+              <el-image v-if="row.icon" :src="row.icon" style="width:36px;height:36px;border-radius: 6px" fit="cover" />
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -78,7 +73,7 @@
         <el-table :data="items" v-loading="itemLoading" stripe>
           <el-table-column prop="cover" label="封面" width="80">
             <template #default="{ row }">
-              <el-image v-if="row.cover" :src="row.cover" style="width:42px;height:42px;border-radius:8px" fit="cover" />
+              <el-image v-if="row.cover" :src="row.cover" style="width:42px;height:42px;border-radius: 6px" fit="cover" />
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -236,11 +231,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 
 const activeTab = ref('dashboard')
 const saving = ref(false)
@@ -248,6 +245,7 @@ const formatDate = (d: string) => d ? new Date(d).toLocaleString('zh-CN') : '-'
 
 const regions = ref<any[]>([])
 const dashStats = ref<any[]>([])
+const statItems = computed(() => dashStats.value.map((s: any) => ({ label: s.label, value: s.value ?? '-' })))
 
 const categories = ref<any[]>([])
 const catLoading = ref(false)
@@ -479,9 +477,5 @@ onMounted(() => {
 <style scoped>
 .page-shell { padding: 24px; }
 .tab-toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
-.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-.stat-card { text-align: center; }
-.stat-value { font-size: 28px; font-weight: 700; color: #409eff; }
-.stat-label { font-size: 13px; color: #666; margin-top: 4px; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
 </style>

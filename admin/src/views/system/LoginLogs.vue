@@ -69,6 +69,8 @@ const filters = reactive({
   success: undefined as boolean | undefined
 })
 
+import { formatDateRangeParams } from '@/utils/date'
+
 const loadLogs = async (showSuccess = false) => {
   loading.value = true
   try {
@@ -78,8 +80,9 @@ const loadLogs = async (showSuccess = false) => {
       ...filters
     }
     if (dateRange.value?.length === 2) {
-      params.startDate = dateRange.value[0]?.toISOString()
-      params.endDate = dateRange.value[1]?.toISOString()
+      const { startDate, endDate } = formatDateRangeParams(dateRange.value)
+      if (startDate) params.startDate = startDate
+      if (endDate) params.endDate = endDate
     }
     const res: any = await request.get('/admin/login-logs', { params })
     logs.value = res?.list || res?.data?.list || []
@@ -108,5 +111,5 @@ onMounted(() => {
 <style scoped>
 .page-container { padding: 24px; }
 .table-footer { padding: 16px; display: flex; justify-content: flex-end; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border-radius: 16px; border: 1px solid rgba(255,255,255,0.8); }
+.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border-radius: 14px; border: 1px solid rgba(255,255,255,0.8); }
 </style>

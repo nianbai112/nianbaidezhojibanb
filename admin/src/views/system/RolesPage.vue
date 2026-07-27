@@ -3,7 +3,8 @@
     <GlassPageHeader title="角色权限" subtitle="管理后台角色、权限点和运营账号可操作范围">
       <template #actions>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadData(true)">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openDialog()">新增角色</el-button>
+        <!-- AUD-P1-159: 新增角色按钮按 admin:edit 权限显隐 -->
+        <el-button v-if="hasEditPermission" type="primary" :icon="Plus" @click="openDialog()">新增角色</el-button>
       </template>
     </GlassPageHeader>
 
@@ -57,8 +58,10 @@
         </el-table-column>
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openDialog(row)">编辑权限</el-button>
-            <el-button link type="danger" :disabled="row.isSystem" @click="handleDelete(row)">删除</el-button>
+            <!-- AUD-P1-159: 编辑按钮按 admin:edit 权限显隐 -->
+            <el-button v-if="hasEditPermission" link type="primary" @click="openDialog(row)">编辑权限</el-button>
+            <!-- AUD-P1-159: 删除按钮按 admin:delete 权限显隐 -->
+            <el-button v-if="hasDeletePermission" link type="danger" :disabled="row.isSystem" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -117,6 +120,12 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus, RefreshRight } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import { createRole, deleteRole, fetchPermissions, fetchRoleList, updateRole } from '@/api/admin'
+import { useAuthStore } from '@/stores/auth'
+
+// AUD-P1-159: 权限检查
+const auth = useAuthStore()
+const hasEditPermission = computed(() => auth.permissions.includes('admin:edit'))
+const hasDeletePermission = computed(() => auth.permissions.includes('admin:delete'))
 
 interface PermissionItem {
   id: string

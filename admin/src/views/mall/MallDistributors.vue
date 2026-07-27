@@ -1,8 +1,6 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>分销管理</h2>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="分销管理" />
 
     <div class="filter-bar">
       <el-input
@@ -26,6 +24,18 @@
     <el-table :data="distributors" v-loading="loading" border stripe>
       <el-table-column prop="realName" label="姓名" width="100" />
       <el-table-column prop="phone" label="手机号" width="120" />
+      <el-table-column label="小程序用户" min-width="190">
+        <template #default="{ row }">
+          <div v-if="miniUser(row)" class="user-cell">
+            <el-avatar :size="32" :src="miniUser(row).avatar">{{ userInitial(miniUser(row)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ miniUser(row).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">{{ miniUser(row).phone || `UID ${miniUser(row).uid || miniUser(row).id}` }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="levelName" label="等级" width="100">
         <template #default="{ row }">
           {{ row.level?.name || '默认' }}
@@ -80,6 +90,18 @@
     <!-- Detail Dialog -->
     <el-dialog v-model="showDetailDialog" title="分销员详情" width="700px">
       <el-descriptions :column="2" border>
+        <el-descriptions-item label="小程序用户" :span="2">
+          <div v-if="miniUser(selectedDistributor)" class="user-cell">
+            <el-avatar :size="36" :src="miniUser(selectedDistributor).avatar">{{ userInitial(miniUser(selectedDistributor)) }}</el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ miniUser(selectedDistributor).nickname || '未设置昵称' }}</div>
+              <div class="user-sub">用户ID：{{ miniUser(selectedDistributor).id }}</div>
+            </div>
+          </div>
+          <el-tag v-else type="warning" size="small">未绑定小程序用户</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="小程序手机号">{{ miniUser(selectedDistributor)?.phone || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="小程序UID">{{ miniUser(selectedDistributor)?.uid ? `UID ${miniUser(selectedDistributor).uid}` : '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ selectedDistributor?.realName }}</el-descriptions-item>
         <el-descriptions-item label="手机号">{{ selectedDistributor?.phone }}</el-descriptions-item>
         <el-descriptions-item label="等级">{{ selectedDistributor?.level?.name || '默认' }}</el-descriptions-item>
@@ -109,6 +131,7 @@
 import { ref, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const distributors = ref<any[]>([])
@@ -116,6 +139,8 @@ const filters = ref({ keyword: '', status: '' })
 const pagination = ref({ page: 1, pageSize: 20, total: 0 })
 const showDetailDialog = ref(false)
 const selectedDistributor = ref<any>(null)
+const miniUser = (row: any) => row?.User || row?.user || null
+const userInitial = (user: any) => String(user?.nickname || '用').slice(0, 1)
 
 const getStatusType = (status: string) => {
   const map: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger', frozen: 'info' }
@@ -230,17 +255,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
 .filter-bar {
   display: flex;
   gap: 12px;
@@ -251,5 +265,33 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-meta {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.user-name {
+  font-weight: 600;
+  color: #172033;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-sub {
+  color: #7b8798;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

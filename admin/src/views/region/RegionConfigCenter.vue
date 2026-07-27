@@ -44,8 +44,23 @@
                   <el-option label="其他" value="other" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="小程序区域负责人">
+                <el-select v-model="form.managerUserId" clearable filterable placeholder="选择小程序用户" style="width:100%">
+                  <el-option
+                    v-for="user in miniUsers"
+                    :key="user.id"
+                    :label="userOptionLabel(user)"
+                    :value="user.id"
+                  />
+                </el-select>
+                <div class="form-tip">用于小程序私信、区域权限识别和运营责任归属。</div>
+              </el-form-item>
               <el-form-item label="运营状态">
                 <el-switch v-model="form.isOpen" active-text="开放" inactive-text="关闭" />
+              </el-form-item>
+              <el-form-item label="允许用户切换到此区域">
+                <el-switch v-model="form.regionSwitchSupported" inline-prompt active-text="允许" inactive-text="禁止" />
+                <div class="form-tip">关闭后，小程序用户不能自行切换到该区域。</div>
               </el-form-item>
               <el-form-item label="热门区域"><el-switch v-model="form.isHot" active-text="是" inactive-text="否" /></el-form-item>
               <el-form-item label="封面展示模式">
@@ -82,11 +97,18 @@
         />
       </el-tab-pane>
 
-      <!-- 4. 业务开关 -->
+      <!-- 4. 校园地图 -->
+      <el-tab-pane label="校园地图" name="campusMap">
+        <RegionCampusMapPainter
+          :region-id="selectedId"
+          :region-name="form.name"
+        />
+      </el-tab-pane>
+
+      <!-- 5. 业务开关 -->
       <el-tab-pane label="业务开关" name="switches">
         <RegionBusinessSwitches
           v-model:showHotList="form.showHotList"
-          v-model:isForceGuidance="form.isForceGuidance"
           v-model:privateMessageEnabled="form.privateMessageEnabled"
           v-model:contactsRequireStudentAuth="form.contactsRequireStudentAuth"
           v-model:onlyStudentAuthUsers="form.onlyStudentAuthUsers"
@@ -96,7 +118,7 @@
         />
       </el-tab-pane>
 
-      <!-- 5. 财务规则 -->
+      <!-- 6. 财务规则 -->
       <el-tab-pane label="财务规则" name="finance">
         <RegionFinanceEditor
           v-model:balance="form.balance"
@@ -109,7 +131,7 @@
         />
       </el-tab-pane>
 
-      <!-- 6. 首页频道 -->
+      <!-- 7. 首页频道 -->
       <el-tab-pane label="首页频道" name="home">
         <div class="section-card glass-card">
           <div class="section-head"><div class="card-title">页面布局模式</div></div>
@@ -126,6 +148,22 @@
               <el-form-item label="字号"><el-input-number v-model="navConfig.title.fontSize" :min="12" :max="24" /></el-form-item>
               <el-form-item label="显示标题"><el-switch v-model="navConfig.title.show" /></el-form-item>
               <el-form-item label="显示布局切换按钮"><el-switch v-model="navConfig.showLayoutSwitch" /></el-form-item>
+            </div>
+          </el-form>
+        </div>
+        <div class="section-card glass-card" style="margin-top:24px">
+          <div class="section-head"><div class="card-title">首页搜索框</div></div>
+          <el-form label-position="top">
+            <div class="form-grid two relaxed">
+              <el-form-item label="首页搜索框提示文字" class="span-2">
+                <el-input
+                  v-model="homeHero.searchPlaceholder"
+                  maxlength="40"
+                  show-word-limit
+                  placeholder="搜一搜：拼饭 / 二手 / 跑腿 / 活动"
+                />
+                <div class="form-tip">保存后小程序首页搜索框会显示此文案，搜索行为保持原有跳转。</div>
+              </el-form-item>
             </div>
           </el-form>
         </div>
@@ -174,10 +212,12 @@
           </el-form>
         </div>
         <RegionMessageEditor
+          v-model:interactionIcon="msgIcons.interaction"
           v-model:likeIcon="msgIcons.like"
           v-model:followIcon="msgIcons.follow"
           v-model:commentIcon="msgIcons.comment"
           v-model:messageIcon="msgIcons.message"
+          v-model:squatIcon="msgIcons.squat"
           v-model:navCards="msgNavCards"
         />
       </el-tab-pane>
@@ -260,24 +300,106 @@
 
       <!-- 10. 底部导航 -->
       <el-tab-pane label="底部导航" name="tabbar">
-        <div class="section-card glass-card">
-          <div class="section-head">
-            <div class="card-title">底部导航配置</div>
-            <el-button size="small" @click="openTabbarDrawer">编辑配置</el-button>
-          </div>
-          <div class="tabbar-preview">
-            <div class="tabbar-phone">
-              <div class="tabbar-bar">
-                <div v-for="tab in tabbarList" :key="tab.id" class="tabbar-item" :class="{ disabled: !tab.enabled }">
-                  <div class="tabbar-icon" :style="{ color: tab.enabled ? (tab.selectedColor || '#1677ff') : '#ccc' }">
-                    <el-icon :size="16"><component :is="getTabIcon(tab.id)" /></el-icon>
-                  </div>
-                  <span class="tabbar-text">{{ tab.name }}</span>
-                </div>
+        <div class="section-grid tabbar-control-grid">
+          <div class="section-card glass-card">
+            <div class="section-head">
+              <div>
+                <div class="card-title">消息未读提示</div>
+                <div class="section-subtitle">控制小程序底部导航风格和“消息”入口的未读提醒样式</div>
               </div>
             </div>
-            <div class="tabbar-summary">
-              {{ tabbarList.length }} 个导航项，{{ tabbarList.filter(t => t.enabled).length }} 个启用
+            <div class="tabbar-style-control">
+              <label>导航栏风格</label>
+              <el-segmented v-model="tabbarConfig.type" :options="tabbarStyleOptions" size="small" />
+            </div>
+            <div class="badge-style-list">
+              <button
+                v-for="option in messageBadgeOptions"
+                :key="option.value"
+                type="button"
+                class="badge-style-option"
+                :class="{ active: tabbarConfig.messageBadgeStyle === option.value }"
+                @click="tabbarConfig.messageBadgeStyle = option.value"
+              >
+                <span class="badge-option-preview">
+                  <span class="badge-phone-tab">
+                    <el-icon :size="18"><ChatDotRound /></el-icon>
+                    <span class="badge-phone-label">消息</span>
+                    <span
+                      v-if="option.value === 'bubble'"
+                      class="preview-message-tip compact"
+                    >有3条新消息</span>
+                    <span
+                      v-else-if="option.value === 'number'"
+                      class="preview-message-badge compact"
+                    >3</span>
+                    <span
+                      v-else-if="option.value === 'dot'"
+                      class="preview-message-badge compact dot"
+                    ></span>
+                  </span>
+                </span>
+                <span class="badge-option-main">
+                  <b>{{ option.label }}</b>
+                  <small>{{ option.desc }}</small>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div class="section-card glass-card">
+            <div class="section-head">
+              <div>
+                <div class="card-title">当前效果</div>
+                <div class="section-subtitle">保存底部导航后，小程序端按区域配置生效</div>
+              </div>
+              <el-button size="small" type="primary" :loading="savingTabbar" @click="saveTabbar">保存底部导航</el-button>
+            </div>
+            <div class="tabbar-preview">
+              <div class="tabbar-phone">
+                <div class="tabbar-bar" :class="`style-${tabbarConfig.type}`">
+                  <div v-for="tab in tabbarList" :key="tab.id" class="tabbar-item" :class="{ disabled: !tab.enabled }">
+                    <div class="tabbar-icon" :style="{ color: tab.enabled ? (tab.selectedColor || 'var(--el-color-primary)') : 'var(--mx-border-strong)' }">
+                      <el-icon :size="16"><component :is="getTabIcon(tab.id)" /></el-icon>
+                      <span
+                        v-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'number'"
+                        class="preview-message-badge mini"
+                      >3</span>
+                      <span
+                        v-else-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'dot'"
+                        class="preview-message-badge mini dot"
+                      ></span>
+                    </div>
+                    <span v-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'bubble'" class="preview-message-tip mini">有3条新消息</span>
+                    <span class="tabbar-text">{{ tab.name }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="tabbar-summary">
+                {{ tabbarList.length }} 个导航项，{{ tabbarList.filter(t => t.enabled).length }} 个启用
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-card glass-card" style="margin-top:24px">
+          <div class="section-head">
+            <div>
+              <div class="card-title">底部导航配置</div>
+              <div class="section-subtitle">管理导航项、图标、颜色和跳转路径</div>
+            </div>
+            <el-button size="small" @click="openTabbarDrawer">编辑配置</el-button>
+          </div>
+          <div class="tabbar-quick-list">
+            <div v-for="tab in tabbarList" :key="tab.id" class="tabbar-quick-item" :class="{ disabled: !tab.enabled }">
+              <div class="tabbar-quick-icon">
+                <el-icon :size="16"><component :is="getTabIcon(tab.id)" /></el-icon>
+              </div>
+              <div class="tabbar-quick-main">
+                <b>{{ tab.name || '未命名' }}</b>
+                <span>{{ tab.pagePath || tab.action || '未配置跳转' }}</span>
+              </div>
+              <el-tag size="small" :type="tab.enabled ? 'success' : 'info'">{{ tab.enabled ? '启用' : '停用' }}</el-tag>
             </div>
           </div>
         </div>
@@ -331,6 +453,10 @@
             <div class="editor-section">
               <div class="editor-section-title">全局样式</div>
               <div class="style-row">
+                <div class="style-field wide">
+                  <label>导航栏风格</label>
+                  <el-segmented v-model="tabbarConfig.type" :options="tabbarStyleOptions" size="small" />
+                </div>
                 <div class="style-field">
                   <label>默认文字颜色</label>
                   <el-color-picker v-model="tabbarConfig.color" />
@@ -342,6 +468,17 @@
                 <div class="style-field">
                   <label>背景颜色</label>
                   <el-color-picker v-model="tabbarConfig.backgroundColor" />
+                </div>
+                <div class="style-field wide">
+                  <label>消息未读提示</label>
+                  <el-select v-model="tabbarConfig.messageBadgeStyle" size="small">
+                    <el-option
+                      v-for="option in messageBadgeOptions"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                  </el-select>
                 </div>
               </div>
             </div>
@@ -391,7 +528,7 @@
                           scene="tabbar-icon"
                           shape="square"
                           placeholder="上传普通图标"
-                          tip="建议 80x80"
+                          tip="建议 128x128，透明 PNG 更佳"
                           :max-size="1"
                         />
                       </div>
@@ -402,7 +539,7 @@
                           scene="tabbar-icon-active"
                           shape="square"
                           placeholder="上传选中图标"
-                          tip="建议 80x80"
+                          tip="建议 128x128，透明 PNG 更佳"
                           :max-size="1"
                         />
                       </div>
@@ -410,15 +547,15 @@
                     <div class="field-row">
                       <div class="field-item small">
                         <label>图标宽度</label>
-                        <el-input-number v-model="tab.width" :min="16" :max="64" size="small" />
+                        <el-input-number v-model="tab.width" :min="TAB_ICON_MIN_SIZE" :max="TAB_ICON_MAX_SIZE" size="small" />
                       </div>
                       <div class="field-item small">
                         <label>图标高度</label>
-                        <el-input-number v-model="tab.height" :min="16" :max="64" size="small" />
+                        <el-input-number v-model="tab.height" :min="TAB_ICON_MIN_SIZE" :max="TAB_ICON_MAX_SIZE" size="small" />
                       </div>
                       <div class="field-item small">
                         <label>字号</label>
-                        <el-input-number v-model="tab.fontSize" :min="8" :max="20" size="small" />
+                        <el-input-number v-model="tab.fontSize" :min="8" :max="TAB_FONT_MAX_SIZE" size="small" />
                       </div>
                     </div>
                     <div class="field-row">
@@ -457,12 +594,28 @@
               <div class="preview-content">
                 <div class="preview-placeholder">小程序内容区域</div>
               </div>
-              <div class="preview-tabbar" :style="{ background: tabbarConfig.backgroundColor || '#ffffff' }">
+              <div
+                class="preview-tabbar"
+                :class="`style-${tabbarConfig.type}`"
+                :style="{ background: tabbarConfig.backgroundColor || 'var(--mx-card)' }"
+              >
                 <div v-for="tab in tabbarList" :key="tab.id" class="preview-tab-item" :class="{ disabled: !tab.enabled }">
-                  <div class="preview-tab-icon" :style="{ color: tab.enabled ? (tab.selectedColor || tabbarConfig.selectedColor || '#1677ff') : '#ccc' }">
+                  <div class="preview-tab-icon" :style="{ color: tab.enabled ? (tab.selectedColor || tabbarConfig.selectedColor || 'var(--el-color-primary)') : 'var(--mx-border-strong)' }">
                     <el-icon :size="20"><component :is="getTabIcon(tab.id)" /></el-icon>
+                    <span
+                      v-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'number'"
+                      class="preview-message-badge mini"
+                    >3</span>
+                    <span
+                      v-else-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'dot'"
+                      class="preview-message-badge mini dot"
+                    ></span>
                   </div>
-                  <span v-if="!tab.hideText" class="preview-tab-text" :style="{ color: tab.enabled ? (tab.color || tabbarConfig.color || '#8A8A8A') : '#ccc', fontSize: (tab.fontSize || 12) + 'px' }">
+                  <span
+                    v-if="tab.id === 'message' && tabbarConfig.messageBadgeStyle === 'bubble'"
+                    class="preview-message-tip mini"
+                  >有3条新消息</span>
+                  <span v-if="!tab.hideText" class="preview-tab-text" :style="{ color: tab.enabled ? (tab.color || tabbarConfig.color || 'var(--mx-muted)') : 'var(--mx-border-strong)', fontSize: (tab.fontSize || 12) + 'px' }">
                     {{ tab.name }}
                   </span>
                 </div>
@@ -488,6 +641,20 @@
             <el-option label="社区" value="community" />
             <el-option label="其他" value="other" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="小程序区域负责人">
+          <el-select v-model="createForm.managerUserId" clearable filterable placeholder="选择小程序用户" style="width:100%">
+            <el-option
+              v-for="user in miniUsers"
+              :key="user.id"
+              :label="userOptionLabel(user)"
+              :value="user.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="允许用户切换到此区域">
+          <el-switch v-model="createForm.regionSwitchSupported" inline-prompt active-text="允许" inactive-text="禁止" />
+          <div class="form-tip">关闭后，小程序用户不能自行切换到该区域。</div>
         </el-form-item>
         <div class="create-next glass-card">
           <div>
@@ -519,6 +686,7 @@ import RegionHeroPanel from './components/RegionHeroPanel.vue'
 import RegionPreviewDrawer from './components/RegionPreviewDrawer.vue'
 import RegionAssetEditor from './components/RegionAssetEditor.vue'
 import RegionMapEditor from './components/RegionMapEditor.vue'
+import RegionCampusMapPainter from './components/RegionCampusMapPainter.vue'
 import RegionBusinessSwitches from './components/RegionBusinessSwitches.vue'
 import RegionFinanceEditor from './components/RegionFinanceEditor.vue'
 import RegionHomeTabsEditor from './components/RegionHomeTabsEditor.vue'
@@ -526,11 +694,16 @@ import RegionMessageEditor from './components/RegionMessageEditor.vue'
 import RegionProfileEditor from './components/RegionProfileEditor.vue'
 import RegionLaunchChecklist from './components/RegionLaunchChecklist.vue'
 import RegionBatchOperations from './components/RegionBatchOperations.vue'
+import { request } from '@/api/request'
 
 // ---- 状态 ----
 const route = useRoute()
-const activeTab = ref('basic')
+// 支持 ?tab=xxx 指定初始 tab（旧版 /region/campus-map 重定向携带 tab=campusMap）
+const TAB_NAMES = ['basic', 'assets', 'location', 'campusMap', 'switches', 'finance', 'home', 'message', 'profile', 'share', 'tabbar', 'checklist']
+const initialTab = String(route.query.tab || '')
+const activeTab = ref(TAB_NAMES.includes(initialTab) ? initialTab : 'basic')
 const regions = ref<any[]>([])
+const miniUsers = ref<any[]>([])
 const selectedId = ref<string | number>('')
 const saving = ref(false)
 const creating = ref(false)
@@ -550,6 +723,7 @@ interface CarouselItem {
   linkValue: string
   sortOrder: number
   enabled: boolean
+  [key: string]: any
 }
 
 const carouselItems = ref<CarouselItem[]>([])
@@ -571,6 +745,11 @@ const DEFAULT_LEADERBOARD = {
     { type: 'topic', title: '话题榜单', enabled: true, sortOrder: 2 }
   ]
 }
+const DEFAULT_HOME_HERO = {
+  title: '今天想在校园里\n干点啥？',
+  subtitle: '发现校园里的新鲜事',
+  searchPlaceholder: '搜一搜：拼饭 / 二手 / 跑腿 / 活动'
+}
 const DEFAULT_MSG_NAV_CARDS = [
   { id: 'notice', title: '系统通知', subtitle: '平台消息与审核通知', icon: 'notice', path: '/pages/tabbar/news/news', enabled: true, sortOrder: 0 }
 ]
@@ -579,8 +758,32 @@ const DEFAULT_PROFILE_ITEMS = [
   { id: 'wallet', title: '我的钱包', description: '余额、提现和交易流水', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/withdraw/withdraw', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 1, requireLogin: true },
   { id: 'share', title: '分享有礼', description: '邀请同学加入本地生活圈', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/news/SharingCourtesy/SharingCourtesy', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2, requireLogin: true },
   { id: 'merchant', title: '商家中心', description: '商家入驻与店铺管理', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/MerchantManagement/managerial', query: '', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3, requireLogin: true },
-  { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 4, requireLogin: false }
+  { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/DormShopOwner/DormShopOwner', query: '', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4, requireLogin: true },
+  { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', icon: '', main_image: '/static/logo.jpg', path: '/pages/B/circle-manage', query: '', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 5, requireLogin: true },
+  { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 6, requireLogin: false }
 ]
+function ensureProfileDefaultItems(items: any[]) {
+  const list = Array.isArray(items) ? JSON.parse(JSON.stringify(items)) : []
+  const hasDormShopOwner = list.some((item: any) => {
+    const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim()
+    const permission = String(item?.navigation_permission || item?.navigationPermission || '').trim()
+    return item?.id === 'dorm_shop_owner' || permission === 'dorm_shop_owner' || path.includes('DormShopOwner/DormShopOwner')
+  })
+  if (!hasDormShopOwner) {
+    const dormEntry = DEFAULT_PROFILE_ITEMS.find((item) => item.id === 'dorm_shop_owner')
+    if (dormEntry) list.push(JSON.parse(JSON.stringify(dormEntry)))
+  }
+  const hasCircleManage = list.some((item: any) => {
+    const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim()
+    const permission = String(item?.navigation_permission || item?.navigationPermission || '').trim()
+    return item?.id === 'circle_manage' || permission === 'circle_owner' || path.includes('pages/B/circle-manage')
+  })
+  if (!hasCircleManage) {
+    const circleManageEntry = DEFAULT_PROFILE_ITEMS.find((item) => item.id === 'circle_manage')
+    if (circleManageEntry) list.push(JSON.parse(JSON.stringify(circleManageEntry)))
+  }
+  return list
+}
 const DEFAULT_TABBAR = [
   { id: 'home', name: '首页', pagePath: 'pages/tabbar/index/index', action: '', iconPath: '/static/tabbar/home.png', selectedIconPath: '/static/tabbar/home-active.png', color: '#8A8A8A', selectedColor: '#1677ff', width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 0, navType: 'bottom' },
   { id: 'circle', name: '圈子', pagePath: 'pages/tabbar/containers/containers', action: '', iconPath: '/static/tabbar/circle.png', selectedIconPath: '/static/tabbar/circle-active.png', color: '#8A8A8A', selectedColor: '#1677ff', width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 1, navType: 'bottom' },
@@ -588,6 +791,19 @@ const DEFAULT_TABBAR = [
   { id: 'message', name: '消息', pagePath: 'pages/tabbar/news/news', action: '', iconPath: '/static/tabbar/message.png', selectedIconPath: '/static/tabbar/message-active.png', color: '#8A8A8A', selectedColor: '#1677ff', width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 3, navType: 'bottom' },
   { id: 'mine', name: '我的', pagePath: 'pages/tabbar/auth/PersonalHomepage', action: '', iconPath: '/static/tabbar/mine.png', selectedIconPath: '/static/tabbar/mine-active.png', color: '#8A8A8A', selectedColor: '#1677ff', width: 24, height: 24, fontSize: 12, avatarMode: false, hideText: false, enabled: true, sortOrder: 4, navType: 'bottom' }
 ]
+const messageBadgeOptions = [
+  { label: '文字气泡', value: 'bubble', desc: '显示“有3条新消息”这类浮层提示，存在感最强。' },
+  { label: '数字红点', value: 'number', desc: '只显示未读数量，适合常规消息提醒。' },
+  { label: '小红点', value: 'dot', desc: '只提示有新消息，不暴露具体数量。' },
+  { label: '不显示', value: 'none', desc: '消息入口不展示未读提醒。' }
+]
+const tabbarStyleOptions = [
+  { label: '传统底部', value: 'bottom' },
+  { label: '胶囊悬浮', value: 'capsule' }
+]
+const TAB_ICON_MIN_SIZE = 16
+const TAB_ICON_MAX_SIZE = 128
+const TAB_FONT_MAX_SIZE = 32
 
 // ---- 表单数据 ----
 const form = reactive({
@@ -598,7 +814,9 @@ const form = reactive({
   logo: '',
   coverImage: '',
   regionType: 'other',
+  managerUserId: '',
   isOpen: true,
+  regionSwitchSupported: true,
   isHot: false,
   regionCoverMode: 'cover',
   carouselImages: [] as string[],
@@ -615,7 +833,6 @@ const form = reactive({
   selfUnbanFee: 0,
   showHotList: false,
   hotFeaturedDisplay: 'none',
-  isForceGuidance: false,
   privateMessageEnabled: true,
   contactsRequireStudentAuth: false,
   onlyStudentAuthUsers: false,
@@ -632,16 +849,44 @@ const navConfig = reactive({
 })
 
 const leaderboard = reactive(JSON.parse(JSON.stringify(DEFAULT_LEADERBOARD)))
-const msgIcons = reactive({ like: '', follow: '', comment: '', message: '' })
+const homeHeroSource = ref<any | null>(null)
+const homeHero = reactive({
+  searchPlaceholder: DEFAULT_HOME_HERO.searchPlaceholder
+})
+const defaultMsgIcons = {
+  message: { name: '系统/聊天', enabled: true, sortOrder: 0 },
+  interaction: { name: '互动', enabled: true, sortOrder: 1 },
+  comment: { name: '评论/回复', enabled: true, sortOrder: 1 },
+  like: { name: '喜欢', enabled: true, sortOrder: 2 },
+  follow: { name: '关注', enabled: true, sortOrder: 3 },
+  squat: { name: '蹲一蹲', enabled: true, sortOrder: 4 }
+}
+
+function sanitizeMessageCategories(config: any = {}) {
+  return Object.fromEntries(Object.entries(defaultMsgIcons).map(([key, fallback]) => {
+    const value = config?.[key]
+    return [key, {
+      name: typeof value === 'object' && value?.name ? String(value.name) : fallback.name,
+      enabled: typeof value === 'object' ? value?.enabled !== false : fallback.enabled,
+      sortOrder: typeof value === 'object' && Number.isFinite(Number(value?.sortOrder))
+        ? Number(value.sortOrder)
+        : fallback.sortOrder
+    }]
+  }))
+}
+
+const msgIcons = reactive(sanitizeMessageCategories())
 const msgNavCards = ref<any[]>(JSON.parse(JSON.stringify(DEFAULT_MSG_NAV_CARDS)))
 const regionTabsList = ref<any[]>(JSON.parse(JSON.stringify(DEFAULT_TABS)))
 const profileItems = ref<any[]>(JSON.parse(JSON.stringify(DEFAULT_PROFILE_ITEMS)))
 const tabbarList = ref<any[]>(JSON.parse(JSON.stringify(DEFAULT_TABBAR)))
 const tabbarConfig = reactive({
+  type: 'bottom',
   color: '#8A8A8A',
   selectedColor: '#1677ff',
   backgroundColor: '#ffffff',
-  borderStyle: 'black'
+  borderStyle: 'black',
+  messageBadgeStyle: 'bubble'
 })
 
 const shareConfig = reactive({
@@ -657,7 +902,7 @@ const shareConfig = reactive({
   momentsDescription: ''
 })
 
-const createForm = reactive({ name: '', code: '', regionType: 'campus', enterDecoration: true })
+const createForm = reactive({ name: '', code: '', regionType: 'campus', managerUserId: '', regionSwitchSupported: true, enterDecoration: true })
 
 // ---- 计算属性 ----
 const completionPercent = computed(() => {
@@ -707,6 +952,40 @@ function getTabIcon(id: string) {
   return map[id] || Menu
 }
 
+function normalizeTabbarType(value: any) {
+  return value === 'capsule' ? 'capsule' : 'bottom'
+}
+
+function resolveTabbarType(config: any) {
+  if (config?.type) return normalizeTabbarType(config.type)
+  const list = Array.isArray(config?.list) ? config.list : []
+  return list.some((tab: any) => tab?.navType === 'capsule') ? 'capsule' : 'bottom'
+}
+
+function clampTabNumber(value: any, fallback: number, min: number, max: number) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, Math.round(number)))
+}
+
+function normalizeTabbarList(list: any[], type = tabbarConfig.type) {
+  const navType = normalizeTabbarType(type)
+  return (Array.isArray(list) ? list : []).map((tab: any, index: number) => ({
+    ...tab,
+    navType,
+    width: clampTabNumber(tab.width, 24, TAB_ICON_MIN_SIZE, TAB_ICON_MAX_SIZE),
+    height: clampTabNumber(tab.height, 24, TAB_ICON_MIN_SIZE, TAB_ICON_MAX_SIZE),
+    fontSize: clampTabNumber(tab.fontSize, 12, 8, TAB_FONT_MAX_SIZE),
+    sortOrder: Number.isFinite(Number(tab.sortOrder)) ? Number(tab.sortOrder) : index
+  }))
+}
+
+function userOptionLabel(user: any) {
+  const name = user?.nickname || user?.realName || user?.phone || '未命名用户'
+  const uid = user?.uid ? `UID ${user.uid}` : String(user?.id || '').slice(0, 8)
+  return `${name}（${uid}）`
+}
+
 function handleJumpToTab(tab: string) {
   activeTab.value = tab
 }
@@ -738,7 +1017,7 @@ function addTabbarItem() {
     hideText: false,
     enabled: true,
     sortOrder: tabbarList.value.length,
-    navType: 'bottom'
+    navType: normalizeTabbarType(tabbarConfig.type)
   })
 }
 
@@ -752,10 +1031,12 @@ function moveTabbarItem(idx: number, dir: number) {
 
 function resetTabbar() {
   tabbarList.value = JSON.parse(JSON.stringify(DEFAULT_TABBAR))
+  tabbarConfig.type = 'bottom'
   tabbarConfig.color = '#8A8A8A'
   tabbarConfig.selectedColor = '#1677ff'
   tabbarConfig.backgroundColor = '#ffffff'
   tabbarConfig.borderStyle = 'black'
+  tabbarConfig.messageBadgeStyle = 'bubble'
 }
 
 async function saveTabbar() {
@@ -763,11 +1044,13 @@ async function saveTabbar() {
   savingTabbar.value = true
   try {
     const config = {
+      type: normalizeTabbarType(tabbarConfig.type),
       color: tabbarConfig.color,
       selectedColor: tabbarConfig.selectedColor,
       backgroundColor: tabbarConfig.backgroundColor,
       borderStyle: tabbarConfig.borderStyle,
-      list: JSON.parse(JSON.stringify(tabbarList.value))
+      messageBadgeStyle: tabbarConfig.messageBadgeStyle,
+      list: JSON.parse(JSON.stringify(normalizeTabbarList(tabbarList.value)))
     }
     await saveRegionTabbar(selectedId.value, config)
     ElMessage.success('底部导航配置已保存')
@@ -788,6 +1071,75 @@ function cleanJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null))
 }
 
+function parseShareRules(value: any) {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  const text = String(value).trim()
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { description: text }
+  }
+}
+
+function normalizeSwitchSupported(row: any, fallback = true) {
+  const value = row?.regionSwitchSupported ?? row?.region_switch_supported
+  if (value === undefined || value === null || value === '') return fallback
+  return !(value === false || value === 0 || value === '0' || value === 'false')
+}
+
+function isHomeHeroItem(item: any) {
+  const type = String(item?.module_type || item?.type || '').toLowerCase()
+  return type === 'hero' || type === 'home_hero' || type === 'campus_hero'
+}
+
+function normalizeCarouselItem(item: any, idx: number): CarouselItem {
+  if (typeof item === 'string') {
+    return { image: item, title: '', linkType: 'none', linkValue: '', sortOrder: idx, enabled: true }
+  }
+  return { ...item, sortOrder: item.sortOrder ?? item.sort_order ?? idx }
+}
+
+function loadHomeHeroFromCarouselItems(items: any[]) {
+  const heroItem = items.find(isHomeHeroItem) || null
+  homeHeroSource.value = heroItem ? { ...heroItem } : null
+  homeHero.searchPlaceholder = String(
+    heroItem?.search_placeholder ||
+      heroItem?.searchPlaceholder ||
+      heroItem?.placeholder ||
+      DEFAULT_HOME_HERO.searchPlaceholder
+  ).trim()
+}
+
+function buildHomeHeroItem() {
+  const source = homeHeroSource.value || {}
+  const searchPlaceholder = homeHero.searchPlaceholder.trim() || DEFAULT_HOME_HERO.searchPlaceholder
+  return {
+    ...source,
+    id: source.id || 'home_hero',
+    module_type: 'hero',
+    type: 'hero',
+    title: source.title || DEFAULT_HOME_HERO.title,
+    subtitle: source.subtitle || source.content || DEFAULT_HOME_HERO.subtitle,
+    content: source.content || source.subtitle || DEFAULT_HOME_HERO.subtitle,
+    search_placeholder: searchPlaceholder,
+    placeholder: searchPlaceholder,
+    sortOrder: source.sortOrder ?? source.sort_order ?? -100,
+    enabled: source.enabled ?? source.isShow ?? true
+  }
+}
+
+function buildHomeCarouselImagesPayload() {
+  return [
+    buildHomeHeroItem(),
+    ...carouselItems.value.map((item, index) => ({
+      ...item,
+      sortOrder: item.sortOrder ?? item.sort_order ?? index
+    }))
+  ]
+}
+
 // ---- 数据加载 ----
 function fillForm(row: any) {
   form.id = row.id || ''
@@ -797,17 +1149,25 @@ function fillForm(row: any) {
   form.logo = row.logo || ''
   form.coverImage = row.coverImage || row.cover || ''
   form.regionType = row.regionType || 'other'
+  form.managerUserId =
+    row.managerUserId ||
+    row.manager_user_id ||
+    row.managerId ||
+    row.manager_id ||
+    row.settings?.operator?.managerUserId ||
+    row.settings?.operator?.manager_id ||
+    ''
   form.isOpen = row.isOpen !== undefined ? row.isOpen : (row.status === 1 || row.status === true)
+  form.regionSwitchSupported = normalizeSwitchSupported(row, form.regionSwitchSupported)
   form.isHot = row.isHot ?? false
   form.regionCoverMode = row.regionCoverMode || 'cover'
   if (Array.isArray(row.carouselImages)) {
-    carouselItems.value = row.carouselImages.map((item: any, idx: number) => {
-      if (typeof item === 'string') {
-        return { image: item, title: '', linkType: 'none', linkValue: '', sortOrder: idx, enabled: true }
-      }
-      return { ...item, sortOrder: item.sortOrder ?? idx }
-    })
+    loadHomeHeroFromCarouselItems(row.carouselImages)
+    carouselItems.value = row.carouselImages
+      .filter((item: any) => !isHomeHeroItem(item))
+      .map(normalizeCarouselItem)
   } else {
+    loadHomeHeroFromCarouselItems([])
     carouselItems.value = []
   }
   form.latitude = row.latitude ?? null
@@ -824,7 +1184,6 @@ function fillForm(row: any) {
   form.selfUnbanFee = row.selfUnbanFee ?? 0
   form.showHotList = row.showHotList ?? false
   form.hotFeaturedDisplay = row.hotFeaturedDisplay || 'none'
-  form.isForceGuidance = row.isForceGuidance ?? false
   form.privateMessageEnabled = row.privateMessageEnabled ?? true
   form.contactsRequireStudentAuth = row.contactsRequireStudentAuth ?? false
   form.onlyStudentAuthUsers = row.onlyStudentAuthUsers ?? false
@@ -843,9 +1202,7 @@ function fillForm(row: any) {
     Object.assign(leaderboard, row.homeLeaderboard)
     if (!leaderboard.items) leaderboard.items = []
   }
-  if (row.messageIcons) {
-    Object.assign(msgIcons, row.messageIcons)
-  }
+  Object.assign(msgIcons, sanitizeMessageCategories(row.messageIcons))
   if (row.messageNavigation?.cards) {
     msgNavCards.value = JSON.parse(JSON.stringify(row.messageNavigation.cards))
   }
@@ -853,7 +1210,7 @@ function fillForm(row: any) {
     regionTabsList.value = JSON.parse(JSON.stringify(row.regionTabs))
   }
   if (Array.isArray(row.profileLayoutItems)) {
-    profileItems.value = JSON.parse(JSON.stringify(row.profileLayoutItems))
+    profileItems.value = ensureProfileDefaultItems(row.profileLayoutItems)
   }
 
   lastUpdated.value = row.updatedAt || row.createdAt || ''
@@ -862,17 +1219,20 @@ function fillForm(row: any) {
 async function selectRegion(id: string | number) {
   try {
     const detail: any = await fetchRegionDetail(id)
-    fillForm(detail)
+    const cachedRow = regions.value.find(r => String(r.id) === String(id))
+    fillForm({ ...(cachedRow || {}), ...(detail?.data || detail || {}) })
 
     // 加载底部导航
     try {
       const tabbarData: any = await fetchRegionTabbar(id)
       if (tabbarData?.config) {
+        tabbarConfig.type = resolveTabbarType(tabbarData.config)
         tabbarConfig.color = tabbarData.config.color || '#8A8A8A'
         tabbarConfig.selectedColor = tabbarData.config.selectedColor || '#1677ff'
         tabbarConfig.backgroundColor = tabbarData.config.backgroundColor || '#ffffff'
         tabbarConfig.borderStyle = tabbarData.config.borderStyle || 'black'
-        tabbarList.value = JSON.parse(JSON.stringify(tabbarData.config.list || DEFAULT_TABBAR))
+        tabbarConfig.messageBadgeStyle = tabbarData.config.messageBadgeStyle || 'bubble'
+        tabbarList.value = JSON.parse(JSON.stringify(normalizeTabbarList(tabbarData.config.list || DEFAULT_TABBAR, tabbarConfig.type)))
       }
     } catch (e: any) {
       ElMessage.error(e?.message || '加载失败')
@@ -886,16 +1246,14 @@ async function selectRegion(id: string | number) {
         shareConfig.enabled = shareData.isEnabled ?? true
         shareConfig.title = shareData.activityTitle || ''
         shareConfig.imageUrl = shareData.activityImage || ''
-        try {
-          const rules = typeof shareData.activityRules === 'string' ? JSON.parse(shareData.activityRules) : (shareData.activityRules || {})
-          shareConfig.shareType = rules.shareType || 'page'
-          shareConfig.path = rules.path || ''
-          shareConfig.description = rules.description || ''
-          shareConfig.momentsEnabled = rules.momentsEnabled ?? true
-          shareConfig.momentsTitle = rules.momentsTitle || ''
-          shareConfig.momentsImageUrl = rules.momentsImageUrl || ''
-          shareConfig.momentsDescription = rules.momentsDescription || ''
-        } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
+        const rules = parseShareRules(shareData.activityRules)
+        shareConfig.shareType = rules.shareType || 'page'
+        shareConfig.path = rules.path || ''
+        shareConfig.description = rules.description || ''
+        shareConfig.momentsEnabled = rules.momentsEnabled ?? true
+        shareConfig.momentsTitle = rules.momentsTitle || ''
+        shareConfig.momentsImageUrl = rules.momentsImageUrl || ''
+        shareConfig.momentsDescription = rules.momentsDescription || ''
       }
     } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
 
@@ -932,6 +1290,15 @@ async function loadRegions(showSuccess = false) {
   }
 }
 
+async function loadMiniUsers() {
+  try {
+    const res: any = await request.get('/admin/users', { params: { page: 1, pageSize: 200, status: 'active', userType: 'normal' } })
+    miniUsers.value = Array.isArray(res) ? res : res?.list || res?.data?.list || []
+  } catch (e) {
+    miniUsers.value = []
+  }
+}
+
 // ---- 保存 ----
 async function saveRegion() {
   if (!form.id) {
@@ -950,11 +1317,17 @@ async function saveRegion() {
       description: form.description,
       logo: form.logo,
       coverImage: form.coverImage,
-      regionType: form.regionType,
-      isOpen: form.isOpen,
-      isHot: form.isHot,
+	      regionType: form.regionType,
+      managerUserId: form.managerUserId || null,
+      manager_user_id: form.managerUserId || null,
+      managerId: form.managerUserId || null,
+      manager_id: form.managerUserId || null,
+	      isOpen: form.isOpen,
+      regionSwitchSupported: form.regionSwitchSupported,
+	      region_switch_supported: form.regionSwitchSupported,
+	      isHot: form.isHot,
       regionCoverMode: form.regionCoverMode,
-      carouselImages: carouselItems.value,
+      carouselImages: buildHomeCarouselImagesPayload(),
       latitude: form.latitude,
       longitude: form.longitude,
       address: locationAddress.value,
@@ -969,7 +1342,6 @@ async function saveRegion() {
       selfUnbanFee: form.selfUnbanFee,
       showHotList: form.showHotList,
       hotFeaturedDisplay: form.hotFeaturedDisplay,
-      isForceGuidance: form.isForceGuidance,
       privateMessageEnabled: form.privateMessageEnabled,
       contactsRequireStudentAuth: form.contactsRequireStudentAuth,
       onlyStudentAuthUsers: form.onlyStudentAuthUsers,
@@ -980,16 +1352,18 @@ async function saveRegion() {
       profilePageLayout: form.profilePageLayout,
       homeNavLayoutConfig: cleanJson({ ...navConfig, title: { ...navConfig.title } }),
       homeLeaderboard: cleanJson(leaderboard),
-      messageIcons: cleanJson(msgIcons),
+      messageIcons: cleanJson(sanitizeMessageCategories(msgIcons)),
       messageNavigation: cleanJson({ cards: msgNavCards.value }),
       regionTabs: cleanJson(regionTabsList.value),
       profileLayoutItems: cleanJson(profileItems.value)
     }
-    try {
-      await saveRegionBaseConfig(form.id, payload)
-    } catch (e: any) {
-      throw new Error(`区域基础配置保存失败：${getErrorMessage(e)}`)
-    }
+	    const expectedSwitchSupported = form.regionSwitchSupported
+	    try {
+	      const savedRegion = await saveRegionBaseConfig(form.id, payload)
+	      form.regionSwitchSupported = normalizeSwitchSupported(savedRegion, expectedSwitchSupported)
+	    } catch (e: any) {
+	      throw new Error(`区域基础配置保存失败：${getErrorMessage(e)}`)
+	    }
 
     // 保存分享设置
     try {
@@ -1012,9 +1386,31 @@ async function saveRegion() {
       ElMessage.warning(`区域基础配置已保存，但分享设置保存失败：${getErrorMessage(e)}`)
     }
 
-    ElMessage.success('区域配置已保存，小程序端将在下次加载时生效')
-    lastUpdated.value = new Date().toISOString()
-    await loadRegions()
+    // 保存底部导航设置
+    try {
+      await saveRegionTabbar(form.id, {
+        type: normalizeTabbarType(tabbarConfig.type),
+        color: tabbarConfig.color,
+        selectedColor: tabbarConfig.selectedColor,
+        backgroundColor: tabbarConfig.backgroundColor,
+        borderStyle: tabbarConfig.borderStyle,
+        messageBadgeStyle: tabbarConfig.messageBadgeStyle,
+        list: cleanJson(normalizeTabbarList(tabbarList.value))
+      })
+    } catch (e: any) {
+      console.error('保存底部导航配置失败', e)
+      ElMessage.warning(`区域基础配置已保存，但底部导航保存失败：${getErrorMessage(e)}`)
+    }
+
+	    ElMessage.success('区域配置已保存，小程序端将在下次加载时生效')
+	    lastUpdated.value = new Date().toISOString()
+	    await loadRegions()
+	    const current = regions.value.find(r => String(r.id) === String(form.id))
+	    if (current) {
+	      current.regionSwitchSupported = expectedSwitchSupported
+	      current.region_switch_supported = expectedSwitchSupported
+	    }
+	    form.regionSwitchSupported = expectedSwitchSupported
   } catch (e: any) {
     ElMessage.error(getErrorMessage(e))
   } finally {
@@ -1076,6 +1472,8 @@ function openCreateDialog() {
   createForm.name = ''
   createForm.code = ''
   createForm.regionType = 'campus'
+  createForm.managerUserId = ''
+  createForm.regionSwitchSupported = true
   createForm.enterDecoration = true
   createVisible.value = true
 }
@@ -1091,10 +1489,20 @@ async function submitCreate() {
       name: createForm.name,
       code: createForm.code || undefined,
       regionType: createForm.regionType,
+      managerUserId: createForm.managerUserId || undefined,
+      manager_user_id: createForm.managerUserId || undefined,
+      regionSwitchSupported: createForm.regionSwitchSupported,
+      region_switch_supported: createForm.regionSwitchSupported,
       regionTabs: DEFAULT_TABS,
       homeLeaderboard: DEFAULT_LEADERBOARD,
       messageNavigation: { cards: DEFAULT_MSG_NAV_CARDS },
-      profileLayoutItems: DEFAULT_PROFILE_ITEMS
+      profileLayoutItems: DEFAULT_PROFILE_ITEMS,
+      settings: {
+        operator: {
+          managerUserId: createForm.managerUserId || undefined,
+          manager_id: createForm.managerUserId || undefined
+        }
+      }
     })
     ElMessage.success('区域创建成功')
     createVisible.value = false
@@ -1122,7 +1530,10 @@ async function submitCreate() {
   }
 }
 
-onMounted(loadRegions)
+onMounted(() => {
+  loadMiniUsers()
+  loadRegions()
+})
 </script>
 
 <style scoped lang="scss">
@@ -1135,10 +1546,10 @@ onMounted(loadRegions)
   padding: 0 18px;
   font-size: 14.5px;
   font-weight: 650;
-  color: #526174;
+  color: var(--mx-sub);
 }
 .quiet-tabs :deep(.el-tabs__item.is-active) {
-  color: #1f6fff;
+  color: var(--el-color-primary);
   font-weight: 760;
 }
 
@@ -1156,10 +1567,16 @@ onMounted(loadRegions)
   gap: 16px;
   padding: 20px 24px 4px;
 }
+.section-subtitle {
+  margin-top: 5px;
+  color: var(--mx-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .section-card :deep(.el-form) { padding: 16px 24px 24px; }
 .relaxed { gap: 16px 24px; }
 .span-2 { grid-column: span 2; }
-.form-tip { color: #94a3b8; font-size: 12px; margin-top: 4px; }
+.form-tip { color: var(--mx-muted); font-size: 12px; margin-top: 4px; }
 
 .create-next {
   display: flex;
@@ -1169,16 +1586,16 @@ onMounted(loadRegions)
   padding: 14px 16px;
   margin-top: 4px;
   border-radius: 14px;
-  background: rgba(239, 246, 255, .72);
+  background: var(--el-color-primary-light-9);
 }
 .create-next b {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 14px;
   font-weight: 700;
 }
 .create-next p {
   margin: 5px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1196,11 +1613,11 @@ onMounted(loadRegions)
   gap: 16px;
   padding: 14px 16px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, .6);
-  border: 1px solid rgba(226, 232, 240, .6);
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
 }
 .switch-item b { font-size: 14px; }
-.switch-item p { margin: 4px 0 0; color: #94a3b8; font-size: 12px; }
+.switch-item p { margin: 4px 0 0; color: var(--mx-muted); font-size: 12px; }
 
 .sortable-list {
   display: grid;
@@ -1213,13 +1630,13 @@ onMounted(loadRegions)
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, .66);
-  border: 1px solid rgba(226, 232, 240, .6);
+  border-radius: 10px;
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
 }
 .sortable-grip {
   cursor: grab;
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 16px;
   user-select: none;
 }
@@ -1234,26 +1651,107 @@ onMounted(loadRegions)
   gap: 4px;
 }
 .muted {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 
 /* 底部导航预览 */
+.tabbar-control-grid {
+  grid-template-columns: minmax(360px, .95fr) minmax(360px, 1.05fr);
+}
+.badge-style-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px 24px 24px;
+}
+.badge-style-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 136px 1fr;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--mx-border);
+  border-radius: 14px;
+  background: var(--mx-card);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.badge-style-option:hover,
+.badge-style-option.active {
+  border-color: color-mix(in srgb, var(--el-color-primary) 42%, transparent);
+  background: var(--el-color-primary-light-9);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--el-color-primary) 8%, transparent);
+}
+.badge-option-preview {
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
+}
+.badge-phone-tab {
+  position: relative;
+  min-width: 82px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  color: var(--el-color-primary);
+}
+.badge-phone-label {
+  color: var(--mx-sub);
+  font-size: 10px;
+  font-weight: 700;
+}
+.badge-option-main {
+  display: grid;
+  gap: 4px;
+}
+.badge-option-main b {
+  color: var(--mx-text);
+  font-size: 14px;
+  font-weight: 800;
+}
+.badge-option-main small {
+  color: var(--mx-sub);
+  font-size: 12px;
+  line-height: 1.55;
+}
 .tabbar-preview {
   padding: 16px 24px;
 }
 .tabbar-phone {
-  background: #f8fafc;
-  border-radius: 12px;
+  background: var(--mx-soft);
+  border-radius: 10px;
   padding: 10px;
 }
 .tabbar-bar {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  background: #fff;
+  background: var(--mx-card);
   border-radius: 10px;
   padding: 8px 4px;
+}
+.tabbar-bar.style-capsule {
+  width: calc(100% - 36px);
+  margin: 0 auto 8px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--mx-text) 8%, transparent);
+}
+.tabbar-style-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.tabbar-style-control label {
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-weight: 800;
 }
 .tabbar-item {
   display: flex;
@@ -1266,6 +1764,7 @@ onMounted(loadRegions)
   opacity: 0.4;
 }
 .tabbar-icon {
+  position: relative;
   width: 24px;
   height: 24px;
   display: grid;
@@ -1273,13 +1772,126 @@ onMounted(loadRegions)
 }
 .tabbar-text {
   font-size: 10px;
-  color: #64748b;
+  color: var(--mx-sub);
   white-space: nowrap;
 }
 .tabbar-summary {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
   margin-top: 8px;
+}
+.tabbar-quick-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px 24px 24px;
+}
+.tabbar-quick-item {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
+}
+.tabbar-quick-item.disabled {
+  opacity: .58;
+}
+.tabbar-quick-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+.tabbar-quick-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.tabbar-quick-main b {
+  color: var(--mx-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+.tabbar-quick-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mx-muted);
+  font-size: 12px;
+}
+.preview-message-tip {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translate(-50%, -4px);
+  white-space: nowrap;
+  color: #fff;
+  background: var(--el-color-danger);
+  border-radius: 999px;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--el-color-danger) 22%, transparent);
+  pointer-events: none;
+}
+.preview-message-tip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--el-color-danger);
+}
+.preview-message-tip.compact {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+.preview-message-tip.mini {
+  padding: 3px 7px;
+  font-size: 9px;
+  bottom: calc(100% - 2px);
+}
+.preview-message-badge {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--el-color-danger);
+  border: 1px solid var(--mx-card);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--el-color-danger) 22%, transparent);
+}
+.preview-message-badge.compact {
+  top: -8px;
+  right: 14px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+.preview-message-badge.mini {
+  top: -5px;
+  right: -8px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9px;
+}
+.preview-message-badge.dot {
+  width: 9px;
+  min-width: 9px;
+  height: 9px;
+  padding: 0;
+  border-radius: 50%;
+}
+.preview-message-badge.compact.dot {
+  top: -5px;
+  right: 20px;
 }
 
 /* 编辑器 */
@@ -1314,9 +1926,12 @@ onMounted(loadRegions)
   flex-direction: column;
   gap: 6px;
 }
+.style-field.wide {
+  min-width: 160px;
+}
 .style-field label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 700;
 }
 .tab-list {
@@ -1324,22 +1939,22 @@ onMounted(loadRegions)
   gap: 12px;
 }
 .tab-editor-item {
-  border: 1px solid rgba(226, 232, 240, .7);
+  border: 1px solid var(--mx-border);
   border-radius: 14px;
   overflow: hidden;
-  background: rgba(255, 255, 255, .6);
+  background: var(--mx-card);
 }
 .tab-editor-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: rgba(248, 250, 252, .8);
-  border-bottom: 1px solid rgba(226, 232, 240, .5);
+  background: var(--mx-soft);
+  border-bottom: 1px solid var(--mx-border);
 }
 .tab-drag {
   cursor: grab;
-  color: #94a3b8;
+  color: var(--mx-muted);
   user-select: none;
 }
 .tab-label {
@@ -1380,7 +1995,7 @@ onMounted(loadRegions)
 }
 .field-item label {
   font-size: 11px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-weight: 700;
 }
 .tab-icon-upload-grid {
@@ -1388,7 +2003,7 @@ onMounted(loadRegions)
 }
 .empty-tabs {
   text-align: center;
-  color: #94a3b8;
+  color: var(--mx-muted);
   padding: 24px;
   font-size: 13px;
 }
@@ -1397,7 +2012,7 @@ onMounted(loadRegions)
   justify-content: flex-end;
   gap: 10px;
   padding-top: 16px;
-  border-top: 1px solid rgba(226, 232, 240, .5);
+  border-top: 1px solid var(--mx-border);
 }
 .editor-preview {
   position: sticky;
@@ -1412,19 +2027,19 @@ onMounted(loadRegions)
   width: 220px;
   margin: 0 auto;
   border-radius: 28px;
-  border: 2px solid #1f6fff;
-  background: #fff;
+  border: 2px solid var(--el-color-primary);
+  background: var(--mx-card);
   overflow: hidden;
-  box-shadow: 0 12px 32px rgba(37, 99, 235, .12);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--el-color-primary) 12%, transparent);
 }
 .preview-content {
   height: 320px;
-  background: linear-gradient(180deg, #f0f7ff, #fff);
+  background: var(--mx-hover);
   display: grid;
   place-items: center;
 }
 .preview-placeholder {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 .preview-tabbar {
@@ -1432,9 +2047,17 @@ onMounted(loadRegions)
   justify-content: space-around;
   align-items: center;
   padding: 6px 2px 10px;
-  border-top: 1px solid rgba(226, 232, 240, .5);
+  border-top: 1px solid var(--mx-border);
+}
+.preview-tabbar.style-capsule {
+  width: calc(100% - 36px);
+  margin: 0 auto 12px;
+  border: 1px solid var(--mx-border);
+  border-radius: 999px;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--mx-text) 10%, transparent);
 }
 .preview-tab-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1445,6 +2068,7 @@ onMounted(loadRegions)
   opacity: 0.3;
 }
 .preview-tab-icon {
+  position: relative;
   width: 24px;
   height: 24px;
   display: grid;
@@ -1457,6 +2081,7 @@ onMounted(loadRegions)
 
 @media (max-width: 1050px) {
   .section-grid { grid-template-columns: 1fr; }
+  .tabbar-control-grid { grid-template-columns: 1fr; }
   .switch-grid { grid-template-columns: 1fr; }
 }
 </style>

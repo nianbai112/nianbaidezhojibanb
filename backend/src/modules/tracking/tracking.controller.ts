@@ -8,9 +8,11 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request } from 'express';
 import { TrackingService } from './tracking.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { RequirePermission } from '../../decorators/require-permission.decorator';
 import { CurrentUser } from '../../decorators/current-user.decorator';
@@ -20,20 +22,53 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class TrackingController {
   constructor(private readonly trackingService: TrackingService) {}
 
-  @Post('api/tracking/events')
+  @Post('tracking/events')
+  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: '上报单个事件' })
-  trackEvent(@Body() body: any, @Req() req: Request) {
+  trackEvent(@Body() body: any, @Req() req: Request, @CurrentUser('sub') userId?: string) {
+    return this.handleTrackEvent(body, req, userId);
+  }
+
+  @Post('api/tracking/events')
+  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 30 } })
+  @ApiOperation({ summary: '上报单个事件（旧路径兼容）' })
+  trackEventLegacy(@Body() body: any, @Req() req: Request, @CurrentUser('sub') userId?: string) {
+    return this.handleTrackEvent(body, req, userId);
+  }
+
+  private handleTrackEvent(body: any, req: Request, userId?: string) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     const ua = req.headers['user-agent'] || '';
-    return this.trackingService.trackEvent({ ...body, ip, ua });
+    const rest = { ...(body || {}) };
+    delete rest.userId;
+    delete rest.user_id;
+    delete rest.regionId;
+    delete rest.region_id;
+    return this.trackingService.trackEvent({ ...rest, ip, ua }, userId);
+  }
+
+  @Post('tracking/batch')
+  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: '批量上报事件' })
+  trackBatch(@Body() body: { events: any[] }, @Req() req: Request, @CurrentUser('sub') userId?: string) {
+    return this.handleTrackBatch(body, req, userId);
   }
 
   @Post('api/tracking/batch')
-  @ApiOperation({ summary: '批量上报事件' })
-  trackBatch(@Body() body: { events: any[] }, @Req() req: Request) {
+  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: '批量上报事件（旧路径兼容）' })
+  trackBatchLegacy(@Body() body: { events: any[] }, @Req() req: Request, @CurrentUser('sub') userId?: string) {
+    return this.handleTrackBatch(body, req, userId);
+  }
+
+  private handleTrackBatch(body: { events: any[] }, req: Request, userId?: string) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     const ua = req.headers['user-agent'] || '';
-    return this.trackingService.trackBatch(body.events, ip, ua);
+    return this.trackingService.trackBatch(body?.events, ip, ua, userId);
   }
 
   @Get('admin/tracking/events')

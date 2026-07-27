@@ -96,7 +96,7 @@ export class ErrandAdminController {
   // ================= 统计分析 =================
   @Get('stats')
   @ApiOperation({ summary: '获取配送统计' })
-  @RequirePermission('errand:stats:view')
+  @RequirePermission('errand:view')
   getAdminStats(@Query('regionId') regionId: string) {
     return this.errandService.getAdminStats(regionId);
   }

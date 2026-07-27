@@ -1,0 +1,15 @@
+<svg width="750" height="900" viewBox="0 0 750 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="750" height="900" rx="36" fill="#0F0F0F"/>
+  <rect x="44" y="44" width="662" height="812" rx="30" fill="#FFFFFF"/>
+  <rect x="80" y="86" width="590" height="252" rx="28" fill="#111111"/>
+  <circle cx="600" cy="150" r="46" fill="#2FE36D"/>
+  <circle cx="540" cy="218" r="24" fill="#FFD43B"/>
+  <path d="M124 270C206 194 282 184 352 240C408 285 468 290 628 166" stroke="#2FE36D" stroke-width="18" stroke-linecap="round"/>
+  <text x="86" y="410" fill="#111111" font-size="54" font-weight="800" font-family="Arial, sans-serif">新用户首单礼包</text>
+  <text x="88" y="468" fill="#555555" font-size="28" font-family="Arial, sans-serif">首单立减 / 配送补贴 / 邀请奖励</text>
+  <rect x="88" y="520" width="574" height="126" rx="24" fill="#F5F5F5"/>
+  <text x="122" y="572" fill="#111111" font-size="28" font-weight="700" font-family="Arial, sans-serif">￥8 首单券</text>
+  <text x="122" y="616" fill="#777777" font-size="24" font-family="Arial, sans-serif">满 20 可用，限当前区域</text>
+  <rect x="88" y="690" width="574" height="82" rx="41" fill="#111111"/>
+  <text x="280" y="742" fill="#FFFFFF" font-size="30" font-weight="700" font-family="Arial, sans-serif">立即领取</text>
+</svg>

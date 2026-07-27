@@ -7,6 +7,9 @@ export class ChannelMaskDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() websocket?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() wechatSubscribe?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() officialAccount?: boolean;
+  // AUD-P1-170: 新增邮件和短信渠道
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() email?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() sms?: boolean;
 }
 
 export class CreateNotificationDto {

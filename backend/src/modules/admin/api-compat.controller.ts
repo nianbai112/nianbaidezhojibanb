@@ -9,13 +9,13 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtGuard } from "../../guards/jwt.guard";
-import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
+import { AdminGuard, AdminPermissionGuard, SuperAdminGuard } from "../../guards/admin.guard";
 import { RequirePermission } from "../../decorators/require-permission.decorator";
 import { PrismaService } from "../../common/services/prisma.service";
 
 @ApiTags("新后台 /api 兼容接口")
 @Controller("api")
-@UseGuards(JwtGuard, AdminGuard)
+@UseGuards(JwtGuard, AdminGuard, SuperAdminGuard)
 @ApiBearerAuth()
 export class ApiCompatController {
 
@@ -928,20 +928,6 @@ export class ApiCompatController {
   draftManageCreateFromNotes() { return { success: true }; }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 漂流瓶
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  @Get("drift-bottle/manage/bottles")
-  async driftBottleManageBottles(@Query() q: any) {
-    const { page = 1, pageSize = 20 } = q;
-    const [list, total] = await Promise.all([
-      this.prisma.driftBottle.findMany({ skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, nickname: true } } } }),
-      this.prisma.driftBottle.count(),
-    ]);
-    return { list, total, page: +page, pageSize: +pageSize };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // 余额 / Bull / License / 区域 / 小程序 / 笔记 / 商家 / 分享 / 商城
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1011,10 +997,21 @@ export class ApiCompatController {
 
   @Get("share/records")
   async shareRecords(@Query() q: any) {
-    const { page = 1, pageSize = 20 } = q;
+    const { page = 1, pageSize = 20, status, regionId, inviterId, inviteeId, keyword } = q;
+    const where: any = {};
+    if (status) where.status = status;
+    if (regionId) where.regionId = regionId;
+    if (inviterId) where.inviterId = inviterId;
+    if (inviteeId) where.inviteeId = inviteeId;
+    if (keyword) {
+      where.OR = [
+        { inviterId: String(keyword) },
+        { inviteeId: String(keyword) },
+      ];
+    }
     const [list, total] = await Promise.all([
-      this.prisma.shareInvite.findMany({ skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { inviter: { select: { id: true, nickname: true } }, invitee: { select: { id: true, nickname: true } } } }),
-      this.prisma.shareInvite.count(),
+      this.prisma.shareInvite.findMany({ where, skip: (+page - 1) * +pageSize, take: +pageSize, orderBy: { createdAt: "desc" }, include: { inviter: { select: { id: true, nickname: true } }, invitee: { select: { id: true, nickname: true } }, rewards: true } }),
+      this.prisma.shareInvite.count({ where }),
     ]);
     return { list, total, page: +page, pageSize: +pageSize };
   }

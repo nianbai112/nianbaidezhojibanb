@@ -238,11 +238,11 @@ const enabledLeaderboardItems = computed(() => {
 
 // 默认导航项
 const getDefaultNavItems = () => [
-  { name: '笔记', icon: '', page: '/pages/note/list', enabled: true },
-  { name: '外卖', icon: '', page: '/pages/takeout/list', enabled: true },
-  { name: '二手', icon: '', page: '/pages/secondhand/list', enabled: true },
-  { name: '活动', icon: '', page: '/pages/activity/list', enabled: true },
-  { name: '圈子', icon: '', page: '/pages/circle/list', enabled: true },
+  { name: '笔记', icon: '', page: 'pagesB/post/post', enabled: true },
+  { name: '外卖', icon: '', page: 'pagesA/merchant/merchant', enabled: true },
+  { name: '二手', icon: '', page: 'pages/tabbar/index/index?tab=secondhand', enabled: true },
+  { name: '活动', icon: '', page: 'pagesA/selection/list/list?tabIndex=0', enabled: true },
+  { name: '圈子', icon: '', page: 'pages/tabbar/containers/containers', enabled: true },
 ]
 
 // 默认导航名称

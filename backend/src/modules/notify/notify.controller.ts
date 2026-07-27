@@ -40,6 +40,17 @@ export class NotifyController {
     return this.notifyService.getUnreadSummary(userId, regionId);
   }
 
+  @Post('notifications/batch-action')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '批量标记已读或从用户列表隐藏' })
+  batchAction(
+    @CurrentUser('sub') userId: string,
+    @Body() body: { ids?: string[]; action?: 'read' | 'hide' },
+  ) {
+    return this.notifyService.batchAction(userId, body.ids, body.action);
+  }
+
   @Put('notifications/:id/read')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -90,6 +101,34 @@ export class NotifyController {
     });
   }
 
+  @Get('official-assistant/messages')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取官方助手消息时间线' })
+  getOfficialAssistantTimeline(
+    @CurrentUser('sub') userId: string,
+    @Query() query: any,
+  ) {
+    return this.notifyService.getOfficialAssistantTimeline(userId, {
+      regionId: query.region_id || query.regionId,
+      category: query.category,
+      page: query.page ? Number(query.page) : 1,
+      pageSize: query.pageSize || query.page_size ? Number(query.pageSize || query.page_size) : 20,
+    });
+  }
+
+  @Post('notifications/:id/review')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '审核通知关联内容（旧小程序兼容）' })
+  reviewNotificationLegacy(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: { action?: string },
+  ) {
+    return this.notifyService.reviewNotification(userId, id, dto?.action || '');
+  }
+
   // ==================== 旧接口兼容 ====================
 
   @Get('notifications/all-details')
@@ -103,6 +142,7 @@ export class NotifyController {
     const normalizedQuery: NotificationQueryDto = {
       type: query.type,
       regionId: query.region_id || query.regionId,
+      unreadOnly: query.unreadOnly || query.unread_only,
       page: query.page ? Number(query.page) : 1,
       pageSize: query.pageSize ? Number(query.pageSize) : 10,
     };
@@ -135,7 +175,8 @@ export class NotifyController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '全部标记已读（旧接口兼容）' })
-  markAllReadLegacy(@CurrentUser('sub') userId: string) {
-    return this.notifyService.markAllRead(userId, {});
+  markAllReadLegacy(@CurrentUser('sub') userId: string, @Query('region_id') regionId?: string) {
+    // AUD-P1-020: 旧接口支持下传 regionId，防止跨区域清空未读
+    return this.notifyService.markAllRead(userId, { regionId: regionId || '' });
   }
 }

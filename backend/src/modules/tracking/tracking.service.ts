@@ -5,39 +5,62 @@ import { PrismaService } from '../../common/services/prisma.service';
 export class TrackingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async trackEvent(data: any) {
+  private async resolveIdentity(userId?: string) {
+    if (!userId) return { userId: null, regionId: null };
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { regionId: true },
+    });
+    return { userId, regionId: profile?.regionId || null };
+  }
+
+  private normalizeEvent(data: any, identity: { userId: string | null; regionId: string | null }, ip: string, ua: string) {
+    const eventName = String(data?.eventName || '').trim().slice(0, 64);
+    if (!eventName) return null;
+
+    const rawParams = data?.params && typeof data.params === 'object' && !Array.isArray(data.params)
+      ? data.params
+      : {};
+    const params = { ...rawParams };
+    if (eventName === 'search') {
+      const keyword = String(params.keyword || '').trim().slice(0, 100);
+      // 搜索词榜只接受可追溯的登录用户，匿名请求不进入运营统计。
+      if (!identity.userId || !keyword) return null;
+      params.keyword = keyword;
+    }
+
+    return {
+      eventName,
+      userId: identity.userId,
+      sessionId: String(data?.sessionId || '').trim().slice(0, 128) || null,
+      regionId: identity.regionId,
+      pagePath: String(data?.pagePath || '').trim().slice(0, 255) || null,
+      targetId: String(data?.targetId || '').trim().slice(0, 128) || null,
+      targetType: String(data?.targetType || '').trim().slice(0, 64) || null,
+      params,
+      ip,
+      ua: String(ua || '').slice(0, 512),
+    };
+  }
+
+  async trackEvent(data: any, userId?: string) {
+    const identity = await this.resolveIdentity(userId);
+    const event = this.normalizeEvent(data, identity, data?.ip || '', data?.ua || '');
+    if (!event) return { success: true, dropped: true };
     await this.prisma.trackingEvent.create({
-      data: {
-        eventName: data.eventName,
-        userId: data.userId,
-        sessionId: data.sessionId,
-        regionId: data.regionId,
-        pagePath: data.pagePath,
-        targetId: data.targetId,
-        targetType: data.targetType,
-        params: data.params,
-        ip: data.ip,
-        ua: data.ua,
-      },
+      data: event,
     });
     return { success: true };
   }
 
-  async trackBatch(events: any[], ip: string, ua: string) {
+  async trackBatch(events: any[], ip: string, ua: string, userId?: string) {
     if (!events?.length) return { success: true, count: 0 };
 
-    const data = events.map((e) => ({
-      eventName: e.eventName,
-      userId: e.userId,
-      sessionId: e.sessionId,
-      regionId: e.regionId,
-      pagePath: e.pagePath,
-      targetId: e.targetId,
-      targetType: e.targetType,
-      params: e.params,
-      ip,
-      ua,
-    }));
+    const identity = await this.resolveIdentity(userId);
+    const data = events.slice(0, 50)
+      .map((event) => this.normalizeEvent(event, identity, ip, ua))
+      .filter(Boolean) as any[];
+    if (!data.length) return { success: true, count: 0, dropped: true };
 
     await this.prisma.trackingEvent.createMany({ data });
     return { success: true, count: data.length };
@@ -194,7 +217,7 @@ export class TrackingService {
   }
 
   async getSearchKeywords(query: any) {
-    const { regionId, startDate, endDate, limit = 50 } = query;
+    const { regionId, startDate, endDate, keyword, limit = 50 } = query;
 
     const where: any = { eventName: 'search' };
     if (regionId) where.regionId = regionId;
@@ -206,24 +229,41 @@ export class TrackingService {
 
     const searches = await this.prisma.trackingEvent.findMany({
       where,
-      select: { params: true },
+      select: { params: true, createdAt: true, regionId: true },
       take: 10000,
+      orderBy: { createdAt: 'desc' },
     });
 
-    // Aggregate search keywords
-    const keywords = new Map<string, number>();
+    const keywordFilter = String(keyword || '').trim();
+    const keywords = new Map<string, { keyword: string; count: number; latestAt: Date | null; regionIds: Set<string>; types: Set<string> }>();
     searches.forEach((s) => {
-      const keyword = (s.params as any)?.keyword;
-      if (keyword) {
-        keywords.set(keyword, (keywords.get(keyword) || 0) + 1);
-      }
+      const itemKeyword = String((s.params as any)?.keyword || '').trim();
+      if (!itemKeyword) return;
+      if (keywordFilter && !itemKeyword.includes(keywordFilter)) return;
+      const existed = keywords.get(itemKeyword) || { keyword: itemKeyword, count: 0, latestAt: null, regionIds: new Set<string>(), types: new Set<string>() };
+      existed.count += 1;
+      if (!existed.latestAt || s.createdAt > existed.latestAt) existed.latestAt = s.createdAt;
+      if (s.regionId) existed.regionIds.add(s.regionId);
+      const type = String((s.params as any)?.type || (s.params as any)?.searchType || '').trim();
+      if (type) existed.types.add(type);
+      keywords.set(itemKeyword, existed);
     });
+
+    const allItems = Array.from(keywords.values())
+      .map((item) => ({
+        keyword: item.keyword,
+        count: item.count,
+        latestAt: item.latestAt?.toISOString?.() || null,
+        regionCount: item.regionIds.size,
+        types: Array.from(item.types),
+      }))
+      .sort((a, b) => b.count - a.count);
+    const list = allItems.slice(0, Number(limit));
 
     return {
-      keywords: Array.from(keywords.entries())
-        .map(([keyword, count]) => ({ keyword, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, Number(limit)),
+      keywords: list,
+      totalKeywords: keywords.size,
+      totalSearches: allItems.reduce((sum, item) => sum + item.count, 0),
     };
   }
 }

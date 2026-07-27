@@ -227,7 +227,7 @@ onMounted(loadAll)
 .page-shell { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 .status-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .status-card :deep(.el-card__body) { display: flex; align-items: center; gap: 12px; padding: 16px; }
-.status-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; }
+.status-icon { width: 40px; height: 40px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; }
 .status-label { font-size: 12px; color: #666; }
 .status-value { font-size: 18px; font-weight: 700; }
 .config-list { display: flex; flex-direction: column; gap: 12px; }

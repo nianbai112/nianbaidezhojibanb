@@ -1,151 +1,176 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>数据概览</h2>
-      <div class="header-actions">
-        <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 240px" @change="loadData" />
+  <div class="page-shell">
+    <PageHeader title="数据概览" subtitle="统一查看用户、内容、订单和区域经营数据">
+      <template #actions>
+        <el-select v-model="filters.regionId" clearable filterable placeholder="全部区域" style="width: 180px" @change="loadData">
+          <el-option v-for="region in regions" :key="region.id" :label="region.name" :value="region.id" />
+        </el-select>
+        <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 260px" @change="loadData" />
         <el-button type="primary" :loading="loading" @click="loadData(true)">刷新</el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
-    <div class="stats-grid">
-      <div class="stat-card glass-card" v-for="stat in stats" :key="stat.label">
-        <div class="stat-icon" :style="{ background: stat.color }">
-          <el-icon><component :is="stat.icon" /></el-icon>
-        </div>
-        <div class="stat-info">
-          <div class="stat-value">{{ stat.value }}</div>
-          <div class="stat-label">{{ stat.label }}</div>
-        </div>
-        <div class="stat-trend" :class="stat.trend > 0 ? 'up' : 'down'" v-if="stat.trend !== undefined">
-          {{ stat.trend > 0 ? '+' : '' }}{{ stat.trend }}%
-        </div>
-      </div>
-    </div>
+    <StatGrid :items="statItems" />
 
-    <div class="charts-grid">
-      <div class="glass-card">
-        <h3>用户增长趋势</h3>
-        <div class="chart-placeholder">
-          <div v-for="(item, index) in userTrend" :key="index" class="trend-bar">
-            <div class="bar-label">{{ item.date }}</div>
-            <div class="bar-track">
-              <div class="bar-fill" :style="{ width: (item.count / maxTrend * 100) + '%' }"></div>
-            </div>
-            <div class="bar-value">{{ item.count }}</div>
+    <div class="main-grid">
+      <section class="glass-card">
+        <div class="section-head">
+          <h3>用户增长趋势</h3>
+          <span>按选择时间段统计</span>
+        </div>
+        <div class="trend-list">
+          <div v-for="item in userTrend" :key="item.date" class="trend-row">
+            <span>{{ item.date }}</span>
+            <div class="bar-track"><div class="bar-fill user" :style="{ width: barWidth(item.count, maxUserTrend) }"></div></div>
+            <strong>{{ item.count }}</strong>
           </div>
+          <EmptyState v-if="!userTrend.length" description="暂无趋势数据" :image-size="64" />
         </div>
-      </div>
+      </section>
 
-      <div class="glass-card">
+      <section class="glass-card">
+        <div class="section-head">
+          <h3>业务线成交拆分</h3>
+          <span>按支付订单与业务订单综合统计</span>
+        </div>
+        <el-table :data="businessBreakdown" size="small">
+          <el-table-column prop="name" label="业务线" min-width="120" />
+          <el-table-column prop="orders" label="订单/意向" width="100" />
+          <el-table-column prop="completed" label="完成" width="90" />
+          <el-table-column label="GMV" width="120">
+            <template #default="{ row }">¥{{ money(row.gmv) }}</template>
+          </el-table-column>
+          <el-table-column label="支付单" width="90">
+            <template #default="{ row }">{{ row.paidCount || 0 }}</template>
+          </el-table-column>
+        </el-table>
+      </section>
+    </div>
+
+    <section class="glass-card">
+      <div class="section-head">
         <h3>区域数据对比</h3>
-        <div class="region-list">
-          <div v-for="region in regionData" :key="region.id" class="region-item">
-            <div class="region-name">{{ region.name }}</div>
-            <div class="region-stats">
-              <span>用户: {{ region.users }}</span>
-              <span>帖子: {{ region.posts }}</span>
-              <span>订单: {{ region.orders }}</span>
-            </div>
-          </div>
-        </div>
+        <span>按订单量排序</span>
       </div>
-    </div>
+      <el-table :data="regionData" size="small">
+        <el-table-column prop="name" label="区域" min-width="160" />
+        <el-table-column prop="users" label="用户" width="100" />
+        <el-table-column prop="posts" label="帖子" width="100" />
+        <el-table-column prop="orders" label="订单" width="100" />
+        <el-table-column prop="merchants" label="商家" width="100" />
+        <el-table-column label="GMV" width="140">
+          <template #default="{ row }">¥{{ money(row.gmv) }}</template>
+        </el-table-column>
+      </el-table>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { User, Document, Tickets, Wallet, Shop, Van } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/common/PageHeader.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import type { StatItem } from '@/types/admin'
 import { request } from '@/api/request'
+import { fetchRegions } from '@/api/admin'
 
-const dateRange = ref<any>(null)
+const dateRange = ref<any[]>([])
 const loading = ref(false)
-const stats = ref<any[]>([])
-const userTrend = ref<any[]>([])
+const regions = ref<any[]>([])
+const filters = reactive({ regionId: '' })
+const overview = ref<any>({})
+const userData = ref<any>({})
+const orderData = ref<any>({})
 const regionData = ref<any[]>([])
 
-const maxTrend = computed(() => Math.max(...userTrend.value.map(i => i.count), 1))
 const unwrap = (res: any) => res?.data ?? res ?? {}
+const money = (value: any) => Number(value || 0).toFixed(2)
+const barWidth = (count: number, max: number) => `${Math.max(4, (Number(count || 0) / Math.max(max, 1)) * 100)}%`
 
-const loadData = async (showSuccess = false) => {
+const userTrend = computed(() => userData.value?.trend || [])
+const maxUserTrend = computed(() => Math.max(...userTrend.value.map((item: any) => item.count), 1))
+const businessBreakdown = computed(() => orderData.value?.businessBreakdown || [])
+
+const statItems = computed<StatItem[]>(() => {
+  const data = overview.value || {}
+  const item = (label: string, value: string | number, trend: number): StatItem => ({
+    label,
+    value,
+    delta: `${trend >= 0 ? '+' : ''}${trend}%`,
+    down: trend < 0,
+  })
+  return [
+    item('总用户', data.users?.total || 0, data.users?.trend ?? 0),
+    item('新增用户', data.users?.new || 0, data.users?.trend ?? 0),
+    item('总帖子', data.content?.totalPosts || 0, data.content?.trend ?? 0),
+    item('订单/意向', orderData.value?.total || data.orders?.total || 0, data.orders?.trend ?? 0),
+    item('总GMV', `¥${money(orderData.value?.gmv ?? data.gmv?.total)}`, data.orders?.trend ?? 0),
+    item('活跃商家', data.merchants?.active || 0, 0),
+  ]
+})
+
+import { formatDateRangeParams } from '@/utils/date'
+
+function params() {
+  const result: any = { regionId: filters.regionId || undefined }
+  if (dateRange.value?.length === 2) {
+    const { startDate, endDate } = formatDateRangeParams(dateRange.value)
+    if (startDate) result.startDate = startDate
+    if (endDate) result.endDate = endDate
+  }
+  return result
+}
+
+async function loadRegions() {
+  try {
+    regions.value = await fetchRegions()
+  } catch {
+    regions.value = []
+  }
+}
+
+async function loadData(showSuccess = false) {
   loading.value = true
   try {
-    const params: any = {}
-    if (dateRange.value) {
-      params.startDate = dateRange.value[0]?.toISOString()
-      params.endDate = dateRange.value[1]?.toISOString()
-    }
-
-    const [overview, users, regions] = await Promise.all([
-      request.get('/admin/analytics/overview', { params }),
-      request.get('/admin/analytics/users', { params }),
-      request.get('/admin/analytics/regions', { params }),
+    const query = params()
+    const [overviewRes, usersRes, ordersRes, regionsRes] = await Promise.all([
+      request.get('/admin/analytics/overview', { params: query }),
+      request.get('/admin/analytics/users', { params: query }),
+      request.get('/admin/analytics/orders', { params: query }),
+      request.get('/admin/analytics/regions', { params: query }),
     ])
-
-    const data = unwrap(overview)
-    const gmvData = data.gmv || {}
-    stats.value = [
-      { label: '总用户', value: data.users?.total || 0, icon: 'User', color: '#409eff', trend: data.users?.trend ?? 0 },
-      { label: '新增用户', value: data.users?.new || 0, icon: 'User', color: '#67c23a', trend: data.users?.trend ?? 0 },
-      { label: '总帖子', value: data.content?.totalPosts || 0, icon: 'Document', color: '#e6a23c', trend: data.content?.trend ?? 0 },
-      { label: '总订单', value: data.orders?.total || 0, icon: 'Tickets', color: '#f56c6c', trend: data.orders?.trend ?? 0 },
-      { label: '总GMV', value: `¥${formatMoney(gmvData.total)}`, icon: 'Wallet', color: '#7c3aed', trend: data.orders?.trend ?? 0 },
-      { label: '活跃商家', value: data.merchants?.active || 0, icon: 'Shop', color: '#67c23a', trend: 0 },
-    ]
-
-    userTrend.value = unwrap(users)?.trend || []
-    regionData.value = Array.isArray(unwrap(regions)) ? unwrap(regions) : []
-    if (showSuccess === true) ElMessage.success('数据概览已刷新')
+    overview.value = unwrap(overviewRes)
+    userData.value = unwrap(usersRes)
+    orderData.value = unwrap(ordersRes)
+    regionData.value = Array.isArray(unwrap(regionsRes)) ? unwrap(regionsRes) : []
+    if (showSuccess) ElMessage.success('数据概览已刷新')
   } catch (error: any) {
     ElMessage.error(error?.message || '加载数据失败')
-    stats.value = [
-      { label: '总用户', value: 0, icon: 'User', color: '#409eff', trend: 0 },
-      { label: '新增用户', value: 0, icon: 'User', color: '#67c23a', trend: 0 },
-      { label: '总帖子', value: 0, icon: 'Document', color: '#e6a23c', trend: 0 },
-      { label: '总订单', value: 0, icon: 'Tickets', color: '#f56c6c', trend: 0 },
-      { label: '总GMV', value: '¥0.00', icon: 'Wallet', color: '#7c3aed', trend: 0 },
-      { label: '活跃商家', value: 0, icon: 'Shop', color: '#67c23a', trend: 0 },
-    ]
-    userTrend.value = []
-    regionData.value = []
   } finally {
     loading.value = false
   }
 }
 
-onMounted(() => {
-  loadData()
+onMounted(async () => {
+  await loadRegions()
+  await loadData()
 })
-
-const formatMoney = (amount: number) => Number(amount || 0).toFixed(2)
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.header-actions { display: flex; gap: 12px; align-items: center; }
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
-.stat-card { display: flex; align-items: center; padding: 20px; gap: 16px; }
-.stat-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; }
-.stat-info { flex: 1; }
-.stat-value { font-size: 24px; font-weight: 600; }
-.stat-label { font-size: 14px; color: #666; }
-.stat-trend { font-size: 14px; font-weight: 500; }
-.stat-trend.up { color: #67c23a; }
-.stat-trend.down { color: #f56c6c; }
-.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 20px; }
-.glass-card h3 { margin-bottom: 16px; font-size: 16px; font-weight: 600; }
-.chart-placeholder { display: flex; flex-direction: column; gap: 8px; }
-.trend-bar { display: flex; align-items: center; gap: 8px; }
-.bar-label { width: 60px; font-size: 12px; color: #666; }
-.bar-track { flex: 1; height: 20px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
-.bar-fill { height: 100%; background: linear-gradient(90deg, #409eff, #67c23a); border-radius: 4px; transition: width 0.3s; }
-.bar-value { width: 40px; text-align: right; font-size: 12px; font-weight: 500; }
-.region-list { display: flex; flex-direction: column; gap: 12px; }
-.region-item { padding: 12px; background: #f5f7fa; border-radius: 8px; }
-.region-name { font-weight: 600; margin-bottom: 8px; }
-.region-stats { display: flex; gap: 16px; font-size: 14px; color: #666; }
+.glass-card { background: var(--mx-card); border: 1px solid var(--mx-border); border-radius: 6px; padding: 18px; }
+.main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.section-head h3 { margin: 0; color: var(--mx-text); font-size: 16px; }
+.section-head span { color: var(--mx-muted); font-size: 12px; }
+.trend-list { display: flex; flex-direction: column; gap: 10px; min-height: 260px; }
+.trend-row { display: grid; grid-template-columns: 92px 1fr 52px; gap: 10px; align-items: center; font-size: 13px; color: var(--mx-sub); }
+.bar-track { height: 18px; background: var(--mx-soft); border-radius: 999px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; }
+.bar-fill.user { background: var(--el-color-primary); }
+@media (max-width: 1200px) {
+  .main-grid { grid-template-columns: 1fr; }
+}
 </style>

@@ -1,8 +1,6 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>退款售后</h2>
-    </div>
+  <div class="page-shell">
+    <PageHeader title="退款售后" />
 
     <div class="filter-bar">
       <el-input
@@ -15,8 +13,9 @@
       />
       <el-select v-model="filters.status" placeholder="退款状态" clearable style="width: 120px" @change="loadRefunds">
         <el-option label="申请中" value="applying" />
-        <el-option label="已通过" value="approved" />
-        <el-option label="已拒绝" value="rejected" />
+        <el-option label="已同意" value="merchant_approved" />
+        <el-option label="退款处理中" value="processing" />
+        <el-option label="已拒绝" value="merchant_rejected" />
         <el-option label="已退款" value="refunded" />
         <el-option label="已关闭" value="closed" />
       </el-select>
@@ -66,8 +65,8 @@
           <el-button size="small" @click="viewDetail(row)">详情</el-button>
           <el-button v-if="row.status === 'applying'" size="small" type="success" @click="approveRefund(row)">通过</el-button>
           <el-button v-if="row.status === 'applying'" size="small" type="danger" @click="rejectRefund(row)">拒绝</el-button>
-          <el-button v-if="row.status === 'approved'" size="small" type="success" @click="finishRefund(row)">完成退款</el-button>
-          <el-button v-if="row.status === 'applying' || row.status === 'approved'" size="small" @click="closeRefund(row)">取消</el-button>
+          <el-button v-if="['merchant_approved', 'approved'].includes(row.status)" size="small" type="success" @click="finishRefund(row)">发起退款</el-button>
+          <el-button v-if="row.status === 'applying'" size="small" @click="closeRefund(row)">取消</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -135,7 +134,7 @@
         <el-button @click="showDetailDialog = false">关闭</el-button>
         <el-button v-if="selectedRefund?.status === 'applying'" type="success" @click="approveRefund(selectedRefund)">通过</el-button>
         <el-button v-if="selectedRefund?.status === 'applying'" type="danger" @click="rejectRefund(selectedRefund)">拒绝</el-button>
-        <el-button v-if="selectedRefund?.status === 'approved'" type="success" @click="finishRefund(selectedRefund)">完成退款</el-button>
+        <el-button v-if="['merchant_approved', 'approved'].includes(selectedRefund?.status)" type="success" @click="finishRefund(selectedRefund)">发起退款</el-button>
       </template>
     </el-dialog>
   </div>
@@ -145,6 +144,7 @@
 import { ref, onMounted } from 'vue'
 import { request } from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/common/PageHeader.vue'
 
 const loading = ref(false)
 const refunds = ref<any[]>([])
@@ -156,8 +156,9 @@ const selectedRefund = ref<any>(null)
 const getStatusType = (status: string) => {
   const map: Record<string, string> = {
     applying: 'warning',
-    approved: 'success',
-    rejected: 'danger',
+    merchant_approved: 'success',
+    processing: 'warning',
+    merchant_rejected: 'danger',
     refunded: 'success',
     closed: 'info',
   }
@@ -167,8 +168,9 @@ const getStatusType = (status: string) => {
 const getStatusLabel = (status: string) => {
   const map: Record<string, string> = {
     applying: '申请中',
-    approved: '已通过',
-    rejected: '已拒绝',
+    merchant_approved: '已同意',
+    processing: '退款处理中',
+    merchant_rejected: '已拒绝',
     refunded: '已退款',
     closed: '已关闭',
   }
@@ -221,7 +223,7 @@ const viewDetail = async (refund: any) => {
 const approveRefund = async (refund: any) => {
   try {
     await ElMessageBox.confirm('确定通过该退款申请吗？', '确认操作', { type: 'warning' })
-    await request.put(`/mall/refunds/admin/${refund.id}/review`, { status: 'approved' })
+    await request.put(`/mall/refunds/admin/${refund.id}/review`, { status: 'merchant_approved' })
     ElMessage.success('审核通过')
     showDetailDialog.value = false
     loadRefunds()
@@ -239,7 +241,7 @@ const rejectRefund = async (refund: any) => {
       type: 'warning',
       inputValidator: (val) => !!val?.trim() || '请输入拒绝原因',
     })
-    await request.put(`/mall/refunds/admin/${refund.id}/review`, { status: 'rejected', reject_reason: reason })
+    await request.put(`/mall/refunds/admin/${refund.id}/review`, { status: 'merchant_rejected', reject_reason: reason })
     ElMessage.success('已拒绝')
     showDetailDialog.value = false
     loadRefunds()
@@ -252,9 +254,9 @@ const rejectRefund = async (refund: any) => {
 
 const finishRefund = async (refund: any) => {
   try {
-    await ElMessageBox.confirm('确认已完成退款打款？此操作将同步更新订单退款状态。', '完成退款', { type: 'success' })
+    await ElMessageBox.confirm('将向支付渠道发起退款；到账前售后会保持“退款处理中”。', '发起退款', { type: 'warning' })
     await request.put(`/mall/refunds/admin/${refund.id}/finish`, {})
-    ElMessage.success('退款已完成')
+    ElMessage.success('退款已提交，请等待支付渠道确认')
     showDetailDialog.value = false
     loadRefunds()
   } catch (error) {
@@ -284,17 +286,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
 .filter-bar {
   display: flex;
   gap: 12px;

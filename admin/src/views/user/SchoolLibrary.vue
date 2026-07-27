@@ -3,24 +3,7 @@
     <PageHeader title="学校库管理" subtitle="管理学校数据，绑定区域" icon="School" />
 
     <!-- 统计卡片 -->
-    <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.total }}</div>
-        <div class="stat-label">学校总数</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.enabled }}</div>
-        <div class="stat-label">启用学校</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.bound }}</div>
-        <div class="stat-label">已绑定区域</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.unbound }}</div>
-        <div class="stat-label">未绑定学校</div>
-      </div>
-    </div>
+    <StatGrid :items="statItems" />
 
     <!-- 搜索区 -->
     <div class="filter-bar">
@@ -47,8 +30,27 @@
       <el-button @click="loadData">刷新</el-button>
     </div>
 
+    <el-alert
+      v-if="activeFilterSummary"
+      :title="activeFilterSummary"
+      type="info"
+      show-icon
+      :closable="false"
+      class="filter-alert"
+    >
+      <template #default>
+        <el-button text type="primary" @click="resetFilters">查看全部学校</el-button>
+      </template>
+    </el-alert>
+
     <!-- 表格 -->
     <el-table :data="list" v-loading="loading" border stripe style="width: 100%">
+      <template #empty>
+        <div class="empty-state">
+          <div>{{ activeFilterSummary ? '当前筛选下暂无学校' : '暂无学校数据' }}</div>
+          <el-button v-if="activeFilterSummary" text type="primary" @click="resetFilters">清除筛选查看全部学校</el-button>
+        </div>
+      </template>
       <el-table-column prop="name" label="学校名称" min-width="160" show-overflow-tooltip />
       <el-table-column prop="shortName" label="简称" width="100" show-overflow-tooltip />
       <el-table-column prop="type" label="类型" width="80">
@@ -143,8 +145,12 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="详细地址">
-          <el-input v-model="form.address" placeholder="详细地址" />
+        <el-form-item label="学校位置">
+          <div class="location-picker-field">
+            <el-input v-model="form.address" placeholder="点击地图选点，自动回填详细地址和经纬度" />
+            <el-button type="primary" plain :icon="MapLocation" @click="mapVisible = true">地图选点</el-button>
+          </div>
+          <div class="form-tip">运营不用记经纬度，搜索学校或直接点地图即可自动带入省市区、详细地址和坐标。</div>
         </el-form-item>
         <el-row :gutter="16">
           <el-col :span="12">
@@ -212,16 +218,26 @@
         <el-button type="primary" :loading="submitting" @click="submitForm">确定</el-button>
       </template>
     </el-dialog>
+
+    <AmapLocationPicker
+      v-model:visible="mapVisible"
+      :default-center="mapDefaultCenter"
+      :default-city="mapDefaultCity"
+      @confirm="onMapConfirm"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
+import StatGrid from '@/components/glass/StatGrid.vue'
 import { fetchSchools, fetchSchoolStats, createSchool, updateSchool, updateSchoolStatus, deleteSchool, fetchRegions } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { MapLocation } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const loading = ref(false)
@@ -230,8 +246,17 @@ const list = ref<any[]>([])
 const regions = ref<any[]>([])
 const showDialog = ref(false)
 const editingId = ref<string | null>(null)
+const mapVisible = ref(false)
+let loadRequestSeq = 0
 
 const stats = reactive({ total: 0, enabled: 0, bound: 0, unbound: 0 })
+
+const statItems = computed(() => [
+  { label: '全库学校', value: stats.total, icon: 'School' },
+  { label: '全库启用', value: stats.enabled, icon: 'CircleCheck' },
+  { label: '全库已绑定', value: stats.bound, icon: 'Link' },
+  { label: '全库未绑定', value: stats.unbound, icon: 'Link' },
+])
 
 const filters = reactive({
   keyword: '',
@@ -262,6 +287,32 @@ const form = reactive({
   remark: ''
 })
 
+const mapDefaultCenter = computed(() => {
+  const longitude = Number(form.longitude)
+  const latitude = Number(form.latitude)
+  if (Number.isFinite(longitude) && Number.isFinite(latitude) && longitude && latitude) {
+    return [longitude, latitude] as [number, number]
+  }
+  return undefined
+})
+
+const mapDefaultCity = computed(() => form.city || form.province || '全国')
+
+const activeRegionName = computed(() => {
+  if (!filters.regionId) return ''
+  return regions.value.find((item: any) => String(item.id) === String(filters.regionId))?.name || String(filters.regionId)
+})
+
+const activeFilterSummary = computed(() => {
+  const parts: string[] = []
+  if (filters.keyword) parts.push(`关键词：${filters.keyword}`)
+  if (filters.type) parts.push(`类型：${typeLabel(filters.type)}`)
+  if (filters.city) parts.push(`城市：${filters.city}`)
+  if (filters.isEnabled !== undefined) parts.push(`状态：${filters.isEnabled ? '启用' : '禁用'}`)
+  if (filters.regionId) parts.push(`所属区域：${activeRegionName.value}`)
+  return parts.length ? `当前列表已筛选（${parts.join('，')}），上方统计仍是全库统计。` : ''
+})
+
 const typeLabel = (type: string) => {
   const map: Record<string, string> = {
     university: '大学',
@@ -290,6 +341,7 @@ const resetFilters = () => {
 }
 
 const loadData = async () => {
+  const requestSeq = ++loadRequestSeq
   loading.value = true
   try {
     const params: Record<string, any> = {
@@ -303,12 +355,16 @@ const loadData = async () => {
     if (filters.regionId) params.regionId = filters.regionId
 
     const res: any = await fetchSchools(params)
+    if (requestSeq !== loadRequestSeq) return
     list.value = res?.list || []
     pagination.total = res?.total || 0
   } catch (e: any) {
+    if (requestSeq !== loadRequestSeq) return
     ElMessage.error(e?.message || '加载失败')
   } finally {
-    loading.value = false
+    if (requestSeq === loadRequestSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -328,19 +384,17 @@ const loadRegions = async () => {
   try {
     const res: any = await fetchRegions()
     regions.value = Array.isArray(res) ? res : (res?.list || [])
-    const preferredId = String(
-      route.query.regionId ||
-      localStorage.getItem('LM_SELECTED_REGION_ID') ||
-      localStorage.getItem('selectedRegionId') ||
-      ''
-    )
-    if (preferredId && regions.value.some(r => String(r.id) === preferredId)) {
-      filters.regionId = preferredId
-      form.regionId = preferredId
+    const queryRegionId = String(route.query.regionId || '')
+    if (queryRegionId && regions.value.some(r => String(r.id) === queryRegionId)) {
+      filters.regionId = queryRegionId
+      form.regionId = queryRegionId
       pagination.page = 1
-      await loadData()
     }
-  } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载失败')
+  } finally {
+    await loadData()
+  }
 }
 
 const resetForm = () => {
@@ -365,29 +419,70 @@ const resetForm = () => {
 
 const openCreate = () => {
   resetForm()
+  form.regionId = filters.regionId || ''
   showDialog.value = true
 }
 
 const openEdit = (row: any) => {
   editingId.value = row.id
-  form.name = row.name || ''
-  form.shortName = row.shortName || ''
+  form.name = normalizeText(row.name)
+  form.shortName = normalizeText(row.shortName)
   form.type = row.type || 'university'
-  form.province = row.province || ''
-  form.city = row.city || ''
-  form.district = row.district || ''
-  form.address = row.address || ''
+  form.province = normalizeText(row.province)
+  form.city = normalizeText(row.city)
+  form.district = normalizeText(row.district)
+  form.address = normalizeText(row.address)
   form.longitude = row.longitude
   form.latitude = row.latitude
-  form.campusName = row.campusName || ''
+  form.campusName = normalizeText(row.campusName)
   form.logo = row.logo || ''
   form.cover = row.cover || ''
   form.regionId = row.regionId || ''
   form.isEnabled = row.isEnabled !== false
   form.sortOrder = row.sortOrder || 0
-  form.remark = row.remark || ''
+  form.remark = normalizeText(row.remark)
   showDialog.value = true
 }
+
+const onMapConfirm = (location: any) => {
+  form.longitude = Number(location.longitude) || null
+  form.latitude = Number(location.latitude) || null
+  form.address = normalizeText(location.address) || form.address
+  form.province = normalizeText(location.province) || form.province
+  form.city = normalizeText(location.city) || form.city
+  form.district = normalizeText(location.district) || form.district
+  const poiName = normalizeText(location.poiName)
+  if (!form.name.trim() && poiName) {
+    form.name = poiName
+  }
+  mapVisible.value = false
+}
+
+const normalizeText = (value: any) => {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined && item !== null && String(item).trim())
+      .map((item) => String(item).trim())
+      .join(' ')
+  }
+  if (value === undefined || value === null) return ''
+  return String(value).trim()
+}
+
+const buildSchoolPayload = () => ({
+  ...form,
+  name: normalizeText(form.name),
+  shortName: normalizeText(form.shortName),
+  province: normalizeText(form.province),
+  city: normalizeText(form.city),
+  district: normalizeText(form.district),
+  address: normalizeText(form.address),
+  campusName: normalizeText(form.campusName),
+  remark: normalizeText(form.remark),
+  longitude: form.longitude === null || form.longitude === undefined ? null : Number(form.longitude),
+  latitude: form.latitude === null || form.latitude === undefined ? null : Number(form.latitude),
+  sortOrder: Number(form.sortOrder) || 0
+})
 
 const submitForm = async () => {
   if (!form.name.trim()) {
@@ -396,16 +491,16 @@ const submitForm = async () => {
   }
   submitting.value = true
   try {
+    const payload = buildSchoolPayload()
     if (editingId.value) {
-      await updateSchool(editingId.value, form)
+      await updateSchool(editingId.value, payload)
       ElMessage.success('更新成功')
     } else {
-      await createSchool(form)
+      await createSchool(payload)
       ElMessage.success('创建成功')
     }
     showDialog.value = false
-    loadData()
-    loadStats()
+    await Promise.all([loadData(), loadStats()])
   } catch (e: any) {
     ElMessage.error(e?.message || '操作失败')
   } finally {
@@ -417,8 +512,7 @@ const toggleStatus = async (row: any) => {
   try {
     await updateSchoolStatus(row.id, !row.isEnabled)
     ElMessage.success(row.isEnabled ? '已禁用' : '已启用')
-    loadData()
-    loadStats()
+    await Promise.all([loadData(), loadStats()])
   } catch (e: any) {
     ElMessage.error(e?.message || '操作失败')
   }
@@ -428,16 +522,19 @@ const handleDelete = async (row: any) => {
   try {
     await ElMessageBox.confirm(`确定删除学校「${row.name}」？`, '确认', { type: 'warning' })
     const res: any = await deleteSchool(row.id)
+    list.value = list.value.filter(item => item.id !== row.id)
+    pagination.total = Math.max(0, pagination.total - 1)
+    if (!list.value.length && pagination.page > 1) {
+      pagination.page -= 1
+    }
     ElMessage.success(res?.message || '删除成功')
-    loadData()
-    loadStats()
+    await Promise.all([loadData(), loadStats()])
   } catch (e: any) {
     if (e !== 'cancel') ElMessage.error(e?.message || '删除失败')
   }
 }
 
 onMounted(() => {
-  loadData()
   loadStats()
   loadRegions()
 })
@@ -445,18 +542,19 @@ onMounted(() => {
 
 <style scoped>
 .page-shell { padding: 24px; }
-.stats-row { display: flex; gap: 16px; margin-bottom: 16px; }
-.stat-card {
-  flex: 1;
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  text-align: center;
-}
-.stat-value { font-size: 28px; font-weight: 700; color: #303133; }
-.stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
 .filter-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.filter-alert {
+  margin-bottom: 12px;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #8a97aa;
+  line-height: 22px;
+  padding: 12px 0;
+}
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
 .media-grid {
   margin-top: 2px;
@@ -464,5 +562,31 @@ onMounted(() => {
 
 .media-grid :deep(.el-form-item__content) {
   align-items: stretch;
+}
+.location-picker-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.location-picker-field .el-input {
+  flex: 1;
+  min-width: 0;
+}
+.location-picker-field .el-button {
+  flex: 0 0 auto;
+}
+.form-tip {
+  margin-top: 6px;
+  color: #8a97aa;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+@media (max-width: 768px) {
+  .location-picker-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 </style>

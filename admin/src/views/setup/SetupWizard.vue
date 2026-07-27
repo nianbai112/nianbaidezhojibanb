@@ -9,15 +9,15 @@
         </div>
       </div>
       <div class="hero-copy">
-        <span>首次安装 · v1.0.1</span>
-        <strong>把宝塔服务器第一次部署走稳</strong>
-        <p>按步骤完成环境检查、数据库连接、超级管理员创建和基础配置写入。初始化完成后请关闭安装模式。</p>
+        <span>首次安装 · v1.0.0</span>
+        <strong>把新服务器部署变成填表</strong>
+        <p>先让后端进入安装模式，只填写数据库、Redis、管理员和后台域名。小程序、对象存储、支付登录后台后继续补齐。</p>
       </div>
       <div class="hero-checklist">
-        <div>后端 3000 端口</div>
+        <div>Node / PM2</div>
         <div>MySQL / Redis</div>
-        <div>管理员账号</div>
-        <div>小程序 AppID</div>
+        <div>Nginx / API 代理</div>
+        <div>管理员与域名</div>
       </div>
     </section>
 
@@ -28,7 +28,7 @@
             <span>Setup Wizard</span>
             <h2>首次安装向导</h2>
             <p v-if="status.initialized">系统已经初始化。请返回登录页继续使用后台。</p>
-            <p v-else>请先在后端 `.env` 设置 `SETUP_WIZARD=true` 和 `SETUP_TOKEN`，再填写下面配置。</p>
+            <p v-else>按表单填写数据库、Redis、管理员和后台域名。小程序、对象存储、支付登录后台后继续补齐。</p>
           </div>
           <el-tag :type="status.initialized ? 'success' : 'warning'" size="large">
             {{ status.initialized ? '已初始化' : '待初始化' }}
@@ -46,18 +46,33 @@
 
         <template v-else>
           <el-steps :active="activeStep" finish-status="success" align-center class="setup-steps">
-            <el-step title="口令" description="填写 SETUP_TOKEN" />
-            <el-step title="配置" description="写入 .env" />
-            <el-step title="完成" description="迁移与登录" />
+            <el-step title="配置" description="填写基础信息" />
+            <el-step title="检查" description="服务器与数据库" />
+            <el-step title="完成" description="写入配置并初始化" />
           </el-steps>
 
           <el-form label-position="top" class="setup-form">
             <section class="form-section">
               <div class="section-title">
-                <b>安装口令</b>
-                <span>来自后端 `.env` 的 SETUP_TOKEN，不是后台登录密码。</span>
+                <b>安装说明</b>
+                <span>{{ status.setupTokenRequired ? '当前服务器已配置安装口令，请填写 .env 里的 SETUP_TOKEN。' : '首次运行包已进入安装模式，不需要客户寻找额外口令。' }}</span>
               </div>
-              <el-input v-model="setupToken" type="password" show-password size="large" placeholder="请输入 SETUP_TOKEN" />
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                title="先完成基础安装"
+                description="数据库、Redis 和管理员创建成功后，系统会自动写入已安装状态。后续微信小程序、对象存储、支付等业务配置在后台继续补齐。"
+              />
+              <el-form-item v-if="status.setupTokenRequired" label="安装口令">
+                <el-input
+                  v-model="setupToken"
+                  type="password"
+                  show-password
+                  autocomplete="one-time-code"
+                  placeholder="复制客户服务器 .env 里的 SETUP_TOKEN"
+                />
+              </el-form-item>
               <div class="section-actions">
                 <el-button :loading="loadingStatus" @click="loadStatus">刷新状态</el-button>
                 <el-button type="primary" :loading="checking" @click="runCheck">检查服务器环境</el-button>
@@ -67,7 +82,7 @@
             <section v-if="checkResult" class="form-section">
               <div class="section-title">
                 <b>环境检查</b>
-                <span>红色项必须处理，黄色项建议上线前处理。</span>
+                <span>红色项会阻止安装，黄色项可以先跳过，登录后台后继续补齐。</span>
               </div>
               <div class="check-grid">
                 <article v-for="item in checkResult.checks" :key="item.name" :class="['check-card', item.status]">
@@ -95,14 +110,14 @@
                 <el-form-item label="超级管理员手机号（可选）">
                   <el-input v-model="form.adminPhone" placeholder="用于找回或备注" />
                 </el-form-item>
-                <el-form-item label="超级管理员密码">
-                  <el-input v-model="form.adminPassword" type="password" show-password placeholder="至少 12 位强密码" />
-                </el-form-item>
-                <el-form-item label="JWT 密钥">
-                  <div class="input-action">
-                    <el-input v-model="form.jwtSecret" type="password" show-password placeholder="建议自动生成" />
-                    <el-button @click="generateJwt">生成</el-button>
-                  </div>
+                <el-form-item label="超级管理员密码" :error="adminPasswordError">
+                  <el-input
+                    v-model="form.adminPassword"
+                    type="password"
+                    show-password
+                    autocomplete="new-password"
+                    placeholder="至少 12 位，包含字母、数字和符号"
+                  />
                 </el-form-item>
               </div>
             </section>
@@ -110,14 +125,38 @@
             <section class="form-section">
               <div class="section-title">
                 <b>数据库与 Redis</b>
-                <span>宝塔里创建 MySQL 数据库后，把库名、账号、密码填到 DATABASE_URL。</span>
+                <span>默认推荐宝塔 MySQL；如已有 PostgreSQL，也可以切换后再试连。</span>
               </div>
-              <el-form-item label="DATABASE_URL">
-                <el-input
-                  v-model="form.databaseUrl"
-                  placeholder="mysql://数据库账号:数据库密码@127.0.0.1:3306/数据库名"
-                />
-              </el-form-item>
+              <div class="form-grid three">
+                <el-form-item label="数据库类型">
+                  <el-radio-group v-model="database.provider">
+                    <el-radio-button label="mysql">MySQL</el-radio-button>
+                    <el-radio-button label="postgresql">PostgreSQL</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item label="数据库地址">
+                  <el-input v-model="database.host" placeholder="127.0.0.1" />
+                </el-form-item>
+                <el-form-item label="数据库端口">
+                  <el-input-number v-model="database.port" :min="1" :max="65535" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="数据库名">
+                  <el-input v-model="database.name" placeholder="lingmeng" />
+                </el-form-item>
+                <el-form-item label="数据库账号">
+                  <el-input v-model="database.user" placeholder="lingmeng" />
+                </el-form-item>
+                <el-form-item label="数据库密码">
+                  <el-input v-model="database.password" type="password" show-password :placeholder="database.provider === 'mysql' ? 'MySQL 密码' : 'PostgreSQL 密码'" />
+                </el-form-item>
+                <el-form-item v-if="database.provider === 'postgresql'" label="Schema">
+                  <el-input v-model="database.schema" placeholder="public" />
+                </el-form-item>
+              </div>
+              <div class="database-preview">
+                <span>DATABASE_URL</span>
+                <code>{{ maskedDatabaseUrl || '请先填写数据库账号、密码和库名' }}</code>
+              </div>
               <div class="form-grid three">
                 <el-form-item label="Redis Host">
                   <el-input v-model="form.redisHost" placeholder="127.0.0.1" />
@@ -133,74 +172,12 @@
 
             <section class="form-section">
               <div class="section-title">
-                <b>小程序与跨域</b>
-                <span>微信小程序 AppID/Secret 是必填；CORS 建议填后台域名和 API 域名。</span>
+                <b>后台访问域名</b>
+                <span>系统已自动识别当前后台域名；如域名不对，改成客户真实访问后台的 https 地址。</span>
               </div>
               <div class="form-grid">
-                <el-form-item label="微信小程序 AppID">
-                  <el-input v-model="form.wxMiniAppid" placeholder="wx..." />
-                </el-form-item>
-                <el-form-item label="微信小程序 AppSecret">
-                  <el-input v-model="form.wxMiniSecret" type="password" show-password placeholder="小程序密钥" />
-                </el-form-item>
-                <el-form-item label="CORS_ORIGIN">
-                  <el-input v-model="form.corsOrigin" placeholder="https://admin.example.com,https://api.example.com" />
-                </el-form-item>
-              </div>
-            </section>
-
-            <section class="form-section">
-              <div class="section-title">
-                <b>对象存储 COS（可稍后配置）</b>
-                <span>没有开通腾讯云 COS 时可以先留空，后续在系统配置里补。</span>
-              </div>
-              <div class="form-grid">
-                <el-form-item label="SecretId">
-                  <el-input v-model="form.cosSecretId" type="password" show-password />
-                </el-form-item>
-                <el-form-item label="SecretKey">
-                  <el-input v-model="form.cosSecretKey" type="password" show-password />
-                </el-form-item>
-                <el-form-item label="存储桶名称 Bucket">
-                  <el-input v-model="form.cosBucket" placeholder="nianbai-1340278115" />
-                </el-form-item>
-                <el-form-item label="所属地域 Region">
-                  <el-select v-model="form.cosRegion" filterable clearable placeholder="请选择或输入 ap-chongqing">
-                    <el-option v-for="region in cosRegions" :key="region.value" :label="region.label" :value="region.value" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="CDN / COS 访问域名">
-                  <el-input v-model="form.cosDomain" placeholder="https://bucket.cos.ap-chongqing.myqcloud.com" />
-                </el-form-item>
-              </div>
-            </section>
-
-            <section class="form-section">
-              <div class="section-title">
-                <b>微信支付（可稍后配置）</b>
-                <span>未开通支付时先留空；涉及下单支付、退款、提现时再补齐。</span>
-              </div>
-              <div class="form-grid">
-                <el-form-item label="商户号 MCHID">
-                  <el-input v-model="form.wxPayMchid" />
-                </el-form-item>
-                <el-form-item label="APIv3 密钥">
-                  <el-input v-model="form.wxPayApiv3Key" type="password" show-password />
-                </el-form-item>
-                <el-form-item label="证书序列号">
-                  <el-input v-model="form.wxPayCertSerialNo" />
-                </el-form-item>
-                <el-form-item label="商户私钥路径">
-                  <el-input v-model="form.wxPayPrivateKeyPath" placeholder="/www/wwwroot/lingmeng/certs/apiclient_key.pem" />
-                </el-form-item>
-                <el-form-item label="平台证书路径">
-                  <el-input v-model="form.wxPayPlatformCertPath" placeholder="/www/wwwroot/lingmeng/certs/platform.pem" />
-                </el-form-item>
-                <el-form-item label="支付回调地址">
-                  <el-input v-model="form.wxPayNotifyUrl" placeholder="https://api.example.com/wxpay/notify" />
-                </el-form-item>
-                <el-form-item label="退款回调地址">
-                  <el-input v-model="form.wxPayRefundNotifyUrl" placeholder="https://api.example.com/wxpay/refund-notify" />
+                <el-form-item label="后台访问域名">
+                  <el-input v-model="form.corsOrigin" placeholder="https://admin.example.com" />
                 </el-form-item>
               </div>
             </section>
@@ -216,11 +193,17 @@
             <template #title>{{ initResult.message || (initResult.success ? '初始化完成' : '初始化未完成') }}</template>
             <template #default>
               <div v-if="initResult.requiresMigration" class="command-box">
-                <p>请在宝塔终端执行下面命令，然后重启后端，再回到本页点击“执行初始化”。</p>
+                <p>向导已自动尝试迁移，但数据库权限或连接仍有问题。修好后可重试；必要时再手动执行下面命令。</p>
                 <code>cd /www/wwwroot/lingmeng/backend && npm run db:migrate:deploy && npm run db:generate && pm2 restart lingmeng-backend</code>
               </div>
               <div v-else-if="initResult.success" class="command-box">
-                <p>初始化成功。上线前请把后端 `.env` 的 `SETUP_WIZARD=true` 改为 `SETUP_WIZARD=false`，并重启后端。</p>
+                <p v-if="initResult.autoRestart">初始化成功，后端正在自动重启并重新加载配置。稍等片刻后会返回登录页。</p>
+                <p v-else>初始化成功，系统已自动写入已安装状态。请手动重启后端后登录后台，继续补齐小程序、对象存储、支付等业务配置。</p>
+              </div>
+              <div v-else class="command-box">
+                <p>初始化没有完成，请按下面顺序排查后再点“执行初始化”。</p>
+                <code>cd /www/wwwroot/lingmeng && pm2 logs lingmeng-backend --lines 80 --nostream</code>
+                <p v-for="(step, index) in initResult.nextSteps || []" :key="index">{{ index + 1 }}. {{ step }}</p>
               </div>
             </template>
           </el-alert>
@@ -240,7 +223,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
@@ -260,34 +243,79 @@ const submitting = ref(false)
 const status = reactive<SetupStatus>({ initialized: false })
 const checkResult = ref<SetupCheckResult | null>(null)
 const initResult = ref<any>(null)
+const MIN_ADMIN_PASSWORD_LENGTH = 12
 
 const form = reactive<SetupInitPayload>({
   siteName: '校园本地生活',
   adminUsername: 'admin',
   adminPassword: '',
+  databaseProvider: 'mysql',
   redisHost: '127.0.0.1',
   redisPort: 6379,
-  corsOrigin: '',
+  corsOrigin: window.location.origin,
   wxMiniAppid: '',
-  wxMiniSecret: '',
-  jwtSecret: ''
+  wxMiniSecret: ''
 })
 
-const cosRegions = [
-  { label: '北京 ap-beijing', value: 'ap-beijing' },
-  { label: '上海 ap-shanghai', value: 'ap-shanghai' },
-  { label: '广州 ap-guangzhou', value: 'ap-guangzhou' },
-  { label: '成都 ap-chengdu', value: 'ap-chengdu' },
-  { label: '重庆 ap-chongqing', value: 'ap-chongqing' },
-  { label: '南京 ap-nanjing', value: 'ap-nanjing' },
-  { label: '中国香港 ap-hongkong', value: 'ap-hongkong' }
-]
+const database = reactive({
+  provider: 'mysql',
+  host: '127.0.0.1',
+  port: 3306,
+  name: 'lingmeng',
+  user: 'lingmeng',
+  password: '',
+  schema: 'public'
+})
+
+function encodeDatabasePart(value: string) {
+  return encodeURIComponent(value.trim())
+}
+
+const databaseUrl = computed(() => {
+  const host = database.host.trim()
+  const name = database.name.trim()
+  const user = database.user.trim()
+  const password = database.password
+  const schema = database.schema.trim() || 'public'
+  if (!host || !name || !user || !password) return ''
+  if (database.provider === 'mysql') {
+    return `mysql://${encodeDatabasePart(user)}:${encodeDatabasePart(password)}@${host}:${database.port}/${encodeDatabasePart(name)}`
+  }
+  return `postgresql://${encodeDatabasePart(user)}:${encodeDatabasePart(password)}@${host}:${database.port}/${encodeDatabasePart(name)}?schema=${encodeDatabasePart(schema)}`
+})
+
+const maskedDatabaseUrl = computed(() => {
+  if (!databaseUrl.value) return ''
+  const encodedPassword = encodeDatabasePart(database.password)
+  return databaseUrl.value.replace(`:${encodedPassword}@`, ':******@')
+})
 
 const activeStep = computed(() => {
   if (initResult.value?.success) return 3
   if (checkResult.value) return 2
-  return setupToken.value ? 1 : 0
+  return 1
 })
+
+const adminPasswordError = computed(() => getAdminPasswordError(form.adminPassword))
+
+function getAdminPasswordError(password: string) {
+  if (!password) return ''
+  if (password.length < MIN_ADMIN_PASSWORD_LENGTH) return `密码长度至少 ${MIN_ADMIN_PASSWORD_LENGTH} 位`
+  let classes = 0
+  if (/[a-z]/.test(password)) classes += 1
+  if (/[A-Z]/.test(password)) classes += 1
+  if (/\d/.test(password)) classes += 1
+  if (/[^a-zA-Z\d]/.test(password)) classes += 1
+  if (classes < 3) return '密码需要至少包含字母、数字、符号中的 3 类'
+  return ''
+}
+
+function formatApiError(error: any, fallback: string) {
+  const message = error?.response?.data?.message || error?.response?.data?.error || error?.message
+  if (Array.isArray(message)) return message.join('；')
+  if (typeof message === 'string' && message.trim()) return message
+  return fallback
+}
 
 async function loadStatus() {
   loadingStatus.value = true
@@ -302,13 +330,14 @@ async function loadStatus() {
 }
 
 async function runCheck() {
-  if (!setupToken.value) {
-    ElMessage.warning('请先填写 SETUP_TOKEN')
+  if (status.setupTokenRequired && !setupToken.value.trim()) {
+    ElMessage.warning('请先填写 .env 里的 SETUP_TOKEN')
     return
   }
+  syncDatabaseUrl()
   checking.value = true
   try {
-    checkResult.value = await checkSetupEnvironment(setupToken.value)
+    checkResult.value = await checkSetupEnvironment(setupToken.value, normalizePayload(form))
     const type = checkResult.value.overall === 'failed' ? 'error' : checkResult.value.overall === 'warning' ? 'warning' : 'success'
     ElMessage[type](type === 'success' ? '环境检查通过' : '环境检查完成，请处理提示项')
   } catch (error: any) {
@@ -319,12 +348,26 @@ async function runCheck() {
 }
 
 async function submitInit() {
-  if (!setupToken.value) {
-    ElMessage.warning('请先填写 SETUP_TOKEN')
+  if (status.setupTokenRequired && !setupToken.value.trim()) {
+    ElMessage.warning('请先填写 .env 里的 SETUP_TOKEN')
     return
   }
   if (!form.adminUsername || !form.adminPassword) {
     ElMessage.warning('请填写超级管理员账号和密码')
+    return
+  }
+  const passwordError = getAdminPasswordError(form.adminPassword)
+  if (passwordError) {
+    ElMessage.warning(passwordError)
+    return
+  }
+  syncDatabaseUrl()
+  if (!form.databaseUrl) {
+    ElMessage.warning('请填写数据库账号、密码和库名')
+    return
+  }
+  if (!form.corsOrigin || form.corsOrigin === 'true' || form.corsOrigin === '*') {
+    ElMessage.warning('请填写当前后台域名，例如 https://admin.example.com')
     return
   }
   submitting.value = true
@@ -333,14 +376,32 @@ async function submitInit() {
     initResult.value = await initSetup(normalizePayload(form), setupToken.value)
     if (initResult.value?.success) {
       status.initialized = true
-      ElMessage.success('初始化完成')
+      if (initResult.value?.autoRestart) {
+        ElMessage.success('初始化完成，服务正在自动重启')
+        window.setTimeout(() => {
+          goLogin()
+        }, 4200)
+      } else {
+        ElMessage.success('初始化完成，请手动重启后端后登录')
+      }
     } else if (initResult.value?.requiresMigration) {
-      ElMessage.warning('需要先执行数据库迁移')
+      ElMessage.warning('自动迁移未完成，请检查数据库权限后重试')
     } else {
       ElMessage.warning(initResult.value?.message || '初始化未完成')
     }
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '初始化失败')
+    const message = formatApiError(error, '初始化失败')
+    initResult.value = {
+      success: false,
+      message,
+      nextSteps: [
+        '确认 MySQL/Redis 服务已启动，数据库名、账号、密码和端口填写正确',
+        '确认数据库账号拥有建表权限；MySQL 客户推荐使用宝塔创建的同名数据库和用户',
+        '查看 PM2 日志里的第一条红色错误，按提示修正后重试',
+        '如果刚才已经写入 .env，保存后执行 bash restart.sh 再打开 /setup'
+      ]
+    }
+    ElMessage.error(message)
   } finally {
     submitting.value = false
   }
@@ -356,11 +417,23 @@ function normalizePayload(payload: SetupInitPayload) {
   return next as unknown as SetupInitPayload
 }
 
-function generateJwt() {
-  const bytes = new Uint8Array(48)
-  window.crypto.getRandomValues(bytes)
-  form.jwtSecret = Array.from(bytes, (item) => item.toString(16).padStart(2, '0')).join('')
+function syncDatabaseUrl() {
+  form.databaseProvider = database.provider
+  form.databaseUrl = databaseUrl.value
 }
+
+watch(
+  () => database.provider,
+  (provider) => {
+    form.databaseProvider = provider
+    if (provider === 'mysql' && database.port === 5432) {
+      database.port = 3306
+    }
+    if (provider === 'postgresql' && database.port === 3306) {
+      database.port = 5432
+    }
+  }
+)
 
 function goLogin() {
   router.push('/login')
@@ -368,7 +441,9 @@ function goLogin() {
 
 onMounted(() => {
   loadStatus()
-  generateJwt()
+  if (!form.corsOrigin) {
+    form.corsOrigin = window.location.origin
+  }
 })
 </script>
 
@@ -402,7 +477,7 @@ onMounted(() => {
 .brand-mark {
   width: 54px;
   height: 54px;
-  border-radius: 16px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
   color: #fff;
@@ -480,7 +555,7 @@ onMounted(() => {
 
 .hero-checklist div {
   padding: 16px;
-  border-radius: 16px;
+  border-radius: 14px;
   font-weight: 850;
 }
 
@@ -531,7 +606,7 @@ onMounted(() => {
 
 .form-section {
   padding: 20px;
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .section-title {
@@ -563,6 +638,30 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
+}
+
+.database-preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  margin: 2px 0 16px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.database-preview span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.database-preview code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .section-actions,
@@ -623,7 +722,7 @@ onMounted(() => {
 .command-box code {
   display: block;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: 10px;
   white-space: normal;
   word-break: break-all;
   color: #e2e8f0;

@@ -12,7 +12,7 @@
           <el-tag v-if="trends.length" size="small" effect="plain">真实订单</el-tag>
         </div>
         <div class="card-body">
-          <el-empty v-if="!trends.length" description="暂无真实趋势数据" />
+          <EmptyState v-if="!trends.length" description="暂无真实趋势数据" />
           <div v-else class="trend-chart">
             <div class="trend-summary">
               <div>
@@ -27,14 +27,14 @@
             <svg class="trend-svg" viewBox="0 0 640 220" preserveAspectRatio="none" role="img">
               <defs>
                 <linearGradient id="trendFill" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stop-color="#2563eb" stop-opacity=".22" />
-                  <stop offset="100%" stop-color="#2563eb" stop-opacity="0" />
+                  <stop offset="0%" stop-color="var(--el-color-primary)" stop-opacity=".22" />
+                  <stop offset="100%" stop-color="var(--el-color-primary)" stop-opacity="0" />
                 </linearGradient>
               </defs>
               <path :d="trendAreaPath" fill="url(#trendFill)" />
-              <polyline :points="trendPolyline" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+              <polyline :points="trendPolyline" fill="none" stroke="var(--el-color-primary)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
               <g v-for="p in trendPoints" :key="p.date">
-                <circle :cx="p.x" :cy="p.y" r="4.5" fill="#fff" stroke="#2563eb" stroke-width="3" />
+                <circle :cx="p.x" :cy="p.y" r="4.5" fill="var(--mx-card)" stroke="var(--el-color-primary)" stroke-width="3" />
               </g>
             </svg>
             <div class="trend-axis">
@@ -46,7 +46,7 @@
       <div class="glass-card">
         <div class="card-header"><div class="card-title">订单来源分布</div></div>
         <div class="card-body">
-          <el-empty v-if="!orderSources.length" description="暂无真实来源数据" />
+          <EmptyState v-if="!orderSources.length" description="暂无真实来源数据" />
           <div v-else class="source-list">
             <div v-for="s in orderSources" :key="s.name" class="source-item">
               <div class="source-row"><b>{{ s.name }}</b><span>{{ s.count }} 单</span></div>
@@ -59,7 +59,7 @@
       <div class="glass-card">
         <div class="card-header"><div class="card-title">待办事项</div></div>
         <div class="card-body">
-          <el-empty v-if="!todoItems.length" description="暂无待办事项" />
+          <EmptyState v-if="!todoItems.length" description="暂无待办事项" />
           <div v-else class="side-list">
             <div class="side-item" v-for="item in todoItems" :key="item.title">
               <div class="side-left">
@@ -77,10 +77,10 @@
       <div class="glass-card">
         <div class="card-header"><div class="card-title">区域运营排行</div></div>
         <div class="card-body">
-          <el-empty v-if="!regionRank.length" description="暂无区域数据" />
+          <EmptyState v-if="!regionRank.length" description="暂无区域数据" />
           <table v-else class="soft-table"><tbody>
             <tr v-for="(r,i) in regionRank" :key="r.name">
-              <td>{{ i+1 }}</td><td><b>{{ r.name }}</b></td><td>{{ r.orders }}</td><td class="money">{{ r.gmv }}</td><td style="color:#16a34a">{{ r.growth }}</td>
+              <td>{{ i+1 }}</td><td><b>{{ r.name }}</b></td><td>{{ r.orders }}</td><td class="money">{{ r.gmv }}</td><td style="color:var(--el-color-success)">{{ r.growth }}</td>
             </tr>
           </tbody></table>
         </div>
@@ -88,7 +88,7 @@
       <div class="glass-card">
         <div class="card-header"><div class="card-title">商家销售排行（今日）</div></div>
         <div class="card-body">
-          <el-empty v-if="!merchantRank.length" description="暂无今日销售数据" />
+          <EmptyState v-if="!merchantRank.length" description="暂无今日销售数据" />
           <table v-else class="soft-table"><tbody>
             <tr v-for="(m,i) in merchantRank" :key="m.name">
               <td>{{ i+1 }}</td><td><div class="user-line"><div class="avatar store">{{ m.name.slice(0,1) }}</div><b>{{ m.name }}</b></div></td>
@@ -112,6 +112,7 @@
 import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
 import { Calendar, Refresh, Operation, Shop, Goods, Warning, ChatDotRound, Money, User, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -175,7 +176,7 @@ const trendAreaPath = computed(() => {
 const quick = ['优惠券管理','创建活动','用户管理','商家管理','订单查询','系统设置']
 
 function goQuick(name: string) {
-  const map: Record<string, string> = { '优惠券管理':'/marketing/coupons', '创建活动':'/marketing/activities', '用户管理':'/user/list', '商家管理':'/merchant/list', '订单查询':'/order/center', '系统设置':'/system/settings' }
+  const map: Record<string, string> = { '优惠券管理':'/marketing/coupons', '创建活动':'/marketing/campaigns', '用户管理':'/user/list', '商家管理':'/merchant/list', '订单查询':'/order/center', '系统设置':'/system/settings' }
   router.push(map[name] || '/dashboard')
 }
 
@@ -254,19 +255,19 @@ onMounted(() => loadData())
 }
 .trend-chart { min-height: 282px; }
 .trend-summary { display:flex; gap:14px; margin-bottom:12px; }
-.trend-summary div { flex:1; padding:12px 14px; border-radius:14px; background:rgba(248,250,252,.9); border:1px solid rgba(226,232,240,.8); }
-.trend-summary span { display:block; color:#64748b; font-size:12px; font-weight:850; }
-.trend-summary b { display:block; margin-top:6px; color:#0f172a; font-size:22px; font-weight:950; }
-.trend-svg { width:100%; height:220px; display:block; border-radius:16px; background:linear-gradient(180deg,rgba(248,250,252,.9),rgba(255,255,255,.65)); border:1px solid rgba(226,232,240,.8); }
-.trend-axis { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-top:10px; color:#64748b; font-size:12px; font-weight:800; text-align:center; }
+.trend-summary div { flex:1; padding:12px 14px; border-radius:14px; background:var(--mx-soft); border:1px solid var(--mx-border); }
+.trend-summary span { display:block; color:var(--mx-sub); font-size:12px; font-weight:850; }
+.trend-summary b { display:block; margin-top:6px; color:var(--mx-text); font-size:22px; font-weight:950; }
+.trend-svg { width:100%; height:220px; display:block; border-radius: 14px; background:var(--mx-soft); border:1px solid var(--mx-border); }
+.trend-axis { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-top:10px; color:var(--mx-sub); font-size:12px; font-weight:800; text-align:center; }
 .source-list { display:grid; gap:14px; }
-.source-item { padding:12px; border-radius:14px; background:rgba(248,250,252,.86); border:1px solid rgba(226,232,240,.78); }
-.source-row { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; color:#334155; font-size:13px; }
-.source-row b { color:#0f172a; }
-.source-percent { margin-top:6px; color:#64748b; font-size:12px; font-weight:900; }
+.source-item { padding:12px; border-radius:14px; background:var(--mx-soft); border:1px solid var(--mx-border); }
+.source-row { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; color:var(--mx-sub); font-size:13px; }
+.source-row b { color:var(--mx-text); }
+.source-percent { margin-top:6px; color:var(--mx-sub); font-size:12px; font-weight:900; }
 .quick-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-.quick-grid button { border:0; min-height:68px; border-radius:17px; background:rgba(239,246,255,.76); color:#1f6fff; font-weight:900; display:grid; place-items:center; gap:6px; cursor:pointer; transition:.15s ease; }
-.quick-grid button:hover { background:rgba(219,234,254,.85); }
+.quick-grid button { border:0; min-height:68px; border-radius: 14px; background:var(--mx-hover); color:var(--el-color-primary); font-weight:900; display:grid; place-items:center; gap:6px; cursor:pointer; transition:.15s ease; }
+.quick-grid button:hover { background:var(--el-color-primary-light-8); }
 @media(max-width:1200px){
   .dashboard-primary{ grid-template-columns:1fr; }
   .dashboard-secondary{ grid-template-columns:1fr; }

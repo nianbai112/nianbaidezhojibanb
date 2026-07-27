@@ -71,7 +71,7 @@
             <em>¥{{ money(item.income) }}</em>
           </div>
         </div>
-        <el-empty v-else description="暂无趋势数据" />
+        <EmptyState v-else description="暂无趋势数据" />
       </el-card>
 
       <el-card class="panel-card" shadow="never">
@@ -87,7 +87,7 @@
             <strong>{{ item.count }} 单</strong>
             <em>¥{{ money(item.amount) }}</em>
           </div>
-          <el-empty v-if="!typeRows.length" description="暂无服务类型数据" />
+          <EmptyState v-if="!typeRows.length" description="暂无服务类型数据" />
         </div>
       </el-card>
 
@@ -112,6 +112,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { fetchRegions } from '@/api/admin'
 import {
@@ -213,10 +214,10 @@ onMounted(loadAll)
 .metric-card,
 .ops-strip,
 .panel-card {
-  border: 1px solid rgba(203, 213, 225, 0.78);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.05);
+  border: 1px solid var(--mx-border-strong);
+  border-radius: 14px;
+  background: var(--mx-card);
+  box-shadow: var(--mx-shadow);
 }
 
 .metric-card {
@@ -232,28 +233,28 @@ onMounted(loadAll)
   height: 46px;
   display: grid;
   place-items: center;
-  border-radius: 15px;
+  border-radius: 14px;
   color: #fff;
 }
 
-.metric-icon.blue { background: linear-gradient(135deg, #2563eb, #38bdf8); }
-.metric-icon.orange { background: linear-gradient(135deg, #f97316, #facc15); }
-.metric-icon.cyan { background: linear-gradient(135deg, #06b6d4, #22c55e); }
-.metric-icon.green { background: linear-gradient(135deg, #16a34a, #86efac); }
-.metric-icon.purple { background: linear-gradient(135deg, #7c3aed, #38bdf8); }
-.metric-icon.red { background: linear-gradient(135deg, #ef4444, #f97316); }
+.metric-icon.blue { background: var(--el-color-primary); }
+.metric-icon.orange { background: var(--el-color-warning); }
+.metric-icon.cyan { background: var(--mx-cyan); }
+.metric-icon.green { background: var(--el-color-success); }
+.metric-icon.purple { background: var(--mx-purple); }
+.metric-icon.red { background: var(--el-color-danger); }
 
 .metric-card p,
 .ops-strip p {
   margin: 0 0 6px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
 
 .metric-card strong {
   display: block;
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 25px;
   font-weight: 800;
 }
@@ -262,7 +263,7 @@ onMounted(loadAll)
 .ops-strip span,
 .card-title small {
   display: block;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 600;
 }
@@ -276,7 +277,7 @@ onMounted(loadAll)
 }
 
 .ops-strip strong {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 18px;
   font-weight: 800;
 }
@@ -292,7 +293,7 @@ onMounted(loadAll)
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  color: #0f172a;
+  color: var(--mx-text);
   font-weight: 800;
 }
 
@@ -309,7 +310,7 @@ onMounted(loadAll)
   grid-template-columns: 48px 1fr 60px 76px;
   align-items: center;
   gap: 10px;
-  color: #475569;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 700;
 }
@@ -317,7 +318,7 @@ onMounted(loadAll)
 .trend-bar {
   height: 10px;
   border-radius: 999px;
-  background: #eef2ff;
+  background: var(--el-color-primary-light-9);
   overflow: hidden;
 }
 
@@ -325,12 +326,12 @@ onMounted(loadAll)
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2563eb, #22c55e);
+  background: var(--el-color-primary);
 }
 
 .trend-row em,
 .type-row em {
-  color: #0f766e;
+  color: var(--el-color-success-dark-2);
   font-style: normal;
 }
 
@@ -338,7 +339,7 @@ onMounted(loadAll)
   grid-template-columns: 1fr 72px 82px;
   padding: 12px;
   border-radius: 14px;
-  background: #f8fafc;
+  background: var(--mx-soft);
 }
 
 .quick-grid {
@@ -349,10 +350,10 @@ onMounted(loadAll)
 
 .quick-grid button {
   height: 64px;
-  border: 1px solid #dbe7f6;
+  border: 1px solid var(--el-color-primary-light-8);
   border-radius: 14px;
-  background: linear-gradient(135deg, #f8fbff, #edf6ff);
-  color: #1e3a8a;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
   font-weight: 800;
   cursor: pointer;
 }

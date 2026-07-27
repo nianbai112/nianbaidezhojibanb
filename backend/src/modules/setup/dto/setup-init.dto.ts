@@ -23,6 +23,10 @@ export class SetupInitDto {
 
   @IsOptional()
   @IsString()
+  databaseProvider?: string;
+
+  @IsOptional()
+  @IsString()
   databaseUrl?: string;
 
   @IsOptional()
@@ -53,6 +57,34 @@ export class SetupInitDto {
   @IsOptional()
   @IsString()
   wxMiniSecret?: string;
+
+  @IsOptional()
+  @IsString()
+  smsProvider?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsAccessKeyId?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsAccessKeySecret?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsSignName?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsTemplateCode?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsEndpoint?: string;
+
+  @IsOptional()
+  @IsString()
+  aliyunSmsRegionId?: string;
 
   @IsOptional()
   @IsString()

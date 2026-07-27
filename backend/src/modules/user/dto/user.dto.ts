@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Gender } from '@prisma/client';
 
@@ -133,6 +134,11 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsBoolean()
   notifyFollow?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  notifySquat?: boolean;
 }
 
 export class StudentVerifyDto {
@@ -164,11 +170,24 @@ export class FollowDto {
 export class ListQueryDto {
   @ApiProperty({ required: false, default: 1 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   page?: number = 1;
 
   @ApiProperty({ required: false, default: 20 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   pageSize?: number = 20;
+
+  @ApiProperty({ required: false, default: 20, description: '兼容小程序旧参数，等同于 pageSize' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  limit?: number;
+
+  @ApiProperty({ required: false, enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  order?: 'asc' | 'desc' = 'desc';
 }

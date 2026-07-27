@@ -175,7 +175,7 @@ const form = reactive({
 const typeOptions = [
   { label: '布局测试', value: 'layout' },
   { label: '信息流样式', value: 'feed_style' },
-  { label: '弹窗广告', value: 'popup' },
+  { label: '首页权益卡片', value: 'popup' },
   { label: '分享链路', value: 'share' },
   { label: '优惠券', value: 'coupon' },
   { label: '推荐算法', value: 'recommend' },

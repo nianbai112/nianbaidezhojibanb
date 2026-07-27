@@ -326,3 +326,13 @@ API 契约：
 8. 后台不能绕过领域状态机；
 9. 自动化测试、真实数据库并发、微信沙箱和小程序真机证据齐全；
 10. 部署、灰度和监控完成后，才标记“已上线验证”，本地构建或单测通过只标记“本地已验证”。
+
+## 15. 2026-07-22 验收证据状态
+
+- `implemented`：已提供只读历史审计脚本 `backend/scripts/audit-errand-closure.cjs`，输出六类冲突计数和订单 ID；已提供默认 dry-run、仅显式 `--apply` 才执行的 `backend/scripts/backfill-errand-receipts.cjs`。回填只补 `receiptConfirmDeadline/receiptConfirmedAt/receiptConfirmedBy`，不写 `settlementEligibleAt`，不创建结算明细。
+- `verified locally`：闭环集成测试覆盖双骑手并发接单仅一人成功、骑手送达后用户确认、申诉冻结自动确认、余额部分/全额退款、申诉订单排除结算、已支付结算生成追偿；后端跑腿/支付/申诉/财务定向回归为 19 suites / 169 tests；后端构建、后台 Vite 构建及小程序跑腿验收 34/34 通过；Prisma 方言 schema 同步检查通过。
+- `verified locally`（数据库）：本机 PostgreSQL 测试库已由迁移前完整备份保护，并成功应用全部 111 个仓库迁移；闭环只读审计六类异常均为 0，回填 dry-run 的送达/完成候选均为 0，因此未执行 `--apply`。后台 `vue-tsc --noEmit` 仍被分析页、帖子管理、日志页等既有类型错误阻断，完整自动化门禁尚未全绿。
+- `verified with real PostgreSQL concurrency`：在已迁移的隔离 PostgreSQL 数据库创建 1 个测试订单和 50 个认证骑手，同时调用真实接单事务；结果为 1 成功、49 失败、1 个 `accepted` 配送节点、1 个 busy 骑手，订单只绑定 1 个骑手。
+- `verified in WeChat sandbox`：待验证；尚未取得微信支付/退款沙箱、证书、回调和重复通知证据。
+- `verified in DevTools/device`：待验证；尚未完成弱网、重复点击、退出重进、支付取消、定位拒绝和通知拒绝验证。
+- `pending deployment`：本机测试库迁移和历史审计已完成且无回填候选；微信沙箱、开发者工具/真机、目标环境迁移、区域灰度开关、监控和正式部署仍未执行，在这些步骤完成前不得宣称跑腿已上线闭环。

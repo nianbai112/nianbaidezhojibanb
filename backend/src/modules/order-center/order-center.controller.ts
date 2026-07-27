@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Param,
+  Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -10,6 +11,7 @@ import { OrderCenterService } from "./order-center.service";
 import { JwtGuard } from "../../guards/jwt.guard";
 import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
 import { RequirePermission } from "../../decorators/require-permission.decorator";
+import { CurrentUser } from "../../decorators/current-user.decorator";
 
 @ApiTags("统一订单中心")
 @Controller("admin/order-center")
@@ -21,22 +23,22 @@ export class OrderCenterController {
   @Get("orders")
   @RequirePermission("order:view")
   @ApiOperation({ summary: "统一订单列表" })
-  getOrders(@Query() query: any) {
-    return this.orderCenterService.getOrders(query);
+  getOrders(@Query() query: any, @CurrentUser('sub') operatorId: string) {
+    return this.orderCenterService.getOrders(query, operatorId);
   }
 
   @Get("export")
   @RequirePermission("order:view")
   @ApiOperation({ summary: "导出统一订单 CSV" })
-  exportOrders(@Query() query: any) {
-    return this.orderCenterService.exportOrders(query);
+  exportOrders(@Query() query: any, @CurrentUser('sub') operatorId: string) {
+    return this.orderCenterService.exportOrders(query, operatorId);
   }
 
   @Get("orders/:id")
   @RequirePermission("order:view")
   @ApiOperation({ summary: "订单详情" })
-  getOrderDetail(@Param("id") id: string, @Query("type") type?: string) {
-    return this.orderCenterService.getOrderDetail(id, type);
+  getOrderDetail(@Param("id") id: string, @Query("type") type?: string, @CurrentUser('sub') operatorId?: string) {
+    return this.orderCenterService.getOrderDetail(id, type, operatorId);
   }
 
   @Get("user/:userId")
@@ -45,22 +47,23 @@ export class OrderCenterController {
   getUserOrders(
     @Param("userId") userId: string,
     @Query() query: any,
+    @CurrentUser('sub') operatorId: string,
   ) {
-    return this.orderCenterService.getUserOrders(userId, query);
+    return this.orderCenterService.getUserOrders(userId, query, operatorId);
   }
 
   @Get("payment/:paymentNo")
   @RequirePermission("order:view")
   @ApiOperation({ summary: "支付单查询" })
-  getPaymentByNo(@Param("paymentNo") paymentNo: string) {
-    return this.orderCenterService.getPaymentByNo(paymentNo);
+  getPaymentByNo(@Param("paymentNo") paymentNo: string, @CurrentUser('sub') operatorId: string) {
+    return this.orderCenterService.getPaymentByNo(paymentNo, operatorId);
   }
 
   @Get("refunds")
   @RequirePermission("order:view")
   @ApiOperation({ summary: "统一退款列表" })
-  getRefunds(@Query() query: any) {
-    return this.orderCenterService.getRefunds(query);
+  getRefunds(@Query() query: any, @CurrentUser('sub') operatorId: string) {
+    return this.orderCenterService.getRefunds(query, operatorId);
   }
 
   @Get("timeline/:orderId")
@@ -69,7 +72,15 @@ export class OrderCenterController {
   getOrderTimeline(
     @Param("orderId") orderId: string,
     @Query("type") type?: string,
+    @CurrentUser('sub') operatorId?: string,
   ) {
-    return this.orderCenterService.getOrderTimeline(orderId, type);
+    return this.orderCenterService.getOrderTimeline(orderId, type, operatorId);
+  }
+
+  @Post('orders/:id/release-rider')
+  @RequirePermission('order:refund')
+  @ApiOperation({ summary: '将超时未取餐的外卖订单退回骑手池' })
+  releaseRider(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
+    return this.orderCenterService.releaseUnpickedRiderOrder(id, operatorId);
   }
 }

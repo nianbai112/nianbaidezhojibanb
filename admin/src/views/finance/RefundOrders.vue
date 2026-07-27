@@ -1,8 +1,8 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="退款订单" subtitle="查看退款订单记录" icon="Money" />
+    <PageHeader title="退款资金记录" subtitle="查看支付渠道退款回执与对账结果；外卖售后请从“售后处理”进入" icon="Money" />
     <div class="filter-bar">
-      <el-input v-model="filters.keyword" placeholder="搜索退款单号" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
+      <el-input v-model="filters.keyword" placeholder="搜索退款单号/订单号" clearable style="width: 220px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
         <el-option label="成功" value="SUCCESS" />
         <el-option label="处理中" value="PROCESSING" />
@@ -14,6 +14,9 @@
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="refundNo" label="退款单号" width="200" show-overflow-tooltip />
       <el-table-column prop="orderNo" label="原订单号" width="200" show-overflow-tooltip />
+      <el-table-column label="来源" width="120">
+        <template #default="{ row }">{{ sourceLabel(row) }}</template>
+      </el-table-column>
       <el-table-column prop="user.nickname" label="用户" width="120">
         <template #default="{ row }">{{ row.user?.nickname || row.userId }}</template>
       </el-table-column>
@@ -21,6 +24,7 @@
         <template #default="{ row }">¥{{ Number(row.amount).toFixed(2) }}</template>
       </el-table-column>
       <el-table-column prop="reason" label="原因" min-width="150" show-overflow-tooltip />
+      <el-table-column prop="failureReason" label="失败说明" min-width="150" show-overflow-tooltip />
       <el-table-column prop="status" label="状态" width="80">
         <template #default="{ row }">
           <el-tag :type="row.status === 'SUCCESS' ? 'success' : row.status === 'FAILED' ? 'danger' : 'warning'" size="small">
@@ -40,12 +44,17 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 
 const statusMap: Record<string, string> = { SUCCESS: '成功', PROCESSING: '处理中', FAILED: '失败' }
+const sourceLabel = (row: any) => row.source === 'payment'
+  ? ({ order: '外卖订单', mall_order: '商城订单', errand_order: '跑腿订单' }[row.bizType] || '支付退款')
+  : '历史退款'
 const loading = ref(false)
+const route = useRoute()
 const list = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(20)
@@ -66,7 +75,16 @@ const resetFilters = () => {
   loadData()
 }
 
-onMounted(() => loadData())
+const applyRouteQuery = () => {
+  const keyword = route.query.businessId || route.query.keyword || route.query.focusId
+  if (keyword) filters.keyword = String(keyword)
+  if (route.query.status) filters.status = String(route.query.status)
+}
+
+onMounted(() => {
+  applyRouteQuery()
+  loadData()
+})
 </script>
 
 <style scoped>

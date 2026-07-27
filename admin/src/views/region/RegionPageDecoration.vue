@@ -129,6 +129,33 @@
               </div>
             </div>
             <el-divider />
+            <div class="home-hero-editor">
+              <div class="subsection-head">
+                <div>
+                  <div class="subsection-title">校园首页主视觉</div>
+                  <p>配置小程序首页顶部标题、搜索提示和右侧吉祥物插画。保存后通过首页接口以 hero 模块下发。</p>
+                </div>
+                <el-switch v-model="homeHeroConfig.enabled" active-text="显示" inactive-text="隐藏" />
+              </div>
+              <div class="home-hero-card">
+                <div class="home-hero-upload">
+                  <ImageUploadBox
+                    v-model="homeHeroConfig.mascot_image"
+                    scene="region-home-hero"
+                    shape="square"
+                    placeholder="上传吉祥物插画"
+                    tip="建议透明 PNG，右侧人物/吉祥物"
+                    :max-size="5"
+                  />
+                </div>
+                <div class="home-hero-fields">
+                  <el-input v-model="homeHeroConfig.title" type="textarea" :rows="2" maxlength="40" show-word-limit placeholder="主标题，如：今天想在校园里干点啥？" />
+                  <el-input v-model="homeHeroConfig.subtitle" maxlength="32" show-word-limit placeholder="副标题，如：发现校园里的新鲜事" />
+                  <el-input v-model="homeHeroConfig.search_placeholder" maxlength="40" show-word-limit placeholder="搜索框提示，如：搜一搜：拼饭 / 二手 / 跑腿 / 活动" />
+                </div>
+              </div>
+            </div>
+            <el-divider />
             <div class="banner-editor">
               <div class="subsection-head">
                 <div>
@@ -438,6 +465,13 @@
           </div>
         </div>
 
+        <div v-if="activeMenu === 'profile-visual'" class="config-section glass-card">
+          <div class="section-head"><div class="card-title">我的页右上角吉祥物</div></div>
+          <div class="config-content"><el-switch v-model="profileVisual.enabled" active-text="显示" inactive-text="隐藏" /><ImageUploadBox v-model="profileVisual.image" scene="region-profile-visual" shape="square" placeholder="上传我的页吉祥物" tip="建议透明 PNG，右侧装饰插画" :max-size="5" /></div>
+        </div>
+        <div v-if="activeMenu === 'profile-drawer'" class="config-section"><RegionProfileDrawerEditor v-model="profileDrawer" /></div>
+        <div v-if="activeMenu === 'profile-quick-actions'" class="config-section"><RegionProfileQuickActionsEditor v-model="profileQuickActions" /></div>
+
         <!-- 底部导航预览 -->
         <div v-if="activeMenu === 'tabbar'" class="config-section glass-card">
           <div class="section-head">
@@ -453,7 +487,7 @@
                   {{ tab.enabled ? '启用' : '禁用' }}
                 </el-tag>
               </div>
-              <el-empty v-if="!tabbarData.length" description="暂无底部导航配置" />
+              <EmptyState v-if="!tabbarData.length" description="暂无底部导航配置" />
             </div>
           </div>
         </div>
@@ -473,7 +507,7 @@
                 </div>
                 <div class="share-title">{{ shareConfig.title || '欢迎来到' + (currentRegion?.name || '小程序') }}</div>
                 <div class="share-image" v-if="shareConfig.imageUrl">
-                  <el-image :src="shareConfig.imageUrl" fit="cover" style="width:100%;height:120px;border-radius:8px" />
+                  <el-image :src="shareConfig.imageUrl" fit="cover" style="width:100%;height:120px;border-radius: 6px" />
                 </div>
                 <div class="share-footer">
                   <span>小程序标识</span>
@@ -482,6 +516,8 @@
             </div>
           </div>
         </div>
+
+        <div v-if="activeMenu === 'publish-entry'" class="config-section"><RegionPublishEntryEditor v-model="publishMenu" /></div>
 
         <!-- 发布检查 -->
         <div v-if="activeMenu === 'publish'" class="config-section glass-card">
@@ -572,7 +608,7 @@
                   <span>{{ tab.name }}</span>
                 </div>
               </div>
-              <el-empty v-if="!tabbarData.filter(t => t.enabled).length" description="暂无启用的底部导航" />
+              <EmptyState v-if="!tabbarData.filter(t => t.enabled).length" description="暂无启用的底部导航" />
             </div>
           </div>
 
@@ -615,10 +651,14 @@ import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import MiniProgramPreview from '@/components/preview/MiniProgramPreview.vue'
 import PreviewHomePage from '@/components/preview/PreviewHomePage.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import PreviewMessagePage from '@/components/preview/PreviewMessagePage.vue'
 import PreviewProfilePage from '@/components/preview/PreviewProfilePage.vue'
 import PreviewTabbar from '@/components/preview/PreviewTabbar.vue'
 import PreviewShareCard from '@/components/preview/PreviewShareCard.vue'
+import RegionPublishEntryEditor from './components/RegionPublishEntryEditor.vue'
+import RegionProfileDrawerEditor from './components/RegionProfileDrawerEditor.vue'
+import RegionProfileQuickActionsEditor from './components/RegionProfileQuickActionsEditor.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -698,8 +738,12 @@ const menuItems = ref([
   { key: 'leaderboard', label: '首页榜单', icon: 'Trophy', completed: false },
   { key: 'message', label: '消息页', icon: 'ChatDotRound', completed: false },
   { key: 'profile', label: '我的页', icon: 'User', completed: false },
+  { key: 'profile-visual', label: '我的页主视觉', icon: 'User', completed: false },
+  { key: 'profile-drawer', label: '我的侧边栏', icon: 'User', completed: false },
+  { key: 'profile-quick-actions', label: '我的页快捷入口', icon: 'Grid', completed: false },
   { key: 'tabbar', label: '底部导航预览', icon: 'Setting', completed: false },
   { key: 'share', label: '分享卡片预览', icon: 'Share', completed: false },
+  { key: 'publish-entry', label: '发布入口', icon: 'Promotion', completed: false },
   { key: 'publish', label: '发布检查', icon: 'CircleCheck', completed: false },
 ])
 
@@ -713,6 +757,20 @@ const homeConfig = reactive({
   home_feature_style: 'default',
   home_nav_layout: 1,
 })
+
+const homeHeroConfig = reactive({
+  enabled: true,
+  title: '今天想在校园里\n干点啥？',
+  subtitle: '发现校园里的新鲜事',
+  search_placeholder: '搜一搜：拼饭 / 二手 / 跑腿 / 活动',
+  mascot_image: '',
+})
+const defaultPublishMenu = () => ({ title: '今天想发点什么？', subtitle: '选择你要发布的内容类型', heroImage: '', entries: { note: { enabled: true, title: '发笔记', subtitle: '发布校园生活、经验和新鲜事', image: '' }, secondhand: { enabled: true, title: '出闲置', subtitle: '发布你不再需要的物品', image: '' }, errand: { enabled: true, title: '跑腿任务', subtitle: '发布帮取快递、代买等需求', image: '' } } })
+const publishMenu = ref(defaultPublishMenu())
+const normalizePublishMenu = (value: any) => {
+  const fallback = defaultPublishMenu(); const source = value && typeof value === 'object' ? value : {}; const entries = source.entries || {}
+  return { ...fallback, ...source, entries: { note: { ...fallback.entries.note, ...(entries.note || {}) }, secondhand: { ...fallback.entries.secondhand, ...(entries.secondhand || {}) }, errand: { ...fallback.entries.errand, ...(entries.errand || {}) } } }
+}
 
 type DecorationJumpType = 'filter' | 'internal' | 'miniProgram' | 'webview' | 'image' | 'none'
 
@@ -729,31 +787,36 @@ const miniProgramPageOptions = [
   { label: '发笔记', value: 'pagesB/post/createPost' },
   { label: '笔记列表', value: 'pagesB/post/post' },
   { label: '圈子首页', value: 'pages/tabbar/containers/containers' },
-  { label: '外卖商家', value: 'pagesA/selection/selection' },
-  { label: '商家列表', value: 'pagesA/merchant/merchant' },
-  { label: '二手交易', value: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease' },
-  { label: '活动/分享有礼', value: 'pagesA/news/SharingCourtesy/SharingCourtesy' },
+  { label: '外卖商家列表', value: 'pagesA/merchant/merchant' },
+  { label: '二手市场（首页二手Tab）', value: 'pages/tabbar/index/index?tab=secondhand' },
+  { label: '对象匹配', value: 'pagesB/ObjectMatching/ObjectMatching' },
+  { label: '发布二手', value: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease' },
+  { label: '我的闲置', value: 'pagesC/SecondHand/MySecondHand/MySecondHand' },
+  { label: '活动中心', value: 'pagesA/selection/list/list?tabIndex=0' },
+  { label: '分享有礼', value: 'pagesA/news/SharingCourtesy/SharingCourtesy' },
   { label: '评分首页', value: 'pagesA/RatingsHome/RatingsHome' },
   { label: '打卡地图', value: 'pagesA/RatingsHome/PunchingMap/PunchingMap' },
   { label: '跑腿', value: 'pages/tabbar/RunErrands/RunErrands' },
   { label: '商城首页', value: 'pagesB/mall/index/index' },
   { label: '商城商品', value: 'pagesB/mall/product/list' },
-  { label: '签到中心', value: 'pagesB/signin/signin' },
+  { label: '成长中心（在线签到）', value: 'pagesB/growth/center' },
   { label: '学生认证', value: 'pages/auth/StudentCertification/StudentCertification' },
   { label: '个人中心', value: 'pages/tabbar/auth/PersonalHomepage' },
 ]
 
 const typePathMap: Record<string, string> = {
   note: 'pagesB/post/post',
-  takeout: 'pagesA/selection/selection',
-  secondhand: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease',
-  activity: 'pagesA/news/SharingCourtesy/SharingCourtesy',
+  takeout: 'pagesA/merchant/merchant',
+  secondhand: 'pages/tabbar/index/index?tab=secondhand',
+  activity: 'pagesA/selection/list/list?tabIndex=0',
   vote: 'pagesA/RatingsHome/RatingsHome',
   rating: 'pagesA/RatingsHome/RatingsHome',
   merchant: 'pagesA/merchant/merchant',
   errand: 'pages/tabbar/RunErrands/RunErrands',
   circle: 'pages/tabbar/containers/containers',
   mall: 'pagesB/mall/index/index',
+  dating: 'pagesB/ObjectMatching/ObjectMatching',
+  object_matching: 'pagesB/ObjectMatching/ObjectMatching',
 }
 
 const carouselItems = ref<any[]>([])
@@ -761,18 +824,18 @@ const carouselItems = ref<any[]>([])
 // 首页 Tabs 配置
 const tabsConfig = ref<any[]>([
   { name: '笔记', type: 'note', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesB/post/post', appId: '', query: '', remark: '' },
-  { name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/selection', appId: '', query: '', remark: '' },
-  { name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', appId: '', query: '', remark: '' },
-  { name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', appId: '', query: '', remark: '' },
+  { name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/merchant/merchant', appId: '', query: '', remark: '' },
+  { name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: '', appId: '', query: '', remark: '' },
+  { name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/list/list?tabIndex=0', appId: '', query: '', remark: '' },
 ])
 
 // 首页导航配置
 const homeNavLayout = ref(1)
 const navConfig = ref<any[]>([
   { name: '笔记', subtitle: '', icon: '', page: 'pagesB/post/post', path: 'pagesB/post/post', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
-  { name: '外卖', subtitle: '', icon: '', page: 'pagesA/selection/selection', path: 'pagesA/selection/selection', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
-  { name: '二手', subtitle: '', icon: '', page: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', path: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
-  { name: '活动', subtitle: '', icon: '', page: 'pagesA/news/SharingCourtesy/SharingCourtesy', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
+  { name: '外卖', subtitle: '', icon: '', page: 'pagesA/merchant/merchant', path: 'pagesA/merchant/merchant', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
+  { name: '二手', subtitle: '', icon: '', page: 'pages/tabbar/index/index?tab=secondhand', path: 'pages/tabbar/index/index?tab=secondhand', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
+  { name: '活动', subtitle: '', icon: '', page: 'pagesA/selection/list/list?tabIndex=0', path: 'pagesA/selection/list/list?tabIndex=0', linkType: 'internal', appId: '', query: '', remark: '', enabled: true },
 ])
 
 // 首页榜单配置
@@ -796,6 +859,26 @@ const messageConfig = reactive({
 const profileConfig = reactive({
   profile_page_layout: 'default',
 })
+const profileVisual = reactive({ enabled: true, image: '' })
+const defaultProfileDrawer = () => ({ groups: [
+  { id: 'assets', title: '资产与订单', items: [{ id: 'wallet', icon: 'icon-qianbao', title: '我的钱包', path: '/pagesA/wallet/wallet', permission: 'all', enabled: true }, { id: 'history', icon: 'icon-clock-o', title: '浏览记录', path: '/pages/auth/BrowsingHistory/BrowsingHistory', permission: 'all', enabled: true }] },
+  { id: 'activity', title: '活动', items: [{ id: 'activity', icon: 'icon-flag-o', title: '活动中心', path: '/pagesA/selection/list/list?tabIndex=0', permission: 'all', enabled: true }, { id: 'signup', icon: 'icon-description', title: '我的报名', path: '/pagesA/selection/list/list?tabIndex=1', permission: 'all', enabled: true }, { id: 'ticket', icon: 'icon-bill', title: '我的票券', path: '/pagesA/ticket-wallet/ticket-wallet', permission: 'all', enabled: true }] },
+  { id: 'trade', title: '交易', items: [{ id: 'buy', icon: 'icon-goods-collect-o', title: '我的买入', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=buyer', permission: 'all', enabled: true }, { id: 'sell', icon: 'icon-shop-o', title: '我的卖出', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=seller', permission: 'all', enabled: true }, { id: 'address', icon: 'icon-location-o', title: '收货地址', path: '/pages/address/address', permission: 'all', enabled: true }] },
+  { id: 'account', title: '账号', items: [{ id: 'verify', icon: 'icon-user-o', title: '我的认证', path: '/pages/auth/StudentCertification/StudentCertification', permission: 'all', enabled: true }, { id: 'member', icon: 'icon-vip', title: '我的会员', path: '/pagesA/MemberCenter/MemberCenter', permission: 'all', enabled: true }] }
+] })
+const profileDrawer = ref(defaultProfileDrawer())
+const defaultProfileQuickActions = () => ({ items: [
+  { key: 'posts', title: '我的发布', icon: 'icon-bianji', tone: 'green', permission: 'all', type: 'profile_tab', tabIndex: 0, enabled: true, sortOrder: 0 },
+  { key: 'idle', title: '我的闲置', icon: 'icon-dingdan2', tone: 'orange', permission: 'all', type: 'internal', path: '/pagesC/SecondHand/MySecondHand/MySecondHand', enabled: true, sortOrder: 1 },
+  { key: 'errand', title: '我的跑腿', icon: 'icon-qishoupeisong', tone: 'green', permission: 'all', type: 'internal', path: '/pages/tabbar/RunErrands/RunErrands', enabled: true, sortOrder: 2 },
+  { key: 'draft', title: '草稿箱', icon: 'icon-bill', tone: 'blue', permission: 'all', type: 'internal', path: '/pagesB/post/createPost', enabled: true, sortOrder: 3 },
+  { key: 'favorite', title: '我的收藏', icon: 'icon-aixin4', tone: 'yellow', permission: 'all', type: 'profile_tab', tabIndex: 1, enabled: true, sortOrder: 4 },
+  { key: 'history', title: '浏览记录', icon: 'icon-eye', tone: 'green-soft', permission: 'all', type: 'internal', path: '/pages/auth/BrowsingHistory/BrowsingHistory', enabled: true, sortOrder: 5 },
+  { key: 'comments', title: '收到的评论', icon: 'icon-comment-circle-o', tone: 'purple', permission: 'all', type: 'profile_tab', tabIndex: 3, enabled: true, sortOrder: 6 },
+  { key: 'certification', title: '账号认证', icon: 'icon-user-o', tone: 'blue', permission: 'all', type: 'internal', path: '/pages/auth/StudentCertification/StudentCertification', enabled: true, sortOrder: 7 },
+  { key: 'badge', title: '我的称号', icon: 'icon-huangguan', tone: 'gold', permission: 'all', type: 'internal', path: '/pagesB/badge/badge', enabled: true, sortOrder: 8 },
+] })
+const profileQuickActions = ref(defaultProfileQuickActions())
 
 // 底部导航数据
 const tabbarData = ref<any[]>([])
@@ -911,6 +994,27 @@ function makeJumpPayload(item: any) {
   }
 }
 
+function isHomeHeroItem(item: any) {
+  const type = String(item?.module_type || item?.type || '').toLowerCase()
+  return type === 'hero' || type === 'home_hero' || type === 'campus_hero'
+}
+
+function normalizeHomeHeroItem(item: any = {}) {
+  const raw = item || {}
+  const image = raw.mascot_image || raw.mascotImage || raw.image || raw.imageUrl || raw.image_url || raw.url || ''
+  return {
+    enabled: raw.enabled !== false && raw.isShow !== false && raw.status !== 0,
+    title: raw.title || '今天想在校园里\n干点啥？',
+    subtitle: raw.subtitle || raw.description || raw.content || '发现校园里的新鲜事',
+    search_placeholder: raw.search_placeholder || raw.searchPlaceholder || raw.placeholder || '搜一搜：拼饭 / 二手 / 跑腿 / 活动',
+    mascot_image: image,
+  }
+}
+
+function applyHomeHeroConfig(item: any) {
+  Object.assign(homeHeroConfig, normalizeHomeHeroItem(item))
+}
+
 function normalizeCarouselItem(item: any, index = 0) {
   const raw = typeof item === 'string' ? { image: item } : (item || {})
   const image = raw.image || raw.imageUrl || raw.image_url || raw.url || raw.cover || ''
@@ -947,6 +1051,33 @@ function serializeCarouselItems() {
       }
     })
     .filter(item => item.image || item.title)
+}
+
+function serializeHomeHeroItem() {
+  const normalized = normalizeHomeHeroItem(homeHeroConfig)
+  if (!normalized.enabled) return null
+  return {
+    id: 'home_hero',
+    module_type: 'hero',
+    type: 'hero',
+    title: normalized.title,
+    subtitle: normalized.subtitle,
+    content: normalized.subtitle,
+    search_placeholder: normalized.search_placeholder,
+    placeholder: normalized.search_placeholder,
+    mascot_image: normalized.mascot_image,
+    image: normalized.mascot_image,
+    imageUrl: normalized.mascot_image,
+    image_url: normalized.mascot_image,
+    enabled: true,
+    isShow: true,
+    status: 1,
+    sortOrder: -100,
+  }
+}
+
+function serializeHomeContentItems() {
+  return [serializeHomeHeroItem(), ...serializeCarouselItems()].filter(Boolean)
 }
 
 function normalizeHomeNav(nav: any, index = 0) {
@@ -1018,8 +1149,10 @@ const loadRegionDetail = async () => {
     if (data.home_nav_layout) homeConfig.home_nav_layout = data.home_nav_layout
 
     const rawCarousel = data.carousel_images ?? data.carouselImages ?? []
+    const rawHero = Array.isArray(rawCarousel) ? rawCarousel.find(isHomeHeroItem) : null
+    applyHomeHeroConfig(data.home_hero || data.homeHero || rawHero || {})
     if (Array.isArray(rawCarousel)) {
-      carouselItems.value = rawCarousel.map(normalizeCarouselItem)
+      carouselItems.value = rawCarousel.filter(item => !isHomeHeroItem(item)).map(normalizeCarouselItem)
     } else {
       carouselItems.value = []
     }
@@ -1048,6 +1181,10 @@ const loadRegionDetail = async () => {
 
     // 更新我的页配置
     if (data.profile_page_layout) profileConfig.profile_page_layout = data.profile_page_layout
+    Object.assign(profileVisual, { enabled: data.settings?.profileVisual?.enabled !== false, image: data.settings?.profileVisual?.image || '' })
+    profileDrawer.value = data.settings?.profileDrawer?.groups ? data.settings.profileDrawer : defaultProfileDrawer()
+    profileQuickActions.value = Array.isArray(data.settings?.profileQuickActions?.items) ? data.settings.profileQuickActions : defaultProfileQuickActions()
+    publishMenu.value = normalizePublishMenu(data.settings?.publishMenu)
 
     // 更新完整度
     updateCompletionStatus()
@@ -1120,7 +1257,8 @@ const updateCompletionStatus = () => {
         check.status = tabsConfig.value.some(t => t.enabled) ? 'pass' : 'fail'
         break
       case 'homeModule':
-        check.status = (homeConfig.show_carousel && carouselItems.value.some(item => item.enabled !== false && item.image))
+        check.status = (homeHeroConfig.enabled && (homeHeroConfig.title || homeHeroConfig.mascot_image))
+          || (homeConfig.show_carousel && carouselItems.value.some(item => item.enabled !== false && item.image))
           || homeConfig.show_kingkong
           || homeConfig.show_hot_list
           ? 'pass'
@@ -1148,7 +1286,8 @@ const updateCompletionStatus = () => {
   menuItems.value.forEach(item => {
     switch (item.key) {
       case 'home':
-        item.completed = (homeConfig.show_carousel && carouselItems.value.some(b => b.enabled !== false && b.image))
+        item.completed = Boolean(homeHeroConfig.enabled && (homeHeroConfig.title || homeHeroConfig.mascot_image))
+          || (homeConfig.show_carousel && carouselItems.value.some(b => b.enabled !== false && b.image))
           || homeConfig.show_kingkong
           || homeConfig.show_hot_list
         break
@@ -1167,11 +1306,17 @@ const updateCompletionStatus = () => {
       case 'profile':
         item.completed = !!profileConfig.profile_page_layout
         break
+      case 'profile-quick-actions':
+        item.completed = profileQuickActions.value.items.some((item: any) => item.enabled !== false)
+        break
       case 'tabbar':
         item.completed = tabbarData.value.length > 0
         break
       case 'share':
         item.completed = !!shareConfig.title
+        break
+      case 'publish-entry':
+        item.completed = !!publishMenu.value.title
         break
     }
   })
@@ -1217,9 +1362,9 @@ const getLinkTypeLabel = (type?: string) => {
 const resetTabs = () => {
   tabsConfig.value = [
     { name: '笔记', type: 'note', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesB/post/post', appId: '', query: '', remark: '' },
-    { name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/selection', appId: '', query: '', remark: '' },
-    { name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/SecondHand/Second-hand-selease/Second-hand-selease', appId: '', query: '', remark: '' },
-    { name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/news/SharingCourtesy/SharingCourtesy', appId: '', query: '', remark: '' },
+    { name: '外卖', type: 'takeout', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/merchant/merchant', appId: '', query: '', remark: '' },
+    { name: '二手', type: 'secondhand', enabled: true, icon: '', image: '', linkType: 'filter', path: '', appId: '', query: '', remark: '' },
+    { name: '活动', type: 'activity', enabled: true, icon: '', image: '', linkType: 'filter', path: 'pagesA/selection/list/list?tabIndex=0', appId: '', query: '', remark: '' },
   ]
 }
 
@@ -1327,12 +1472,12 @@ const saveHomeConfig = async () => {
       hot_featured_display: homeConfig.hot_featured_display,
       home_feature_style: homeConfig.home_feature_style,
       home_nav_layout: homeConfig.home_nav_layout,
-      carousel_images: serializeCarouselItems(),
+      carousel_images: serializeHomeContentItems(),
     })
     mergeCurrentRegion({
       ...homeConfig,
-      carousel_images: serializeCarouselItems(),
-      carouselImages: serializeCarouselItems(),
+      carousel_images: serializeHomeContentItems(),
+      carouselImages: serializeHomeContentItems(),
     })
     ElMessage.success('首页装修配置已保存')
     updateCompletionStatus()
@@ -1420,6 +1565,7 @@ const saveProfileConfig = async () => {
   try {
     await request.put(`/admin/regions/${selectedRegionId.value}`, {
       profile_page_layout: profileConfig.profile_page_layout,
+      settings: { ...(currentRegion.value?.settings || {}), publishMenu: publishMenu.value, profileVisual: { ...profileVisual }, profileDrawer: profileDrawer.value, profileQuickActions: profileQuickActions.value },
     })
     ElMessage.success('我的页配置已保存')
     updateCompletionStatus()
@@ -1445,7 +1591,7 @@ const saveAllConfig = async () => {
       hot_featured_display: homeConfig.hot_featured_display,
       home_feature_style: homeConfig.home_feature_style,
       home_nav_layout: homeNavLayout.value,
-      carousel_images: serializeCarouselItems(),
+      carousel_images: serializeHomeContentItems(),
       home_nav_layout_config: serializeHomeNavItems(),
       region_tabs: serializeHomeTabs(),
       home_leaderboard: leaderboardConfig,
@@ -1454,16 +1600,18 @@ const saveAllConfig = async () => {
       private_message_enabled: messageConfig.private_message_enabled,
       // 我的页配置
       profile_page_layout: profileConfig.profile_page_layout,
+      settings: { ...(currentRegion.value?.settings || {}), publishMenu: publishMenu.value, profileVisual: { ...profileVisual }, profileDrawer: profileDrawer.value, profileQuickActions: profileQuickActions.value },
     })
     mergeCurrentRegion({
       ...homeConfig,
       home_nav_layout: homeNavLayout.value,
-      carousel_images: serializeCarouselItems(),
-      carouselImages: serializeCarouselItems(),
+      carousel_images: serializeHomeContentItems(),
+      carouselImages: serializeHomeContentItems(),
       home_nav_layout_config: serializeHomeNavItems(),
       homeNavLayoutConfig: serializeHomeNavItems(),
       region_tabs: serializeHomeTabs(),
       regionTabs: serializeHomeTabs(),
+      settings: { ...(currentRegion.value?.settings || {}), publishMenu: publishMenu.value, profileVisual: { ...profileVisual }, profileDrawer: profileDrawer.value, profileQuickActions: profileQuickActions.value },
     })
     ElMessage.success('全部装修配置已保存')
     updateCompletionStatus()
@@ -1509,7 +1657,7 @@ const goToShareSettings = () => {
 }
 
 // 监听配置变化，更新完整度和预览
-watch([homeConfig, carouselItems, tabsConfig, navConfig, leaderboardConfig, messageConfig, profileConfig], () => {
+watch([homeConfig, homeHeroConfig, carouselItems, tabsConfig, navConfig, leaderboardConfig, messageConfig, profileConfig, publishMenu, profileQuickActions], () => {
   updateCompletionStatus()
 }, { deep: true })
 
@@ -1520,7 +1668,6 @@ onMounted(() => {
 
 <style scoped>
 .page-decoration {
-  padding: 20px;
   min-height: 100vh;
 }
 
@@ -1531,10 +1678,8 @@ onMounted(() => {
   grid-template-columns: minmax(260px, 1.15fr) minmax(280px, 1fr) auto auto;
   align-items: center;
   gap: 22px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, .86), rgba(239, 246, 255, .76)),
-    radial-gradient(circle at 84% 20%, rgba(59, 130, 246, .16), transparent 30%);
-  border: 1px solid rgba(191, 219, 254, .78);
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
 }
 
 .hero-region {
@@ -1545,14 +1690,14 @@ onMounted(() => {
 }
 
 .hero-eyebrow {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 900;
   margin-bottom: 4px;
 }
 
 .hero-title {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 22px;
   line-height: 1.2;
   font-weight: 950;
@@ -1566,7 +1711,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
 }
@@ -1584,7 +1729,7 @@ onMounted(() => {
 }
 
 .hero-stat b {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 28px;
   line-height: 1;
   font-weight: 950;
@@ -1592,7 +1737,7 @@ onMounted(() => {
 
 .hero-stat span,
 .metric-pill span {
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 850;
 }
@@ -1606,9 +1751,9 @@ onMounted(() => {
 .metric-pill {
   min-height: 66px;
   padding: 10px 12px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, .72);
-  border: 1px solid rgba(226, 232, 240, .82);
+  border-radius: 14px;
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
   display: grid;
   align-content: center;
   gap: 4px;
@@ -1616,7 +1761,7 @@ onMounted(() => {
 }
 
 .metric-pill b {
-  color: #2563eb;
+  color: var(--el-color-primary);
   font-size: 18px;
   font-weight: 950;
 }
@@ -1649,7 +1794,7 @@ onMounted(() => {
 .section-title {
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--mx-sub);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
@@ -1657,8 +1802,8 @@ onMounted(() => {
 
 .region-info {
   padding: 12px;
-  background: linear-gradient(135deg, #f0f7ff, #e8f4ff);
-  border-radius: 8px;
+  background: var(--el-color-primary-light-9);
+  border-radius: 6px;
 }
 
 .region-header {
@@ -1683,7 +1828,7 @@ onMounted(() => {
 
 .completion-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--mx-sub);
   margin-bottom: 4px;
 }
 
@@ -1698,26 +1843,26 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
   font-size: 14px;
-  color: #475569;
+  color: var(--mx-sub);
 }
 
 .menu-item:hover {
-  background: #f1f5f9;
+  background: var(--mx-hover);
 }
 
 .menu-item.active {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+  background: var(--el-color-primary);
+  color: var(--mx-card);
+  box-shadow: var(--mx-shadow);
 }
 
 .check-icon {
   margin-left: auto;
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 
 /* 中间配置区 */
@@ -1737,13 +1882,13 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+  border-bottom: 1px solid var(--mx-border);
 }
 
 .card-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--mx-text);
 }
 
 .head-actions {
@@ -1766,18 +1911,18 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 }
 
 .switch-item b {
   font-size: 14px;
-  color: #1e293b;
+  color: var(--mx-text);
 }
 
 .switch-item p {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
   margin-top: 2px;
 }
 
@@ -1804,7 +1949,7 @@ onMounted(() => {
 }
 
 .subsection-title {
-  color: #0f172a;
+  color: var(--mx-text);
   font-size: 15px;
   font-weight: 950;
   line-height: 1.35;
@@ -1813,7 +1958,7 @@ onMounted(() => {
 .subsection-head p,
 .nav-toolbar p {
   margin: 4px 0 0;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 700;
 }
@@ -1823,15 +1968,41 @@ onMounted(() => {
   gap: 14px;
 }
 
+.home-hero-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.home-hero-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(320px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--el-color-success-light-9);
+  border: 1px solid var(--el-color-success-light-8);
+}
+
+.home-hero-upload :deep(.upload-trigger) {
+  min-height: 188px;
+}
+
+.home-hero-fields {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
 .banner-card {
   display: grid;
   grid-template-columns: minmax(280px, 380px) minmax(320px, 1fr) auto;
   gap: 16px;
   align-items: stretch;
   padding: 14px;
-  border-radius: 16px;
-  background: rgba(248, 250, 252, .78);
-  border: 1px solid rgba(203, 213, 225, .74);
+  border-radius: 14px;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border-strong);
 }
 
 .banner-cover :deep(.upload-trigger) {
@@ -1855,14 +2026,14 @@ onMounted(() => {
 
 .empty-inline {
   min-height: 120px;
-  border-radius: 16px;
-  border: 1px dashed rgba(148, 163, 184, .82);
-  background: rgba(248, 250, 252, .74);
+  border-radius: 14px;
+  border: 1px dashed var(--mx-border-strong);
+  background: var(--mx-soft);
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 16px;
-  color: #64748b;
+  color: var(--mx-sub);
   font-size: 13px;
   font-weight: 800;
   text-align: center;
@@ -1880,8 +2051,8 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 }
 
 .tab-item-rich {
@@ -1889,8 +2060,8 @@ onMounted(() => {
   align-items: stretch;
   gap: 10px;
   padding: 12px;
-  background: rgba(248, 250, 252, .76);
-  border: 1px solid rgba(226, 232, 240, .82);
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
   border-radius: 14px;
 }
 
@@ -1914,9 +2085,9 @@ onMounted(() => {
   align-items: start;
   padding: 12px;
   margin-left: 34px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, .72);
-  border: 1px solid rgba(226, 232, 240, .72);
+  border-radius: 10px;
+  background: var(--mx-card);
+  border: 1px solid var(--mx-border);
 }
 
 .tab-assets {
@@ -1931,7 +2102,7 @@ onMounted(() => {
 }
 
 .mini-upload-label {
-  color: #475569;
+  color: var(--mx-sub);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1969,11 +2140,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #e2e8f0;
+  background: var(--mx-border);
   border-radius: 50%;
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
+  color: var(--mx-sub);
 }
 
 .tab-actions {
@@ -2004,9 +2175,9 @@ onMounted(() => {
   align-items: center;
   gap: 14px;
   padding: 14px;
-  background: rgba(248, 250, 252, .78);
-  border: 1px solid rgba(203, 213, 225, .74);
-  border-radius: 16px;
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border-strong);
+  border-radius: 14px;
 }
 
 .nav-card-index {
@@ -2015,8 +2186,8 @@ onMounted(() => {
   border-radius: 999px;
   display: grid;
   place-items: center;
-  color: #2563eb;
-  background: #dbeafe;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
   font-weight: 950;
   font-size: 13px;
 }
@@ -2063,13 +2234,13 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
   margin-bottom: 8px;
 }
 
 .muted {
-  color: #94a3b8;
+  color: var(--mx-muted);
   font-size: 12px;
 }
 
@@ -2091,8 +2262,8 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 }
 
 /* 分享卡片预览 */
@@ -2103,10 +2274,10 @@ onMounted(() => {
 
 .share-card {
   width: 280px;
-  background: #fff;
-  border-radius: 12px;
+  background: var(--mx-card);
+  border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--mx-shadow);
 }
 
 .share-header {
@@ -2128,9 +2299,9 @@ onMounted(() => {
 
 .share-footer {
   padding: 8px 12px;
-  background: #f8fafc;
+  background: var(--mx-soft);
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 /* 发布检查 */
@@ -2145,8 +2316,8 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  background: var(--mx-soft);
+  border-radius: 6px;
 }
 
 .check-info {
@@ -2162,19 +2333,19 @@ onMounted(() => {
 
 .check-desc {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
 }
 
 .text-success {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 
 .text-warning {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 
 .text-danger {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 /* 右侧预览区 */
@@ -2196,13 +2367,13 @@ onMounted(() => {
 .preview-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--mx-text);
 }
 
 /* 底部导航预览页 */
 .tabbar-preview-page {
   min-height: 100%;
-  background: #f5f5f5;
+  background: var(--mx-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2218,7 +2389,7 @@ onMounted(() => {
   font-weight: 600;
   margin-bottom: 20px;
   font-size: 16px;
-  color: #333;
+  color: var(--mx-text);
 }
 
 .tabbar-grid {
@@ -2236,12 +2407,12 @@ onMounted(() => {
 
 .tabbar-grid-item span {
   font-size: 12px;
-  color: #475569;
+  color: var(--mx-sub);
 }
 
 .form-tip {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mx-muted);
   margin-top: 4px;
 }
 

@@ -52,6 +52,25 @@ describe('环境变量校验 - 生产安全', () => {
       expect(() => validate(config)).not.toThrow();
     });
 
+    it('可用 DB_HOST/DB_USER/DB_PASSWORD/DB_NAME 自动生成 DATABASE_URL', () => {
+      const { DATABASE_URL, ...baseWithoutUrl } = PROD_BASE;
+      const config = {
+        ...baseWithoutUrl,
+        DB_HOST: 'localhost',
+        DB_PROVIDER: 'postgresql',
+        DB_PORT: '5432',
+        DB_USER: 'lingmeng',
+        DB_PASSWORD: 'secret',
+        DB_NAME: 'lingmeng',
+        DB_SCHEMA: 'public',
+        JWT_SECRET: VALID_JWT,
+      };
+      const value = validate(config);
+      expect(value.DATABASE_URL).toBe(
+        'postgresql://lingmeng:secret@localhost:5432/lingmeng?schema=public',
+      );
+    });
+
     it('CORS_ORIGIN 为 * 应失败', () => {
       const config = { ...PROD_BASE, JWT_SECRET: VALID_JWT, CORS_ORIGIN: '*' };
       expect(() => validate(config)).toThrow();

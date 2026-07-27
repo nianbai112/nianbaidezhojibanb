@@ -41,6 +41,8 @@ const MINI_PROGRAM_PREFIXES = [
   "/status/location",
   "/merchants/",
   "/merchants",
+  "/dorm-shops/",
+  "/dorm-shops",
   "/categories",
   "/products",
   "/product-options",
