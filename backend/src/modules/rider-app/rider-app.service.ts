@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { ErrandService } from '../errand/errand.service';
@@ -84,6 +84,68 @@ export class RiderAppService {
   async getStats(userId: string) {
     await this.requireOfficialRider(userId);
     return this.errandService.getOrderStats(userId);
+  }
+
+  async reportException(userId: string, orderId: string, dto: any) {
+    await this.requireOfficialRider(userId);
+    const type = String(dto?.type || '').trim();
+    const descriptions: Record<string, string> = {
+      merchant_delay: '商家未出餐或取货等待',
+      cannot_contact: '无法联系用户',
+      address_issue: '地址错误或无法进入',
+      vehicle_issue: '车辆或设备故障',
+      other: '其他配送异常',
+    };
+    if (!descriptions[type]) throw new BadRequestException('不支持的异常类型');
+    const description = String(dto?.description || '').trim();
+    if (description.length < 5 || description.length > 300) {
+      throw new BadRequestException('异常说明需填写 5-300 个字');
+    }
+    const proofImages = Array.isArray(dto?.proof_images ?? dto?.proofImages)
+      ? (dto.proof_images ?? dto.proofImages).filter(Boolean).map(String).slice(0, 3)
+      : [];
+    const [errand, shopOrder] = await Promise.all([
+      this.prisma.errandOrder.findUnique({
+        where: { id: orderId }, select: { id: true, riderId: true, status: true },
+      }),
+      this.prisma.order.findUnique({
+        where: { id: orderId }, select: { id: true, riderId: true, status: true },
+      }),
+    ]);
+    const order = errand || shopOrder;
+    if (!order) throw new NotFoundException('订单不存在');
+    if (order.riderId !== userId) throw new BadRequestException('订单未分配给当前骑手');
+    const orderType = errand ? 'errand' : 'shop';
+    const active = errand
+      ? ['accepted', 'in_progress'].includes(String(order.status))
+      : String(order.status) === 'SHIPPED';
+    if (!active) throw new BadRequestException('当前订单状态不能上报配送异常');
+
+    const existing = await this.prisma.deliveryRiskEvent.findFirst({
+      where: { orderId, orderType, riderId: userId, eventType: type, handled: false },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing) return { success: true, duplicate: true, data: existing };
+
+    const risk = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.deliveryRiskEvent.create({
+        data: {
+          orderId, orderType, riderId: userId, eventType: type,
+          eventLevel: type === 'vehicle_issue' ? 'error' : 'warning',
+          description, handled: false,
+        },
+      });
+      await tx.deliveryOrderNode.create({
+        data: {
+          orderId, orderType, nodeType: 'exception', nodeLabel: descriptions[type],
+          operatorId: userId, operatorType: 'rider', riderType: 'official',
+          displayMode: 'live_map', proofImages: proofImages.length ? proofImages : undefined,
+          remark: description,
+        },
+      });
+      return created;
+    });
+    return { success: true, message: '异常已上报，平台将尽快处理', data: risk };
   }
 
   private async requireOfficialRider(userId: string) {

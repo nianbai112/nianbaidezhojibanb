@@ -1928,8 +1928,33 @@ export class ErrandService {
     });
     if (!order) throw new NotFoundException('订单不存在');
     if (order.riderId !== userId) throw new BadRequestException('订单尚未分配给当前骑手');
-    const [formatted] = await this.formatShopOrdersForRider([order]);
-    return { success: true, data: formatted };
+    const [[formatted], deliveryNodes] = await Promise.all([
+      this.formatShopOrdersForRider([order]),
+      this.prisma.deliveryOrderNode.findMany({
+        where: { orderId, orderType: 'shop' }, orderBy: { createdAt: 'asc' },
+      }).catch(() => []),
+    ]);
+    return {
+      success: true,
+      data: {
+        ...formatted,
+        delivery_track: {
+          display_mode: order.deliveryDisplayMode || 'live_map',
+          rider_type: 'official',
+          can_show_live_map: false,
+          location_stale: true,
+          current_location: null,
+          nodes: deliveryNodes.map((node: any) => ({
+            id: node.id,
+            type: node.nodeType,
+            label: node.nodeLabel || this.deliveryNodeLabel(node.nodeType),
+            time: node.createdAt,
+            address: node.address || '',
+            remark: node.remark || '',
+          })),
+        },
+      },
+    };
   }
 
   async createReview(userId: string, orderId: string, dto: any) {
@@ -2630,6 +2655,12 @@ export class ErrandService {
         recipient_name: row.deliverContact || user?.nickname || '用户',
         mobile: row.deliverPhone || user?.phone || '',
         pickup_address: row.pickupAddress,
+        pickup_latitude: row.pickupLat,
+        pickup_longitude: row.pickupLng,
+        delivery_latitude: row.deliverLat,
+        delivery_longitude: row.deliverLng,
+        delivery_proof_required: Array.isArray(remark?.risk_assessment?.required_evidence)
+          && remark.risk_assessment.required_evidence.length > 0,
         latitude: row.deliverLat,
         longitude: row.deliverLng,
         details,
@@ -2742,6 +2773,11 @@ export class ErrandService {
         merchant_address: merchant.address || '',
         merchant_phone: merchant.phone || '',
         merchant_logo: merchant.logo || '',
+        pickup_latitude: this.numberValue(merchant.latitude, 0) || null,
+        pickup_longitude: this.numberValue(merchant.longitude, 0) || null,
+        delivery_latitude: null,
+        delivery_longitude: null,
+        delivery_proof_required: false,
         latitude: this.numberValue(merchant.latitude, 0),
         longitude: this.numberValue(merchant.longitude, 0),
         details,
@@ -2757,6 +2793,8 @@ export class ErrandService {
           : null,
         rider: rider ? this.publicRiderProfile(rider) : null,
         rider_id: row.riderId,
+        delivery_display_mode: row.deliveryDisplayMode || 'live_map',
+        delivery_track_mode: row.deliveryDisplayMode || 'live_map',
         remarks: row.remark || '',
         created_at: row.createdAt,
         assigned_time: row.acceptTime,

@@ -30,11 +30,11 @@
 - Produces normalized pickup/delivery coordinates and `delivery_proof_required`.
 - Produces `getNavigationTarget(order, kind)` for native map launch.
 
-- [ ] Write failing backend and App tests for coordinate/proof normalization.
-- [ ] Run targeted tests and confirm the new contract is absent.
-- [ ] Add the minimum formatter fields and pure navigation helper.
-- [ ] Add native map buttons with address-search fallback.
-- [ ] Run targeted tests.
+- [x] Write failing backend and App tests for coordinate/proof normalization.
+- [x] Run targeted tests and confirm the new contract is absent.
+- [x] Add the minimum formatter fields and pure navigation helper.
+- [x] Add native map buttons with address-search fallback.
+- [x] Run targeted tests.
 
 ### Task 2: Upload and submit delivery proof
 
@@ -47,11 +47,11 @@
 - Produces `uploadImage(filePath)` returning one uploaded URL.
 - Status submission sends `proof_images`, location, and remark.
 
-- [ ] Write a failing test for proof requirement validation.
-- [ ] Run it and confirm failure.
-- [ ] Implement a pure `validateDeliveryProof` helper.
-- [ ] Add choose/remove/preview/upload behavior using `uni.chooseImage` and existing `/upload`.
-- [ ] Run App tests.
+- [x] Write a failing test for proof requirement validation.
+- [x] Run it and confirm failure.
+- [x] Implement a pure `validateDeliveryProof` helper.
+- [x] Add choose/remove/preview/upload behavior using `uni.chooseImage` and existing `/upload`.
+- [x] Run App tests.
 
 ### Task 3: Delivery exception endpoint and App form
 
@@ -67,19 +67,18 @@
 - Produces `POST /rider-app/orders/:orderId/exceptions`.
 - Consumes `{ type, description, proof_images }`.
 
-- [ ] Write failing service tests for ownership, active status, input validation, and duplicate open reports.
-- [ ] Run tests and confirm the endpoint is missing.
-- [ ] Implement the minimal transaction writing `DeliveryRiskEvent` and `DeliveryOrderNode`.
-- [ ] Add the guarded controller method.
-- [ ] Add a compact exception form to the order detail page.
-- [ ] Run targeted tests.
+- [x] Write failing service tests for ownership, active status, input validation, and duplicate open reports.
+- [x] Run tests and confirm the endpoint is missing.
+- [x] Implement the minimal transaction writing `DeliveryRiskEvent` and `DeliveryOrderNode`.
+- [x] Add the guarded controller method.
+- [x] Add a compact exception form to the order detail page.
+- [x] Run targeted tests.
 
 ### Task 4: Integrated verification
 
 **Files:**
 - Modify only files required to correct introduced failures.
 
-- [ ] Run backend targeted tests, full Jest suite, TypeScript, and lint.
-- [ ] Run App Node tests and HBuilderX iOS simulator compile/launch.
-- [ ] Inspect the order detail UI and commit only intended backend/admin files.
-
+- [x] Run backend targeted tests, full Jest suite, TypeScript, and lint.
+- [x] Run App Node tests and HBuilderX iOS simulator compile/launch.
+- [x] Inspect compiled order-detail output and commit only intended backend/admin files.

@@ -47,4 +47,14 @@ describe('RiderAppController', () => {
     expect(service.acceptOrder).toHaveBeenCalledWith('user-1', 'order-1');
     expect(service.updateLocation).toHaveBeenCalledWith('user-1', { lat: 30, lng: 120 });
   });
+
+  it('delegates delivery exception reports with the authenticated user id', async () => {
+    const service = { reportException: jest.fn().mockResolvedValue({ success: true }) };
+    const controller = new RiderAppController(service as any);
+    const dto = { type: 'address_issue', description: '地址信息有误' };
+
+    await controller.reportException('order-1', 'user-1', dto);
+
+    expect(service.reportException).toHaveBeenCalledWith('user-1', 'order-1', dto);
+  });
 });

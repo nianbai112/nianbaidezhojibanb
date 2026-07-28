@@ -6,6 +6,9 @@
     </div>
     <el-table :data="list" v-loading="loading" border stripe>
       <el-table-column prop="orderNo" label="订单号" width="200" show-overflow-tooltip />
+      <el-table-column prop="orderType" label="来源" width="90">
+        <template #default="{ row }">{{ row.orderType === 'shop' ? '外卖配送' : '跑腿配送' }}</template>
+      </el-table-column>
       <el-table-column prop="title" label="标题" min-width="150" show-overflow-tooltip />
       <el-table-column prop="user.nickname" label="用户" width="100">
         <template #default="{ row }">{{ row.user?.nickname || row.userId }}</template>
@@ -62,12 +65,19 @@ const statusMap: Record<string, string> = {
   refunding: '退款中',
   refunded: '已退款',
   cancelled: '已取消',
+  SHIPPED: '配送中',
+  RECEIVED: '已送达',
 }
 const riskTypeMap: Record<string, string> = {
   unaccepted_timeout: '长时间无人接单',
   delivery_overdue: '履约超时',
   refund_failed: '退款失败',
   auto_receipt_hold_48h: '自动确认长时间阻塞',
+  merchant_delay: '商家出餐延迟',
+  cannot_contact: '无法联系用户',
+  address_issue: '地址问题',
+  vehicle_issue: '车辆故障',
+  other: '其他异常',
 }
 const loading = ref(false)
 const list = ref<any[]>([])

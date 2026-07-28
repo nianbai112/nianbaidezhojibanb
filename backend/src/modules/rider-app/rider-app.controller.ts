@@ -92,6 +92,18 @@ export class RiderAppController {
     return this.riderAppService.updateOrderStatus(userId, orderId, dto);
   }
 
+  @Post('rider-app/orders/:orderId/exceptions')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '官方骑手上报配送异常' })
+  reportException(
+    @Param('orderId') orderId: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: any,
+  ) {
+    return this.riderAppService.reportException(userId, orderId, dto);
+  }
+
   @Post('rider-app/location')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

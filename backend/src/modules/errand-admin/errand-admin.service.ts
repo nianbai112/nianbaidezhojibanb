@@ -451,10 +451,19 @@ export class ErrandAdminService {
 
   async handleRiskEvent(id: string, operatorId?: string) {
     const event = await this.prisma.deliveryRiskEvent.findUnique({ where: { id } })
-    if (!event || event.orderType !== 'errand') throw new NotFoundException('风险事件不存在')
-    const order = await this.prisma.errandOrder.findUnique({ where: { id: event.orderId }, select: { id: true, regionId: true } })
-    if (!order) throw new NotFoundException('跑腿订单不存在')
-    await this.assertOrderRegion(order.regionId, operatorId)
+    if (!event || !['errand', 'shop'].includes(event.orderType)) throw new NotFoundException('风险事件不存在')
+    if (event.orderType === 'shop') {
+      const order = await this.prisma.order.findUnique({
+        where: { id: event.orderId },
+        select: { id: true, merchant: { select: { regionId: true } } },
+      })
+      if (!order) throw new NotFoundException('商城订单不存在')
+      await this.assertOrderRegion(order.merchant?.regionId, operatorId)
+    } else {
+      const order = await this.prisma.errandOrder.findUnique({ where: { id: event.orderId }, select: { id: true, regionId: true } })
+      if (!order) throw new NotFoundException('跑腿订单不存在')
+      await this.assertOrderRegion(order.regionId, operatorId)
+    }
     const updated = await this.prisma.deliveryRiskEvent.updateMany({
       where: { id, handled: false },
       data: { handled: true, handledBy: operatorId || null, handledAt: new Date() },
@@ -594,13 +603,22 @@ export class ErrandAdminService {
 
   async getAbnormalOrders(query: DeliveryOrderQueryDto, operatorId?: string) {
     const { page = 1, pageSize = 20, regionId, startDate, endDate } = query as any
+    const pageNumber = Math.max(1, Number(page) || 1)
+    const size = Math.max(1, Math.min(100, Number(pageSize) || 20))
+    const offset = (pageNumber - 1) * size
     const keyword = String((query as any).keyword || (query as any).orderNo || '').trim()
-    const riskEvents = await this.prisma.deliveryRiskEvent.findMany({
-      where: { orderType: 'errand', handled: false },
-      select: { orderId: true },
-      distinct: ['orderId'],
-    }).catch(() => [])
-    const riskOrderIds = riskEvents.map((event: any) => event.orderId).filter(Boolean)
+    const [errandRiskEvents, shopRiskEvents] = await Promise.all([
+      this.prisma.deliveryRiskEvent.findMany({
+        where: { orderType: 'errand', handled: false },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      }).catch(() => []),
+      this.prisma.deliveryRiskEvent.findMany({
+        where: { orderType: 'shop', handled: false },
+        orderBy: { createdAt: 'desc' },
+      }).catch(() => []),
+    ])
+    const riskOrderIds = errandRiskEvents.map((event: any) => event.orderId).filter(Boolean)
     const where: any = {
       OR: [
         { status: { in: ['cancelled', 'refunding', 'refunded'] } },
@@ -631,20 +649,73 @@ export class ErrandAdminService {
       if (startDate) where.createdAt.gte = new Date(startDate)
       if (endDate) where.createdAt.lte = new Date(String(endDate).includes('T') ? endDate : `${endDate}T23:59:59.999Z`)
     }
-    const [list, total] = await Promise.all([
-      this.prisma.errandOrder.findMany({
-        where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          User: { select: { id: true, nickname: true, phone: true, avatar: true } },
-          RegionRider: { select: { id: true, userId: true, realName: true, phone: true, riderType: true, riskLevel: true, violationCount: true } },
-          tasks: { orderBy: { sortOrder: 'asc' } },
-        },
-      }),
+    const shopRiskOrderIds = Array.from(new Set(shopRiskEvents.map((event: any) => event.orderId).filter(Boolean)))
+    const shopWhere: any = { id: { in: shopRiskOrderIds } }
+    if (scopedRegionIds !== undefined || regionId) {
+      const allowedRegionIds = regionId ? [regionId] : scopedRegionIds
+      shopWhere.merchant = { is: { regionId: { in: allowedRegionIds } } }
+    }
+    if (keyword) {
+      shopWhere.OR = [
+        { orderNo: { contains: keyword } },
+        { receiverName: { contains: keyword } },
+        { receiverPhone: { contains: keyword } },
+        { merchant: { is: { name: { contains: keyword } } } },
+        { user: { is: { nickname: { contains: keyword } } } },
+      ]
+    }
+    if (startDate || endDate) {
+      shopWhere.createdAt = {}
+      if (startDate) shopWhere.createdAt.gte = new Date(startDate)
+      if (endDate) shopWhere.createdAt.lte = new Date(String(endDate).includes('T') ? endDate : `${endDate}T23:59:59.999Z`)
+    }
+    const [shopOrders, errandTotal] = await Promise.all([
+      shopRiskOrderIds.length
+        ? this.prisma.order.findMany({
+            where: shopWhere,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              user: { select: { id: true, nickname: true, phone: true, avatar: true } },
+              merchant: { select: { id: true, name: true, regionId: true } },
+            },
+          })
+        : [],
       this.prisma.errandOrder.count({ where }),
     ])
+    const shopRisksByOrder = new Map<string, any[]>()
+    for (const event of shopRiskEvents) {
+      const events = shopRisksByOrder.get(event.orderId) || []
+      events.push(event)
+      shopRisksByOrder.set(event.orderId, events)
+    }
+    const shopRows = shopOrders.map((row: any) => {
+      const events = shopRisksByOrder.get(row.id) || []
+      return {
+        ...row,
+        orderType: 'shop',
+        title: row.merchant?.name || '外卖配送订单',
+        user: row.user || null,
+        price: Number(row.payAmount || 0),
+        openRiskEvents: events,
+        abnormalReason: events.map((event: any) => event.description || event.eventType).filter(Boolean).join('；') || '配送异常',
+      }
+    })
+    const shopPageRows = shopRows.slice(offset, offset + size)
+    const remaining = size - shopPageRows.length
+    const errandSkip = Math.max(0, offset - shopRows.length)
+    const list = remaining > 0
+      ? await this.prisma.errandOrder.findMany({
+          where,
+          skip: errandSkip,
+          take: remaining,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            User: { select: { id: true, nickname: true, phone: true, avatar: true } },
+            RegionRider: { select: { id: true, userId: true, realName: true, phone: true, riderType: true, riskLevel: true, violationCount: true } },
+            tasks: { orderBy: { sortOrder: 'asc' } },
+          },
+        })
+      : []
     const openRiskEvents = list.length
       ? await this.prisma.deliveryRiskEvent.findMany({
           where: { orderType: 'errand', handled: false, orderId: { in: list.map((row: any) => row.id) } },
@@ -658,17 +729,18 @@ export class ErrandAdminService {
       risksByOrder.set(event.orderId, events)
     }
     return {
-      list: list.map(row => {
+      list: [...shopPageRows, ...list.map(row => {
         const events = risksByOrder.get(row.id) || []
         return {
           ...this.formatOrder(row),
+          orderType: 'errand',
           openRiskEvents: events,
           abnormalReason: events.map(event => event.description || event.eventType).filter(Boolean).join('；') || row.cancelReason || '订单状态异常',
         }
-      }),
-      total,
-      page: +page,
-      pageSize: +pageSize,
+      })],
+      total: shopRows.length + errandTotal,
+      page: pageNumber,
+      pageSize: size,
     }
   }
 

@@ -93,7 +93,10 @@ describe('ErrandAdminService closed-loop detail', () => {
     };
     const prisma: any = {
       deliveryRiskEvent: {
-        findMany: jest.fn().mockResolvedValueOnce([{ orderId: 'order-1' }]).mockResolvedValueOnce([risk]),
+        findMany: jest.fn(({ where, select }: any) => {
+          if (where.orderType === 'shop') return Promise.resolve([]);
+          return Promise.resolve(select ? [{ orderId: 'order-1' }] : [risk]);
+        }),
         findUnique: jest.fn().mockResolvedValue({ ...risk, order: undefined }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
@@ -116,5 +119,43 @@ describe('ErrandAdminService closed-loop detail', () => {
       where: { id: 'risk-1', handled: false },
       data: expect.objectContaining({ handled: true, handledBy: 'admin-a' }),
     }));
+  });
+
+  it('surfaces and handles rider-reported shop delivery exceptions in the abnormal order menu', async () => {
+    const risk = {
+      id: 'risk-shop-1', orderId: 'shop-1', orderType: 'shop', riderId: 'rider-1',
+      eventType: 'cannot_contact', eventLevel: 'warning', description: '到达后多次联系不上用户',
+      handled: false, createdAt: new Date('2026-07-28T10:00:00.000Z'),
+    };
+    const prisma: any = {
+      deliveryRiskEvent: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(where.orderType === 'shop' ? [risk] : [])),
+        findUnique: jest.fn().mockResolvedValue(risk),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      errandOrder: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+      order: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'shop-1', orderNo: 'SHOP-1', status: 'SHIPPED', riderId: 'rider-1',
+          payAmount: 26, createdAt: new Date('2026-07-28T09:00:00.000Z'),
+          user: { id: 'user-1', nickname: '同学甲', phone: '13800000000' },
+          merchant: { id: 'merchant-1', name: '一食堂', regionId: 'region-a' },
+        }]),
+        findUnique: jest.fn().mockResolvedValue({ id: 'shop-1', merchant: { regionId: 'region-a' } }),
+      },
+    };
+    const scope = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: false, regionIds: ['region-a'] }) };
+    const service = new ErrandAdminService(prisma, scope as any);
+
+    const result = await service.getAbnormalOrders({} as any, 'admin-a');
+    expect(result).toEqual(expect.objectContaining({
+      total: 1,
+      list: [expect.objectContaining({
+        id: 'shop-1', orderType: 'shop', orderNo: 'SHOP-1', title: '一食堂',
+        abnormalReason: '到达后多次联系不上用户',
+        openRiskEvents: [expect.objectContaining({ id: 'risk-shop-1', eventType: 'cannot_contact' })],
+      })],
+    }));
+    await expect(service.handleRiskEvent('risk-shop-1', 'admin-a')).resolves.toEqual({ success: true });
   });
 });

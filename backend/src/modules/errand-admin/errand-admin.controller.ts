@@ -96,14 +96,14 @@ export class ErrandAdminController {
 
   @Get('admin/errand/abnormal-orders')
   @RequirePermission('errand:view')
-  @ApiOperation({ summary: '跑腿异常订单' })
+  @ApiOperation({ summary: '配送异常订单' })
   getAbnormalOrders(@Query() q: DeliveryOrderQueryDto, @CurrentUser('sub') operatorId: string) {
     return this.service.getAbnormalOrders(q, operatorId)
   }
 
   @Post('admin/errand/risk-events/:id/handle')
   @RequirePermission('errand:config')
-  @ApiOperation({ summary: '标记跑腿风险事件已处理' })
+  @ApiOperation({ summary: '标记配送风险事件已处理' })
   handleRiskEvent(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
     return this.service.handleRiskEvent(id, operatorId)
   }
