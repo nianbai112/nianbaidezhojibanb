@@ -62,6 +62,7 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   'official-assistant',
   'tracking',
   'platform',
+  'rider-app',
 ];
 
 const MINI_PROGRAM_ROOT_PREFIXES = new Set(MINI_PROGRAM_ROOT_PREFIX_LIST);

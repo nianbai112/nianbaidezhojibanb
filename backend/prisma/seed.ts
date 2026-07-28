@@ -174,6 +174,7 @@ async function main() {
     { code: 'admin:unlock', name: '解锁账号', module: 'admin', action: 'unlock' },
 
     // 系统
+    { code: 'rider-app:config', name: '骑手 App 控制', module: 'rider_app', action: 'config' },
     { code: 'system:config', name: '系统配置', module: 'system', action: 'config' },
     { code: 'system:logs', name: '查看日志', module: 'system', action: 'logs' },
     { code: 'system:upload', name: '文件管理', module: 'system', action: 'upload' },

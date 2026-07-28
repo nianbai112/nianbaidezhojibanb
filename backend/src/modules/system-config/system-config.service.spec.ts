@@ -88,4 +88,50 @@ describe('SystemConfigService storage config', () => {
       params: expect.objectContaining({ key: 'amap-key', type: 3, origins: '114,30', destination: '114.01,30.01' }),
     }));
   });
+
+  it('normalizes a partial rider App control config from storage', async () => {
+    const prisma = {
+      config: {
+        findUnique: jest.fn().mockResolvedValue({ value: { features: { chat: false } } }),
+      },
+    };
+    const service = new SystemConfigService(prisma as any, {} as any);
+
+    await expect(service.getRiderAppControlConfig()).resolves.toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        enabled: true,
+        runtime: { wsPath: '/api/ws-native', locationIntervalSeconds: 30 },
+        features: { orderPool: true, chat: false, income: true, incentives: true },
+      }),
+    }));
+  });
+
+  it('stores a normalized rider App control config with an audit log', async () => {
+    const prisma = {
+      config: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) => Promise.resolve(create)),
+      },
+      adminOperationLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new SystemConfigService(prisma as any, {} as any);
+
+    await expect(service.saveRiderAppControlConfig({
+      maintenance: { enabled: true },
+      runtime: { locationIntervalSeconds: 60 },
+    }, 'admin-1', '127.0.0.1')).resolves.toMatchObject({
+      success: true,
+      data: {
+        maintenance: { enabled: true },
+        runtime: { locationIntervalSeconds: 60 },
+      },
+    });
+
+    expect(prisma.config.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { key: 'rider_app_control' },
+      create: expect.objectContaining({ group: 'rider_app', createdBy: 'admin-1' }),
+    }));
+    expect(prisma.adminOperationLog.create).toHaveBeenCalledTimes(1);
+  });
 });

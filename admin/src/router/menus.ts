@@ -148,6 +148,7 @@ export const menuGroups = [
       { path: '/system/admins', title: '管理员', icon: 'User' },
       { path: '/system/roles', title: '角色权限', icon: 'Lock' },
       { path: '/system/settings', title: '系统配置', icon: 'Tools' },
+      { path: '/system/rider-app-control', title: '骑手 App 控制中心', icon: 'Iphone' },
       { path: '/system/files', title: '文件中心', icon: 'FolderOpened' },
       { path: '/system/license-runtime', title: '授权与更新', icon: 'Refresh' },
       { path: '/system/mini-program-download', title: '小程序下载', icon: 'Download' },

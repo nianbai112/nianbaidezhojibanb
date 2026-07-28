@@ -153,6 +153,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'system/files', component: () => import('@/views/modules/FilesPage.vue'), meta: { title: '文件中心' } },
       { path: 'system/website', component: () => import('@/views/system/WebsiteManager.vue'), meta: { title: '官网管理' } },
       { path: 'system/settings', component: () => import('@/views/system/SystemSettings.vue'), meta: { title: '系统配置' } },
+      { path: 'system/rider-app-control', component: () => import('@/views/system/RiderAppControl.vue'), meta: { title: '骑手 App 控制中心' } },
       { path: 'system/agreements', component: () => import('@/views/system/AgreementCenter.vue'), meta: { title: '协议与条款' } },
       { path: 'system/mini-program-paths', component: () => import('@/views/system/MiniProgramPaths.vue'), meta: { title: '小程序路径' } },
       { path: 'system/mini-program-download', component: () => import('@/views/system/MiniProgramDownload.vue'), meta: { title: '小程序下载' } },

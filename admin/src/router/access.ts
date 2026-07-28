@@ -102,6 +102,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/system/login-logs', any: ['admin:view', 'system:config'] },
   { prefix: '/system/realtime-sessions', any: ['message:view'] },
   { prefix: '/system/notification-center', any: ['notification:view', 'system:config'] },
+  { prefix: '/system/rider-app-control', any: ['rider-app:config'] },
   { prefix: '/system', any: ['system:config', 'config:view'] },
   { prefix: '/ops/jobs', any: ['ops:view', 'system:config'] },
 

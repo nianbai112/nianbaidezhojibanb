@@ -1903,6 +1903,35 @@ export class ErrandService {
     return { success: true, data: { ...formatted, delivery_track: deliveryTrack } };
   }
 
+  async getRiderDeliveryOrderDetail(orderId: string, userId: string) {
+    const errand = await this.prisma.errandOrder.findUnique({
+      where: { id: orderId },
+      select: { id: true, riderId: true },
+    });
+    if (errand) {
+      if (errand.riderId !== userId) throw new BadRequestException('订单尚未分配给当前骑手');
+      return this.getOrderDetail(orderId, userId);
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        merchant: {
+          select: {
+            id: true, userId: true, name: true, regionId: true, address: true,
+            phone: true, logo: true, latitude: true, longitude: true, businessType: true,
+          },
+        },
+        user: { select: { id: true, nickname: true, avatar: true, phone: true } },
+        items: true,
+      },
+    });
+    if (!order) throw new NotFoundException('订单不存在');
+    if (order.riderId !== userId) throw new BadRequestException('订单尚未分配给当前骑手');
+    const [formatted] = await this.formatShopOrdersForRider([order]);
+    return { success: true, data: formatted };
+  }
+
   async createReview(userId: string, orderId: string, dto: any) {
     const rating = Number(dto?.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {

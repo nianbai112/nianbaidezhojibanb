@@ -24,6 +24,7 @@ import { ShopModule } from './modules/shop/shop.module';
 // 其唯一有用副作用（写 Redis rider:location）已迁移至 ErrandService.updateLocation。
 // import { DeliveryModule } from './modules/delivery/delivery.module';
 import { ErrandModule } from './modules/errand/errand.module';
+import { RiderAppModule } from './modules/rider-app/rider-app.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { FinanceAdminModule } from './modules/finance-admin/finance-admin.module';
 import { CouponAdminModule } from './modules/coupon-admin/coupon-admin.module';
@@ -177,6 +178,7 @@ const envFilePath = getEnvFilePaths();
     ShopModule,
     // DeliveryModule 已下线（见上方 import 处说明）
     ErrandModule,
+    RiderAppModule,
     FinanceModule,
     FinanceAdminModule,
     CouponAdminModule,

@@ -25,6 +25,8 @@ describe('rewriteMiniProgramApiPath', () => {
       .toBe('/assistant-tickets/my');
     expect(rewriteMiniProgramApiPath('/api/delivery-distance/merchant-1'))
       .toBe('/delivery-distance/merchant-1');
+    expect(rewriteMiniProgramApiPath('/api/rider-app/orders?status=accepted'))
+      .toBe('/rider-app/orders?status=accepted');
   });
 
   it('keeps backend routes that are intentionally mounted under /api', () => {
@@ -52,5 +54,6 @@ describe('rewriteMiniProgramApiPath', () => {
     expect(excludes).toContain('order-appeals/(.*)');
     expect(excludes).toContain('assistant-tickets/(.*)');
     expect(excludes).toContain('delivery-distance/(.*)');
+    expect(excludes).toContain('rider-app/(.*)');
   });
 });

@@ -47,6 +47,26 @@ export class SystemConfigController {
     return this.systemConfigService.saveLoginPageConfig(dto, operatorId, req.ip);
   }
 
+  @Get('admin/rider-app/config')
+  @RequirePermission('rider-app:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '获取骑手 App 控制配置' })
+  getRiderAppControlConfig() {
+    return this.systemConfigService.getRiderAppControlConfig();
+  }
+
+  @Put('admin/rider-app/config')
+  @RequirePermission('rider-app:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '保存骑手 App 控制配置' })
+  saveRiderAppControlConfig(
+    @Body() dto: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.systemConfigService.saveRiderAppControlConfig(dto, operatorId, req.ip);
+  }
+
   @Get("admin/configs")
   @RequirePermission("system:config")
   @UseGuards(AdminPermissionGuard)
@@ -547,5 +567,17 @@ export class LoginPageConfigPublicController {
   @ApiOperation({ summary: '获取小程序登录页视觉配置' })
   getLoginPageConfig() {
     return this.systemConfigService.getLoginPageConfig();
+  }
+}
+
+@ApiTags('骑手 App 公开配置')
+@Controller()
+export class RiderAppConfigPublicController {
+  constructor(private readonly systemConfigService: SystemConfigService) {}
+
+  @Get('rider-app/config')
+  @ApiOperation({ summary: '获取骑手 App 启动配置' })
+  getConfig() {
+    return this.systemConfigService.getRiderAppControlConfig();
   }
 }

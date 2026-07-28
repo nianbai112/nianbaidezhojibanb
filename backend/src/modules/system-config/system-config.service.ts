@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, Optional, Inject, forwardRef }
 import { PrismaService } from '../../common/services/prisma.service';
 import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 import { WechatTokenService } from '../wechat/wechat-token.service';
+import { normalizeRiderAppControlConfig } from './rider-app-control.config';
 
 const SECRET_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|ukey|pass$/i;
 const SECRET_MASK = '******';
@@ -68,6 +69,46 @@ export class SystemConfigService {
       after: value,
     }, ip);
     return { success: true, data: item.value };
+  }
+
+  async getRiderAppControlConfig() {
+    const item = await this.prisma.config.findUnique({ where: { key: 'rider_app_control' } });
+    return {
+      success: true,
+      data: normalizeRiderAppControlConfig(item?.value),
+    };
+  }
+
+  async saveRiderAppControlConfig(dto: any, operatorId?: string, ip?: string) {
+    const before = await this.prisma.config.findUnique({ where: { key: 'rider_app_control' } });
+    const value = normalizeRiderAppControlConfig(dto);
+    const item = await this.prisma.config.upsert({
+      where: { key: 'rider_app_control' },
+      update: {
+        value,
+        group: 'rider_app',
+        desc: '骑手 App 运行控制配置',
+        updatedBy: operatorId,
+      },
+      create: {
+        key: 'rider_app_control',
+        value,
+        group: 'rider_app',
+        desc: '骑手 App 运行控制配置',
+        createdBy: operatorId,
+        updatedBy: operatorId,
+      },
+    });
+    await this.logConfigChange(
+      operatorId,
+      'UPDATE_RIDER_APP_CONTROL',
+      'rider_app',
+      'rider_app_control',
+      'config',
+      { before: before?.value || null, after: value },
+      ip,
+    );
+    return { success: true, data: normalizeRiderAppControlConfig(item.value) };
   }
 
   async getConfigs(group?: string, regionId?: string) {
