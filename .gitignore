@@ -46,3 +46,4 @@ output/
 work/
 backend/storage/
 node_modules.stale*/
+.worktrees/
