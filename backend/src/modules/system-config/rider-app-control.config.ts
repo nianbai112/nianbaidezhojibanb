@@ -23,6 +23,10 @@ export type RiderAppControlConfig = {
   runtime: {
     wsPath: string;
     locationIntervalSeconds: number;
+    backgroundLocationEnabled: boolean;
+    locationQueueMaxPoints: number;
+    locationBatchSize: number;
+    locationMaxAgeHours: number;
   };
   features: {
     orderPool: boolean;
@@ -55,6 +59,10 @@ export const DEFAULT_RIDER_APP_CONTROL_CONFIG: RiderAppControlConfig = {
   runtime: {
     wsPath: '/api/ws-native',
     locationIntervalSeconds: 30,
+    backgroundLocationEnabled: true,
+    locationQueueMaxPoints: 300,
+    locationBatchSize: 50,
+    locationMaxAgeHours: 24,
   },
   features: {
     orderPool: true,
@@ -103,6 +111,15 @@ export function normalizeRiderAppControlConfig(value: unknown): RiderAppControlC
   const interval = runtime.locationIntervalSeconds === undefined
     ? DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.locationIntervalSeconds
     : Number(runtime.locationIntervalSeconds);
+  const queueMaxPoints = runtime.locationQueueMaxPoints === undefined
+    ? DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.locationQueueMaxPoints
+    : Number(runtime.locationQueueMaxPoints);
+  const batchSize = runtime.locationBatchSize === undefined
+    ? DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.locationBatchSize
+    : Number(runtime.locationBatchSize);
+  const maxAgeHours = runtime.locationMaxAgeHours === undefined
+    ? DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.locationMaxAgeHours
+    : Number(runtime.locationMaxAgeHours);
 
   const config: RiderAppControlConfig = {
     enabled: boolean(raw.enabled, DEFAULT_RIDER_APP_CONTROL_CONFIG.enabled),
@@ -127,6 +144,13 @@ export function normalizeRiderAppControlConfig(value: unknown): RiderAppControlC
     runtime: {
       wsPath: text(runtime.wsPath, DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.wsPath),
       locationIntervalSeconds: interval,
+      backgroundLocationEnabled: boolean(
+        runtime.backgroundLocationEnabled,
+        DEFAULT_RIDER_APP_CONTROL_CONFIG.runtime.backgroundLocationEnabled,
+      ),
+      locationQueueMaxPoints: queueMaxPoints,
+      locationBatchSize: batchSize,
+      locationMaxAgeHours: maxAgeHours,
     },
     features: {
       orderPool: boolean(features.orderPool, DEFAULT_RIDER_APP_CONTROL_CONFIG.features.orderPool),
@@ -145,6 +169,15 @@ export function normalizeRiderAppControlConfig(value: unknown): RiderAppControlC
   }
   if (!Number.isInteger(interval) || interval < 15 || interval > 300) {
     throw new BadRequestException('定位上传间隔必须是 15 至 300 秒的整数');
+  }
+  if (!Number.isInteger(queueMaxPoints) || queueMaxPoints < 50 || queueMaxPoints > 1000) {
+    throw new BadRequestException('轨迹队列上限必须是 50 至 1000 的整数');
+  }
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 50) {
+    throw new BadRequestException('单次补传数量必须是 1 至 50 的整数');
+  }
+  if (!Number.isInteger(maxAgeHours) || maxAgeHours < 1 || maxAgeHours > 72) {
+    throw new BadRequestException('最长补传时效必须是 1 至 72 小时的整数');
   }
 
   return config;

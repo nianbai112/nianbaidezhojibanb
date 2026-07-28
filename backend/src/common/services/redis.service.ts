@@ -100,6 +100,34 @@ export class RedisService {
     await this.redis.hset(key, field, value);
   }
 
+  async hsetIfNewer(
+    key: string,
+    field: string,
+    value: { time: number; [name: string]: unknown },
+  ): Promise<boolean> {
+    const time = Number(value?.time);
+    if (!Number.isFinite(time)) throw new Error('Redis freshness value requires a finite time');
+    const result = await this.redis.eval(
+      `local current = redis.call('HGET', KEYS[1], ARGV[1])
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and decoded['time'] ~= nil then
+    local current_time = tonumber(decoded['time'])
+    local incoming_time = tonumber(ARGV[2])
+    if current_time and incoming_time and current_time >= incoming_time then return 0 end
+  end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+return 1`,
+      1,
+      key,
+      field,
+      time,
+      JSON.stringify(value),
+    );
+    return Number(result) === 1;
+  }
+
   async hget(key: string, field: string): Promise<string | null> {
     return this.redis.hget(key, field);
   }

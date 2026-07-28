@@ -21,6 +21,10 @@ describe('rider App control config', () => {
       runtime: {
         wsPath: '/api/ws-native',
         locationIntervalSeconds: 30,
+        backgroundLocationEnabled: true,
+        locationQueueMaxPoints: 300,
+        locationBatchSize: 50,
+        locationMaxAgeHours: 24,
       },
       features: {
         orderPool: true,
@@ -43,6 +47,12 @@ describe('rider App control config', () => {
     [{ runtime: { wsPath: 'wss://evil.example/ws' } }, 'WebSocket 路径'],
     [{ runtime: { locationIntervalSeconds: 14 } }, '定位上传间隔'],
     [{ runtime: { locationIntervalSeconds: 301 } }, '定位上传间隔'],
+    [{ runtime: { locationQueueMaxPoints: 49 } }, '轨迹队列上限'],
+    [{ runtime: { locationQueueMaxPoints: 1001 } }, '轨迹队列上限'],
+    [{ runtime: { locationBatchSize: 0 } }, '单次补传数量'],
+    [{ runtime: { locationBatchSize: 51 } }, '单次补传数量'],
+    [{ runtime: { locationMaxAgeHours: 0 } }, '最长补传时效'],
+    [{ runtime: { locationMaxAgeHours: 73 } }, '最长补传时效'],
   ])('rejects unsafe or out-of-range values', (value, message) => {
     expect(() => normalizeRiderAppControlConfig(value)).toThrow(message);
   });

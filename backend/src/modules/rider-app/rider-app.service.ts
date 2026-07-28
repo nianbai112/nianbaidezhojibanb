@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../common/services/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { ErrandService } from '../errand/errand.service';
+import { SystemConfigService } from '../system-config/system-config.service';
 
 @Injectable()
 export class RiderAppService {
@@ -9,6 +10,7 @@ export class RiderAppService {
     private readonly prisma: PrismaService,
     private readonly authService: AuthService,
     private readonly errandService: ErrandService,
+    private readonly systemConfigService: SystemConfigService,
   ) {}
 
   async sendPhoneCode(dto: { phone?: string; mobile?: string }, ip?: string) {
@@ -69,6 +71,105 @@ export class RiderAppService {
       throw new BadRequestException('没有配送中的订单，定位上传已关闭');
     }
     return this.errandService.updateLocation(userId, dto);
+  }
+
+  async updateLocationBatch(userId: string, dto: any) {
+    await this.requireOfficialRider(userId);
+    const source = Array.isArray(dto?.points) ? dto.points : [];
+    if (source.length === 0) throw new BadRequestException('定位轨迹不能为空');
+    if (source.length > 50) throw new BadRequestException('单次最多上传 50 个定位点');
+
+    const configResponse = await this.systemConfigService.getRiderAppControlConfig();
+    if (configResponse?.data?.runtime?.backgroundLocationEnabled === false) {
+      throw new BadRequestException('后台定位已关闭，请稍后再补传');
+    }
+    const maxAgeHours = Number(configResponse?.data?.runtime?.locationMaxAgeHours) || 24;
+    const now = Date.now();
+    const orderCutoff = new Date(now - maxAgeHours * 60 * 60 * 1000);
+    const [assignedErrands, assignedShopOrders] = await Promise.all([
+      this.prisma.errandOrder.findMany({
+        where: { riderId: userId, updatedAt: { gte: orderCutoff } },
+        select: { id: true },
+      }),
+      this.prisma.order.findMany({
+        where: { riderId: userId, updatedAt: { gte: orderCutoff } },
+        select: { id: true },
+      }),
+    ]);
+    if (assignedErrands.length + assignedShopOrders.length === 0) {
+      throw new BadRequestException('没有可补传的配送订单');
+    }
+    const orderTypes = new Map<string, string>([
+      ...assignedErrands.map((order) => [order.id, 'errand'] as const),
+      ...assignedShopOrders.map((order) => [order.id, 'shop'] as const),
+    ]);
+    type TrackInput = {
+      clientId: string;
+      riderId: string;
+      orderId: string | null;
+      orderType: string | null;
+      lat: number;
+      lng: number;
+      accuracy: number | null;
+      speed: number | null;
+      heading: number | null;
+      recordedAt: Date;
+    };
+    const tracks: TrackInput[] = source.map((item: any): TrackInput => {
+      const clientId = String(item?.client_id ?? item?.clientId ?? '').trim();
+      if (!clientId || clientId.length > 128) throw new BadRequestException('定位点编号无效');
+      const lat = Number(item?.lat ?? item?.latitude);
+      const lng = Number(item?.lng ?? item?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        throw new BadRequestException('定位坐标无效');
+      }
+      const recordedAt = new Date(String(item?.recorded_at ?? item?.recordedAt ?? ''));
+      const recordedTime = recordedAt.getTime();
+      if (!Number.isFinite(recordedTime)) throw new BadRequestException('定位采集时间无效');
+      if (recordedTime > now + 5 * 60 * 1000) throw new BadRequestException('定位采集时间不能晚于服务器时间');
+      if (recordedTime < now - maxAgeHours * 60 * 60 * 1000) {
+        throw new BadRequestException(`定位点超过补传时效（${maxAgeHours} 小时）`);
+      }
+      const orderId = String(item?.order_id ?? item?.orderId ?? '').trim() || null;
+      if (orderId && !orderTypes.has(orderId)) {
+        throw new BadRequestException('定位点订单不属于当前骑手或已超过补传时效');
+      }
+      const optionalNumber = (value: unknown) => {
+        if (value === undefined || value === null || value === '') return null;
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+      };
+      return {
+        clientId,
+        riderId: userId,
+        orderId,
+        orderType: orderId ? orderTypes.get(orderId) || null : null,
+        lat,
+        lng,
+        accuracy: optionalNumber(item?.accuracy),
+        speed: optionalNumber(item?.speed),
+        heading: optionalNumber(item?.heading),
+        recordedAt,
+      };
+    });
+
+    const result = await this.prisma.riderLocationTrack.createMany({
+      data: tracks,
+      skipDuplicates: true,
+    });
+    const newest = tracks.reduce((latest, point) => (
+      point.recordedAt >= latest.recordedAt ? point : latest
+    ));
+    await this.errandService.updateLocationIfNewer(
+      userId,
+      { lat: newest.lat, lng: newest.lng },
+      newest.recordedAt,
+    );
+    return {
+      success: true,
+      inserted: result.count,
+      accepted_client_ids: tracks.map((point) => point.clientId),
+    };
   }
 
   async getProfile(userId: string) {

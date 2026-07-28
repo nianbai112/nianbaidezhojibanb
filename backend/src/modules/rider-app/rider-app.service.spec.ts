@@ -28,11 +28,16 @@ describe('RiderAppService', () => {
       region: { findUnique: jest.fn().mockResolvedValue({ name: '测试区域' }) },
       errandOrder: {
         count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([{ id: 'order-1' }]),
         findUnique: jest.fn().mockResolvedValue({ id: 'order-1', riderId: 'user-1', status: 'in_progress' }),
       },
       order: {
         count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn().mockResolvedValue(null),
+      },
+      riderLocationTrack: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
       deliveryRiskEvent: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -52,12 +57,21 @@ describe('RiderAppService', () => {
       acceptOrder: jest.fn().mockResolvedValue({ success: true }),
       updateRiderStatus: jest.fn().mockResolvedValue({ success: true }),
       updateLocation: jest.fn().mockResolvedValue({ success: true }),
+      updateLocationIfNewer: jest.fn().mockResolvedValue({ success: true, updated: true }),
       getRiderInfo: jest.fn().mockResolvedValue({ id: 'rider-1' }),
       updateRiderInfo: jest.fn().mockResolvedValue({ id: 'rider-1' }),
       getOrderStats: jest.fn().mockResolvedValue({ today: 1 }),
     };
+    const systemConfig = {
+      getRiderAppControlConfig: jest.fn().mockResolvedValue({
+        data: { runtime: { locationMaxAgeHours: 24 } },
+      }),
+    };
     (prisma as any).$transaction = jest.fn(async (callback: any) => callback(prisma));
-    return { service: new RiderAppService(prisma as any, auth as any, errand as any), prisma, auth, errand };
+    return {
+      service: new RiderAppService(prisma as any, auth as any, errand as any, systemConfig as any),
+      prisma, auth, errand, systemConfig,
+    };
   }
 
   it('allows only approved official riders with a region', async () => {
@@ -134,6 +148,78 @@ describe('RiderAppService', () => {
     await expect(service.updateLocation('user-1', { lat: 30, lng: 120 }))
       .rejects.toThrow('配送中的订单');
     expect(errand.updateLocation).not.toHaveBeenCalled();
+  });
+
+  it('stores an idempotent batch and forwards the newest point to the live location', async () => {
+    const { service, prisma, errand } = createService();
+    const recordedAt = new Date().toISOString();
+
+    await expect(service.updateLocationBatch('user-1', { points: [
+      { client_id: 'point-1', order_id: 'order-1', lat: 30, lng: 120, recorded_at: recordedAt },
+      { client_id: 'point-2', order_id: 'order-1', lat: 30.1, lng: 120.1, accuracy: 8, recorded_at: recordedAt },
+    ] })).resolves.toMatchObject({
+      success: true,
+      inserted: 2,
+      accepted_client_ids: ['point-1', 'point-2'],
+    });
+
+    expect(prisma.riderLocationTrack.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ riderId: 'user-1', orderId: 'order-1', clientId: 'point-1' }),
+      ]),
+      skipDuplicates: true,
+    });
+    expect(errand.updateLocationIfNewer).toHaveBeenCalledWith(
+      'user-1',
+      { lat: 30.1, lng: 120.1 },
+      new Date(recordedAt),
+    );
+  });
+
+  it('accepts cached points for a recently completed assigned order', async () => {
+    const { service, prisma } = createService();
+    const recordedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    await expect(service.updateLocationBatch('user-1', { points: [{
+      client_id: 'completed-point', order_id: 'order-1', lat: 30, lng: 120,
+      recorded_at: recordedAt,
+    }] })).resolves.toMatchObject({
+      success: true,
+      accepted_client_ids: ['completed-point'],
+    });
+
+    expect(prisma.errandOrder.findMany).toHaveBeenCalledWith({
+      where: { riderId: 'user-1', updatedAt: { gte: expect.any(Date) } },
+      select: { id: true },
+    });
+  });
+
+  it('rejects oversized, stale, invalid, or unassigned trajectory batches', async () => {
+    const { service } = createService();
+    const point = { client_id: 'point-1', order_id: 'order-1', lat: 30, lng: 120, recorded_at: new Date().toISOString() };
+
+    await expect(service.updateLocationBatch('user-1', { points: Array(51).fill(point) }))
+      .rejects.toThrow('最多上传 50');
+    await expect(service.updateLocationBatch('user-1', { points: [{ ...point, lat: 91 }] }))
+      .rejects.toThrow('定位坐标无效');
+    await expect(service.updateLocationBatch('user-1', { points: [{
+      ...point, recorded_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+    }] })).rejects.toThrow('超过补传时效');
+    await expect(service.updateLocationBatch('user-1', { points: [{ ...point, order_id: 'other-order' }] }))
+      .rejects.toThrow('不属于当前骑手');
+  });
+
+  it('enforces the server-side background-location switch', async () => {
+    const { service, systemConfig, prisma } = createService();
+    systemConfig.getRiderAppControlConfig.mockResolvedValue({
+      data: { runtime: { backgroundLocationEnabled: false, locationMaxAgeHours: 24 } },
+    });
+
+    await expect(service.updateLocationBatch('user-1', { points: [{
+      client_id: 'point-1', order_id: 'order-1', lat: 30, lng: 120,
+      recorded_at: new Date().toISOString(),
+    }] })).rejects.toThrow('后台定位已关闭');
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
   });
 
   it('records one actionable exception for an active assigned order', async () => {

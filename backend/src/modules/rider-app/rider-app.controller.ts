@@ -112,6 +112,14 @@ export class RiderAppController {
     return this.riderAppService.updateLocation(userId, dto);
   }
 
+  @Post('rider-app/location/batch')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '官方骑手批量补传配送轨迹' })
+  updateLocationBatch(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.riderAppService.updateLocationBatch(userId, dto);
+  }
+
   @Get('rider-app/profile')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

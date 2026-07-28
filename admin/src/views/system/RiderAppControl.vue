@@ -70,6 +70,28 @@
             <el-input-number v-model="form.runtime.locationIntervalSeconds" :min="15" :max="300" :step="5" />
             <span class="unit">秒</span>
           </el-form-item>
+          <el-form-item label="后台持续定位">
+            <el-switch
+              v-model="form.runtime.backgroundLocationEnabled"
+              active-text="允许"
+              inactive-text="停止"
+            />
+            <div class="form-tip">关闭后，骑手 App 将停止新轨迹采集，但仍会保留尚未补传的本地轨迹。</div>
+          </el-form-item>
+          <div class="two-cols">
+            <el-form-item label="本地轨迹队列上限">
+              <el-input-number v-model="form.runtime.locationQueueMaxPoints" :min="50" :max="1000" :step="50" />
+              <span class="unit">点</span>
+            </el-form-item>
+            <el-form-item label="单次补传数量">
+              <el-input-number v-model="form.runtime.locationBatchSize" :min="1" :max="50" :step="5" />
+              <span class="unit">点</span>
+            </el-form-item>
+          </div>
+          <el-form-item label="最长补传时效">
+            <el-input-number v-model="form.runtime.locationMaxAgeHours" :min="1" :max="72" />
+            <span class="unit">小时</span>
+          </el-form-item>
         </el-form>
       </el-card>
 
@@ -117,7 +139,10 @@ const defaults = () => ({
     iosDownloadUrl: '', androidDownloadUrl: ''
   },
   notice: { enabled: false, title: '', content: '' },
-  runtime: { wsPath: '/api/ws-native', locationIntervalSeconds: 30 },
+  runtime: {
+    wsPath: '/api/ws-native', locationIntervalSeconds: 30, backgroundLocationEnabled: true,
+    locationQueueMaxPoints: 300, locationBatchSize: 50, locationMaxAgeHours: 24
+  },
   features: { orderPool: true, chat: true, income: true, incentives: true } as Record<FeatureKey, boolean>
 })
 
@@ -164,6 +189,15 @@ function validate() {
   }
   if (!form.runtime.wsPath.startsWith('/') || form.runtime.wsPath.startsWith('//') || form.runtime.wsPath.includes('://')) {
     throw new Error('WebSocket 必须填写站内相对路径')
+  }
+  if (form.runtime.locationQueueMaxPoints < 50 || form.runtime.locationQueueMaxPoints > 1000) {
+    throw new Error('本地轨迹队列上限必须为 50 至 1000 点')
+  }
+  if (form.runtime.locationBatchSize < 1 || form.runtime.locationBatchSize > 50) {
+    throw new Error('单次补传数量必须为 1 至 50 点')
+  }
+  if (form.runtime.locationMaxAgeHours < 1 || form.runtime.locationMaxAgeHours > 72) {
+    throw new Error('最长补传时效必须为 1 至 72 小时')
   }
 }
 

@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-07-28T13:16:11.087Z",
+  "generatedAt": "2026-07-28T13:55:21.390Z",
   "roots": {
     "miniappRoot": "/Users/nianbaidediannao/Desktop/前端文件",
     "backendRoot": "/Users/nianbaidediannao/Desktop/后端后台本地测试版/backend"
   },
   "stats": {
     "miniappRequests": 435,
-    "backendRoutes": 2000,
+    "backendRoutes": 2001,
     "matchedMiniappRequests": 435,
     "unmatchedMiniappRequests": 0,
-    "unmatchedNonAdminBackendRoutes": 568
+    "unmatchedNonAdminBackendRoutes": 569
   },
   "unmatchedMiniappRequests": [],
   "unmatchedNonAdminBackendRoutes": [
@@ -2063,7 +2063,7 @@
       "method": "GET",
       "path": "/rider-app/profile",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 115
+      "line": 123
     },
     {
       "method": "GET",
@@ -2075,7 +2075,7 @@
       "method": "GET",
       "path": "/rider-app/stats",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 131
+      "line": 139
     },
     {
       "method": "GET",
@@ -3111,6 +3111,12 @@
     },
     {
       "method": "POST",
+      "path": "/rider-app/location/batch",
+      "file": "backend/src/modules/rider-app/rider-app.controller.ts",
+      "line": 115
+    },
+    {
+      "method": "POST",
       "path": "/rider-app/login/phone",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
       "line": 28
@@ -3413,7 +3419,7 @@
       "method": "PUT",
       "path": "/rider-app/profile",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 123
+      "line": 131
     },
     {
       "method": "PUT",
@@ -16071,7 +16077,7 @@
       "method": "GET",
       "path": "/rider-app/profile",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 115
+      "line": 123
     },
     {
       "method": "GET",
@@ -16083,7 +16089,7 @@
       "method": "GET",
       "path": "/rider-app/stats",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 131
+      "line": 139
     },
     {
       "method": "GET",
@@ -19483,6 +19489,12 @@
     },
     {
       "method": "POST",
+      "path": "/rider-app/location/batch",
+      "file": "backend/src/modules/rider-app/rider-app.controller.ts",
+      "line": 115
+    },
+    {
+      "method": "POST",
       "path": "/rider-app/login/phone",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
       "line": 28
@@ -21489,7 +21501,7 @@
       "method": "PUT",
       "path": "/rider-app/profile",
       "file": "backend/src/modules/rider-app/rider-app.controller.ts",
-      "line": 123
+      "line": 131
     },
     {
       "method": "PUT",

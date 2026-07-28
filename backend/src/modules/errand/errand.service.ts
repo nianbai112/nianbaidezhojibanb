@@ -3348,6 +3348,32 @@ export class ErrandService {
     return { success: true, data: this.formatRiderInfo(rider, true) };
   }
 
+  async updateLocationIfNewer(userId: string, dto: any, recordedAt: Date) {
+    const lat = this.numberValue(dto?.lat ?? dto?.latitude, NaN)
+    const lng = this.numberValue(dto?.lng ?? dto?.longitude, NaN)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new BadRequestException('定位坐标无效');
+    if (!(recordedAt instanceof Date) || !Number.isFinite(recordedAt.getTime())) {
+      throw new BadRequestException('定位采集时间无效');
+    }
+    const result = await this.prisma.regionRider.updateMany({
+      where: {
+        userId,
+        OR: [{ locationUpdatedAt: null }, { locationUpdatedAt: { lt: recordedAt } }],
+      },
+      data: { lat, lng, locationUpdatedAt: recordedAt },
+    });
+    if (result.count > 0) {
+      await this.redis
+        .hsetIfNewer(
+          'rider:location',
+          userId,
+          { lat, lng, time: recordedAt.getTime() },
+        )
+        .catch(() => undefined);
+    }
+    return { success: true, updated: result.count > 0 };
+  }
+
   async getRiderLocation(viewerId: string, riderId: string, orderId?: string) {
     const rider = await this.prisma.regionRider.findFirst({
       where: { OR: [{ id: riderId }, { userId: riderId }] },

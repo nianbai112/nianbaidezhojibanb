@@ -101,7 +101,14 @@ describe('SystemConfigService storage config', () => {
       success: true,
       data: expect.objectContaining({
         enabled: true,
-        runtime: { wsPath: '/api/ws-native', locationIntervalSeconds: 30 },
+        runtime: {
+          wsPath: '/api/ws-native',
+          locationIntervalSeconds: 30,
+          backgroundLocationEnabled: true,
+          locationQueueMaxPoints: 300,
+          locationBatchSize: 50,
+          locationMaxAgeHours: 24,
+        },
         features: { orderPool: true, chat: false, income: true, incentives: true },
       }),
     }));
@@ -124,7 +131,7 @@ describe('SystemConfigService storage config', () => {
       success: true,
       data: {
         maintenance: { enabled: true },
-        runtime: { locationIntervalSeconds: 60 },
+        runtime: expect.objectContaining({ locationIntervalSeconds: 60 }),
       },
     });
 

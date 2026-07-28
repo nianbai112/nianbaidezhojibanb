@@ -4623,6 +4623,26 @@ model StatusLocation {
   @@map("status_locations")
 }
 
+model RiderLocationTrack {
+  id         String   @id @default(cuid())
+  clientId   String
+  riderId    String
+  orderId    String?
+  orderType  String?
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  speed      Float?
+  heading    Float?
+  recordedAt DateTime
+  receivedAt DateTime @default(now())
+
+  @@unique([riderId, clientId])
+  @@index([riderId, recordedAt])
+  @@index([orderId, orderType, recordedAt])
+  @@map("rider_location_tracks")
+}
+
 // ==================== 配送节点 ====================
 
 model DeliveryOrderNode {

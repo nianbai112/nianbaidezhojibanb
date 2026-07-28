@@ -36,16 +36,21 @@ describe('RiderAppController', () => {
       getOrders: jest.fn().mockResolvedValue({ orders: [] }),
       acceptOrder: jest.fn().mockResolvedValue({ success: true }),
       updateLocation: jest.fn().mockResolvedValue({ success: true }),
+      updateLocationBatch: jest.fn().mockResolvedValue({ success: true, accepted_client_ids: ['point-1'] }),
     };
     const controller = new RiderAppController(service as any);
 
     await controller.getOrders('user-1', { status: 'accepted' });
     await controller.acceptOrder('order-1', 'user-1');
     await controller.updateLocation('user-1', { lat: 30, lng: 120 });
+    await controller.updateLocationBatch('user-1', { points: [{ client_id: 'point-1' }] });
 
     expect(service.getOrders).toHaveBeenCalledWith('user-1', { status: 'accepted' });
     expect(service.acceptOrder).toHaveBeenCalledWith('user-1', 'order-1');
     expect(service.updateLocation).toHaveBeenCalledWith('user-1', { lat: 30, lng: 120 });
+    expect(service.updateLocationBatch).toHaveBeenCalledWith('user-1', {
+      points: [{ client_id: 'point-1' }],
+    });
   });
 
   it('delegates delivery exception reports with the authenticated user id', async () => {
