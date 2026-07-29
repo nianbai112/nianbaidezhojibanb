@@ -22,6 +22,64 @@ describe('WsNativeGateway account lifecycle', () => {
     expect(ws.close).toHaveBeenCalledWith(4003, 'Account inactive');
   });
 
+  it('records an approved official rider connection as rider_app', async () => {
+    const prisma: any = {
+      regionRider: { findFirst: jest.fn().mockResolvedValue({ id: 'rider-1' }) },
+      realtimeSession: {
+        create: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const gateway = new WsNativeGateway(
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) } as any,
+      { get: jest.fn().mockReturnValue('secret') } as any,
+      prisma,
+      {} as any,
+      {} as any,
+      { assertActiveUser: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+    (gateway as any).isRedisRateLimited = jest.fn().mockResolvedValue(false);
+    (gateway as any).markPresenceOnline = jest.fn().mockResolvedValue(false);
+    (gateway as any).getUnreadSummaryForUser = jest.fn().mockResolvedValue({ total: 0 });
+    const ws = { on: jest.fn(), send: jest.fn(), close: jest.fn(), readyState: 1 };
+
+    await (gateway as any).handleConnection(ws, {
+      url: '/ws-native?token=valid&client=rider_app',
+      headers: { host: 'localhost', 'user-agent': 'rider-device' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+
+    expect(prisma.realtimeSession.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'user-1', platform: 'rider_app', online: true }),
+    });
+  });
+
+  it('rejects rider_app identity for a non-official account', async () => {
+    const prisma: any = {
+      regionRider: { findFirst: jest.fn().mockResolvedValue(null) },
+      realtimeSession: { create: jest.fn(), updateMany: jest.fn() },
+    };
+    const gateway = new WsNativeGateway(
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) } as any,
+      { get: jest.fn().mockReturnValue('secret') } as any,
+      prisma,
+      {} as any,
+      {} as any,
+      { assertActiveUser: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+    (gateway as any).isRedisRateLimited = jest.fn().mockResolvedValue(false);
+    const ws = { on: jest.fn(), send: jest.fn(), close: jest.fn(), readyState: 1 };
+
+    await (gateway as any).handleConnection(ws, {
+      url: '/ws-native?token=valid&client=rider_app',
+      headers: { host: 'localhost' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+
+    expect(ws.close).toHaveBeenCalledWith(4003, 'Invalid token');
+    expect(prisma.realtimeSession.create).not.toHaveBeenCalled();
+  });
+
   it('pushes visible presence only to existing private and group peers', async () => {
     const gateway = createGateway({});
     (gateway as any).prisma = {

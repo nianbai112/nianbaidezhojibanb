@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell" v-loading="loading">
-    <PageHeader title="骑手 App 控制中心" subtitle="控制骑手端运行状态、版本发布、定位参数和功能入口">
+    <PageHeader title="骑手 App 控制中心" subtitle="控制骑手端运行状态、版本发布、功能入口和骑手在线情况">
       <template #actions>
         <el-button @click="loadConfig">刷新</el-button>
         <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
@@ -60,42 +60,6 @@
       </el-card>
 
       <el-card shadow="never">
-        <template #header><span class="card-title">运行参数</span></template>
-        <el-form label-position="top">
-          <el-form-item label="WebSocket 相对路径">
-            <el-input v-model="form.runtime.wsPath" placeholder="/api/ws-native" />
-            <div class="form-tip">只允许站内相对路径，不能配置其他服务器。</div>
-          </el-form-item>
-          <el-form-item label="定位上传间隔">
-            <el-input-number v-model="form.runtime.locationIntervalSeconds" :min="15" :max="300" :step="5" />
-            <span class="unit">秒</span>
-          </el-form-item>
-          <el-form-item label="后台持续定位">
-            <el-switch
-              v-model="form.runtime.backgroundLocationEnabled"
-              active-text="允许"
-              inactive-text="停止"
-            />
-            <div class="form-tip">关闭后，骑手 App 将停止新轨迹采集，但仍会保留尚未补传的本地轨迹。</div>
-          </el-form-item>
-          <div class="two-cols">
-            <el-form-item label="本地轨迹队列上限">
-              <el-input-number v-model="form.runtime.locationQueueMaxPoints" :min="50" :max="1000" :step="50" />
-              <span class="unit">点</span>
-            </el-form-item>
-            <el-form-item label="单次补传数量">
-              <el-input-number v-model="form.runtime.locationBatchSize" :min="1" :max="50" :step="5" />
-              <span class="unit">点</span>
-            </el-form-item>
-          </div>
-          <el-form-item label="最长补传时效">
-            <el-input-number v-model="form.runtime.locationMaxAgeHours" :min="1" :max="72" />
-            <span class="unit">小时</span>
-          </el-form-item>
-        </el-form>
-      </el-card>
-
-      <el-card shadow="never">
         <template #header><span class="card-title">功能开关与公告</span></template>
         <div class="switch-list">
           <div v-for="item in featureItems" :key="item.key" class="switch-row">
@@ -119,12 +83,65 @@
           </el-form-item>
         </el-form>
       </el-card>
+
+      <el-card shadow="never" class="rider-session-card">
+        <template #header>
+          <div class="session-header">
+            <div>
+              <span class="card-title">骑手 App 登录状态</span>
+              <span class="session-summary">在线 {{ riderOnlineCount }} 人 · 已记录 {{ riderSessions.length }} 人</span>
+            </div>
+            <el-button :loading="riderSessionLoading" @click="loadRiderSessions(true)">刷新</el-button>
+          </div>
+        </template>
+        <el-alert
+          title="只统计审核通过的官方骑手 App 连接；90 秒无心跳自动判定离线。"
+          type="info"
+          :closable="false"
+          show-icon
+          class="session-alert"
+        />
+        <el-table :data="riderSessions" v-loading="riderSessionLoading" stripe empty-text="暂时没有骑手 App 登录记录">
+          <el-table-column label="骑手" min-width="180">
+            <template #default="{ row }">
+              <div class="rider-cell">
+                <el-avatar :size="34" :src="row.actor?.avatar">{{ (row.actor?.name || '?').slice(0, 1) }}</el-avatar>
+                <div>
+                  <div class="rider-name">{{ row.actor?.name || '未命名骑手' }}</div>
+                  <div class="rider-subtitle">{{ row.actor?.subtitle || '-' }}</div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="App 状态" width="95">
+            <template #default="{ row }">
+              <el-tag :type="row.appOnline ? 'success' : 'info'" effect="plain">
+                {{ row.appOnline ? '在线' : '离线' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="接单状态" width="100">
+            <template #default="{ row }">{{ riderBusinessStatus(row.rider?.status) }}</template>
+          </el-table-column>
+          <el-table-column label="所属区域" min-width="130">
+            <template #default="{ row }">{{ row.rider?.regionName || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="最后活跃" width="175">
+            <template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template>
+          </el-table-column>
+          <el-table-column label="最近登录" width="175">
+            <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+          </el-table-column>
+          <el-table-column prop="ip" label="IP" width="140" show-overflow-tooltip />
+          <el-table-column prop="userAgent" label="设备" min-width="220" show-overflow-tooltip />
+        </el-table>
+      </el-card>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
@@ -150,6 +167,10 @@ const form = reactive(defaults())
 const saved = ref(defaults())
 const loading = ref(false)
 const saving = ref(false)
+const riderSessionLoading = ref(false)
+const riderSessions = ref<any[]>([])
+const riderOnlineCount = ref(0)
+let riderSessionTimer: number | undefined
 const featureItems: Array<{ key: FeatureKey; title: string; desc: string }> = [
   { key: 'orderPool', title: '订单大厅', desc: '控制订单池展示与接单入口' },
   { key: 'chat', title: '骑手聊天', desc: '控制消息列表和聊天入口' },
@@ -225,7 +246,56 @@ async function saveConfig() {
   }
 }
 
-onMounted(loadConfig)
+function formatTime(value?: string) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '-'
+}
+
+function riderBusinessStatus(value?: string) {
+  return ({ online: '可接单', busy: '配送中', offline: '未上线' } as Record<string, string>)[String(value || '')] || '-'
+}
+
+function mergeRiderSessions(rows: any[]) {
+  const riders = new Map<string, any>()
+  for (const row of rows) {
+    const key = String(row.userId || row.id || '')
+    if (!key) continue
+    const online = Boolean(row.online && row.socketLive)
+    const saved = riders.get(key)
+    if (!saved) {
+      riders.set(key, { ...row, appOnline: online })
+    } else if (online) {
+      saved.appOnline = true
+    }
+  }
+  return Array.from(riders.values()).sort((a, b) => Number(b.appOnline) - Number(a.appOnline))
+}
+
+async function loadRiderSessions(showSuccess = false) {
+  riderSessionLoading.value = true
+  try {
+    const response: any = await request.get('/admin/realtime/sessions', {
+      params: { platform: 'rider_app', page: 1, pageSize: 200 }
+    })
+    const body = response?.data || response || {}
+    riderSessions.value = mergeRiderSessions(Array.isArray(body.list) ? body.list : [])
+    riderOnlineCount.value = riderSessions.value.filter((row) => row.appOnline).length
+    if (showSuccess) ElMessage.success('骑手 App 状态已刷新')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载骑手 App 状态失败')
+  } finally {
+    riderSessionLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadConfig()
+  loadRiderSessions()
+  riderSessionTimer = window.setInterval(() => loadRiderSessions(), 30000)
+})
+
+onBeforeUnmount(() => {
+  if (riderSessionTimer) window.clearInterval(riderSessionTimer)
+})
 </script>
 
 <style scoped>
@@ -237,6 +307,13 @@ onMounted(loadConfig)
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .switch-desc, .form-tip { margin-top: 4px; color: var(--mx-muted); font-size: 12px; }
 .unit { margin-left: 8px; color: var(--mx-muted); }
+.rider-session-card { grid-column: 1 / -1; }
+.session-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.session-summary { margin-left: 12px; color: var(--mx-muted); font-size: 13px; font-weight: 400; }
+.session-alert { margin-bottom: 14px; }
+.rider-cell { display: flex; align-items: center; gap: 10px; }
+.rider-name { font-weight: 600; color: var(--mx-text); }
+.rider-subtitle { margin-top: 2px; color: var(--mx-muted); font-size: 12px; }
 @media (max-width: 900px) {
   .config-grid, .two-cols { grid-template-columns: 1fr; }
 }

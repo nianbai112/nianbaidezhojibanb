@@ -23,6 +23,7 @@ interface NativeClient {
   ws: WebSocket;
   userId: string;
   isAdmin: boolean;
+  platform: 'miniapp' | 'rider_app' | 'admin';
   socketId: string;
   regionId?: string;
   lastPongAt: number;
@@ -152,15 +153,25 @@ export class WsNativeGateway {
 
       const userId = payload.sub;
       const isAdmin = payload.isAdmin === true;
+      let platform: NativeClient['platform'] = isAdmin ? 'admin' : 'miniapp';
 
       if (!isAdmin) {
         await this.userAccess.assertActiveUser(userId, '连接实时服务');
+        if (url.searchParams.get('client') === 'rider_app') {
+          const rider = await this.prisma.regionRider.findFirst({
+            where: { userId, verifyStatus: 'approved', riderType: 'official' },
+            select: { id: true },
+          });
+          if (!rider) throw new Error('Official rider required');
+          platform = 'rider_app';
+        }
       }
 
       const client: NativeClient = {
         ws,
         userId,
         isAdmin,
+        platform,
         socketId,
         lastPongAt: Date.now(),
       };
@@ -180,7 +191,7 @@ export class WsNativeGateway {
             userId: isAdmin ? null : userId,
             adminId: isAdmin ? userId : null,
             socketId,
-            platform: isAdmin ? 'admin' : 'miniapp',
+            platform,
             online: true,
             ip: this.getClientIp(req),
             userAgent: req.headers['user-agent'] || '',
@@ -514,7 +525,7 @@ export class WsNativeGateway {
       userId: client.userId,
       socketId: client.socketId,
       isAdmin: client.isAdmin,
-      platform: client.isAdmin ? 'admin' : 'miniapp',
+      platform: client.platform || (client.isAdmin ? 'admin' : 'miniapp'),
       instanceId: this.instanceId,
       ip: req ? this.getClientIp(req) : undefined,
       userAgent: req?.headers?.['user-agent'] || '',
@@ -552,7 +563,7 @@ export class WsNativeGateway {
     const sockets = await this.redis.hgetall(this.redisUserKey(userId));
     return Object.values(sockets).some((raw) => {
       try {
-        return JSON.parse(raw)?.platform === 'miniapp';
+        return JSON.parse(raw)?.platform !== 'admin';
       } catch {
         return false;
       }

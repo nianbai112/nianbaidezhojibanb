@@ -62,6 +62,7 @@
       <el-select v-model="filters.platform" placeholder="平台" clearable @change="reloadFirstPage">
         <el-option label="全部平台" value="" />
         <el-option label="小程序" value="miniapp" />
+        <el-option label="骑手 App" value="rider_app" />
         <el-option label="后台" value="admin" />
       </el-select>
       <el-select v-model="filters.online" placeholder="在线状态" clearable @change="reloadFirstPage">
@@ -99,8 +100,8 @@
         <el-table-column prop="socketId" label="Socket ID" min-width="185" show-overflow-tooltip />
         <el-table-column prop="platform" label="平台" width="100">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.platform === 'miniapp' ? 'primary' : 'warning'" effect="plain">
-              {{ row.platform === 'miniapp' ? '小程序' : '后台' }}
+            <el-tag size="small" :type="row.platform === 'miniapp' ? 'primary' : row.platform === 'rider_app' ? 'success' : 'warning'" effect="plain">
+              {{ row.platform === 'miniapp' ? '小程序' : row.platform === 'rider_app' ? '骑手 App' : '后台' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -358,6 +359,7 @@ const wsProbe = reactive({
 const stats = reactive({
   onlineCount: 0,
   miniappOnlineCount: 0,
+  riderAppOnlineCount: 0,
   adminOnlineCount: 0,
 })
 
@@ -398,6 +400,7 @@ const lastRefreshText = computed(() => lastRefreshAt.value ? lastRefreshAt.value
 const statItems = computed(() => [
   { label: '在线连接', value: stats.onlineCount, icon: 'Connection' },
   { label: '小程序在线', value: stats.miniappOnlineCount, tone: 'blue' as const, icon: 'Iphone' },
+  { label: '骑手 App 在线', value: stats.riderAppOnlineCount, tone: 'green' as const, icon: 'Position' },
   { label: '后台在线', value: stats.adminOnlineCount, tone: 'orange' as const, icon: 'Monitor' },
   { label: '当前列表', value: total.value, tone: 'green' as const, icon: 'List' },
 ])
@@ -484,6 +487,7 @@ async function loadSessions(showSuccess = false) {
     const nextStats = res?.stats || res?.data?.stats || {}
     stats.onlineCount = Number(nextStats.onlineCount || 0)
     stats.miniappOnlineCount = Number(nextStats.miniappOnlineCount || 0)
+    stats.riderAppOnlineCount = Number(nextStats.riderAppOnlineCount || 0)
     stats.adminOnlineCount = Number(nextStats.adminOnlineCount || 0)
     lastRefreshAt.value = new Date()
     if (showSuccess) ElMessage.success('实时连接已刷新')

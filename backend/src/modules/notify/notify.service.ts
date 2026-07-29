@@ -1502,7 +1502,7 @@ export class NotifyService {
     if (query.online === 'true') where.online = true;
     if (query.online === 'false') where.online = false;
 
-    const [list, total, onlineCount, adminOnlineCount, miniappOnlineCount] = await Promise.all([
+    const [list, total, onlineCount, adminOnlineCount, miniappOnlineCount, riderAppOnlineCount] = await Promise.all([
       this.prisma.realtimeSession.findMany({
         where,
         skip: (page - 1) * pageSize,
@@ -1513,11 +1513,12 @@ export class NotifyService {
       this.prisma.realtimeSession.count({ where: { online: true } }),
       this.prisma.realtimeSession.count({ where: { online: true, platform: 'admin' } }),
       this.prisma.realtimeSession.count({ where: { online: true, platform: 'miniapp' } }),
+      this.prisma.realtimeSession.count({ where: { online: true, platform: 'rider_app' } }),
     ]);
 
     const userIds = Array.from(new Set(list.map((item) => item.userId).filter(Boolean))) as string[];
     const adminIds = Array.from(new Set(list.map((item) => item.adminId).filter(Boolean))) as string[];
-    const [users, admins] = await Promise.all([
+    const [users, admins, riders] = await Promise.all([
       userIds.length
         ? this.prisma.user.findMany({
           where: { id: { in: userIds } },
@@ -1530,26 +1531,53 @@ export class NotifyService {
           select: { id: true, username: true, realName: true, avatar: true, phone: true, email: true },
         })
         : Promise.resolve([]),
+      userIds.length
+        ? this.prisma.regionRider.findMany({
+          where: { userId: { in: userIds } },
+          select: {
+            userId: true, realName: true, phone: true, regionId: true,
+            status: true, verifyStatus: true, riderType: true,
+          },
+        })
+        : Promise.resolve([]),
     ]);
     const userMap = new Map(users.map((item) => [item.id, item]));
     const adminMap = new Map(admins.map((item) => [item.id, item]));
+    const riderMap = new Map(riders.map((item) => [item.userId, item]));
+    const regionIds = Array.from(new Set(riders.map((item) => item.regionId).filter(Boolean))) as string[];
+    const regions = regionIds.length
+      ? await this.prisma.region.findMany({ where: { id: { in: regionIds } }, select: { id: true, name: true } })
+      : [];
+    const regionMap = new Map(regions.map((item) => [item.id, item.name]));
 
     return {
       list: list.map((item) => {
         const user = item.userId ? userMap.get(item.userId) : null;
         const admin = item.adminId ? adminMap.get(item.adminId) : null;
+        const rider = item.userId ? riderMap.get(item.userId) : null;
         const targetId = item.userId || item.adminId || '';
         return {
           ...item,
           socketLive: this.wsNative.isSocketLive(item.socketId),
           liveSocketCount: targetId ? this.wsNative.getLiveSocketCount(targetId) : 0,
+          rider: rider
+            ? {
+              realName: rider.realName,
+              phone: this.maskPhone(rider.phone),
+              regionId: rider.regionId,
+              regionName: regionMap.get(rider.regionId) || '',
+              status: rider.status,
+              verifyStatus: rider.verifyStatus,
+              riderType: rider.riderType,
+            }
+            : null,
           actor: user
             ? {
               id: user.id,
-              name: user.nickname || '未命名用户',
+              name: item.platform === 'rider_app' ? (rider?.realName || user.nickname || '未命名骑手') : (user.nickname || '未命名用户'),
               avatar: user.avatar || '',
-              subtitle: user.phone ? this.maskPhone(user.phone) : '',
-              type: user.userType === 4 ? '机器人用户' : '小程序用户',
+              subtitle: rider?.phone ? this.maskPhone(rider.phone) : user.phone ? this.maskPhone(user.phone) : '',
+              type: item.platform === 'rider_app' ? '官方骑手' : user.userType === 4 ? '机器人用户' : '小程序用户',
             }
             : admin
               ? {
@@ -1564,7 +1592,7 @@ export class NotifyService {
                 name: targetId || '未知连接',
                 avatar: '',
                 subtitle: '',
-                type: item.platform === 'admin' ? '后台管理员' : '小程序用户',
+                type: item.platform === 'admin' ? '后台管理员' : item.platform === 'rider_app' ? '官方骑手' : '小程序用户',
               },
         };
       }),
@@ -1575,6 +1603,7 @@ export class NotifyService {
         onlineCount,
         adminOnlineCount,
         miniappOnlineCount,
+        riderAppOnlineCount,
       },
     };
   }

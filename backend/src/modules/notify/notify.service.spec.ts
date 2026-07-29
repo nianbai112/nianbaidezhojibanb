@@ -28,6 +28,15 @@ const createPrismaMock = () => ({
   assistantTicketReply: { create: jest.fn() },
   user: {
     upsert: jest.fn().mockResolvedValue({ id: 'official-user', nickname: '校园小助手', avatar: '/static/logo.png' }),
+    findMany: jest.fn().mockResolvedValue([]),
+  },
+  adminAccount: { findMany: jest.fn().mockResolvedValue([]) },
+  regionRider: { findMany: jest.fn().mockResolvedValue([]) },
+  region: { findMany: jest.fn().mockResolvedValue([]) },
+  realtimeSession: {
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    findMany: jest.fn().mockResolvedValue([]),
+    count: jest.fn().mockResolvedValue(0),
   },
   conversation: {
     findFirst: jest.fn(),
@@ -70,7 +79,7 @@ const createService = (prisma: ReturnType<typeof createPrismaMock>, channelServi
     withLock: jest.fn((_key: string, _ttl: number, task: () => Promise<any>) => task()),
   } as any,
   { pushNotification: jest.fn() } as any,
-  { pushToUser: jest.fn() } as any,
+  { pushToUser: jest.fn(), isSocketLive: jest.fn().mockReturnValue(false), getLiveSocketCount: jest.fn().mockReturnValue(0) } as any,
   {} as any,
   { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: true, regionIds: [] }) } as any,
   channelService,
@@ -83,6 +92,43 @@ describe('NotifyService takeaway template routing', () => {
     expect((service as any).takeawayTemplateType('shop_order_ready')).toBe('takeaway_rider_order');
     expect((service as any).takeawayTemplateType('takeaway_accept_reminder')).toBe('takeaway_merchant_order');
     expect((service as any).takeawayTemplateType('takeaway_rider_delay')).toBe('takeaway_order_status');
+  });
+});
+
+describe('NotifyService rider app realtime sessions', () => {
+  it('labels rider app sessions with official rider identity and region', async () => {
+    const prisma = createPrismaMock();
+    prisma.realtimeSession.findMany.mockResolvedValue([{
+      id: 'session-1', userId: 'user-1', adminId: null, socketId: 'socket-1',
+      platform: 'rider_app', online: true, ip: '127.0.0.1', userAgent: 'rider-device',
+      lastSeenAt: new Date('2026-07-29T10:00:00.000Z'), createdAt: new Date('2026-07-29T09:00:00.000Z'),
+    }]);
+    prisma.realtimeSession.count
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    prisma.user.findMany.mockResolvedValue([{
+      id: 'user-1', nickname: '昵称', avatar: '/avatar.png', phone: '13800138000', openid: 'openid', userType: 1,
+    }]);
+    prisma.regionRider.findMany.mockResolvedValue([{
+      userId: 'user-1', realName: '张骑手', phone: '13900139000', regionId: 'region-1',
+      status: 'busy', verifyStatus: 'approved', riderType: 'official',
+    }]);
+    prisma.region.findMany.mockResolvedValue([{ id: 'region-1', name: '第一校区' }]);
+    const service = createService(prisma);
+    (service as any).wsNative.isSocketLive.mockReturnValue(true);
+    (service as any).wsNative.getLiveSocketCount.mockReturnValue(1);
+
+    const result = await service.getRealtimeSessions({ platform: 'rider_app', page: 1, pageSize: 50 });
+
+    expect(result.list[0]).toEqual(expect.objectContaining({
+      platform: 'rider_app',
+      actor: expect.objectContaining({ name: '张骑手', type: '官方骑手' }),
+      rider: expect.objectContaining({ regionName: '第一校区', status: 'busy' }),
+    }));
+    expect(result.stats).toEqual(expect.objectContaining({ riderAppOnlineCount: 1 }));
   });
 });
 
