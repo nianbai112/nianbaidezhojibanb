@@ -214,45 +214,96 @@
       </div>
     </div>
 
-    <!-- 阿里云短信配置 -->
+    <!-- 短信服务配置 -->
     <div class="glass-card">
-      <div class="card-header"><div class="card-title">阿里云短信配置</div></div>
+      <div class="card-header"><div class="card-title">短信服务配置</div></div>
       <div class="card-body">
         <el-form label-position="top">
           <el-alert
             class="pay-alert"
-            type="info"
+            type="warning"
             show-icon
             :closable="false"
-            title="用于手机号验证码登录。需先在阿里云开通短信服务，并完成签名、模板审核。"
+            :title="sms.mode === 'auto'
+              ? '自动主备已开启：明确失败才切换备用；超时不会双发；用户再次获取时使用同一验证码改走另一家。'
+              : '手动单通道：每次验证码只通过当前服务商发送，不会调用备用服务商。'"
           />
           <div class="form-grid two">
-            <el-form-item label="短信服务商">
-              <el-select v-model="sms.provider" placeholder="请选择短信服务商" style="width: 100%">
-                <el-option label="阿里云短信" value="aliyun" />
+            <el-form-item label="工作模式">
+              <el-select v-model="sms.mode" style="width: 100%">
+                <el-option label="自动主备（推荐）" value="auto" />
+                <el-option label="手动单通道" value="manual" />
               </el-select>
             </el-form-item>
-            <el-form-item label="AccessKey ID">
-              <el-input v-model="sms.aliyunAccessKeyId" type="password" show-password placeholder="请输入阿里云 AccessKey ID" />
-              <div class="form-tip" v-if="sms.aliyunAccessKeyId === '******'">已配置密钥，留空则不修改</div>
+            <el-form-item :label="sms.mode === 'auto' ? '主服务商' : '短信服务商'">
+              <el-select v-model="sms.provider" placeholder="请选择短信服务商" style="width: 100%" @change="smsEditingProvider = sms.provider">
+                <el-option label="阿里云短信" value="aliyun" />
+                <el-option label="腾讯云短信" value="tencent" />
+              </el-select>
             </el-form-item>
-            <el-form-item label="AccessKey Secret">
-              <el-input v-model="sms.aliyunAccessKeySecret" type="password" show-password placeholder="请输入阿里云 AccessKey Secret" />
-              <div class="form-tip" v-if="sms.aliyunAccessKeySecret === '******'">已配置密钥，留空则不修改</div>
+            <el-form-item label="当前状态">
+              <el-tag type="success" effect="dark">
+                {{ sms.mode === 'auto'
+                  ? `主：${smsPrimaryProviderLabel} / 备用：${smsBackupProviderLabel}`
+                  : `仅使用：${smsPrimaryProviderLabel}` }}
+              </el-tag>
             </el-form-item>
-            <el-form-item label="短信签名">
-              <el-input v-model="sms.aliyunSignName" placeholder="请输入已审核通过的短信签名" />
+            <el-form-item v-if="sms.mode === 'auto'" label="配置参数">
+              <el-radio-group v-model="smsEditingProvider">
+                <el-radio-button value="aliyun">阿里云</el-radio-button>
+                <el-radio-button value="tencent">腾讯云</el-radio-button>
+              </el-radio-group>
+              <div class="form-tip">主备两家的参数都需要配置完整。</div>
             </el-form-item>
-            <el-form-item label="模板 Code">
-              <el-input v-model="sms.aliyunTemplateCode" placeholder="如：SMS_123456789" />
-              <div class="form-tip">模板内容需包含验证码变量 code，例如：验证码为 ${code}</div>
-            </el-form-item>
-            <el-form-item label="Endpoint">
-              <el-input v-model="sms.aliyunEndpoint" placeholder="dysmsapi.aliyuncs.com" />
-            </el-form-item>
-            <el-form-item label="Region ID">
-              <el-input v-model="sms.aliyunRegionId" placeholder="cn-hangzhou" />
-            </el-form-item>
+            <template v-if="visibleSmsProvider === 'aliyun'">
+              <el-form-item label="AccessKey ID">
+                <el-input v-model="sms.aliyunAccessKeyId" type="password" show-password placeholder="请输入阿里云 AccessKey ID" />
+                <div class="form-tip" v-if="sms.aliyunAccessKeyId === '******'">已配置密钥，留空则不修改</div>
+              </el-form-item>
+              <el-form-item label="AccessKey Secret">
+                <el-input v-model="sms.aliyunAccessKeySecret" type="password" show-password placeholder="请输入阿里云 AccessKey Secret" />
+                <div class="form-tip" v-if="sms.aliyunAccessKeySecret === '******'">已配置密钥，留空则不修改</div>
+              </el-form-item>
+              <el-form-item label="短信签名">
+                <el-input v-model="sms.aliyunSignName" placeholder="请输入已审核通过的短信签名" />
+              </el-form-item>
+              <el-form-item label="模板 Code">
+                <el-input v-model="sms.aliyunTemplateCode" placeholder="如：SMS_123456789" />
+                <div class="form-tip">模板内容需包含验证码变量 code，例如：验证码为 ${code}</div>
+              </el-form-item>
+              <el-form-item label="Endpoint">
+                <el-input v-model="sms.aliyunEndpoint" placeholder="dysmsapi.aliyuncs.com" />
+              </el-form-item>
+              <el-form-item label="Region ID">
+                <el-input v-model="sms.aliyunRegionId" placeholder="cn-hangzhou" />
+              </el-form-item>
+            </template>
+            <template v-else>
+              <el-form-item label="SecretId">
+                <el-input v-model="sms.tencentSecretId" type="password" show-password placeholder="请输入腾讯云 SecretId" />
+                <div class="form-tip" v-if="sms.tencentSecretId === '******'">已配置密钥，留空则不修改</div>
+              </el-form-item>
+              <el-form-item label="SecretKey">
+                <el-input v-model="sms.tencentSecretKey" type="password" show-password placeholder="请输入腾讯云 SecretKey" />
+                <div class="form-tip" v-if="sms.tencentSecretKey === '******'">已配置密钥，留空则不修改</div>
+              </el-form-item>
+              <el-form-item label="短信应用 ID（SDKAppID）">
+                <el-input v-model="sms.tencentSmsSdkAppId" placeholder="如：1400000000" />
+              </el-form-item>
+              <el-form-item label="短信签名">
+                <el-input v-model="sms.tencentSignName" placeholder="请输入已审核通过的短信签名" />
+              </el-form-item>
+              <el-form-item label="模板 ID">
+                <el-input v-model="sms.tencentTemplateId" placeholder="如：123456" />
+                <div class="form-tip">验证码会作为模板的第一个参数传入，即 {1}</div>
+              </el-form-item>
+              <el-form-item label="Endpoint">
+                <el-input v-model="sms.tencentEndpoint" placeholder="sms.tencentcloudapi.com" />
+              </el-form-item>
+              <el-form-item label="Region">
+                <el-input v-model="sms.tencentRegion" placeholder="ap-guangzhou" />
+              </el-form-item>
+            </template>
           </div>
         </el-form>
         <div class="section-actions">
@@ -518,14 +569,26 @@ const email = reactive<Record<string, any>>({
 })
 
 const sms = reactive<Record<string, any>>({
+  mode: 'auto',
   provider: 'aliyun',
   aliyunAccessKeyId: '',
   aliyunAccessKeySecret: '',
   aliyunSignName: '',
   aliyunTemplateCode: '',
   aliyunEndpoint: 'dysmsapi.aliyuncs.com',
-  aliyunRegionId: 'cn-hangzhou'
+  aliyunRegionId: 'cn-hangzhou',
+  tencentSecretId: '',
+  tencentSecretKey: '',
+  tencentSmsSdkAppId: '',
+  tencentSignName: '',
+  tencentTemplateId: '',
+  tencentEndpoint: 'sms.tencentcloudapi.com',
+  tencentRegion: 'ap-guangzhou'
 })
+const smsEditingProvider = ref<'aliyun' | 'tencent'>('aliyun')
+const smsPrimaryProviderLabel = computed(() => sms.provider === 'tencent' ? '腾讯云' : '阿里云')
+const smsBackupProviderLabel = computed(() => sms.provider === 'tencent' ? '阿里云' : '腾讯云')
+const visibleSmsProvider = computed(() => sms.mode === 'auto' ? smsEditingProvider.value : sms.provider)
 
 const testEmailForm = reactive({
   toEmail: '',
@@ -622,11 +685,15 @@ async function loadSms() {
     if (data && typeof data === 'object') {
       const cfg = data.sms || data
       Object.assign(sms, {
-        provider: 'aliyun',
         aliyunEndpoint: 'dysmsapi.aliyuncs.com',
         aliyunRegionId: 'cn-hangzhou',
-        ...cfg
+        tencentEndpoint: 'sms.tencentcloudapi.com',
+        tencentRegion: 'ap-guangzhou',
+        ...cfg,
+        mode: cfg.mode === 'manual' ? 'manual' : 'auto',
+        provider: cfg.provider === 'tencent' ? 'tencent' : 'aliyun'
       })
+      smsEditingProvider.value = sms.provider
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载短信配置失败')
@@ -734,8 +801,16 @@ async function saveEmail() {
 }
 
 async function saveSms() {
-  if (sms.provider === 'aliyun' && (!sms.aliyunSignName || !sms.aliyunTemplateCode)) {
+  const needsAliyun = sms.mode === 'auto' || sms.provider === 'aliyun'
+  const needsTencent = sms.mode === 'auto' || sms.provider === 'tencent'
+  if (needsAliyun && (!sms.aliyunSignName || !sms.aliyunTemplateCode)) {
     ElMessage.warning('请填写阿里云短信签名和模板 Code')
+    smsEditingProvider.value = 'aliyun'
+    return
+  }
+  if (needsTencent && (!sms.tencentSmsSdkAppId || !sms.tencentSignName || !sms.tencentTemplateId)) {
+    ElMessage.warning('请填写腾讯云短信应用 ID、短信签名和模板 ID')
+    smsEditingProvider.value = 'tencent'
     return
   }
   savingSms.value = true

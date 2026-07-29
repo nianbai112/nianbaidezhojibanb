@@ -27,6 +27,20 @@ type LoginMetaInput = {
   method?: string;
 };
 
+type SmsProvider = 'aliyun' | 'tencent';
+
+type SmsSendState = {
+  attemptedProviders: SmsProvider[];
+  lastProvider: SmsProvider;
+  deliveryUnknown: boolean;
+};
+
+type SmsSendResult = {
+  provider: SmsProvider;
+  attemptedProviders: SmsProvider[];
+  deliveryUnknown: boolean;
+};
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -558,9 +572,6 @@ export class AuthService {
 
   async sendPhoneLoginCode(dto: { phone?: string; mobile?: string }, ip?: string) {
     const phone = this.normalizePhone(dto.phone || dto.mobile);
-    const code = this.isProduction
-      ? String(crypto.randomInt(100000, 1000000))
-      : String(this.config.get('DEV_PHONE_LOGIN_CODE') || '123456').slice(0, 6).padStart(6, '0');
     const key = `phone_login:code:${phone}`;
     const ipKey = `phone_login:ip:${this.compactIp(ip) || 'unknown'}`;
     const throttleKey = `phone_login:cooldown:${phone}`;
@@ -585,11 +596,68 @@ export class AuthService {
       // Redis 不可用时仍允许本地测试验证码走内存。
     }
 
-    await this.storePhoneCode(key, code);
+    const smsConfig = await this.getSmsConfig();
+    const existingCode = await this.readPhoneCode(key);
+    const previousState = existingCode ? await this.readPhoneSmsState(phone) : null;
+    const automatic = smsConfig.mode === 'auto';
+    if (automatic && previousState?.attemptedProviders.length === 2) {
+      throw new BadRequestException('本验证码已通过双通道发送，请检查垃圾短信或五分钟后重试');
+    }
+
+    const reuseExisting = automatic && !!existingCode && !!previousState;
+    const code = reuseExisting
+      ? existingCode
+      : this.isProduction
+        ? String(crypto.randomInt(100000, 1000000))
+        : String(this.config.get('DEV_PHONE_LOGIN_CODE') || '123456').slice(0, 6).padStart(6, '0');
+    const previousAttempts = reuseExisting ? previousState.attemptedProviders : [];
+    const resendProvider = previousAttempts.length === 1
+      ? this.getBackupSmsProvider(previousAttempts[0])
+      : undefined;
+
+    if (!reuseExisting) {
+      await this.storePhoneCode(key, code);
+    }
     try {
-      await this.sendSmsCode(phone, code);
+      const sendResult = await this.sendSmsCode(phone, code, {
+        provider: resendProvider,
+        allowFallback: previousAttempts.length === 0,
+        smsConfig,
+      });
+      if (automatic) {
+        const attemptedProviders = Array.from(new Set([
+          ...previousAttempts,
+          ...sendResult.attemptedProviders,
+        ])) as SmsProvider[];
+        await this.storePhoneSmsState(phone, {
+          attemptedProviders,
+          lastProvider: sendResult.provider,
+          deliveryUnknown: sendResult.deliveryUnknown,
+        });
+      } else {
+        await this.deletePhoneSmsState(phone);
+      }
     } catch (error) {
-      await this.deletePhoneCode(key);
+      const failedAttempts = Array.isArray((error as any)?.smsAttemptedProviders)
+        ? (error as any).smsAttemptedProviders.filter((item: unknown): item is SmsProvider => item === 'aliyun' || item === 'tencent')
+        : [];
+      if (reuseExisting && automatic && failedAttempts.length) {
+        const attemptedProviders = Array.from(new Set([
+          ...previousAttempts,
+          ...failedAttempts,
+        ])) as SmsProvider[];
+        await this.storePhoneSmsState(phone, {
+          attemptedProviders,
+          lastProvider: failedAttempts[failedAttempts.length - 1],
+          deliveryUnknown: false,
+        });
+      } else if (!reuseExisting) {
+        await Promise.all([
+          this.deletePhoneCode(key),
+          this.deletePhoneCode(throttleKey),
+          this.deletePhoneSmsState(phone),
+        ]);
+      }
       throw error;
     }
     return {
@@ -1640,6 +1708,54 @@ export class AuthService {
     }
   }
 
+  private async readPhoneCode(key: string) {
+    try {
+      return (await this.redis.get(key)) || '';
+    } catch {
+      const memory = this.memoryPhoneCodeStore.get(key);
+      return memory && Date.now() <= memory.expiresAt ? memory.code : '';
+    }
+  }
+
+  private getPhoneSmsStateKey(phone: string) {
+    return `phone_login:sms_state:${phone}`;
+  }
+
+  private async readPhoneSmsState(phone: string): Promise<SmsSendState | null> {
+    try {
+      const raw = await this.redis.get(this.getPhoneSmsStateKey(phone));
+      if (!raw) return null;
+      const value = JSON.parse(raw) as Partial<SmsSendState>;
+      const attemptedProviders = Array.isArray(value.attemptedProviders)
+        ? value.attemptedProviders.filter((item): item is SmsProvider => item === 'aliyun' || item === 'tencent')
+        : [];
+      if (!attemptedProviders.length || (value.lastProvider !== 'aliyun' && value.lastProvider !== 'tencent')) return null;
+      return {
+        attemptedProviders: Array.from(new Set(attemptedProviders)),
+        lastProvider: value.lastProvider,
+        deliveryUnknown: value.deliveryUnknown === true,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async storePhoneSmsState(phone: string, state: SmsSendState) {
+    try {
+      await this.redis.set(this.getPhoneSmsStateKey(phone), JSON.stringify(state), this.PHONE_CODE_TTL);
+    } catch (error: any) {
+      this.logger.error(`保存短信发送通道状态失败: ${error?.message || error}`);
+    }
+  }
+
+  private async deletePhoneSmsState(phone: string) {
+    try {
+      await this.redis.del(this.getPhoneSmsStateKey(phone));
+    } catch {
+      // 验证码仍由 Redis 有效期兜底，通道状态清理失败不影响登录。
+    }
+  }
+
   private async deletePhoneCode(key: string) {
     this.memoryPhoneCodeStore.delete(key);
     try {
@@ -1676,12 +1792,14 @@ export class AuthService {
         // ignore
       }
     }
+    await this.deletePhoneSmsState(phone);
   }
 
   private async getSmsConfig() {
     const saved = await this.prisma.config.findUnique({ where: { key: 'sms' } }).catch(() => null);
     const value = ((saved?.value || {}) as Record<string, any>).sms || saved?.value || {};
     return {
+      mode: String(value.mode || 'auto').trim().toLowerCase() === 'manual' ? 'manual' : 'auto',
       provider: String(value.provider || this.config.get('SMS_PROVIDER') || '').trim().toLowerCase(),
       aliyunAccessKeyId: String(value.aliyunAccessKeyId || this.config.get('ALIYUN_SMS_ACCESS_KEY_ID') || '').trim(),
       aliyunAccessKeySecret: String(value.aliyunAccessKeySecret || this.config.get('ALIYUN_SMS_ACCESS_KEY_SECRET') || '').trim(),
@@ -1689,25 +1807,100 @@ export class AuthService {
       aliyunTemplateCode: String(value.aliyunTemplateCode || this.config.get('ALIYUN_SMS_TEMPLATE_CODE') || '').trim(),
       aliyunEndpoint: String(value.aliyunEndpoint || this.config.get('ALIYUN_SMS_ENDPOINT') || 'dysmsapi.aliyuncs.com').trim(),
       aliyunRegionId: String(value.aliyunRegionId || this.config.get('ALIYUN_SMS_REGION_ID') || 'cn-hangzhou').trim(),
+      tencentSecretId: String(value.tencentSecretId || this.config.get('TENCENT_SMS_SECRET_ID') || '').trim(),
+      tencentSecretKey: String(value.tencentSecretKey || this.config.get('TENCENT_SMS_SECRET_KEY') || '').trim(),
+      tencentSmsSdkAppId: String(value.tencentSmsSdkAppId || this.config.get('TENCENT_SMS_SDK_APP_ID') || '').trim(),
+      tencentSignName: String(value.tencentSignName || this.config.get('TENCENT_SMS_SIGN_NAME') || '').trim(),
+      tencentTemplateId: String(value.tencentTemplateId || this.config.get('TENCENT_SMS_TEMPLATE_ID') || '').trim(),
+      tencentEndpoint: String(value.tencentEndpoint || this.config.get('TENCENT_SMS_ENDPOINT') || 'sms.tencentcloudapi.com').trim(),
+      tencentRegion: String(value.tencentRegion || this.config.get('TENCENT_SMS_REGION') || 'ap-guangzhou').trim(),
     };
   }
 
-  private async sendSmsCode(phone: string, code: string) {
-    if (!this.isProduction) {
-      this.logger.warn(`本地测试手机号验证码 ${phone}: ${code}`);
-      return;
-    }
-    const smsConfig = await this.getSmsConfig();
-    const provider = smsConfig.provider;
-    if (!provider) {
-      throw new BadRequestException('短信服务未配置，请联系管理员');
-    }
-    if (provider === 'aliyun' || provider === 'alicloud') {
+  private getBackupSmsProvider(provider: SmsProvider): SmsProvider {
+    return provider === 'aliyun' ? 'tencent' : 'aliyun';
+  }
+
+  private isSmsDeliveryUnknown(error: any) {
+    if (error?.smsDeliveryUnknown === true) return true;
+    const code = String(error?.code || error?.name || '').toUpperCase();
+    const message = String(error?.message || '').toLowerCase();
+    return ['ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED', 'EPIPE'].includes(code)
+      || /request timeout|timed out|socket hang up|connection reset/.test(message);
+  }
+
+  private markSmsDeliveryUnknown(error: BadRequestException) {
+    (error as any).smsDeliveryUnknown = true;
+    return error;
+  }
+
+  private markSmsAttemptedProviders(error: any, attemptedProviders: SmsProvider[]) {
+    error.smsAttemptedProviders = [...attemptedProviders];
+    return error;
+  }
+
+  private normalizeSmsProvider(provider: string): SmsProvider {
+    if (provider === 'aliyun' || provider === 'alicloud') return 'aliyun';
+    if (provider === 'tencent') return 'tencent';
+    throw new BadRequestException('短信服务提供商暂不支持，请在后台选择阿里云或腾讯云');
+  }
+
+  private async sendSmsByProvider(
+    provider: SmsProvider,
+    phone: string,
+    code: string,
+    smsConfig: Awaited<ReturnType<AuthService['getSmsConfig']>>,
+  ) {
+    if (provider === 'aliyun') {
       await this.sendAliyunSmsCode(phone, code, smsConfig);
       return;
     }
-    this.logger.warn(`SMS_PROVIDER=${provider} 暂未接入短信发送实现，手机号 ${phone} 的验证码未发送`);
-    throw new BadRequestException('短信服务提供商暂不支持，请配置 SMS_PROVIDER=aliyun');
+    await this.sendTencentSmsCode(phone, code, smsConfig);
+  }
+
+  private async sendSmsCode(
+    phone: string,
+    code: string,
+    options: {
+      provider?: SmsProvider;
+      allowFallback?: boolean;
+      smsConfig?: Awaited<ReturnType<AuthService['getSmsConfig']>>;
+    } = {},
+  ): Promise<SmsSendResult> {
+    if (!this.isProduction) {
+      this.logger.warn(`本地测试手机号验证码 ${phone}: ${code}`);
+      return { provider: 'aliyun', attemptedProviders: [], deliveryUnknown: false };
+    }
+    const smsConfig = options.smsConfig || await this.getSmsConfig();
+    if (!smsConfig.provider && !options.provider) {
+      throw new BadRequestException('短信服务未配置，请联系管理员');
+    }
+    const primary = options.provider || this.normalizeSmsProvider(smsConfig.provider);
+    const providers: SmsProvider[] = [primary];
+    if (smsConfig.mode === 'auto' && options.allowFallback !== false) {
+      providers.push(this.getBackupSmsProvider(primary));
+    }
+    const attemptedProviders: SmsProvider[] = [];
+
+    for (const provider of providers) {
+      attemptedProviders.push(provider);
+      try {
+        await this.sendSmsByProvider(provider, phone, code, smsConfig);
+        return { provider, attemptedProviders, deliveryUnknown: false };
+      } catch (error: any) {
+        if (this.isSmsDeliveryUnknown(error)) {
+          return { provider, attemptedProviders, deliveryUnknown: true };
+        }
+        if (provider === providers[providers.length - 1]) {
+          const finalError = error instanceof BadRequestException
+            ? error
+            : new BadRequestException(error?.message || '短信发送失败');
+          throw this.markSmsAttemptedProviders(finalError, attemptedProviders);
+        }
+        this.logger.warn(`${provider === 'aliyun' ? '阿里云' : '腾讯云'}短信明确失败，尝试备用通道`);
+      }
+    }
+    throw new BadRequestException('短信发送失败');
   }
 
   private async sendAliyunSmsCode(phone: string, code: string, smsConfig: Awaited<ReturnType<AuthService['getSmsConfig']>>) {
@@ -1756,7 +1949,64 @@ export class AuthService {
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(`阿里云短信发送异常 phone=${phone}: ${error?.message || error}`);
-      throw new BadRequestException('阿里云短信发送失败，请检查 AccessKey、签名、模板和账户余额');
+      const wrapped = new BadRequestException('阿里云短信发送失败，请检查 AccessKey、签名、模板和账户余额');
+      throw this.isSmsDeliveryUnknown(error) ? this.markSmsDeliveryUnknown(wrapped) : wrapped;
+    }
+  }
+
+  private async sendTencentSmsCode(phone: string, code: string, smsConfig: Awaited<ReturnType<AuthService['getSmsConfig']>>) {
+    const secretId = smsConfig.tencentSecretId;
+    const secretKey = smsConfig.tencentSecretKey;
+    const smsSdkAppId = smsConfig.tencentSmsSdkAppId;
+    const signName = smsConfig.tencentSignName;
+    const templateId = smsConfig.tencentTemplateId;
+    const endpoint = smsConfig.tencentEndpoint;
+    const region = smsConfig.tencentRegion;
+
+    const missing: string[] = [];
+    if (!secretId) missing.push('TENCENT_SMS_SECRET_ID');
+    if (!secretKey) missing.push('TENCENT_SMS_SECRET_KEY');
+    if (!smsSdkAppId) missing.push('TENCENT_SMS_SDK_APP_ID');
+    if (!signName) missing.push('TENCENT_SMS_SIGN_NAME');
+    if (!templateId) missing.push('TENCENT_SMS_TEMPLATE_ID');
+    if (missing.length) {
+      throw new BadRequestException(`腾讯云短信配置不完整：缺少 ${missing.join(', ')}`);
+    }
+
+    try {
+      // 延迟加载便于在测试中完全替换 SDK，避免任何外部短信请求。
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { sms } = require('tencentcloud-sdk-nodejs-sms');
+      const client = new sms.v20210111.Client({
+        credential: { secretId, secretKey },
+        region,
+        profile: {
+          httpProfile: {
+            endpoint,
+            reqMethod: 'POST',
+            reqTimeout: 10,
+          },
+        },
+      });
+      const response = await client.SendSms({
+        PhoneNumberSet: [phone.startsWith('+') ? phone : `+86${phone}`],
+        SmsSdkAppId: smsSdkAppId,
+        SignName: signName,
+        TemplateId: templateId,
+        TemplateParamSet: [code],
+      });
+      const body = response || {};
+      const status = body.SendStatusSet?.[0];
+      if (status?.Code !== 'Ok') {
+        this.logger.warn(`腾讯云短信发送失败 code=${status?.Code || ''} message=${status?.Message || ''}`);
+        throw new BadRequestException(status?.Message || '腾讯云短信发送失败');
+      }
+      this.logger.log(`腾讯云短信验证码已发送 serialNo=${status.SerialNo || ''} requestId=${body.RequestId || ''}`);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(`腾讯云短信发送异常: ${error?.message || error}`);
+      const wrapped = new BadRequestException('腾讯云短信发送失败，请检查 SecretId、SecretKey、签名、模板和账户余额');
+      throw this.isSmsDeliveryUnknown(error) ? this.markSmsDeliveryUnknown(wrapped) : wrapped;
     }
   }
 

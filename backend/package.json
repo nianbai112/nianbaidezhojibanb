@@ -70,6 +70,7 @@
     "sharp": "^0.35.3",
     "socket.io": "^4.8.3",
     "speakeasy": "^2.0.0",
+    "tencentcloud-sdk-nodejs-sms": "^4.1.240",
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1",
     "ws": "^8.21.1"

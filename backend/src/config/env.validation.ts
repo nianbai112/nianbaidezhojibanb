@@ -99,6 +99,13 @@ const minimalSchema = Joi.object({
   ALIYUN_SMS_TEMPLATE_CODE: Joi.string().optional().allow('').default(''),
   ALIYUN_SMS_ENDPOINT: Joi.string().optional().allow('').default('dysmsapi.aliyuncs.com'),
   ALIYUN_SMS_REGION_ID: Joi.string().optional().allow('').default('cn-hangzhou'),
+  TENCENT_SMS_SECRET_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SECRET_KEY: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SDK_APP_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SIGN_NAME: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_TEMPLATE_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_ENDPOINT: Joi.string().optional().allow('').default('sms.tencentcloudapi.com'),
+  TENCENT_SMS_REGION: Joi.string().optional().allow('').default('ap-guangzhou'),
   // 以下在 wizard 模式下全部 optional
   WX_PAY_MCHID: Joi.string().optional().allow(''),
   WX_PAY_APIV3_KEY: Joi.string().optional().allow(''),
@@ -198,6 +205,13 @@ const fullSchema = Joi.object({
   ALIYUN_SMS_TEMPLATE_CODE: Joi.string().optional().allow('').default(''),
   ALIYUN_SMS_ENDPOINT: Joi.string().optional().allow('').default('dysmsapi.aliyuncs.com'),
   ALIYUN_SMS_REGION_ID: Joi.string().optional().allow('').default('cn-hangzhou'),
+  TENCENT_SMS_SECRET_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SECRET_KEY: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SDK_APP_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_SIGN_NAME: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_TEMPLATE_ID: Joi.string().optional().allow('').default(''),
+  TENCENT_SMS_ENDPOINT: Joi.string().optional().allow('').default('sms.tencentcloudapi.com'),
+  TENCENT_SMS_REGION: Joi.string().optional().allow('').default('ap-guangzhou'),
 
   // WeChat Pay
   // 支付配置可由后台「第三方配置」维护，env 仅作为兜底。
