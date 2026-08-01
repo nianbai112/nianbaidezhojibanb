@@ -100,12 +100,13 @@ function booleanValue(value: unknown, fallback: boolean) {
 export function normalizeCampusProjectMetadata(value: unknown): Partial<CampusProjectMetadata> {
   if (!value || typeof value !== 'object') return {};
   const input = value as Record<string, unknown>;
-  const officialNumber = Number(input.officialNumber);
-  if (!Number.isInteger(officialNumber) || officialNumber <= 0) return {};
+  const parsedNumber = Number(input.officialNumber);
+  const officialNumber = Number.isInteger(parsedNumber) && parsedNumber > 0 ? parsedNumber : undefined;
+  const managed = officialNumber !== undefined || Boolean(input.visibilityScope || input.constructionStatus);
+  if (!managed) return {};
 
-  const catalogItem = catalogByNumber.get(officialNumber);
-  const normalized: CampusProjectMetadata = {
-    officialNumber,
+  const catalogItem = officialNumber === undefined ? undefined : catalogByNumber.get(officialNumber);
+  const normalized: Partial<CampusProjectMetadata> = {
     officialName: String(input.officialName ?? catalogItem?.officialName ?? '').trim(),
     engineeringAlias: String(input.engineeringAlias ?? catalogItem?.engineeringAlias ?? '').trim(),
     phase: input.phase === 'future' || input.phase === 'phase1'
@@ -133,6 +134,7 @@ export function normalizeCampusProjectMetadata(value: unknown): Partial<CampusPr
       ? input.sourceConfidence
       : (catalogItem?.sourceConfidence ?? 'official_signage_only'),
   };
+  if (officialNumber !== undefined) normalized.officialNumber = officialNumber;
   return normalized;
 }
 

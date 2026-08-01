@@ -617,7 +617,7 @@ export class CampusMapImportService implements OnModuleInit {
       const properties = feature?.properties || {};
       const layer = String(properties.layer || properties.Layer || properties.category || 'geojson');
       const title = String(properties.title || properties.name || properties.Text || `对象 ${index + 1}`);
-      const project = Number(properties.officialNumber) > 0
+      const project = Number(properties.officialNumber) > 0 || properties.visibilityScope || properties.constructionStatus
         ? normalizeCampusProjectMetadata(properties)
         : undefined;
       const geometry = feature?.geometry;

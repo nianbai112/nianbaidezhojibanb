@@ -120,6 +120,35 @@ describe('CampusMapImportService', () => {
     }));
   });
 
+  it('preserves private review metadata before an official project is assigned', () => {
+    const service = new CampusMapImportService(createPrisma() as any);
+    const result = service.convertGeoJsonToDraft({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: {
+          title: '1号院',
+          layer: 'labels',
+          constructionStatus: 'built',
+          visibilityScope: 'phase1_review',
+          geometryStatus: 'unmatched',
+          searchable: false,
+          navigable: false,
+        },
+        geometry: { type: 'Point', coordinates: [0, 0] },
+      }],
+    });
+
+    expect(result.draft.pois[0]).toEqual(expect.objectContaining({
+      visibilityScope: 'phase1_review',
+      constructionStatus: 'built',
+      geometryStatus: 'unmatched',
+      searchable: false,
+      navigable: false,
+    }));
+    expect(result.draft.pois[0].officialNumber).toBeUndefined();
+  });
+
   it('stores uploaded import jobs in the campus map import config group', async () => {
     const prisma = createPrisma();
     prisma.config.findUnique.mockResolvedValue(null);
