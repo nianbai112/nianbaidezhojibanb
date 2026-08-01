@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
+import { CampusProjectMetadata, normalizeCampusProjectMetadata } from './campus-map-project-catalog';
 
 const execFileAsync = promisify(childProcess.execFile);
 const IMPORT_GROUP = 'campus_map_import';
@@ -20,6 +21,7 @@ type RawCadFeature = {
   layer: string;
   title?: string;
   points: CadPoint[];
+  project?: Partial<CampusProjectMetadata>;
 };
 
 type ImportDraft = {
@@ -615,14 +617,17 @@ export class CampusMapImportService implements OnModuleInit {
       const properties = feature?.properties || {};
       const layer = String(properties.layer || properties.Layer || properties.category || 'geojson');
       const title = String(properties.title || properties.name || properties.Text || `对象 ${index + 1}`);
+      const project = Number(properties.officialNumber) > 0
+        ? normalizeCampusProjectMetadata(properties)
+        : undefined;
       const geometry = feature?.geometry;
       if (!geometry) return;
       if (geometry.type === 'Point' && Array.isArray(geometry.coordinates)) {
-        raw.push({ entityType: 'GEOJSON_POINT', kind: 'point', layer, title, points: [{ x: Number(geometry.coordinates[0]), y: Number(geometry.coordinates[1]) }] });
+        raw.push({ entityType: 'GEOJSON_POINT', kind: 'point', layer, title, points: [{ x: Number(geometry.coordinates[0]), y: Number(geometry.coordinates[1]) }], project });
       } else if (geometry.type === 'LineString') {
         raw.push({ entityType: 'GEOJSON_LINE', kind: 'line', layer, title, points: this.coordinatesToPoints(geometry.coordinates) });
       } else if (geometry.type === 'Polygon') {
-        raw.push({ entityType: 'GEOJSON_POLYGON', kind: 'polygon', layer, title, points: this.closeIfNeeded(this.coordinatesToPoints(geometry.coordinates?.[0] || []), true) });
+        raw.push({ entityType: 'GEOJSON_POLYGON', kind: 'polygon', layer, title, points: this.closeIfNeeded(this.coordinatesToPoints(geometry.coordinates?.[0] || []), true), project });
       }
     });
     return raw.filter((item) => item.points.length);
@@ -673,6 +678,7 @@ export class CampusMapImportService implements OnModuleInit {
           color: semantic.color,
           sourceLayer: feature.layer,
           points: feature.points.slice(0, -1).map(toRatio),
+          ...feature.project,
         });
         addLayerStat(feature.layer, role.role, true);
       } else if (feature.kind === 'line' && feature.points.length >= 2) {
@@ -698,6 +704,7 @@ export class CampusMapImportService implements OnModuleInit {
           color: semantic.color,
           sourceLayer: feature.layer,
           ...toRatio(feature.points[0]),
+          ...feature.project,
         });
         addLayerStat(feature.layer, role.role, true);
       } else {

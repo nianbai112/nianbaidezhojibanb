@@ -82,6 +82,44 @@ describe('CampusMapImportService', () => {
     expect(result.draft.mapHeight).toBe(100);
   });
 
+  it('preserves official project metadata in imported GeoJSON features', () => {
+    const service = new CampusMapImportService(createPrisma() as any);
+    const result = service.convertGeoJsonToDraft({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: {
+          title: '天枢楼',
+          layer: 'phase1_buildings',
+          officialNumber: 3,
+          officialName: '天枢楼',
+          phase: 'phase1',
+          constructionStatus: 'built',
+          visibilityScope: 'phase1_active',
+          semanticType: 'building',
+          searchable: true,
+          navigable: true,
+          geometryStatus: 'verified_polygon',
+          sourceConfidence: 'official_signage_and_cad',
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]]],
+        },
+      }],
+    });
+
+    expect(result.draft.areas[0]).toEqual(expect.objectContaining({
+      officialNumber: 3,
+      officialName: '天枢楼',
+      constructionStatus: 'built',
+      visibilityScope: 'phase1_active',
+      searchable: true,
+      navigable: true,
+      geometryStatus: 'verified_polygon',
+    }));
+  });
+
   it('stores uploaded import jobs in the campus map import config group', async () => {
     const prisma = createPrisma();
     prisma.config.findUnique.mockResolvedValue(null);
