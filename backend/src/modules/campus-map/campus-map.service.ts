@@ -1,6 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../../common/services/prisma.service';
+import {
+  CAMPUS_PROJECT_CATALOG,
+  isPublicCampusProject,
+  validateCampusProjectCollection,
+} from './campus-map-project-catalog';
 
 const GLOBAL_REGION_ID = 'global';
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
@@ -10,6 +15,10 @@ const MAX_INLINE_FEATURES = 20_000;
 @Injectable()
 export class CampusMapService {
   constructor(private readonly prisma: PrismaService) {}
+
+  getProjectCatalog() {
+    return CAMPUS_PROJECT_CATALOG.map((item) => ({ ...item }));
+  }
 
   async getActiveMap(regionId?: string) {
     const requestedRegionId = this.normalizeRegionId(regionId);
@@ -51,7 +60,7 @@ export class CampusMapService {
     if (!regionRecord) {
       return this.disabledConfig(normalizedRegionId, 'not_configured');
     }
-    return this.toPublicConfig(regionRecord, normalizedRegionId, normalizedRegionId);
+    return this.toPublicConfig(regionRecord, normalizedRegionId, normalizedRegionId, false);
   }
 
   async saveDraft(
@@ -118,6 +127,10 @@ export class CampusMapService {
       const manifest = this.asRecord(draft.manifest);
       if (!manifest) throw new BadRequestException('校园地图草稿内容无效');
       const stats = this.manifestStats(manifest);
+      const projectErrors = validateCampusProjectCollection(this.inlineFeatures(manifest));
+      if (projectErrors.length) {
+        throw new BadRequestException(projectErrors.join('；'));
+      }
       const numbered = await tx.campusMap.update({
         where: { id: map.id },
         data: { versionCounter: { increment: 1 }, updatedBy: adminId },
@@ -309,7 +322,7 @@ export class CampusMapService {
 
   private adminManifest(value: Record<string, any>, regionId: string) {
     if (value.enabled === false) return this.disabledConfig(regionId, 'draft_disabled', regionId, value);
-    return this.toPublicConfig({ isEnabled: true, value, updatedAt: value.updatedAt }, regionId, regionId);
+    return this.toPublicConfig({ isEnabled: true, value, updatedAt: value.updatedAt }, regionId, regionId, false);
   }
 
   private withWorkflow(value: Record<string, any>, map: any, overrides: Record<string, any> = {}): any {
@@ -368,16 +381,20 @@ export class CampusMapService {
     });
   }
 
-  private toPublicConfig(record: any, requestedRegionId: string, sourceRegionId: string) {
+  private toPublicConfig(record: any, requestedRegionId: string, sourceRegionId: string, publicOnly = true) {
     if (!record?.isEnabled) {
       return this.disabledConfig(requestedRegionId, 'disabled', sourceRegionId);
     }
     const value = this.asRecord(record.value) || {};
     if (value.enabled === false) {
-      return this.disabledConfig(requestedRegionId, 'disabled', sourceRegionId, value);
+      const disabledValue = publicOnly
+        ? { ...value, layers: this.publicProjectLayers(this.normalizeLayers(value.layers)) }
+        : value;
+      return this.disabledConfig(requestedRegionId, 'disabled', sourceRegionId, disabledValue);
     }
 
-    const layers = this.normalizeLayers(value.layers);
+    const normalizedLayers = this.normalizeLayers(value.layers);
+    const layers = publicOnly ? this.publicProjectLayers(normalizedLayers) : normalizedLayers;
     const imageMap = this.normalizeImageMap(value.imageMap || value.backgroundImage || value.baseImage);
     if (!layers.length && !imageMap) {
       return this.disabledConfig(requestedRegionId, 'empty_layers', sourceRegionId, value);
@@ -458,6 +475,27 @@ export class CampusMapService {
       layerCount: layers.length,
       checksum: createHash('sha256').update(canonicalJson).digest('hex'),
     };
+  }
+
+  private inlineFeatures(manifest: Record<string, any>) {
+    return this.normalizeLayers(manifest.layers)
+      .flatMap((layer: any) => Array.isArray(layer.inlineData?.features) ? layer.inlineData.features : []);
+  }
+
+  private publicProjectLayers(layers: any[]) {
+    return layers.map((layer) => {
+      const inlineData = this.asRecord(layer.inlineData);
+      if (!inlineData || !Array.isArray(inlineData.features)) return layer;
+      const features = inlineData.features.filter((feature: any) => {
+        const properties = this.asRecord(feature?.properties) || {};
+        return isPublicCampusProject(properties);
+      });
+      return {
+        ...layer,
+        inlineData: { ...inlineData, features },
+        featureCount: features.length,
+      };
+    });
   }
 
   private canonicalize(value: any): any {

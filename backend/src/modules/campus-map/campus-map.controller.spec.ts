@@ -17,6 +17,7 @@ const mockAdminGuard = { canActivate: jest.fn().mockResolvedValue(true) };
 const mockAdminPermissionGuard = { canActivate: jest.fn().mockResolvedValue(true) };
 const mockService = {
   getActiveMap: jest.fn(),
+  getProjectCatalog: jest.fn(),
   getRegionMap: jest.fn(),
   upsertRegionMap: jest.fn(),
   saveDraft: jest.fn(),
@@ -94,6 +95,20 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
 
     await controller.getActiveMap(undefined, 'region-2');
     expect(mockService.getActiveMap).toHaveBeenCalledWith('region-2');
+  });
+
+  it('后台官方项目目录返回 37 个条目', async () => {
+    mockService.getProjectCatalog.mockReturnValue(Array.from({ length: 37 }, (_, index) => ({
+      officialNumber: index + 1,
+    })));
+
+    const result = (controller as any).getProjectCatalog();
+
+    expect(result).toHaveLength(37);
+    expect(mockService.getProjectCatalog).toHaveBeenCalledTimes(1);
+    const proto = CampusMapController.prototype as any;
+    expect(Reflect.getMetadata('path', proto.getProjectCatalog)).toBe('admin/campus-map/project-catalog');
+    expect(Reflect.getMetadata('method', proto.getProjectCatalog)).toBe(RequestMethod.GET);
   });
 
   it.each([

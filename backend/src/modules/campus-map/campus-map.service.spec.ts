@@ -141,6 +141,119 @@ describe('CampusMapService', () => {
     expect(result).toMatchObject({ enabled: true, workflow: { activeVersion: 1, activeVersionId: 'version-1' } });
   });
 
+  it('rejects publishing a future searchable feature', async () => {
+    const prisma = makeTransactional();
+    prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1', regionId: 'region-1', versionCounter: 0 });
+    prisma.campusMapDraft.findUnique.mockResolvedValue({
+      id: 'draft-1',
+      mapId: 'map-1',
+      revision: 1,
+      manifest: {
+        enabled: true,
+        mapId: 'campus-map',
+        layers: [{
+          id: 'buildings',
+          inlineData: {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: {
+                officialNumber: 15,
+                officialName: '学生餐厅',
+                constructionStatus: 'under_construction',
+                visibilityScope: 'future_reference',
+                searchable: true,
+                navigable: false,
+                geometryStatus: 'verified_polygon',
+              },
+              geometry: { type: 'Polygon', coordinates: [] },
+            }],
+          },
+        }],
+      },
+    });
+    const service = new CampusMapService(prisma as any);
+
+    await expect(service.publishDraft('region-1')).rejects.toThrow('在建项目 15 不能开启搜索');
+    expect(prisma.campusMap.update).not.toHaveBeenCalled();
+    expect(prisma.campusMapVersion.create).not.toHaveBeenCalled();
+  });
+
+  it('removes review and future features from the active response', async () => {
+    const prisma = createPrisma();
+    const projectFeature = (officialNumber: number, properties: Record<string, any>) => ({
+      type: 'Feature',
+      properties: { officialNumber, officialName: `项目 ${officialNumber}`, ...properties },
+      geometry: { type: 'Point', coordinates: [106, 29] },
+    });
+    prisma.campusMap.findUnique.mockResolvedValue({
+      id: 'map-1',
+      regionId: 'region-1',
+      enabled: true,
+      activeVersionId: 'version-1',
+      activeVersion: {
+        id: 'version-1',
+        version: 1,
+        manifest: {
+          enabled: true,
+          mapId: 'campus-map',
+          layers: [{
+            id: 'buildings',
+            featureCount: 3,
+            inlineData: {
+              type: 'FeatureCollection',
+              features: [
+                projectFeature(3, { constructionStatus: 'built', visibilityScope: 'phase1_active', geometryStatus: 'verified_polygon' }),
+                projectFeature(4, { constructionStatus: 'built', visibilityScope: 'phase1_review', geometryStatus: 'unmatched' }),
+                projectFeature(15, { constructionStatus: 'under_construction', visibilityScope: 'future_reference', geometryStatus: 'unmatched' }),
+              ],
+            },
+          }],
+        },
+      },
+    });
+    const service = new CampusMapService(prisma as any);
+
+    const result = await service.getActiveMap('region-1');
+    const features = result.layers.flatMap((layer: any) => layer.inlineData?.features || []);
+
+    expect(features.map((feature: any) => feature.properties.officialNumber)).toEqual([3]);
+    expect(result.layers[0].featureCount).toBe(1);
+  });
+
+  it('keeps review and future features visible to authorized admin editing', async () => {
+    const prisma = createPrisma();
+    prisma.campusMap.findUnique.mockResolvedValue({
+      id: 'map-1',
+      regionId: 'region-1',
+      enabled: true,
+      draft: {
+        revision: 2,
+        manifest: {
+          enabled: true,
+          mapId: 'campus-map',
+          layers: [{
+            id: 'review',
+            inlineData: {
+              type: 'FeatureCollection',
+              features: [{
+                type: 'Feature',
+                properties: { visibilityScope: 'phase1_review', geometryStatus: 'unmatched' },
+                geometry: { type: 'Point', coordinates: [106, 29] },
+              }],
+            },
+          }],
+        },
+      },
+      activeVersion: null,
+    });
+    const service = new CampusMapService(prisma as any);
+
+    const result = await service.getRegionMap('region-1');
+
+    expect(result.layers[0].inlineData.features).toHaveLength(1);
+  });
+
   it('aborts publishing when the draft changes after it was read', async () => {
     const prisma = makeTransactional();
     prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1', regionId: 'region-1', versionCounter: 0 });

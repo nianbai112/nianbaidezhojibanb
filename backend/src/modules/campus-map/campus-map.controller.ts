@@ -26,6 +26,15 @@ export class CampusMapController {
     return this.service.getActiveMap(regionId || camelRegionId);
   }
 
+  @Get('admin/campus-map/project-catalog')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('region:view')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取校园官方项目目录' })
+  getProjectCatalog() {
+    return this.service.getProjectCatalog();
+  }
+
   @Get('admin/campus-map/converter/status')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('region:view')
