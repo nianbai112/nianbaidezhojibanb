@@ -1,3 +1,5 @@
+import { pickCampusProjectMetadata } from './campusProjectModel.mjs'
+
 const FALLBACK_LAYER_NAME = '未分层'
 
 export function cadFeatureRecords({ pois = [], areas = [], routes = [], calibrationPoints = [] } = {}) {
@@ -92,6 +94,7 @@ function cadFeatureRecord(kind, item = {}) {
     color: item.color || '',
     category: item.category || '',
     semanticType: item.semanticType || '',
+    ...pickCampusProjectMetadata(item),
     xRatio: item.xRatio,
     yRatio: item.yRatio,
     points: Array.isArray(item.points) ? item.points : [],

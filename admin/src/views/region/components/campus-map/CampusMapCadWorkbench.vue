@@ -4,6 +4,9 @@
 
     <div class="cad-toolbar">
       <button type="button" @click="fitView">适配</button>
+      <button type="button" @click="showFutureReference = !showFutureReference">
+        {{ showFutureReference ? '隐藏未来参考' : '显示未来参考' }}
+      </button>
       <span>{{ featureRecords.length }} 对象 / {{ layerRows.length }} 图层</span>
     </div>
 
@@ -40,6 +43,7 @@ import { Circle as CircleStyle, Fill, Stroke, Style, Text } from 'ol/style'
 import { defaults as defaultControls } from 'ol/control'
 import { defaults as defaultInteractions } from 'ol/interaction'
 import { cadFeatureRecords, cadLayerRows, isCadLayerVisible } from './cadWorkbenchModel.mjs'
+import { campusProjectStyle } from './campusProjectModel.mjs'
 
 type RatioPoint = {
   xRatio: number
@@ -76,6 +80,7 @@ const emit = defineEmits<{
 
 const mapRef = ref<HTMLElement>()
 const hiddenLayerKeys = ref(new Set<string>())
+const showFutureReference = ref(false)
 const source = new VectorSource()
 const projection = new Projection({
   code: 'CAD_RATIO',
@@ -133,6 +138,7 @@ watch(() => [
   props.draftAreaPoints,
   props.draftRoutePoints,
   hiddenLayerKeys.value,
+  showFutureReference.value,
 ], updateFeatures, { deep: true })
 
 watch(() => props.selectedId, () => {
@@ -150,6 +156,7 @@ function updateFeatures() {
   source.clear()
   featureRecords.value.forEach((record: any) => {
     if (!isCadLayerVisible(record.layer, hiddenLayerKeys.value)) return
+    if (record.visibilityScope === 'future_reference' && !showFutureReference.value) return
     const feature = createFeature(record)
     if (feature) source.addFeature(feature)
   })
@@ -178,6 +185,11 @@ function createFeature(record: any) {
     title: record.title,
     color: record.color,
     layer: record.layer,
+    officialNumber: record.officialNumber,
+    officialName: record.officialName,
+    semanticType: record.semanticType,
+    constructionStatus: record.constructionStatus,
+    visibilityScope: record.visibilityScope,
   })
   return feature
 }
@@ -237,12 +249,15 @@ function featureStyle(feature: any) {
   const selected = id && id === props.selectedId
   const color = feature.get('color') || (kind === 'route' ? '#f97316' : kind === 'calibration' ? '#dc2626' : '#2563eb')
   const width = selected ? 4 : 2
+  const semanticStyle = campusProjectStyle({ semanticType: feature.get('semanticType') })
+  const future = feature.get('visibilityScope') === 'future_reference'
+  const label = featureLabel(feature)
 
   if (kind === 'area' || kind === 'draftArea') {
     return new Style({
-      stroke: new Stroke({ color: selected ? '#111827' : color, width }),
-      fill: new Fill({ color: kind === 'draftArea' ? 'rgba(20, 184, 166, .16)' : 'rgba(37, 99, 235, .12)' }),
-      text: selected ? labelText(feature.get('title')) : undefined,
+      stroke: new Stroke({ color: selected ? '#111827' : future ? '#94A3B8' : semanticStyle.stroke || color, width, lineDash: future ? [8, 6] : undefined }),
+      fill: new Fill({ color: kind === 'draftArea' ? 'rgba(20, 184, 166, .16)' : future ? 'rgba(148, 163, 184, .10)' : semanticStyle.fill }),
+      text: label ? labelText(label) : undefined,
     })
   }
 
@@ -253,7 +268,7 @@ function featureStyle(feature: any) {
         width: kind === 'draftRoute' ? 3 : width + 1,
         lineDash: kind === 'draftRoute' ? [8, 8] : undefined,
       }),
-      text: selected ? labelText(feature.get('title')) : undefined,
+      text: selected ? labelText(label) : undefined,
     })
   }
 
@@ -263,8 +278,14 @@ function featureStyle(feature: any) {
       fill: new Fill({ color }),
       stroke: new Stroke({ color: '#ffffff', width: 2 }),
     }),
-    text: labelText(feature.get('title'), selected ? 18 : 14),
+    text: labelText(label, selected ? 18 : 14),
   })
+}
+
+function featureLabel(feature: any) {
+  const title = String(feature.get('officialName') || feature.get('title') || '')
+  const number = Number(feature.get('officialNumber'))
+  return Number.isInteger(number) && number > 0 ? `#${number} ${title}` : title
 }
 
 function labelText(title = '', offsetY = 14) {

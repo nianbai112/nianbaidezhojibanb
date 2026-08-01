@@ -10,11 +10,13 @@ async function run() {
 
   const records = cadFeatureRecords({
     pois: [{ id: 'poi-1', title: '图书馆', sourceLayer: '文字标注', xRatio: 0.2, yRatio: 0.3 }],
-    areas: [{ id: 'area-1', title: '教学楼', sourceLayer: '建筑', points: [{ xRatio: 0.1, yRatio: 0.1 }, { xRatio: 0.4, yRatio: 0.1 }, { xRatio: 0.4, yRatio: 0.4 }] }],
+    areas: [{ id: 'area-1', title: '天枢楼', sourceLayer: '建筑', officialNumber: 3, officialName: '天枢楼', visibilityScope: 'phase1_active', semanticType: 'building', points: [{ xRatio: 0.1, yRatio: 0.1 }, { xRatio: 0.4, yRatio: 0.1 }, { xRatio: 0.4, yRatio: 0.4 }] }],
     routes: [{ id: 'route-1', title: '主路', sourceLayer: '建筑', points: [{ xRatio: 0.1, yRatio: 0.5 }, { xRatio: 0.8, yRatio: 0.5 }] }],
   })
 
   assert.deepEqual(records.map((item) => `${item.kind}:${item.id}`), ['area:area-1', 'route:route-1', 'poi:poi-1'])
+  assert.equal(records[0].officialNumber, 3)
+  assert.equal(records[0].visibilityScope, 'phase1_active')
 
   const layers = cadLayerRows(records)
   assert.equal(layers[0].name, '建筑')

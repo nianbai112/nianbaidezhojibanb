@@ -757,6 +757,10 @@ export async function fetchCampusMapConverterStatus() {
   return request.get('/admin/campus-map/converter/status')
 }
 
+export async function fetchCampusMapProjectCatalog() {
+  return request.get('/admin/campus-map/project-catalog')
+}
+
 export async function saveCampusMapConverterConfig(data: { converterPath?: string | null }) {
   return request.put('/admin/campus-map/converter', data)
 }

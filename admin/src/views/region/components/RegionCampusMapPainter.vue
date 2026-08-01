@@ -161,6 +161,7 @@
         <CampusMapInspector
           :selected-editable-item="selectedEditableItem"
           :semantic-categories="semanticCategories"
+          :project-catalog="projectCatalog"
           :editor-mode="editorMode"
           :pois="pois"
           :areas="areas"
@@ -169,6 +170,7 @@
           :format-lng-lat="formatLngLat"
           @clear-selection="selectedId = ''"
           @sync-semantic="syncSelectedSemantic"
+          @assign-project="handleAssignProject"
           @remove-poi="removePoi"
           @remove-area="removeArea"
           @remove-route="removeRoute"
@@ -293,6 +295,7 @@ import {
   deleteRegionCampusMapImport,
   disableRegionCampusMap,
   fetchCampusMapConverterStatus,
+  fetchCampusMapProjectCatalog,
   fetchAmapRuntimeConfig,
   fetchRegionCampusMapImport,
   fetchRegionCampusMapImports,
@@ -302,6 +305,13 @@ import {
   saveRegionCampusMapDraft,
   uploadRegionCampusMapImport,
 } from '@/api/admin'
+import {
+  applyCampusProject,
+  campusProjectCounts,
+  normalizeImportedAreaProject,
+  normalizeImportedPoiProject,
+  pickCampusProjectMetadata,
+} from './campus-map/campusProjectModel.mjs'
 
 type EditorMode = 'amap' | 'image'
 type ToolMode = 'select' | 'poi' | 'area' | 'route' | 'calibration'
@@ -311,7 +321,19 @@ type RatioPoint = {
   longitude?: number
   latitude?: number
 }
-type PoiItem = RatioPoint & {
+type CampusProjectFields = {
+  officialNumber?: number
+  officialName?: string
+  engineeringAlias?: string
+  phase?: 'phase1' | 'future'
+  constructionStatus?: 'built' | 'under_construction'
+  visibilityScope?: 'phase1_active' | 'phase1_review' | 'future_reference'
+  searchable?: boolean
+  navigable?: boolean
+  geometryStatus?: 'verified_polygon' | 'verified_point' | 'point_only' | 'unmatched'
+  sourceConfidence?: 'official_signage_and_cad' | 'official_signage_only'
+}
+type PoiItem = RatioPoint & CampusProjectFields & {
   id: string
   title: string
   category: string
@@ -320,7 +342,7 @@ type PoiItem = RatioPoint & {
   color?: string
   sourceLayer?: string
 }
-type AreaItem = {
+type AreaItem = CampusProjectFields & {
   id: string
   title: string
   category: string
@@ -441,6 +463,8 @@ const semanticCategories: SemanticCategory[] = [
   { type: 'dorm', label: '宿舍', category: 'building', icon: 'bed', color: '#7c3aed' },
   { type: 'teaching', label: '教学楼', category: 'building', icon: 'school', color: '#0f766e' },
   { type: 'office', label: '行政楼', category: 'building', icon: 'briefcase', color: '#475569' },
+  { type: 'research', label: '科研楼', category: 'building', icon: 'school', color: '#0369a1' },
+  { type: 'museum', label: '校史馆', category: 'building', icon: 'building', color: '#92400e' },
   { type: 'sports', label: '运动场', category: 'service', icon: 'ball', color: '#16a34a' },
   { type: 'gate', label: '校门', category: 'entrance', icon: 'gate', color: '#dc2626' },
   { type: 'express', label: '快递点', category: 'service', icon: 'package', color: '#ca8a04' },
@@ -450,7 +474,7 @@ const semanticCategories: SemanticCategory[] = [
   { type: 'parking', label: '停车场', category: 'service', icon: 'parking', color: '#334155' },
   { type: 'bus', label: '公交站', category: 'service', icon: 'bus', color: '#0284c7' },
   { type: 'service', label: '服务点', category: 'service', icon: 'star', color: '#9333ea' },
-  { type: 'building', label: '建筑', category: 'building', icon: 'building', color: '#2563eb' },
+  { type: 'building', label: '建筑', category: 'building', icon: 'building', color: '#4f6272' },
 ]
 const keyPlaceTargets = [
   { type: 'library', label: '图书馆', important: true },
@@ -496,6 +520,7 @@ const vectorCoordinateSystem = ref<Record<string, any> | null>(null)
 const importJobs = ref<CampusMapImportJob[]>([])
 const activeImportJob = ref<CampusMapImportJob | null>(null)
 const converterStatus = ref<CampusMapConverterStatus | null>(null)
+const projectCatalog = ref<any[]>([])
 const calibrationMode = computed(() => toolMode.value === 'calibration')
 const pois = ref<PoiItem[]>([])
 const areas = ref<AreaItem[]>([])
@@ -577,6 +602,25 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       message: draftAreaPoints.value.length || draftRoutePoints.value.length ? '还有未完成的区域或路线草稿' : '没有未完成草稿',
     },
   ]
+
+  const projectItems = [...pois.value, ...areas.value]
+  const projectCounts = campusProjectCounts(projectItems)
+  const projectNumbers = projectItems
+    .map((item) => Number(item.officialNumber))
+    .filter((number) => Number.isInteger(number) && number > 0)
+  const duplicateNumbers = [...new Set(projectNumbers.filter((number, index) => projectNumbers.indexOf(number) !== index))]
+  const futureVisible = projectItems.filter((item) => item.constructionStatus === 'under_construction'
+    && (item.visibilityScope !== 'future_reference' || item.searchable || item.navigable))
+  const unmatchedActive = projectItems.filter((item) => item.visibilityScope === 'phase1_active' && item.geometryStatus === 'unmatched')
+  const projectErrors = duplicateNumbers.length + futureVisible.length + unmatchedActive.length
+  checks.push({
+    key: 'campus-projects',
+    label: '一期项目',
+    status: projectErrors ? 'error' : projectCounts.review ? 'warning' : 'pass',
+    message: projectErrors
+      ? `重复编号 ${duplicateNumbers.length}，未来暴露 ${futureVisible.length}，活动层未匹配 ${unmatchedActive.length}`
+      : `活动 ${projectCounts.active}，待确认 ${projectCounts.review}，未来参考 ${projectCounts.future}，未匹配 ${projectCounts.unmatched}`,
+  })
 
   if (editorMode.value === 'image') {
     checks.unshift({
@@ -787,6 +831,7 @@ const selectedEditableItem = computed<SelectedEditableItem | null>(() => {
 
 watch(() => props.regionId, () => {
   resetDrafts()
+  loadProjectCatalog()
   loadMap()
 }, { immediate: true })
 
@@ -926,6 +971,28 @@ function syncSelectedSemantic() {
   applySemanticFields(selectedEditableItem.value.item, selectedEditableItem.value.item.semanticType)
 }
 
+function handleAssignProject(officialNumber: number) {
+  const selected = selectedEditableItem.value
+  if (!selected || (selected.kind !== 'poi' && selected.kind !== 'area')) return
+  const project = projectCatalog.value.find((item) => Number(item.officialNumber) === Number(officialNumber))
+  if (!project) return
+  recordMapHistory()
+  Object.assign(selected.item, applyCampusProject(selected.item, project, selected.kind))
+  applySemanticFields(selected.item, selected.item.semanticType)
+  ElMessage.success(`已分配 #${project.officialNumber} ${project.officialName}`)
+}
+
+async function loadProjectCatalog() {
+  if (projectCatalog.value.length) return
+  try {
+    const res: any = await fetchCampusMapProjectCatalog()
+    const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+    projectCatalog.value = list
+  } catch (error) {
+    console.error('校园官方项目目录加载失败:', error)
+  }
+}
+
 function importStatusLabel(status: CampusMapImportJob['status']) {
   const labels: Record<string, string> = {
     queued: '排队中',
@@ -1056,6 +1123,7 @@ function normalizeImportedPoi(item: any, index: number): PoiItem {
     sourceLayer: item.sourceLayer,
     xRatio: clampRatio(item.xRatio),
     yRatio: clampRatio(item.yRatio),
+    ...normalizeImportedPoiProject(item),
   }, item.semanticType || item.category) as PoiItem
 }
 
@@ -1072,6 +1140,7 @@ function normalizeImportedArea(item: any, index: number): AreaItem {
       xRatio: clampRatio(point.xRatio),
       yRatio: clampRatio(point.yRatio),
     })) : [],
+    ...normalizeImportedAreaProject(item),
   }, item.semanticType || item.category) as AreaItem
 }
 
@@ -1867,6 +1936,7 @@ function buildPayload() {
       color: poi.color || semanticMeta(poi).color,
       sourceLayer: poi.sourceLayer || undefined,
       Text: poi.title || '点位',
+      ...pickCampusProjectMetadata(poi),
     },
     geometry: {
       type: 'Point',
@@ -1888,6 +1958,7 @@ function buildPayload() {
           icon: area.icon || semanticMeta(area).icon,
           color: area.color || semanticMeta(area).color,
           sourceLayer: area.sourceLayer || undefined,
+          ...pickCampusProjectMetadata(area),
         },
         geometry: {
           type: 'Polygon',
@@ -2000,6 +2071,7 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
       color: (item as any).color || semanticMeta(item).color,
       sourceLayer: (item as any).sourceLayer || undefined,
       provider: 'amap',
+      ...pickCampusProjectMetadata(item),
     coordinateType: 'gcj02',
     Text: item.title || '',
   }
@@ -2406,6 +2478,7 @@ function parsePoiLayer(layer: any): PoiItem[] {
         color: String(properties.color || ''),
         sourceLayer: String(properties.sourceLayer || ''),
         ...toRatioPoint(feature.geometry.coordinates || [0, 0]),
+        ...pickCampusProjectMetadata(properties),
       }, properties.semanticType || properties.category) as PoiItem
     })
 }
@@ -2434,6 +2507,7 @@ function parseAmapPoiLayer(layer: any): PoiItem[] {
         color: String(properties.color || ''),
         sourceLayer: String(properties.sourceLayer || ''),
         ...point,
+        ...pickCampusProjectMetadata(properties),
       }, properties.semanticType || properties.category) as PoiItem
     })
     .filter(Boolean) as PoiItem[]
@@ -2455,6 +2529,7 @@ function parseAreaLayer(layer: any): AreaItem[] {
         color: String(properties.color || ''),
         sourceLayer: String(properties.sourceLayer || ''),
         points,
+        ...pickCampusProjectMetadata(properties),
       }, properties.semanticType || properties.category) as AreaItem
     })
 }
@@ -2478,6 +2553,7 @@ function parseAmapAreaLayer(layer: any): AreaItem[] {
         color: String(properties.color || ''),
         sourceLayer: String(properties.sourceLayer || ''),
         points,
+        ...pickCampusProjectMetadata(properties),
       }, properties.semanticType || properties.category) as AreaItem
     })
     .filter((area: AreaItem) => area.points.length >= 3)

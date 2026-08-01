@@ -14,6 +14,49 @@
           <el-input v-model="selectedEditableItem.item.title" maxlength="30" />
         </el-form-item>
 
+        <template v-if="selectedEditableItem.kind === 'poi' || selectedEditableItem.kind === 'area'">
+          <el-form-item label="官方项目">
+            <el-select
+              :model-value="selectedEditableItem.item.officialNumber"
+              filterable
+              placeholder="选择 1-37 号项目"
+              @change="$emit('assignProject', Number($event))"
+            >
+              <el-option
+                v-for="project in projectCatalog"
+                :key="project.officialNumber"
+                :label="`#${project.officialNumber} ${project.officialName}`"
+                :value="project.officialNumber"
+              >
+                <span>#{{ project.officialNumber }} {{ project.officialName }}</span>
+                <small>{{ project.constructionStatus === 'built' ? '一期已建' : '未来参考' }}</small>
+              </el-option>
+            </el-select>
+          </el-form-item>
+
+          <div v-if="selectedEditableItem.item.officialNumber" class="project-meta-grid">
+            <span>正式编号</span><strong>#{{ selectedEditableItem.item.officialNumber }}</strong>
+            <span>正式名称</span><strong>{{ selectedEditableItem.item.officialName }}</strong>
+            <span>建设状态</span><strong>{{ selectedEditableItem.item.constructionStatus === 'built' ? '已建' : '在建/后续' }}</strong>
+            <span>几何状态</span><strong>{{ selectedEditableItem.item.geometryStatus }}</strong>
+          </div>
+
+          <div class="project-switches">
+            <el-form-item label="可搜索">
+              <el-switch
+                v-model="selectedEditableItem.item.searchable"
+                :disabled="selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+              />
+            </el-form-item>
+            <el-form-item label="可导航">
+              <el-switch
+                v-model="selectedEditableItem.item.navigable"
+                :disabled="selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+              />
+            </el-form-item>
+          </div>
+        </template>
+
         <el-form-item v-if="selectedEditableItem.kind === 'poi' || selectedEditableItem.kind === 'area'" label="校园标志">
           <el-select v-model="selectedEditableItem.item.semanticType" @change="$emit('syncSemantic')">
             <el-option
@@ -165,6 +208,7 @@ import { Delete, EditPen } from '@element-plus/icons-vue'
 defineProps<{
   selectedEditableItem: any | null
   semanticCategories: Array<{ type: string; label: string; color: string }>
+  projectCatalog: any[]
   editorMode: string
   pois: any[]
   areas: any[]
@@ -176,6 +220,7 @@ defineProps<{
 defineEmits<{
   clearSelection: []
   syncSemantic: []
+  assignProject: [officialNumber: number]
   removePoi: [id: string]
   removeArea: [id: string]
   removeRoute: [id: string]
@@ -249,6 +294,33 @@ defineEmits<{
   width: 10px;
   height: 10px;
   border-radius: 50%;
+}
+
+.semantic-option small,
+.project-meta-grid span {
+  color: var(--mx-sub);
+  font-size: 12px;
+}
+
+.project-meta-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: -2px 0 14px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--mx-soft);
+}
+
+.project-meta-grid strong {
+  color: var(--mx-text);
+  font-size: 12px;
+}
+
+.project-switches {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .calibration-grid {
