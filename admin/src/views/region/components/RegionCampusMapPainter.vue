@@ -31,6 +31,14 @@
       @publish="publishMap"
     />
 
+    <CampusMapAvailabilityPanel
+      :status="form.availabilityStatus"
+      :unavailable-message="form.unavailableMessage"
+      :published-status="publishedAvailabilityStatus"
+      @update:status="form.availabilityStatus = $event"
+      @update:unavailable-message="form.unavailableMessage = $event"
+    />
+
     <div class="section-card glass-card painter-shell">
       <div class="map-editor-layout">
         <CampusMapToolRail
@@ -170,6 +178,7 @@
           :format-lng-lat="formatLngLat"
           @clear-selection="selectedId = ''"
           @sync-semantic="syncSelectedSemantic"
+          @sync-availability="syncSelectedAvailability"
           @assign-project="handleAssignProject"
           @remove-poi="removePoi"
           @remove-area="removeArea"
@@ -282,6 +291,7 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import CampusMapActionBar from './campus-map/CampusMapActionBar.vue'
 import CampusMapAssistantDrawer from './campus-map/CampusMapAssistantDrawer.vue'
+import CampusMapAvailabilityPanel from './campus-map/CampusMapAvailabilityPanel.vue'
 import CampusMapCadWorkbench from './campus-map/CampusMapCadWorkbench.vue'
 import CampusMapImportDrawer from './campus-map/CampusMapImportDrawer.vue'
 import CampusMapInspector from './campus-map/CampusMapInspector.vue'
@@ -294,6 +304,7 @@ import {
   amapPlaceSearch,
   deleteRegionCampusMapImport,
   disableRegionCampusMap,
+  fetchCampusMapStatuses,
   fetchCampusMapConverterStatus,
   fetchCampusMapProjectCatalog,
   fetchAmapRuntimeConfig,
@@ -312,6 +323,10 @@ import {
   normalizeImportedPoiProject,
   pickCampusProjectMetadata,
 } from './campus-map/campusProjectModel.mjs'
+import {
+  normalizeBuildingAvailability,
+  normalizeSchoolAvailability,
+} from './campus-map/campusAvailabilityModel.mjs'
 
 type EditorMode = 'amap' | 'image'
 type ToolMode = 'select' | 'poi' | 'area' | 'route' | 'calibration'
@@ -333,7 +348,11 @@ type CampusProjectFields = {
   geometryStatus?: 'verified_polygon' | 'verified_point' | 'point_only' | 'unmatched'
   sourceConfidence?: 'official_signage_and_cad' | 'official_signage_only'
 }
-type PoiItem = RatioPoint & CampusProjectFields & {
+type BuildingAvailabilityFields = {
+  serviceStatus?: 'open' | 'unopened'
+  unavailableMessage?: string
+}
+type PoiItem = RatioPoint & CampusProjectFields & BuildingAvailabilityFields & {
   id: string
   title: string
   category: string
@@ -342,7 +361,7 @@ type PoiItem = RatioPoint & CampusProjectFields & {
   color?: string
   sourceLayer?: string
 }
-type AreaItem = CampusProjectFields & {
+type AreaItem = CampusProjectFields & BuildingAvailabilityFields & {
   id: string
   title: string
   category: string
@@ -352,7 +371,7 @@ type AreaItem = CampusProjectFields & {
   sourceLayer?: string
   points: RatioPoint[]
 }
-type RouteItem = AreaItem
+type RouteItem = Omit<AreaItem, keyof BuildingAvailabilityFields>
 type CalibrationPoint = RatioPoint & {
   id: string
   title: string
@@ -546,6 +565,8 @@ let activeAmapEditor: any = null
 
 const form = reactive({
   enabled: true,
+  availabilityStatus: 'open' as 'open' | 'unopened',
+  unavailableMessage: '',
   title: '校园地图',
   mapId: '',
   version: '',
@@ -554,6 +575,7 @@ const form = reactive({
   mapHeight: 800,
   opacity: 1,
 })
+const publishedAvailabilityStatus = ref<'open' | 'unopened' | 'unconfigured'>('unconfigured')
 
 const workflow = reactive({
   draftRevision: 0,
@@ -584,6 +606,14 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   ].filter((title) => !String(title || '').trim()).length
   const checks: QualityCheck[] = [
     {
+      key: 'school-availability',
+      label: '学校开通状态',
+      status: form.availabilityStatus === 'unopened' && !form.unavailableMessage.trim() ? 'error' : 'pass',
+      message: form.availabilityStatus === 'unopened' && !form.unavailableMessage.trim()
+        ? '学校未开通时必须填写说明'
+        : form.availabilityStatus === 'open' ? '学校地图已开通' : '已填写学校未开通说明',
+    },
+    {
       key: 'content',
       label: '绘制内容',
       status: featureCount > 0 ? 'pass' : 'error',
@@ -612,6 +642,8 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   const futureVisible = projectItems.filter((item) => item.constructionStatus === 'under_construction'
     && (item.visibilityScope !== 'future_reference' || item.searchable || item.navigable))
   const unmatchedActive = projectItems.filter((item) => item.visibilityScope === 'phase1_active' && item.geometryStatus === 'unmatched')
+  const unavailableWithoutMessage = projectItems.filter((item) => item.serviceStatus === 'unopened'
+    && !String(item.unavailableMessage || '').trim())
   const projectErrors = duplicateNumbers.length + futureVisible.length + unmatchedActive.length
   checks.push({
     key: 'campus-projects',
@@ -620,6 +652,14 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
     message: projectErrors
       ? `重复编号 ${duplicateNumbers.length}，未来暴露 ${futureVisible.length}，活动层未匹配 ${unmatchedActive.length}`
       : `活动 ${projectCounts.active}，待确认 ${projectCounts.review}，未来参考 ${projectCounts.future}，未匹配 ${projectCounts.unmatched}`,
+  })
+  checks.push({
+    key: 'building-availability',
+    label: '建筑开放说明',
+    status: unavailableWithoutMessage.length ? 'error' : 'pass',
+    message: unavailableWithoutMessage.length
+      ? `${unavailableWithoutMessage.length} 栋未开放建筑缺少说明`
+      : '未开放建筑均已填写说明',
   })
 
   if (editorMode.value === 'image') {
@@ -969,6 +1009,16 @@ function syncSelectedSemantic() {
   if (!selectedEditableItem.value) return
   recordMapHistory()
   applySemanticFields(selectedEditableItem.value.item, selectedEditableItem.value.item.semanticType)
+}
+
+function syncSelectedAvailability(status: 'open' | 'unopened') {
+  const selected = selectedEditableItem.value
+  if (!selected || (selected.kind !== 'poi' && selected.kind !== 'area')) return
+  recordMapHistory()
+  Object.assign(selected.item, normalizeBuildingAvailability({
+    ...selected.item,
+    serviceStatus: status,
+  }))
 }
 
 function handleAssignProject(officialNumber: number) {
@@ -1464,6 +1514,10 @@ function addAmapPoiAtLngLat(longitude: number, latitude: number, title?: string)
     title: title || `点位 ${pois.value.length + 1}`,
     category: poiCategory.value,
     semanticType: poiCategory.value,
+    serviceStatus: 'open',
+    unavailableMessage: '',
+    searchable: true,
+    navigable: true,
     ...point,
   }
   applySemanticFields(item, poiCategory.value)
@@ -1783,6 +1837,10 @@ function addPoiAtRatio(xRatio: number, yRatio: number) {
     title: `点位 ${pois.value.length + 1}`,
     category: poiCategory.value,
     semanticType: poiCategory.value,
+    serviceStatus: 'open',
+    unavailableMessage: '',
+    searchable: true,
+    navigable: true,
     xRatio: clampRatio(xRatio),
     yRatio: clampRatio(yRatio),
   }
@@ -1822,6 +1880,10 @@ function finishArea() {
     semanticType: 'teaching',
     icon: 'school',
     color: '#0f766e',
+    serviceStatus: 'open',
+    unavailableMessage: '',
+    searchable: true,
+    navigable: true,
     points: draftAreaPoints.value.map((point) => ({ ...point })),
   })
   draftAreaPoints.value = []
@@ -1849,14 +1911,32 @@ function finishRoute() {
   if (editorMode.value === 'amap') refreshAmapOverlays()
 }
 
-function removePoi(id: string) {
+async function removePoi(id: string) {
+  try {
+    await ElMessageBox.confirm('删除后需要保存并发布才会影响小程序，确定删除该点位吗？', '删除点位', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   recordMapHistory()
   pois.value = pois.value.filter((item) => item.id !== id)
   if (selectedId.value === id) selectedId.value = ''
   if (editorMode.value === 'amap') refreshAmapOverlays()
 }
 
-function removeArea(id: string) {
+async function removeArea(id: string) {
+  try {
+    await ElMessageBox.confirm('删除后需要保存并发布才会影响小程序，确定删除该建筑或区域吗？', '删除建筑', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   recordMapHistory()
   areas.value = areas.value.filter((item) => item.id !== id)
   if (editorMode.value === 'amap') refreshAmapOverlays()
@@ -1937,6 +2017,7 @@ function buildPayload() {
       sourceLayer: poi.sourceLayer || undefined,
       Text: poi.title || '点位',
       ...pickCampusProjectMetadata(poi),
+      ...normalizeBuildingAvailability(poi),
     },
     geometry: {
       type: 'Point',
@@ -1959,6 +2040,7 @@ function buildPayload() {
           color: area.color || semanticMeta(area).color,
           sourceLayer: area.sourceLayer || undefined,
           ...pickCampusProjectMetadata(area),
+          ...normalizeBuildingAvailability(area),
         },
         geometry: {
           type: 'Polygon',
@@ -2001,6 +2083,10 @@ function buildPayload() {
   return {
     schemaVersion: 1,
     enabled: form.enabled,
+    availability: normalizeSchoolAvailability({
+      status: form.availabilityStatus,
+      unavailableMessage: form.unavailableMessage,
+    }),
     title: form.title || '校园地图',
     mapId: form.mapId || `campus-map-${currentRegionId() || 'region'}`,
     version: form.version || new Date().toISOString().slice(0, 10),
@@ -2072,6 +2158,7 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
       sourceLayer: (item as any).sourceLayer || undefined,
       provider: 'amap',
       ...pickCampusProjectMetadata(item),
+      ...(kind === 'route' ? {} : normalizeBuildingAvailability(item)),
     coordinateType: 'gcj02',
     Text: item.title || '',
   }
@@ -2169,6 +2256,10 @@ function buildAmapPayload() {
   return {
     schemaVersion: 1,
     enabled: form.enabled,
+    availability: normalizeSchoolAvailability({
+      status: form.availabilityStatus,
+      unavailableMessage: form.unavailableMessage,
+    }),
     title: form.title || '校园地图',
     mapId: form.mapId || `campus-map-${currentRegionId() || 'region'}`,
     version: form.version || new Date().toISOString().slice(0, 10),
@@ -2314,7 +2405,18 @@ async function loadMap() {
   if (!currentRegionId()) return
   loading.value = true
   try {
-    const config: any = await fetchRegionCampusMap(currentRegionId())
+    const [config, statusesResponse]: any[] = await Promise.all([
+      fetchRegionCampusMap(currentRegionId()),
+      fetchCampusMapStatuses().catch(() => []),
+    ])
+    const statuses = Array.isArray(statusesResponse?.data)
+      ? statusesResponse.data
+      : Array.isArray(statusesResponse) ? statusesResponse : []
+    const currentStatus = statuses.find((item: any) => String(item.regionId) === String(currentRegionId()))
+    publishedAvailabilityStatus.value = currentStatus?.publishedStatus === 'open'
+      || currentStatus?.publishedStatus === 'unopened'
+      ? currentStatus.publishedStatus
+      : 'unconfigured'
     applyMapConfig(config?.data || config)
   } catch (error: any) {
     ElMessage.error(error?.message || '校园地图加载失败')
@@ -2366,6 +2468,7 @@ async function publishMap() {
     const result: any = await publishRegionCampusMapDraft(currentRegionId(), revision)
     const config = result?.data || result || {}
     applyWorkflow(config.workflow)
+    publishedAvailabilityStatus.value = normalizeSchoolAvailability(config?.availability).status
     hasUnsavedChanges.value = false
     ElMessage.success('校园地图已发布')
   } catch (error: any) {
@@ -2417,6 +2520,9 @@ function applyMapConfig(config: any = {}) {
 
   editorMode.value = isAmapConfig ? 'amap' : 'image'
   form.enabled = config.enabled !== false
+  const availability = normalizeSchoolAvailability(config.availability)
+  form.availabilityStatus = availability.status
+  form.unavailableMessage = availability.unavailableMessage
   form.title = config.title || '校园地图'
   form.mapId = config.mapId || `campus-map-${currentRegionId() || 'region'}`
   form.version = config.version || ''
@@ -2479,6 +2585,7 @@ function parsePoiLayer(layer: any): PoiItem[] {
         sourceLayer: String(properties.sourceLayer || ''),
         ...toRatioPoint(feature.geometry.coordinates || [0, 0]),
         ...pickCampusProjectMetadata(properties),
+        ...normalizeBuildingAvailability(properties),
       }, properties.semanticType || properties.category) as PoiItem
     })
 }
@@ -2508,6 +2615,7 @@ function parseAmapPoiLayer(layer: any): PoiItem[] {
         sourceLayer: String(properties.sourceLayer || ''),
         ...point,
         ...pickCampusProjectMetadata(properties),
+        ...normalizeBuildingAvailability(properties),
       }, properties.semanticType || properties.category) as PoiItem
     })
     .filter(Boolean) as PoiItem[]
@@ -2530,6 +2638,7 @@ function parseAreaLayer(layer: any): AreaItem[] {
         sourceLayer: String(properties.sourceLayer || ''),
         points,
         ...pickCampusProjectMetadata(properties),
+        ...normalizeBuildingAvailability(properties),
       }, properties.semanticType || properties.category) as AreaItem
     })
 }
@@ -2554,6 +2663,7 @@ function parseAmapAreaLayer(layer: any): AreaItem[] {
         sourceLayer: String(properties.sourceLayer || ''),
         points,
         ...pickCampusProjectMetadata(properties),
+        ...normalizeBuildingAvailability(properties),
       }, properties.semanticType || properties.category) as AreaItem
     })
     .filter((area: AreaItem) => area.points.length >= 3)

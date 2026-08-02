@@ -37,6 +37,18 @@ async function run() {
   const regionRouteIndex = apiSource.indexOf('/admin/campus-map/${regionId}')
   assert.ok(statusesRouteIndex >= 0, '缺少校园地图状态 API')
   assert.ok(statusesRouteIndex < regionRouteIndex, '静态状态路由必须位于动态学校路由之前')
+
+  const readSource = (relativePath) => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8')
+  const painter = readSource('admin/src/views/region/components/RegionCampusMapPainter.vue')
+  const inspector = readSource('admin/src/views/region/components/campus-map/CampusMapInspector.vue')
+  const regionList = readSource('admin/src/views/region/RegionList.vue')
+  assert.match(painter, /CampusMapAvailabilityPanel/)
+  assert.match(painter, /availabilityStatus/)
+  assert.match(painter, /unavailableMessage/)
+  assert.match(inspector, /serviceStatus/)
+  assert.match(inspector, /未开放说明/)
+  assert.match(regionList, /campusMapStatusFilter/)
+  assert.match(regionList, /fetchCampusMapStatuses/)
 }
 
 run().catch((error) => {

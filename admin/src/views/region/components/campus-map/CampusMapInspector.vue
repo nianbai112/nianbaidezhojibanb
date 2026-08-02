@@ -41,17 +41,39 @@
             <span>几何状态</span><strong>{{ selectedEditableItem.item.geometryStatus }}</strong>
           </div>
 
+          <template v-if="selectedEditableItem.item.constructionStatus !== 'under_construction'">
+            <el-form-item label="建筑开放状态">
+              <el-radio-group
+                :model-value="selectedEditableItem.item.serviceStatus || 'open'"
+                @update:model-value="$emit('syncAvailability', $event as 'open' | 'unopened')"
+              >
+                <el-radio-button value="open">已开放</el-radio-button>
+                <el-radio-button value="unopened">未开放</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="selectedEditableItem.item.serviceStatus === 'unopened'" label="未开放说明">
+              <el-input
+                v-model="selectedEditableItem.item.unavailableMessage"
+                type="textarea"
+                :rows="3"
+                maxlength="120"
+                show-word-limit
+                placeholder="例如：建筑正在维护，暂不提供导航"
+              />
+            </el-form-item>
+          </template>
+
           <div class="project-switches">
             <el-form-item label="可搜索">
               <el-switch
                 v-model="selectedEditableItem.item.searchable"
-                :disabled="selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+                :disabled="selectedEditableItem.item.serviceStatus === 'unopened' || selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
               />
             </el-form-item>
             <el-form-item label="可导航">
               <el-switch
                 v-model="selectedEditableItem.item.navigable"
-                :disabled="selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+                :disabled="selectedEditableItem.item.serviceStatus === 'unopened' || selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
               />
             </el-form-item>
           </div>
@@ -220,6 +242,7 @@ defineProps<{
 defineEmits<{
   clearSelection: []
   syncSemantic: []
+  syncAvailability: [status: 'open' | 'unopened']
   assignProject: [officialNumber: number]
   removePoi: [id: string]
   removeArea: [id: string]

@@ -44,6 +44,12 @@
           <el-option label="社区" value="community" />
           <el-option label="其他" value="other" />
         </el-select>
+        <el-select v-model="campusMapStatusFilter" placeholder="校园地图" style="width: 148px">
+          <el-option label="全部地图" value="all" />
+          <el-option label="已开通" value="open" />
+          <el-option label="未开通" value="unopened" />
+          <el-option label="未配置" value="unconfigured" />
+        </el-select>
       </div>
       <div class="toolbar-right">
         <span>共 {{ filteredRegions.length }} 个结果</span>
@@ -59,6 +65,9 @@
           <el-tag v-if="region.isHot" type="warning" effect="light">热门</el-tag>
           <el-tag :type="isRegionSwitchOpen(region) ? 'success' : 'danger'" effect="light">
             {{ isRegionSwitchOpen(region) ? '切换开放' : '切换关闭' }}
+          </el-tag>
+          <el-tag :type="campusMapTagType(region.campusMapStatus)" effect="light">
+            校园地图：{{ campusMapStatusText(region.campusMapStatus) }}
           </el-tag>
         </div>
 
@@ -326,8 +335,12 @@ import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import { createRegion, fetchRegionDetail, fetchRegions, saveRegionTabbar, updateRegion } from '@/api/admin'
+import { createRegion, fetchCampusMapStatuses, fetchRegionDetail, fetchRegions, saveRegionTabbar, updateRegion } from '@/api/admin'
 import { request } from '@/api/request'
+import {
+  filterRegionsByCampusMapStatus,
+  mergeRegionCampusMapStatuses,
+} from './components/campus-map/campusAvailabilityModel.mjs'
 
 const router = useRouter()
 const loading = ref(false)
@@ -338,6 +351,7 @@ const miniUsers = ref<any[]>([])
 const keyword = ref('')
 const statusFilter = ref('all')
 const typeFilter = ref('all')
+const campusMapStatusFilter = ref('all')
 const createVisible = ref(false)
 const createStep = ref(0)
 const mapVisible = ref(false)
@@ -417,12 +431,13 @@ const mapDefaultCenter = computed(() => {
 
 const filteredRegions = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return regions.value.filter(region => {
+  const operationalRows = regions.value.filter(region => {
     const hitKeyword = !kw || [region.name, region.code, region.address, region.description].some(v => String(v || '').toLowerCase().includes(kw))
     const hitStatus = statusFilter.value === 'all' || (statusFilter.value === 'open' ? region.isOpen !== false : region.isOpen === false)
     const hitType = typeFilter.value === 'all' || String(region.regionType || 'other') === typeFilter.value
     return hitKeyword && hitStatus && hitType
   })
+  return filterRegionsByCampusMapStatus(operationalRows, campusMapStatusFilter.value)
 })
 
 onMounted(() => {
@@ -434,12 +449,31 @@ onMounted(() => {
 async function loadRegions() {
   loading.value = true
   try {
-    regions.value = await fetchRegions()
+    const [regionRows, statusesResponse]: any[] = await Promise.all([
+      fetchRegions(),
+      fetchCampusMapStatuses(),
+    ])
+    const statuses = Array.isArray(statusesResponse?.data)
+      ? statusesResponse.data
+      : Array.isArray(statusesResponse) ? statusesResponse : []
+    regions.value = mergeRegionCampusMapStatuses(regionRows, statuses)
   } catch (error: any) {
     ElMessage.error(error?.message || '加载区域列表失败')
   } finally {
     loading.value = false
   }
+}
+
+function campusMapStatusText(status: string) {
+  if (status === 'open') return '已开通'
+  if (status === 'unopened') return '未开通'
+  return '未配置'
+}
+
+function campusMapTagType(status: string) {
+  if (status === 'open') return 'success'
+  if (status === 'unopened') return 'warning'
+  return 'info'
 }
 
 async function loadAdminAccounts() {
