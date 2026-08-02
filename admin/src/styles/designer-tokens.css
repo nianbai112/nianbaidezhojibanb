@@ -1,0 +1,84 @@
+/* ============================================================================
+   小程序装修编辑器 · 工艺 token（视觉精装修）
+   作用域限定：只挂在 .designer-studio / .rte 下，不污染 admin 其他页面。
+   使用方式：编辑器组件内 var(--ds-*) 引用；通用基础类 .ds-num / .ds-label 等。
+   ========================================================================== */
+
+.designer-studio,
+.rte {
+  /* ---- 品牌色（全编辑器唯一品牌色） ---- */
+  --ds-brand: #16A34A;
+  --ds-brand-hover: #15803D;
+  --ds-brand-soft: rgba(22, 163, 74, 0.10);
+  --ds-focus-ring: 0 0 0 2px rgba(22, 163, 74, 0.5);
+
+  /* ---- 语义色 ---- */
+  --ds-warning: #D97706;
+  --ds-danger: #DC2626;
+  --ds-neutral: #9CA3AF;
+
+  /* ---- 深色外壳四级材质 ---- */
+  --ds-desktop: #0B0D10;   /* L1 桌面 */
+  --ds-island: #14171C;    /* L2 面板岛 */
+  --ds-raised: #1C2026;    /* L3 控件 / 浮起 */
+  --ds-line: rgba(255, 255, 255, 0.06);  /* 分隔 / hover 底，一律 1px */
+  --ds-ink: #E7EAEE;       /* 深色壳主文字 */
+  --ds-ink-dim: #9CA3AF;   /* 深色壳次文字（= 中性灰 token） */
+
+  /* ---- type scale ---- */
+  --ds-fs-label: 12px;     /* label 12px / 500 / var(--ds-neutral) */
+  --ds-fs-body: 13px;      /* 正文 13px / 400 */
+  --ds-fs-emphasis: 14px;  /* 强调 14px / 500 */
+  --ds-fs-title: 16px;     /* 卡片标题 16px / 600 */
+
+  /* ---- 间距纪律：只许 4 / 8 / 12 / 16 / 24 ---- */
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-6: 24px;
+
+  /* ---- 圆角三档 ---- */
+  --ds-radius-control: 6px;   /* 控件 */
+  --ds-radius-card: 10px;     /* 卡片 / 岛 */
+  --ds-radius-phone: 24px;    /* 手机框 */
+
+  /* ---- 动效 ---- */
+  --ds-ease: 150ms ease-out;
+}
+
+/* ---- 基础类 ---- */
+
+/* 所有数字：等宽数字，避免计数/时间戳跳动 */
+.ds-num,
+.designer-studio,
+.rte-toolbar,
+.rte-props {
+  font-variant-numeric: tabular-nums;
+}
+
+/* type scale 基础类（在 .designer-studio / .rte 作用域内使用） */
+.ds-label {
+  font-size: var(--ds-fs-label);
+  font-weight: 500;
+  color: var(--ds-neutral);
+}
+.ds-body {
+  font-size: var(--ds-fs-body);
+  font-weight: 400;
+}
+.ds-emphasis {
+  font-size: var(--ds-fs-emphasis);
+  font-weight: 500;
+}
+.ds-card-title {
+  font-size: var(--ds-fs-title);
+  font-weight: 600;
+}
+
+/* 深色壳通用 focus 环（编辑器内交互控件统一 2px 品牌绿 50%） */
+.designer-studio :is(button, [tabindex], a):focus-visible,
+.rte :is(button, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
