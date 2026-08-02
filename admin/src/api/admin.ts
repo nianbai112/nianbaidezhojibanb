@@ -695,6 +695,10 @@ export async function updateRegion(id: string | number, data: any) {
   return request.put(`/admin/regions/${id}`, data)
 }
 
+export async function fetchCampusMapStatuses() {
+  return request.get('/admin/campus-map/statuses')
+}
+
 export async function fetchRegionCampusMap(regionId: string | number) {
   return request.get(`/admin/campus-map/${regionId}`)
 }
