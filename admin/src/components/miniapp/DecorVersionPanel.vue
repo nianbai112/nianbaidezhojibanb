@@ -87,7 +87,19 @@ const FIELD_LABELS: Record<string, string> = {
   decorLayout: '自定义版块',
 }
 
-const eq = (a: any, b: any) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+/** 键序无关的稳定序列化：快照经 Postgres jsonb 存取后键序会重排，直接 JSON.stringify 对比会误报差异 */
+const stable = (v: any): any => {
+  if (Array.isArray(v)) return v.map(stable)
+  if (v && typeof v === 'object') {
+    const o: Record<string, any> = {}
+    for (const k of Object.keys(v).sort()) {
+      if (v[k] !== undefined) o[k] = stable(v[k])
+    }
+    return o
+  }
+  return v ?? null
+}
+const eq = (a: any, b: any) => JSON.stringify(stable(a)) === JSON.stringify(stable(b))
 
 function computeDiff(snapshot: any, current: any): string[] {
   const labels: string[] = []
