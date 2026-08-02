@@ -6,6 +6,11 @@ import {
   isPublicCampusProject,
   validateCampusProjectCollection,
 } from './campus-map-project-catalog';
+import {
+  normalizeCampusAvailability,
+  normalizeCampusFeatureProperties,
+  validateCampusAvailabilityManifest,
+} from './campus-map-availability';
 
 const GLOBAL_REGION_ID = 'global';
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
@@ -18,6 +23,33 @@ export class CampusMapService {
 
   getProjectCatalog() {
     return CAMPUS_PROJECT_CATALOG.map((item) => ({ ...item }));
+  }
+
+  async listAvailabilityStatuses(where: Record<string, any> = {}) {
+    const maps = await this.prisma.campusMap.findMany({
+      where,
+      include: { activeVersion: true, draft: true },
+      orderBy: { regionId: 'asc' },
+    });
+
+    return maps.map((map: any) => {
+      const publishedManifest = this.asRecord(map.activeVersion?.manifest) || {};
+      const draftManifest = this.asRecord(map.draft?.manifest) || {};
+      const publishedAvailability = normalizeCampusAvailability(publishedManifest.availability);
+      const draftAvailability = normalizeCampusAvailability(draftManifest.availability);
+
+      return {
+        regionId: map.regionId,
+        configured: true,
+        publishedStatus: map.activeVersion ? publishedAvailability.status : undefined,
+        draftStatus: map.draft ? draftAvailability.status : undefined,
+        unavailableMessage: map.activeVersion
+          ? publishedAvailability.unavailableMessage
+          : draftAvailability.unavailableMessage,
+        draftRevision: map.draft?.revision,
+        activeVersion: map.activeVersion?.version,
+      };
+    });
   }
 
   async getActiveMap(regionId?: string) {
@@ -130,6 +162,10 @@ export class CampusMapService {
       const projectErrors = validateCampusProjectCollection(this.inlineFeatures(manifest));
       if (projectErrors.length) {
         throw new BadRequestException(projectErrors.join('；'));
+      }
+      const availabilityErrors = validateCampusAvailabilityManifest(manifest);
+      if (availabilityErrors.length) {
+        throw new BadRequestException(availabilityErrors.join('；'));
       }
       const numbered = await tx.campusMap.update({
         where: { id: map.id },
@@ -303,6 +339,23 @@ export class CampusMapService {
     if (!map.enabled) return this.withWorkflow(this.disabledConfig(requestedRegionId, 'disabled', sourceRegionId), map);
     const value = this.asRecord(map.activeVersion?.manifest);
     if (!value) return this.withWorkflow(this.disabledConfig(requestedRegionId, 'not_published', sourceRegionId), map);
+    const availability = normalizeCampusAvailability(value.availability);
+    if (availability.status === 'unopened') {
+      return this.withWorkflow(
+        {
+          ...this.disabledConfig(
+            requestedRegionId,
+            'school_unopened',
+            sourceRegionId,
+            { ...value, layers: [] },
+          ),
+          availability,
+          layers: [],
+        },
+        map,
+        { activeVersion: map.activeVersion.version, activeVersionId: map.activeVersion.id },
+      );
+    }
     return this.withWorkflow(
       this.toPublicConfig({ isEnabled: true, value, updatedAt: map.activeVersion.publishedAt }, requestedRegionId, sourceRegionId),
       map,
@@ -361,6 +414,7 @@ export class CampusMapService {
     return this.compact({
       schemaVersion: Number(raw.schemaVersion || 1),
       enabled,
+      availability: normalizeCampusAvailability(raw.availability),
       regionId,
       title: String(raw.title || '校园地图').trim(),
       mapId,
@@ -403,6 +457,7 @@ export class CampusMapService {
     return {
       schemaVersion: Number(value.schemaVersion || 1),
       enabled: true,
+      availability: normalizeCampusAvailability(value.availability),
       regionId: requestedRegionId,
       sourceRegionId,
       title: String(value.title || '校园地图'),
@@ -429,6 +484,7 @@ export class CampusMapService {
       schemaVersion: Number(value.schemaVersion || 1),
       enabled: false,
       reason,
+      availability: normalizeCampusAvailability(value.availability),
       regionId,
       sourceRegionId,
       title: String(value.title || '校园地图'),
@@ -478,8 +534,11 @@ export class CampusMapService {
   }
 
   private inlineFeatures(manifest: Record<string, any>) {
-    return this.normalizeLayers(manifest.layers)
-      .flatMap((layer: any) => Array.isArray(layer.inlineData?.features) ? layer.inlineData.features : []);
+    return (Array.isArray(manifest.layers) ? manifest.layers : [])
+      .flatMap((layer: any) => {
+        const inlineData = this.asRecord(layer?.inlineData || layer?.data);
+        return Array.isArray(inlineData?.features) ? inlineData.features : [];
+      });
   }
 
   private publicProjectLayers(layers: any[]) {
@@ -535,7 +594,20 @@ export class CampusMapService {
         const item = this.asRecord(layer);
         if (!item) return null;
         const id = String(item.id || item.layerId || `layer_${index + 1}`).trim();
-        const inlineData = item.inlineData || item.data || null;
+        const rawInlineData = this.asRecord(item.inlineData || item.data);
+        const inlineData = rawInlineData && Array.isArray(rawInlineData.features)
+          ? {
+              ...rawInlineData,
+              features: rawInlineData.features.map((feature: any) => {
+                const featureRecord = this.asRecord(feature);
+                if (!featureRecord) return feature;
+                return {
+                  ...featureRecord,
+                  properties: normalizeCampusFeatureProperties(featureRecord.properties || {}),
+                };
+              }),
+            }
+          : item.inlineData || item.data || null;
         const url = String(item.url || item.href || '').trim();
         const load = String(item.load || (url ? 'url' : inlineData ? 'inline' : 'local')).trim();
         return this.compact({

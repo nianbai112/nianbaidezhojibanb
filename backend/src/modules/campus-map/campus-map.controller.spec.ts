@@ -18,6 +18,7 @@ const mockAdminPermissionGuard = { canActivate: jest.fn().mockResolvedValue(true
 const mockService = {
   getActiveMap: jest.fn(),
   getProjectCatalog: jest.fn(),
+  listAvailabilityStatuses: jest.fn(),
   getRegionMap: jest.fn(),
   upsertRegionMap: jest.fn(),
   saveDraft: jest.fn(),
@@ -36,6 +37,7 @@ const mockImportService = {
 };
 const mockScope = {
   assertRegionAccess: jest.fn().mockResolvedValue(undefined),
+  regionFieldWhere: jest.fn().mockResolvedValue({}),
 };
 
 describe('CampusMapController - 公开接口登录校验回归', () => {
@@ -47,6 +49,7 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     mockAdminGuard.canActivate.mockResolvedValue(true);
     mockAdminPermissionGuard.canActivate.mockResolvedValue(true);
     mockScope.assertRegionAccess.mockResolvedValue(undefined);
+    mockScope.regionFieldWhere.mockResolvedValue({});
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [CampusMapController],
@@ -109,6 +112,22 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     const proto = CampusMapController.prototype as any;
     expect(Reflect.getMetadata('path', proto.getProjectCatalog)).toBe('admin/campus-map/project-catalog');
     expect(Reflect.getMetadata('method', proto.getProjectCatalog)).toBe(RequestMethod.GET);
+  });
+
+  it('后台校园地图状态列表使用管理员区域数据范围', async () => {
+    const where = { regionId: { in: ['school-1'] } };
+    const rows = [{ regionId: 'school-1', publishedStatus: 'unopened' }];
+    const req = { user: { sub: 'admin-1' } } as any;
+    mockScope.regionFieldWhere.mockResolvedValue(where);
+    mockService.listAvailabilityStatuses.mockResolvedValue(rows);
+
+    await expect((controller as any).listAdminCampusMapStatuses(req)).resolves.toEqual(rows);
+
+    expect(mockScope.regionFieldWhere).toHaveBeenCalledWith('regionId', 'admin-1');
+    expect(mockService.listAvailabilityStatuses).toHaveBeenCalledWith(where);
+    const proto = CampusMapController.prototype as any;
+    expect(Reflect.getMetadata('path', proto.listAdminCampusMapStatuses)).toBe('admin/campus-map/statuses');
+    expect(Reflect.getMetadata('method', proto.listAdminCampusMapStatuses)).toBe(RequestMethod.GET);
   });
 
   it.each([

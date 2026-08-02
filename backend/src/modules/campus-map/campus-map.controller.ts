@@ -53,6 +53,16 @@ export class CampusMapController {
     return this.imports.saveConverterConfig(dto, (req as any).user?.sub);
   }
 
+  @Get('admin/campus-map/statuses')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('region:view')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取管理员可见学校的校园地图状态' })
+  async listAdminCampusMapStatuses(@Req() req: Request) {
+    const where = await this.scope.regionFieldWhere('regionId', (req as any).user?.sub);
+    return this.service.listAvailabilityStatuses(where);
+  }
+
   @Get('admin/campus-map/:regionId')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('region:view')

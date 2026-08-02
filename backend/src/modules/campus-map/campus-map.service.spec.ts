@@ -11,6 +11,7 @@ describe('CampusMapService', () => {
     },
     campusMap: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
       upsert: jest.fn(),
       update: jest.fn(),
     },
@@ -82,6 +83,102 @@ describe('CampusMapService', () => {
     expect(prisma.config.findUnique).not.toHaveBeenCalled();
   });
 
+  it('returns the requested school explanation without global fallback', async () => {
+    const prisma = createPrisma();
+    prisma.campusMap.findUnique.mockImplementation(({ where }: any) => where.regionId === 'school-1'
+      ? Promise.resolve({
+          enabled: true,
+          regionId: 'school-1',
+          activeVersion: {
+            id: 'school-version-3',
+            version: 3,
+            manifest: {
+              enabled: true,
+              title: '测试大学',
+              availability: {
+                status: 'unopened',
+                unavailableMessage: '地图资料校准中',
+              },
+              layers: [{
+                id: 'buildings',
+                inlineData: { type: 'FeatureCollection', features: [] },
+              }],
+            },
+          },
+        })
+      : Promise.resolve({
+          enabled: true,
+          activeVersion: {
+            id: 'global-version-1',
+            version: 1,
+            manifest: {
+              enabled: true,
+              title: '全局地图',
+              layers: [{
+                id: 'global-buildings',
+                inlineData: { type: 'FeatureCollection', features: [] },
+              }],
+            },
+          },
+        }));
+
+    const service = new CampusMapService(prisma as any);
+
+    await expect(service.getActiveMap('school-1')).resolves.toEqual(expect.objectContaining({
+      enabled: false,
+      reason: 'school_unopened',
+      sourceRegionId: 'school-1',
+      title: '测试大学',
+      availability: {
+        status: 'unopened',
+        unavailableMessage: '地图资料校准中',
+      },
+      layers: [],
+    }));
+    expect(prisma.campusMap.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists scoped published and draft availability statuses', async () => {
+    const prisma = createPrisma();
+    const where = { regionId: { in: ['school-1'] } };
+    prisma.campusMap.findMany.mockResolvedValue([{
+      regionId: 'school-1',
+      enabled: true,
+      activeVersion: {
+        version: 3,
+        manifest: {
+          availability: {
+            status: 'unopened',
+            unavailableMessage: '地图资料校准中',
+          },
+        },
+      },
+      draft: {
+        revision: 4,
+        manifest: {
+          availability: { status: 'open' },
+        },
+      },
+    }]);
+
+    const service = new CampusMapService(prisma as any);
+
+    await expect(service.listAvailabilityStatuses(where)).resolves.toEqual([{
+      regionId: 'school-1',
+      configured: true,
+      publishedStatus: 'unopened',
+      draftStatus: 'open',
+      unavailableMessage: '地图资料校准中',
+      draftRevision: 4,
+      activeVersion: 3,
+    }]);
+    expect(prisma.campusMap.findMany).toHaveBeenCalledWith({
+      where,
+      include: { activeVersion: true, draft: true },
+      orderBy: { regionId: 'asc' },
+    });
+  });
+
   it('rejects saving a stale draft revision instead of overwriting it', async () => {
     const prisma = makeTransactional();
     prisma.campusMap.upsert.mockResolvedValue({ id: 'map-1', regionId: 'region-1' });
@@ -139,6 +236,106 @@ describe('CampusMapService', () => {
       data: expect.objectContaining({ mapId: 'map-1', version: 1, publishedBy: 'admin-1' }),
     }));
     expect(result).toMatchObject({ enabled: true, workflow: { activeVersion: 1, activeVersionId: 'version-1' } });
+  });
+
+  it('rejects invalid availability before creating a published version', async () => {
+    const prisma = makeTransactional();
+    prisma.campusMap.findUnique.mockResolvedValue({
+      id: 'map-1',
+      regionId: 'region-1',
+      versionCounter: 0,
+    });
+    prisma.campusMapDraft.findUnique.mockResolvedValue({
+      id: 'draft-1',
+      mapId: 'map-1',
+      revision: 1,
+      manifest: {
+        enabled: true,
+        mapId: 'campus-map',
+        availability: { status: 'unopened', unavailableMessage: '' },
+        layers: [{
+          id: 'buildings',
+          inlineData: {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: {
+                officialNumber: 3,
+                officialName: '天枢楼',
+                constructionStatus: 'built',
+                visibilityScope: 'phase1_active',
+                geometryStatus: 'verified_polygon',
+                serviceStatus: 'unopened',
+                unavailableMessage: '',
+                navigable: true,
+              },
+              geometry: { type: 'Polygon', coordinates: [] },
+            }],
+          },
+        }],
+      },
+    });
+    const service = new CampusMapService(prisma as any);
+
+    await expect(service.publishDraft('region-1')).rejects.toThrow('学校未开通时必须填写说明');
+    expect(prisma.campusMap.update).not.toHaveBeenCalled();
+    expect(prisma.campusMapVersion.create).not.toHaveBeenCalled();
+  });
+
+  it('normalizes school and building availability when saving a draft', async () => {
+    const prisma = makeTransactional();
+    prisma.campusMap.upsert.mockResolvedValue({ id: 'map-1', regionId: 'region-1' });
+    prisma.campusMapDraft.findUnique.mockResolvedValue(null);
+    prisma.campusMapDraft.create.mockResolvedValue({
+      id: 'draft-1',
+      mapId: 'map-1',
+      revision: 1,
+    });
+    const service = new CampusMapService(prisma as any);
+
+    await service.saveDraft('region-1', {
+      enabled: true,
+      mapId: 'campus-map',
+      availability: { status: 'unopened', unavailableMessage: '  待学校确认  ' },
+      layers: [{
+        id: 'buildings',
+        inlineData: {
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature',
+            properties: {
+              constructionStatus: 'built',
+              visibilityScope: 'phase1_active',
+              serviceStatus: 'unopened',
+              unavailableMessage: '  暂未开放  ',
+              searchable: false,
+              navigable: true,
+            },
+            geometry: { type: 'Point', coordinates: [106, 29] },
+          }],
+        },
+      }],
+    }, 'admin-1', 0);
+
+    expect(prisma.campusMapDraft.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        manifest: expect.objectContaining({
+          availability: { status: 'unopened', unavailableMessage: '待学校确认' },
+          layers: [expect.objectContaining({
+            inlineData: expect.objectContaining({
+              features: [expect.objectContaining({
+                properties: expect.objectContaining({
+                  serviceStatus: 'unopened',
+                  unavailableMessage: '暂未开放',
+                  searchable: true,
+                  navigable: false,
+                }),
+              })],
+            }),
+          })],
+        }),
+      }),
+    });
   });
 
   it('rejects publishing a future searchable feature', async () => {
