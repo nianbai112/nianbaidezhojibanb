@@ -95,6 +95,9 @@ const MINI_PROGRAM_PREFIXES = [
   "/config/ai",
   "/AnonymousIdentity/",
   "/rider-app/",
+  "/platform/",
+  "/layout",
+  "/layout/",
 ];
 
 @Injectable()

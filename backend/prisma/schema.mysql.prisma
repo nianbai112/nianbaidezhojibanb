@@ -2528,6 +2528,22 @@ model Config {
   @@map("configs")
 }
 
+/// 页面布局发布版本历史（真版本，支持回滚）
+model LayoutVersion {
+  id        String   @id @default(cuid())
+  pageType  String
+  regionId  String
+  version   Int
+  config    Json
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([pageType, regionId, version])
+  @@index([pageType, regionId])
+  @@map("layout_versions")
+}
+
 
 model CampusMap {
   id              String             @id @default(cuid())

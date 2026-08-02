@@ -138,11 +138,4 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
     { key: 'login-logs', title: '登录日志', icon: 'Key', component: asyncPage(() => import('@/views/system/LoginLogs.vue')) },
     { key: 'wechat-logs', title: '微信发送日志', icon: 'Message', component: asyncPage(() => import('@/views/system/WechatLogsPage.vue')) }
   ],
-
-  // ── 区域中心 ─────────────────────────────
-  'region-app-pages': [
-    { key: 'home', title: '首页布局', icon: 'HomeFilled', component: asyncPage(() => import('@/views/layout/HomeLayoutConfig.vue')) },
-    { key: 'message', title: '消息页布局', icon: 'ChatDotSquare', component: asyncPage(() => import('@/views/layout/MessageLayoutConfig.vue')) },
-    { key: 'profile', title: '我的页布局', icon: 'User', component: asyncPage(() => import('@/views/layout/ProfileLayoutConfig.vue')) }
-  ]
 }

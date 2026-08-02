@@ -63,6 +63,8 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   'tracking',
   'platform',
   'rider-app',
+  'layout',
+  'miniapp-static',
 ];
 
 const MINI_PROGRAM_ROOT_PREFIXES = new Set(MINI_PROGRAM_ROOT_PREFIX_LIST);

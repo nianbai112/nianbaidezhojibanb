@@ -63,6 +63,7 @@ import { OrderCenterModule } from './modules/order-center/order-center.module';
 import { OrderAppealModule } from './modules/order-appeal/order-appeal.module';
 import { AssistantTicketModule } from './modules/assistant-ticket/assistant-ticket.module';
 import { LayoutConfigModule } from './modules/layout-config/layout-config.module';
+import { DecorVersionModule } from './modules/decor-version/decor-version.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { MarketingAdminModule } from './modules/marketing-admin/marketing-admin.module';
 import { AiAdminModule } from './modules/ai-admin/ai-admin.module';
@@ -217,6 +218,7 @@ const envFilePath = getEnvFilePaths();
     OrderAppealModule,
     AssistantTicketModule,
     LayoutConfigModule,
+    DecorVersionModule,
     AnalyticsModule,
     MarketingAdminModule,
     AiRuntimeModule,

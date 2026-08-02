@@ -3523,6 +3523,12 @@ export class AdminService {
         (exists as any).managerUserId,
       );
     }
+    // 区域装修/配置变更：广播热更新事件，小程序端收到后实时刷新区域配置
+    this.wsNative?.broadcast({
+      event: "regionConfigUpdate",
+      type: "regionConfigUpdate",
+      data: { regionId: id, updateTime: Date.now() },
+    });
     return this.toAdminRegion(region);
   }
 

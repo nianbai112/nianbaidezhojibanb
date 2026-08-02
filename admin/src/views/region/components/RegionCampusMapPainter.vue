@@ -8,11 +8,15 @@
       :route-count="routes.length"
       :publish-summary="publishReadiness.summary"
       :can-publish="publishReadiness.canPublish"
+      :active-version="workflow.activeVersion"
+      :draft-revision="workflow.draftRevision"
+      :has-unsaved-changes="hasUnsavedChanges"
       :assistant-score="mapAssistantScore"
       :assistant-summary="mapAssistantSummary"
       :enabled="form.enabled"
       :loading="loading"
       :saving="saving"
+      :draft-saving="draftSaving"
       :disabling="disabling"
       @update:enabled="form.enabled = $event"
       @assistant="openAssistantDrawer"
@@ -21,6 +25,8 @@
       @advanced="openAdvancedDrawer"
       @preview="openPreviewDrawer"
       @quality="openQualityDrawer"
+      @versions="versionDrawerVisible = true"
+      @save-draft="saveDraft()"
       @disable="disableMap"
       @publish="publishMap"
     />
@@ -213,6 +219,13 @@
       :checks="mapQualityChecks"
     />
 
+    <CampusMapVersionDrawer
+      v-model="versionDrawerVisible"
+      :region-id="currentRegionId()"
+      :active-version="workflow.activeVersion"
+      @restored="handleVersionRestored"
+    />
+
     <el-drawer v-model="advancedDrawerVisible" title="高级设置" size="460px" append-to-body>
       <el-form label-position="top" class="advanced-form">
         <el-form-item label="地图名称">
@@ -273,6 +286,7 @@ import CampusMapInspector from './campus-map/CampusMapInspector.vue'
 import CampusMapPreviewDrawer from './campus-map/CampusMapPreviewDrawer.vue'
 import CampusMapQualityDrawer from './campus-map/CampusMapQualityDrawer.vue'
 import CampusMapToolRail from './campus-map/CampusMapToolRail.vue'
+import CampusMapVersionDrawer from './campus-map/CampusMapVersionDrawer.vue'
 import CampusMapWorkbenchHeader from './campus-map/CampusMapWorkbenchHeader.vue'
 import {
   amapPlaceSearch,
@@ -283,8 +297,9 @@ import {
   fetchRegionCampusMapImport,
   fetchRegionCampusMapImports,
   fetchRegionCampusMap,
+  publishRegionCampusMapDraft,
   retryRegionCampusMapImport,
-  saveRegionCampusMap,
+  saveRegionCampusMapDraft,
   uploadRegionCampusMapImport,
 } from '@/api/admin'
 
@@ -452,6 +467,7 @@ const keyPlaceTargets = [
 const amapMapRef = ref<HTMLElement>()
 const loading = ref(false)
 const saving = ref(false)
+const draftSaving = ref(false)
 const disabling = ref(false)
 const importing = ref(false)
 const amapLoading = ref(false)
@@ -464,6 +480,8 @@ const qualityDrawerVisible = ref(false)
 const advancedDrawerVisible = ref(false)
 const importDrawerVisible = ref(false)
 const assistantDrawerVisible = ref(false)
+const versionDrawerVisible = ref(false)
+const hasUnsavedChanges = ref(false)
 const previewOpened = ref(false)
 const poiCategory = ref('building')
 const amapSearchKeyword = ref('')
@@ -510,6 +528,12 @@ const form = reactive({
   mapWidth: 1200,
   mapHeight: 800,
   opacity: 1,
+})
+
+const workflow = reactive({
+  draftRevision: 0,
+  activeVersion: 0,
+  activeVersionId: '',
 })
 
 const hasVisualBaseMap = computed(() => Boolean(form.imageUrl || hasVectorBaseMap.value))
@@ -564,8 +588,8 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
     checks.push({
       key: 'positioning',
       label: '定位校准',
-      status: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? 'pass' : 'warning',
-      message: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? '已配置定位校准' : '未校准时只能展示临时位置',
+      status: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? 'pass' : 'error',
+      message: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? '已配置定位校准' : '图片/CAD 地图发布前必须配置至少 2 个定位校准点',
     })
   } else {
     checks.unshift({
@@ -779,6 +803,11 @@ watch(editorMode, (mode) => {
 
 watch([pois, areas, routes, calibrationPoints], () => {
   if (editorMode.value === 'amap') refreshAmapOverlays()
+  if (!historyLocked.value) hasUnsavedChanges.value = true
+}, { deep: true })
+
+watch([form, editorMode, hasVectorBaseMap, vectorCoordinateSystem], () => {
+  if (!historyLocked.value) hasUnsavedChanges.value = true
 }, { deep: true })
 
 onBeforeUnmount(() => {
@@ -1164,6 +1193,7 @@ function undoMapEdit() {
   if (!snapshot) return
   redoStack.value.push(serializeMapState())
   applyMapSnapshot(snapshot)
+  hasUnsavedChanges.value = true
 }
 
 function redoMapEdit() {
@@ -1171,6 +1201,7 @@ function redoMapEdit() {
   if (!snapshot) return
   undoStack.value.push(serializeMapState())
   applyMapSnapshot(snapshot)
+  hasUnsavedChanges.value = true
 }
 
 function roundLngLat(value: number) {
@@ -2220,6 +2251,31 @@ async function loadMap() {
   }
 }
 
+async function saveDraft(options: { silent?: boolean } = {}) {
+  if (!currentRegionId()) {
+    ElMessage.warning('请先选择区域')
+    return null
+  }
+  draftSaving.value = true
+  try {
+    const result: any = await saveRegionCampusMapDraft(
+      currentRegionId(),
+      buildPayload(),
+      workflow.draftRevision,
+    )
+    const config = result?.data || result || {}
+    applyWorkflow(config.workflow)
+    hasUnsavedChanges.value = false
+    if (!options.silent) ElMessage.success('校园地图草稿已保存，尚未发布到小程序')
+    return config
+  } catch (error: any) {
+    ElMessage.error(error?.message || '校园地图草稿保存失败')
+    return null
+  } finally {
+    draftSaving.value = false
+  }
+}
+
 async function publishMap() {
   if (!currentRegionId()) {
     ElMessage.warning('请先选择区域')
@@ -2232,8 +2288,13 @@ async function publishMap() {
   if (!(await validateBeforePublish())) return
   saving.value = true
   try {
-    const result: any = await saveRegionCampusMap(currentRegionId(), buildPayload())
-    applyMapConfig(result?.data || result)
+    const draft = await saveDraft({ silent: true })
+    if (!draft) return
+    const revision = Number(draft.workflow?.draftRevision || workflow.draftRevision)
+    const result: any = await publishRegionCampusMapDraft(currentRegionId(), revision)
+    const config = result?.data || result || {}
+    applyWorkflow(config.workflow)
+    hasUnsavedChanges.value = false
     ElMessage.success('校园地图已发布')
   } catch (error: any) {
     ElMessage.error(error?.message || '校园地图发布失败')
@@ -2248,7 +2309,7 @@ async function disableMap() {
     return
   }
   try {
-    await ElMessageBox.confirm('停用后小程序会回到本地示例地图，确定停用吗？', '停用校园地图', {
+    await ElMessageBox.confirm('停用后优先使用全局已发布地图；没有全局地图时小程序显示“暂未开通”。确定停用吗？', '停用校园地图', {
       confirmButtonText: '停用',
       cancelButtonText: '取消',
       type: 'warning',
@@ -2272,6 +2333,7 @@ function applyMapConfig(config: any = {}) {
   historyLocked.value = true
   undoStack.value = []
   redoStack.value = []
+  applyWorkflow(config.workflow)
   const imageMap = config.imageMap || {}
   const isAmapConfig = String(config.coordinateSystem?.type || '').toLowerCase() === 'amap' || config.amap?.provider === 'amap'
   const amapConfig = config.amap || {}
@@ -2310,7 +2372,19 @@ function applyMapConfig(config: any = {}) {
   }
   nextTick(() => {
     historyLocked.value = false
+    hasUnsavedChanges.value = false
   })
+}
+
+function applyWorkflow(value: any = {}) {
+  workflow.draftRevision = Number(value.draftRevision || 0)
+  workflow.activeVersion = Number(value.activeVersion || 0)
+  workflow.activeVersionId = String(value.activeVersionId || '')
+}
+
+async function handleVersionRestored() {
+  versionDrawerVisible.value = false
+  await loadMap()
 }
 
 function getLayerFeatures(layer: any) {

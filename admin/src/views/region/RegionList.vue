@@ -133,9 +133,7 @@
             />
           </div>
           <el-button text :icon="EditPen" @click="openEditBasic(region)">编辑档案</el-button>
-          <el-button text :icon="HomeFilled" @click="goRegionModule(region, '/region/page-decoration')">页面装修</el-button>
-          <el-button text :icon="Menu" @click="goRegionModule(region, '/region/tabbar')">Tabbar</el-button>
-          <el-button text :icon="Share" @click="goRegionModule(region, '/region/share-settings')">分享</el-button>
+          <el-button text :icon="MagicStick" @click="goRegionModule(region, '/region/app-pages')">UI 编辑器</el-button>
           <el-button text :icon="School" @click="goRegionModule(region, '/user/schools')">学校库</el-button>
         </div>
       </article>
@@ -317,14 +315,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   EditPen,
-  HomeFilled,
+  MagicStick,
   MapLocation,
-  Menu,
   Plus,
   Refresh,
   School,
-  Search,
-  Share
+  Search
 } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
@@ -560,7 +556,7 @@ async function submitCreate() {
     createVisible.value = false
     await loadRegions()
     if (createdId && createForm.goDecorationAfterCreate) {
-      goRegionModule({ id: createdId, name: createForm.name }, '/region/page-decoration')
+      goRegionModule({ id: createdId, name: createForm.name }, '/region/app-pages')
     }
   } catch (error: any) {
     ElMessage.error(error?.message || '创建区域失败')

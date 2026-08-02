@@ -202,7 +202,7 @@
         </el-dropdown>
       </header>
 
-      <main class="content"><router-view /></main>
+      <main class="content" :class="{ 'content-fullbleed': isDesignerFullBleed }"><router-view /></main>
     </section>
 
     <CommandPalette ref="paletteRef" :groups="visibleMenuGroups" />
@@ -224,6 +224,11 @@ import { useNavBadges } from './useNavBadges'
 
 const router = useRouter()
 const route = useRoute()
+
+/** 设计器工作室全屏沉浸：content 区 padding 置 0（仅 UI 编辑器 designer 模式） */
+const isDesignerFullBleed = computed(
+  () => route.path === '/region/app-pages' && route.query.mode === 'designer',
+)
 const auth = useAuthStore()
 const unreadMessages = ref(0)
 const sidebarCollapsed = ref(false)
@@ -1268,6 +1273,11 @@ onBeforeUnmount(() => {
 .content {
   flex: 1;
   padding: 16px 20px 24px;
+}
+
+/* 设计器全屏沉浸态：padding 置 0（覆盖下方响应式断点，故用 !important） */
+.content.content-fullbleed {
+  padding: 0 !important;
 }
 
 /* ── 响应式：<1100px 抽屉式侧栏 ── */

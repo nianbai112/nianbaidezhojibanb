@@ -24,6 +24,20 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class LayoutConfigController {
   constructor(private readonly layoutConfigService: LayoutConfigService) {}
 
+  // ==================== AI 生成布局 ====================
+
+  @Post('ai-generate/:pageType/:regionId')
+  @RequirePermission('layout:edit')
+  @ApiOperation({ summary: 'AI 根据描述生成页面布局' })
+  aiGenerateLayout(
+    @Param('pageType') pageType: string,
+    @Param('regionId') regionId: string,
+    @Body() body: { prompt: string },
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.layoutConfigService.aiGenerateLayout(pageType, body?.prompt, operatorId, regionId);
+  }
+
   // ==================== 首页布局 ====================
 
   @Get('home/:regionId')
@@ -178,5 +192,73 @@ export class LayoutConfigController {
   ) {
     const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
     return this.layoutConfigService.publish('profile', regionId, operatorId, ip);
+  }
+
+  // ==================== 容器页（任务大厅）布局 ====================
+
+  @Get('containers/:regionId')
+  @RequirePermission('layout:view')
+  @ApiOperation({ summary: '获取容器页布局配置' })
+  getContainersLayout(@Param('regionId') regionId: string) {
+    return this.layoutConfigService.getLayout('containers', regionId);
+  }
+
+  @Put('containers/:regionId')
+  @RequirePermission('layout:edit')
+  @ApiOperation({ summary: '保存容器页布局草稿' })
+  saveContainersLayout(
+    @Param('regionId') regionId: string,
+    @Body() body: any,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.layoutConfigService.saveDraft('containers', regionId, body, operatorId, ip);
+  }
+
+  @Post('containers/:regionId/preview')
+  @RequirePermission('layout:edit')
+  @ApiOperation({ summary: '预览容器页布局' })
+  previewContainersLayout(
+    @Param('regionId') regionId: string,
+    @Body() body: any,
+  ) {
+    return this.layoutConfigService.preview('containers', regionId, body);
+  }
+
+  @Post('containers/:regionId/publish')
+  @RequirePermission('layout:publish')
+  @ApiOperation({ summary: '发布容器页布局' })
+  publishContainersLayout(
+    @Param('regionId') regionId: string,
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.layoutConfigService.publish('containers', regionId, operatorId, ip);
+  }
+
+  @Post('containers/:regionId/rollback')
+  @RequirePermission('layout:publish')
+  @ApiOperation({ summary: '回滚容器页布局' })
+  rollbackContainersLayout(
+    @Param('regionId') regionId: string,
+    @Body() body: { versionId: string },
+    @CurrentUser('sub') operatorId: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '';
+    return this.layoutConfigService.rollback('containers', regionId, body.versionId, operatorId, ip);
+  }
+
+  @Get('containers/:regionId/versions')
+  @RequirePermission('layout:view')
+  @ApiOperation({ summary: '获取容器页布局版本历史' })
+  getContainersVersions(
+    @Param('regionId') regionId: string,
+    @Query('page') page?: number,
+    @Query('pageSize') pageSize?: number,
+  ) {
+    return this.layoutConfigService.getVersions('containers', regionId, page || 1, pageSize || 20);
   }
 }

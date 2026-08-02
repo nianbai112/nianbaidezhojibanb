@@ -23,9 +23,10 @@ const routes: RouteRecordRaw[] = [
       // ========== 区域中心 ==========
       { path: 'region/list', component: () => import('@/views/region/RegionList.vue'), meta: { title: '区域列表' } },
       { path: 'region/config', component: () => import('@/views/region/RegionConfigCenter.vue'), meta: { title: '区域配置' } },
-      { path: 'region/page-decoration', component: () => import('@/views/region/RegionPageDecoration.vue'), meta: { title: '页面装修' } },
-      { path: 'region/tabbar', component: () => import('@/views/region/RegionTabbarManager.vue'), meta: { title: 'Tabbar 配置' } },
-      { path: 'region/share-settings', component: () => import('@/views/region/RegionShareSettings.vue'), meta: { title: '分享配置' } },
+      // 页面装修相关能力已全部收编进 UI 编辑器（/region/app-pages），旧入口保留重定向
+      { path: 'region/page-decoration', redirect: { path: '/region/app-pages', query: { mode: 'overview' } } },
+      { path: 'region/tabbar', redirect: (to: any) => ({ path: '/region/app-pages', query: { ...to.query, mode: 'tabbar' } }) },
+      { path: 'region/share-settings', redirect: (to: any) => ({ path: '/region/app-pages', query: { ...to.query, mode: 'share' } }) },
       { path: 'region/campus-map', redirect: { path: '/region/config', query: { tab: 'campusMap' } } },
       { path: 'region/admins', component: () => import('@/views/region/RegionAdmins.vue'), meta: { title: '区域管理员' } },
       { path: 'region/city-agent', component: () => import('@/views/city-agent/CityAgentWorkbench.vue'), meta: { title: '区域合作' } },
@@ -223,7 +224,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'user/loyalty', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '成长中心', tabsKey: 'user-loyalty' } },
       { path: 'system/publishing', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '官网与内容', tabsKey: 'system-publishing' } },
       { path: 'system/observability', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '监控与日志', tabsKey: 'system-observability' } },
-      { path: 'region/app-pages', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '小程序页面', tabsKey: 'region-app-pages' } },
+      { path: 'region/app-pages', component: () => import('@/views/miniapp/UiEditor.vue'), meta: { title: 'UI 编辑器', fullBleed: true } },
     ]
   },
   { path: '/:pathMatch(.*)*', component: () => import('@/views/error/NotFound.vue') }

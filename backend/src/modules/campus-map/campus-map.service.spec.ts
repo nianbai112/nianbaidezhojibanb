@@ -293,6 +293,60 @@ describe('CampusMapService', () => {
     expect(result.sourceRegionId).toBe('region-2');
   });
 
+  it('falls back to the global published map when the region map is disabled', async () => {
+    const prisma = createPrisma();
+    prisma.campusMap.findUnique.mockImplementation(({ where }) => {
+      if (where.regionId === 'region-disabled') {
+        return Promise.resolve({
+          id: 'map-disabled',
+          regionId: 'region-disabled',
+          enabled: false,
+          activeVersionId: 'version-disabled',
+          activeVersion: {
+            id: 'version-disabled',
+            version: 2,
+            publishedAt: new Date('2026-07-28T00:00:00.000Z'),
+            manifest: {
+              enabled: true,
+              mapId: 'old-region-map',
+              layers: [{ id: 'operator_pois', inlineData: { type: 'FeatureCollection', features: [] } }],
+            },
+          },
+        });
+      }
+      if (where.regionId === 'global') {
+        return Promise.resolve({
+          id: 'map-global',
+          regionId: 'global',
+          enabled: true,
+          activeVersionId: 'version-global',
+          activeVersion: {
+            id: 'version-global',
+            version: 5,
+            publishedAt: new Date('2026-07-29T00:00:00.000Z'),
+            manifest: {
+              enabled: true,
+              mapId: 'global-map',
+              layers: [{ id: 'operator_pois', inlineData: { type: 'FeatureCollection', features: [] } }],
+            },
+          },
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = new CampusMapService(prisma as any);
+    const result = await service.getActiveMap('region-disabled');
+
+    expect(result).toMatchObject({
+      enabled: true,
+      mapId: 'global-map',
+      regionId: 'region-disabled',
+      sourceRegionId: 'global',
+      workflow: { activeVersion: 5, activeVersionId: 'version-global' },
+    });
+  });
+
   it('returns disabled when no region or global map is configured', async () => {
     const prisma = createPrisma();
     prisma.config.findUnique.mockResolvedValue(null);

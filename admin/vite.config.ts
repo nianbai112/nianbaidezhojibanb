@@ -11,6 +11,11 @@ export default defineConfig({
   ],
   base: process.env.VITE_ADMIN_BASE || '/admin/',
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
+  // @tmagic/editor 依赖链（randombytes 等）在浏览器端引用 Node 的 global，需映射为 globalThis
+  define: { global: 'globalThis' },
+  optimizeDeps: {
+    esbuildOptions: { define: { global: 'globalThis' } },
+  },
   build: {
     rollupOptions: {
       output: {
@@ -31,6 +36,10 @@ export default defineConfig({
         rewrite: p => p.replace(/^\/api/, '')
       },
       '/uploads': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      },
+      '/miniapp-static': {
         target: 'http://localhost:3000',
         changeOrigin: true
       }

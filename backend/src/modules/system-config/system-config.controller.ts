@@ -568,6 +568,12 @@ export class LoginPageConfigPublicController {
   getLoginPageConfig() {
     return this.systemConfigService.getLoginPageConfig();
   }
+
+  @Get('platform/api-config')
+  @ApiOperation({ summary: '获取小程序 API 域名配置' })
+  getPublicApiConfig() {
+    return this.systemConfigService.getPublicApiConfig();
+  }
 }
 
 @ApiTags('骑手 App 公开配置')

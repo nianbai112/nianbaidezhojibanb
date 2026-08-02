@@ -23,6 +23,14 @@ async function bootstrap() {
 
   // 校园地图清单可包含内联 GeoJSON；只为该管理端路由放宽请求体限制。
   app.use('/admin/campus-map', express.json({ limit: '5mb' }));
+  // 小程序代码包素材库走 base64 上传（5MB 图片 ≈ 6.7MB base64），放宽到 10mb。
+  app.use('/admin/miniapp/code/assets', express.json({ limit: '10mb' }));
+
+  // 修复：全局前缀 + 排除路径场景下 Nest 内置 JSON 解析器未覆盖排除路由，
+  // 导致 @Body() 为 undefined（urlencoded 正常、application/json 失效）。
+  // 显式注册 JSON/urlencoded 解析，幂等且与 Nest 默认行为一致。
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
   const logger = app.get(LoggerService);
   app.useLogger(logger);

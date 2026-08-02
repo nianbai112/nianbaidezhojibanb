@@ -703,6 +703,27 @@ export async function saveRegionCampusMap(regionId: string | number, data: any) 
   return request.put(`/admin/campus-map/${regionId}`, data)
 }
 
+export async function saveRegionCampusMapDraft(regionId: string | number, config: any, revision = 0) {
+  return request.put(`/admin/campus-map/${regionId}/draft`, { config, revision })
+}
+
+export async function publishRegionCampusMapDraft(regionId: string | number, revision: number) {
+  return request.post(`/admin/campus-map/${regionId}/publish`, { revision })
+}
+
+export async function fetchRegionCampusMapVersions(
+  regionId: string | number,
+  params: { page?: number; pageSize?: number } = {},
+) {
+  return request.get(`/admin/campus-map/${regionId}/versions`, {
+    params: { page: 1, pageSize: 20, ...params },
+  })
+}
+
+export async function rollbackRegionCampusMapVersion(regionId: string | number, versionId: string) {
+  return request.post(`/admin/campus-map/${regionId}/versions/${versionId}/rollback`)
+}
+
 export async function disableRegionCampusMap(regionId: string | number) {
   return request.delete(`/admin/campus-map/${regionId}`)
 }

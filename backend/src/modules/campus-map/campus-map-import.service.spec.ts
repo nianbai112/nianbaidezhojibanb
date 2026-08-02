@@ -4,6 +4,7 @@ describe('CampusMapImportService', () => {
   const createPrisma = () => ({
     config: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
       upsert: jest.fn(),
     },
   });
@@ -245,5 +246,95 @@ describe('CampusMapImportService', () => {
         updatedBy: 'admin-1',
       }),
     }));
+  });
+
+  it('marks queued and processing imports as retryable failures after a restart', async () => {
+    const prisma = createPrisma();
+    const job = (id: string, status: string) => ({
+      id,
+      regionId: 'region-1',
+      status,
+      progress: 45,
+      message: '处理中',
+      source: {
+        fileName: `${id}.dwg`,
+        fileExt: '.dwg',
+        fileSize: 1024,
+        mimeType: 'application/acad',
+        url: `/uploads/${id}.dwg`,
+        path: `/tmp/${id}.dwg`,
+      },
+      report: { summary: [], warnings: [], layers: [] },
+      draft: null,
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z',
+    });
+    prisma.config.findMany.mockResolvedValue([{
+      key: 'campus_map_imports_region-1',
+      value: {
+        regionId: 'region-1',
+        jobs: [job('queued-job', 'queued'), job('processing-job', 'processing'), job('ready-job', 'draft_ready')],
+      },
+    }]);
+    prisma.config.upsert.mockResolvedValue({ key: 'campus_map_imports_region-1' });
+    const service = new CampusMapImportService(prisma as any);
+
+    await service.onModuleInit();
+
+    const saved = prisma.config.upsert.mock.calls[0][0].update.value.jobs;
+    expect(saved).toEqual([
+      expect.objectContaining({
+        id: 'queued-job',
+        status: 'failed',
+        progress: 0,
+        message: expect.stringContaining('服务重启'),
+      }),
+      expect.objectContaining({
+        id: 'processing-job',
+        status: 'failed',
+        progress: 0,
+        message: expect.stringContaining('服务重启'),
+      }),
+      expect.objectContaining({ id: 'ready-job', status: 'draft_ready', progress: 45 }),
+    ]);
+  });
+
+  it('keeps both jobs when two imports update the same region concurrently', async () => {
+    const prisma = createPrisma();
+    let storedJobs: any[] = [];
+    prisma.config.findUnique.mockImplementation(async () => ({
+      value: { regionId: 'region-1', jobs: storedJobs.map((item) => ({ ...item })) },
+    }));
+    prisma.config.upsert.mockImplementation(async ({ create, update }: any) => {
+      storedJobs = (update.value?.jobs || create.value.jobs).map((item: any) => ({ ...item }));
+      return { key: 'campus_map_imports_region-1' };
+    });
+    const service = new CampusMapImportService(prisma as any);
+    const makeJob = (id: string) => ({
+      id,
+      regionId: 'region-1',
+      status: 'queued',
+      progress: 0,
+      message: '等待处理',
+      source: {
+        fileName: `${id}.dxf`,
+        fileExt: '.dxf',
+        fileSize: 100,
+        mimeType: 'application/dxf',
+        url: `/uploads/${id}.dxf`,
+        path: `/tmp/${id}.dxf`,
+      },
+      report: { summary: [], warnings: [], layers: [] },
+      draft: null,
+      createdAt: '2026-07-29T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z',
+    });
+
+    await Promise.all([
+      (service as any).saveJob(makeJob('job-a')),
+      (service as any).saveJob(makeJob('job-b')),
+    ]);
+
+    expect(storedJobs.map((item) => item.id).sort()).toEqual(['job-a', 'job-b']);
   });
 });

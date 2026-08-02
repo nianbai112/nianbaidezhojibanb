@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import * as childProcess from 'child_process';
 import * as crypto from 'crypto';
@@ -98,11 +98,21 @@ class CampusMapNeedsConverterError extends Error {
 }
 
 @Injectable()
-export class CampusMapImportService {
+export class CampusMapImportService implements OnModuleInit {
   private readonly logger = new Logger(CampusMapImportService.name);
   private readonly activeJobAborters = new Map<string, AbortController>();
+  // ponytail: process-local only; multi-instance converters need a dedicated job table with database claims.
+  private readonly regionWriteTails = new Map<string, Promise<void>>();
 
   constructor(private readonly prisma: PrismaService) {}
+
+  async onModuleInit() {
+    try {
+      await this.recoverInterruptedJobs();
+    } catch (error: any) {
+      this.logger.warn(`校园地图导入任务恢复失败: ${error?.message || error}`);
+    }
+  }
 
   async createImport(regionId: string, file: Express.Multer.File, adminId?: string) {
     const normalizedRegionId = this.normalizeRegionId(regionId);
@@ -197,8 +207,10 @@ export class CampusMapImportService {
     const job = await this.findJob(normalizedRegionId, jobId);
     this.activeJobAborters.get(this.jobKey(normalizedRegionId, jobId))?.abort();
 
-    const jobs = (await this.readJobs(normalizedRegionId)).filter((item) => item.id !== jobId);
-    await this.saveJobs(normalizedRegionId, jobs, adminId || job.createdBy);
+    await this.withRegionWrite(normalizedRegionId, async () => {
+      const jobs = (await this.readJobs(normalizedRegionId)).filter((item) => item.id !== jobId);
+      await this.saveJobs(normalizedRegionId, jobs, adminId || job.createdBy);
+    });
     await this.removeImportFiles(job);
     return { id: jobId, deleted: true };
   }
@@ -898,6 +910,36 @@ export class CampusMapImportService {
     return Array.isArray(value.jobs) ? value.jobs : [];
   }
 
+  private async recoverInterruptedJobs() {
+    const records = await this.prisma.config.findMany({
+      where: {
+        group: IMPORT_GROUP,
+        key: { startsWith: 'campus_map_imports_' },
+        isEnabled: true,
+      },
+      select: { key: true, value: true, updatedBy: true },
+    });
+    for (const record of records) {
+      const value = record?.value && typeof record.value === 'object' && !Array.isArray(record.value)
+        ? record.value as any
+        : {};
+      const jobs = Array.isArray(value.jobs) ? value.jobs as CampusMapImportJob[] : [];
+      if (!jobs.some((job) => job.status === 'queued' || job.status === 'processing')) continue;
+      const regionId = this.normalizeRegionId(value.regionId || record.key.replace(/^campus_map_imports_/, ''));
+      const recoveredAt = new Date().toISOString();
+      const recovered = jobs.map((job) => ['queued', 'processing'].includes(job.status)
+        ? {
+            ...job,
+            status: 'failed' as const,
+            progress: 0,
+            message: '服务重启导致转换中断，请在后台点击重试',
+            updatedAt: recoveredAt,
+          }
+        : job);
+      await this.saveJobs(regionId, recovered, record.updatedBy || undefined);
+    }
+  }
+
   private async findJob(regionId: string, jobId: string) {
     const job = (await this.readJobs(regionId)).find((item) => item.id === jobId);
     if (!job) throw new NotFoundException('校园地图导入任务不存在');
@@ -916,23 +958,45 @@ export class CampusMapImportService {
   }
 
   private async saveJob(job: CampusMapImportJob) {
-    const jobs = await this.readJobs(job.regionId);
-    const nextJobs = [job, ...jobs.filter((item) => item.id !== job.id)].slice(0, 20);
-    await this.saveJobs(job.regionId, nextJobs, job.createdBy);
+    await this.withRegionWrite(job.regionId, async () => {
+      const jobs = await this.readJobs(job.regionId);
+      const nextJobs = [job, ...jobs.filter((item) => item.id !== job.id)].slice(0, 20);
+      await this.saveJobs(job.regionId, nextJobs, job.createdBy);
+    });
   }
 
   private async updateJob(regionId: string, jobId: string, patch: Partial<CampusMapImportJob>, adminId?: string) {
-    const jobs = await this.readJobs(regionId);
-    const index = jobs.findIndex((item) => item.id === jobId);
-    if (index < 0) throw new NotFoundException('校园地图导入任务不存在');
-    const updated = {
-      ...jobs[index],
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    } as CampusMapImportJob;
-    jobs[index] = updated;
-    await this.saveJobs(regionId, jobs, adminId || updated.createdBy);
-    return this.publicJob(updated);
+    return this.withRegionWrite(regionId, async () => {
+      const jobs = await this.readJobs(regionId);
+      const index = jobs.findIndex((item) => item.id === jobId);
+      if (index < 0) throw new NotFoundException('校园地图导入任务不存在');
+      const updated = {
+        ...jobs[index],
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      } as CampusMapImportJob;
+      jobs[index] = updated;
+      await this.saveJobs(regionId, jobs, adminId || updated.createdBy);
+      return this.publicJob(updated);
+    });
+  }
+
+  private async withRegionWrite<T>(regionId: string, operation: () => Promise<T>): Promise<T> {
+    const key = this.normalizeRegionId(regionId);
+    const previous = this.regionWriteTails.get(key) || Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.catch(() => undefined).then(() => gate);
+    this.regionWriteTails.set(key, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.regionWriteTails.get(key) === tail) this.regionWriteTails.delete(key);
+    }
   }
 
   private async saveJobs(regionId: string, jobs: CampusMapImportJob[], adminId?: string) {

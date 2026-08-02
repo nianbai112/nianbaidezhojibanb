@@ -9,6 +9,9 @@
       <span>{{ poiCount }} 点位</span>
       <span>{{ areaCount }} 区域</span>
       <span>{{ routeCount }} 路线</span>
+      <span v-if="activeVersion">线上 v{{ activeVersion }}</span>
+      <span v-if="draftRevision">草稿 r{{ draftRevision }}</span>
+      <span v-if="hasUnsavedChanges" class="warning">有未保存修改</span>
       <span :class="{ warning: !canPublish }">{{ publishSummary }}</span>
     </div>
     <div class="head-actions">
@@ -29,6 +32,8 @@
       <el-button :icon="Setting" @click="$emit('advanced')">高级</el-button>
       <el-button :icon="View" @click="$emit('preview')">预览</el-button>
       <el-button :icon="Warning" @click="$emit('quality')">检查</el-button>
+      <el-button :icon="Clock" @click="$emit('versions')">版本历史</el-button>
+      <el-button :icon="DocumentChecked" :loading="draftSaving" @click="$emit('save-draft')">保存草稿</el-button>
       <el-button type="danger" plain :icon="Delete" :loading="disabling" @click="$emit('disable')">停用</el-button>
       <el-button type="primary" :icon="Check" :loading="saving" @click="$emit('publish')">发布</el-button>
     </div>
@@ -38,7 +43,9 @@
 <script setup lang="ts">
 import {
   Check,
+  Clock,
   Delete,
+  DocumentChecked,
   MagicStick,
   RefreshRight,
   Setting,
@@ -55,11 +62,15 @@ defineProps<{
   routeCount: number
   publishSummary: string
   canPublish: boolean
+  activeVersion: number
+  draftRevision: number
+  hasUnsavedChanges: boolean
   assistantScore: number
   assistantSummary: string
   enabled: boolean
   loading: boolean
   saving: boolean
+  draftSaving: boolean
   disabling: boolean
 }>()
 
@@ -71,6 +82,8 @@ defineEmits<{
   advanced: []
   preview: []
   quality: []
+  versions: []
+  'save-draft': []
   disable: []
   publish: []
 }>()

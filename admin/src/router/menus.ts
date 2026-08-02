@@ -26,10 +26,7 @@ export const menuGroups = [
       { path: '/region/list', title: '区域列表', icon: 'Location' },
       { path: '/region/config', title: '区域配置', icon: 'Setting' },
       { path: '/dashboard/region-ops', title: '区域运营', icon: 'TrendCharts' },
-      { path: '/region/page-decoration', title: '区域页面装修', icon: 'Brush', section: '页面装修' },
-      { path: '/region/tabbar', title: 'Tabbar 配置', icon: 'Menu' },
-      { path: '/region/share-settings', title: '分享配置', icon: 'Share' },
-      { path: '/region/app-pages', title: '小程序页面', icon: 'Iphone' },
+      { path: '/region/app-pages', title: 'UI 编辑器', icon: 'MagicStick', section: '页面装修' },
       { path: '/region/admins', title: '区域管理员', icon: 'UserFilled', section: '人员与合作' },
       { path: '/region/city-agent', title: '区域合作', icon: 'Connection' }
     ]

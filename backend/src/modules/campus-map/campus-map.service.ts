@@ -14,13 +14,18 @@ export class CampusMapService {
   async getActiveMap(regionId?: string) {
     const requestedRegionId = this.normalizeRegionId(regionId);
     const regionMap = await this.findPublishedMap(requestedRegionId);
-    if (regionMap) return this.toPublishedMap(regionMap, requestedRegionId, requestedRegionId);
+    if (this.isPublishedMapEnabled(regionMap)) {
+      return this.toPublishedMap(regionMap, requestedRegionId, requestedRegionId);
+    }
 
     if (requestedRegionId !== GLOBAL_REGION_ID) {
       const globalMap = await this.findPublishedMap(GLOBAL_REGION_ID);
-      if (globalMap) return this.toPublishedMap(globalMap, requestedRegionId, GLOBAL_REGION_ID);
+      if (this.isPublishedMapEnabled(globalMap)) {
+        return this.toPublishedMap(globalMap, requestedRegionId, GLOBAL_REGION_ID);
+      }
     }
 
+    if (regionMap) return this.disabledConfig(requestedRegionId, 'not_configured');
     return this.getLegacyActiveMap(requestedRegionId);
   }
 
@@ -267,12 +272,16 @@ export class CampusMapService {
     const regionRecord = await this.prisma.config.findUnique({
       where: { key: this.configKey(requestedRegionId) },
     });
-    if (regionRecord) return this.toPublicConfig(regionRecord, requestedRegionId, requestedRegionId);
+    if (this.isLegacyMapEnabled(regionRecord)) {
+      return this.toPublicConfig(regionRecord, requestedRegionId, requestedRegionId);
+    }
     if (requestedRegionId !== GLOBAL_REGION_ID) {
       const globalRecord = await this.prisma.config.findUnique({
         where: { key: this.configKey(GLOBAL_REGION_ID) },
       });
-      if (globalRecord) return this.toPublicConfig(globalRecord, requestedRegionId, GLOBAL_REGION_ID);
+      if (this.isLegacyMapEnabled(globalRecord)) {
+        return this.toPublicConfig(globalRecord, requestedRegionId, GLOBAL_REGION_ID);
+      }
     }
     return this.disabledConfig(requestedRegionId, 'not_configured');
   }
@@ -286,6 +295,16 @@ export class CampusMapService {
       map,
       { activeVersion: map.activeVersion.version, activeVersionId: map.activeVersion.id },
     );
+  }
+
+  private isPublishedMapEnabled(map: any) {
+    const manifest = this.asRecord(map?.activeVersion?.manifest);
+    return !!map?.enabled && !!manifest && manifest.enabled !== false;
+  }
+
+  private isLegacyMapEnabled(record: any) {
+    const value = this.asRecord(record?.value);
+    return !!record?.isEnabled && !!value && value.enabled !== false && value.isEnabled !== false;
   }
 
   private adminManifest(value: Record<string, any>, regionId: string) {

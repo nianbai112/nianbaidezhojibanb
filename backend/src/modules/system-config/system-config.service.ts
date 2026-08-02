@@ -56,6 +56,16 @@ export class SystemConfigService {
     return { success: true, data: { ...this.getDefaultLoginPageConfig(), ...(config?.value as Record<string, any> || {}) } };
   }
 
+  /** 小程序 API 域名（Config 表 key: platform.api_base_url，后台可改，小程序启动时拉取） */
+  async getPublicApiConfig() {
+    const config = await this.prisma.config.findUnique({ where: { key: 'platform.api_base_url' } });
+    const apiBaseUrl =
+      (config?.value as any)?.apiBaseUrl ||
+      process.env.PUBLIC_API_BASE_URL ||
+      'https://yuntingzhe.cn/api';
+    return { success: true, data: { apiBaseUrl } };
+  }
+
   async saveLoginPageConfig(dto: any, operatorId?: string, ip?: string) {
     const before = await this.prisma.config.findUnique({ where: { key: 'login_page_config' } });
     const value = this.normalizeLoginPageConfig({ ...this.getDefaultLoginPageConfig(), ...(before?.value as Record<string, any> || {}), ...dto });
