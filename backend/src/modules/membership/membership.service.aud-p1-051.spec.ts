@@ -2,7 +2,7 @@ import { MembershipService } from './membership.service';
 
 describe('AUD-P1-051 MembershipService refund revocation', () => {
   it('adjusts a membership expiry with an auditable before-and-after record', async () => {
-    const oldExpiry = new Date('2026-08-01T00:00:00.000Z');
+    const oldExpiry = new Date(Date.now() + 30 * 86400000);
     const tx: any = {
       userMembership: {
         findUnique: jest.fn().mockResolvedValue({ id: 'membership-1', userId: 'user-1', status: 'active', expiredAt: oldExpiry }),
