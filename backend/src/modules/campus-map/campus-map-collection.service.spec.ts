@@ -55,7 +55,7 @@ describe('CampusMapCollectionService', () => {
 
     const result = await service.rotateAccessCode('region-1', 'task-1', 'admin-1');
 
-    expect(result.accessCode).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(result.accessCode).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(prisma.campusMapCollectionTask.update).toHaveBeenCalledWith({
       where: { id: 'task-1' },
@@ -108,7 +108,13 @@ describe('CampusMapCollectionService', () => {
       accessCodeExpiresAt: new Date(Date.now() + 60_000),
       assignments: [{ userId: 'user-1', assignedBy: 'admin-secret-id' }],
     });
-    prisma.campusMapMarkerTemplate.findMany.mockResolvedValue([]);
+    prisma.campusMapMarkerTemplate.findMany.mockResolvedValue([{
+      id: 'template-1', regionId: 'region-1', label: '教学楼入口', description: null,
+      icon: 'gate', color: '#137547', behavior: 'entrance', fieldSchema: [],
+      allowedBindings: { targetTypes: ['building'], relationTypes: ['entrance_of'] },
+      pinned: true, requirePhoto: false, requireNote: false, requireStationarySample: true,
+      enabled: true, sortOrder: 1, createdBy: 'admin-secret-id', updatedBy: 'admin-secret-id',
+    }]);
     const service = new CampusMapCollectionService(prisma as any);
 
     const result = await service.resolveCollectorContext('valid-code', 'user-1');
@@ -123,6 +129,8 @@ describe('CampusMapCollectionService', () => {
     expect(result.task).not.toHaveProperty('createdBy');
     expect(result.task).not.toHaveProperty('assignments');
     expect(result.task).not.toHaveProperty('accessCodeHash');
+    expect(result.templates[0]).not.toHaveProperty('createdBy');
+    expect(result.templates[0]).not.toHaveProperty('updatedBy');
   });
 
   it('returns the existing owned session when a client retries the same session id', async () => {

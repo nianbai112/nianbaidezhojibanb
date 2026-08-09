@@ -5,6 +5,7 @@ import { RequirePermission } from '../../decorators/require-permission.decorator
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
+import { UploadService } from '../upload/upload.service';
 import {
   CreateCollectionMarkerDto,
   CreateCollectionTaskDto,
@@ -24,6 +25,7 @@ export class CampusMapCollectionController {
   constructor(
     private readonly service: CampusMapCollectionService,
     private readonly scope: AdminDataScopeService,
+    private readonly upload: UploadService,
   ) {}
 
   @Get('admin/campus-map/collections/:regionId/tasks')
@@ -105,7 +107,23 @@ export class CampusMapCollectionController {
     @Req() req: AuthenticatedRequest,
   ) {
     const adminId = await this.assertAdminRegion(req, regionId);
-    return this.service.rotateAccessCode(regionId, taskId, adminId);
+    const access = await this.service.rotateAccessCode(regionId, taskId, adminId);
+    const collectorPath = `/campusMap/collector/index?code=${encodeURIComponent(access.accessCode)}`;
+    try {
+      const qrcode = await this.upload.generateQrcode({
+        scene: access.accessCode,
+        page: 'campusMap/collector/index',
+        width: 430,
+      });
+      return { ...access, collectorPath, qrcodeUrl: qrcode.url };
+    } catch {
+      return {
+        ...access,
+        collectorPath,
+        qrcodeUrl: null,
+        qrcodeError: '真实小程序码生成失败，请检查微信小程序和腾讯云 COS 配置',
+      };
+    }
   }
 
   @Get('admin/campus-map/collections/:regionId/templates')

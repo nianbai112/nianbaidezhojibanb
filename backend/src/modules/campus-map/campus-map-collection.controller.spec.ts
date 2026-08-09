@@ -22,6 +22,7 @@ describe('CampusMapCollectionController', () => {
     finishSession: jest.fn(),
   };
   const scope = { assertRegionAccess: jest.fn() };
+  const upload = { generateQrcode: jest.fn() };
   let controller: CampusMapCollectionController;
 
   beforeEach(() => {
@@ -30,6 +31,7 @@ describe('CampusMapCollectionController', () => {
     controller = new CampusMapCollectionController(
       service as unknown as CampusMapCollectionService,
       scope as any,
+      upload as any,
     );
   });
 
@@ -66,6 +68,21 @@ describe('CampusMapCollectionController', () => {
 
     expect(scope.assertRegionAccess).toHaveBeenCalledWith('admin-1', 'region-1');
     expect(service.createTask).toHaveBeenCalledWith('region-1', dto, 'admin-1');
+  });
+
+  it('returns a real mini-program code for the short-lived collector scene', async () => {
+    service.rotateAccessCode.mockResolvedValue({ accessCode: 'scene-code', expiresAt: new Date('2026-08-09T01:30:00Z') });
+    upload.generateQrcode.mockResolvedValue({ url: 'https://files/collector-code.jpg' });
+
+    const result = await controller.rotateAccessCode('region-1', 'task-1', { user: { sub: 'admin-1' } } as any);
+
+    expect(upload.generateQrcode).toHaveBeenCalledWith({
+      scene: 'scene-code', page: 'campusMap/collector/index', width: 430,
+    });
+    expect(result).toMatchObject({
+      qrcodeUrl: 'https://files/collector-code.jpg',
+      collectorPath: '/campusMap/collector/index?code=scene-code',
+    });
   });
 
   it('rejects admin JWTs from collector routes before calling the service', () => {

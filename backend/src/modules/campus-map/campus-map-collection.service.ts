@@ -179,7 +179,7 @@ export class CampusMapCollectionService {
     const task = await this.prisma.campusMapCollectionTask.findFirst({ where: { id: taskId, regionId } });
     if (!task) throw new NotFoundException('采集任务不存在');
 
-    const accessCode = randomBytes(32).toString('base64url');
+    const accessCode = randomBytes(16).toString('base64url');
     const expiresAt = new Date(Date.now() + ACCESS_CODE_TTL_MS);
     await this.prisma.campusMapCollectionTask.update({
       where: { id: taskId },
@@ -219,7 +219,24 @@ export class CampusMapCollectionService {
       instructions: task.instructions,
       status: task.status,
     };
-    return { task: safeTask, templates, accessCodeExpiresAt: task.accessCodeExpiresAt };
+    const safeTemplates = templates.map((template) => ({
+      id: template.id,
+      regionId: template.regionId,
+      label: template.label,
+      description: template.description,
+      icon: template.icon,
+      color: template.color,
+      behavior: template.behavior,
+      fieldSchema: template.fieldSchema,
+      allowedBindings: template.allowedBindings,
+      pinned: template.pinned,
+      requirePhoto: template.requirePhoto,
+      requireNote: template.requireNote,
+      requireStationarySample: template.requireStationarySample,
+      enabled: template.enabled,
+      sortOrder: template.sortOrder,
+    }));
+    return { task: safeTask, templates: safeTemplates, accessCodeExpiresAt: task.accessCodeExpiresAt };
   }
 
   async startSession(taskId: string, userId: string, dto: StartCollectionSessionDto) {

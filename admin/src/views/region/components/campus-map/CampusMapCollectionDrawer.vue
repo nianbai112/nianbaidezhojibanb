@@ -178,9 +178,15 @@
     <el-dialog v-model="accessDialogVisible" title="采集入口" width="520px" append-to-body @closed="clearAccessCode">
       <div class="access-code-panel">
         <img v-if="accessQr" :src="accessQr" alt="校园采集入口二维码" />
-        <strong>请让已分配的采集人员使用小程序打开</strong>
+        <strong>{{ accessQrIsMiniCode ? '微信扫一扫可直接进入隐藏采集页' : '当前图片仅用于保存入口文本，不能当作小程序码扫码' }}</strong>
         <el-input :model-value="collectorPath" readonly />
-        <el-alert type="warning" :closable="false" title="入口将在 30 分钟后过期；关闭窗口后后台不会保存明文采集码。" />
+        <el-alert
+          :type="accessQrIsMiniCode ? 'warning' : 'error'"
+          :closable="false"
+          :title="accessQrIsMiniCode
+            ? '入口将在 30 分钟后过期；关闭窗口后后台不会保存明文采集码。'
+            : (accessQrError || '真实小程序码生成失败，请复制路径并检查微信与 COS 配置。')"
+        />
         <el-button type="primary" @click="copyCollectorPath">复制入口路径</el-button>
       </div>
     </el-dialog>
@@ -264,6 +270,8 @@ const templateDialogVisible = ref(false)
 const accessDialogVisible = ref(false)
 const accessCode = ref('')
 const accessQr = ref('')
+const accessQrIsMiniCode = ref(false)
+const accessQrError = ref('')
 
 const taskForm = reactive({ id: '', name: '', instructions: '', status: 'draft', collectorUserIdsText: '' })
 const templateForm = reactive({
@@ -370,13 +378,17 @@ async function saveTask() {
 async function createAccessCode(taskId: string) {
   const data: any = await rotateCampusMapCollectionAccessCode(props.regionId, taskId)
   accessCode.value = data.accessCode
-  accessQr.value = await QRCode.toDataURL(collectorPath.value, { width: 260, margin: 1 })
+  accessQrIsMiniCode.value = Boolean(data.qrcodeUrl)
+  accessQrError.value = data.qrcodeError || ''
+  accessQr.value = data.qrcodeUrl || await QRCode.toDataURL(collectorPath.value, { width: 260, margin: 1 })
   accessDialogVisible.value = true
 }
 
 function clearAccessCode() {
   accessCode.value = ''
   accessQr.value = ''
+  accessQrIsMiniCode.value = false
+  accessQrError.value = ''
 }
 
 async function copyCollectorPath() {
