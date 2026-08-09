@@ -703,6 +703,53 @@ export async function fetchRegionCampusMap(regionId: string | number) {
   return request.get(`/admin/campus-map/${regionId}`)
 }
 
+export async function fetchCampusMapCollectionTasks(
+  regionId: string | number,
+  params: { status?: string; page?: number; pageSize?: number } = {},
+) {
+  return request.get(`/admin/campus-map/collections/${regionId}/tasks`, { params })
+}
+
+export async function createCampusMapCollectionTask(regionId: string | number, data: any) {
+  return request.post(`/admin/campus-map/collections/${regionId}/tasks`, data)
+}
+
+export async function fetchCampusMapCollectionTask(regionId: string | number, taskId: string) {
+  return request.get(`/admin/campus-map/collections/${regionId}/tasks/${taskId}`)
+}
+
+export async function fetchCampusMapCollectionSession(
+  regionId: string | number,
+  taskId: string,
+  sessionId: string,
+) {
+  return request.get(`/admin/campus-map/collections/${regionId}/tasks/${taskId}/sessions/${sessionId}`)
+}
+
+export async function updateCampusMapCollectionTask(regionId: string | number, taskId: string, data: any) {
+  return request.patch(`/admin/campus-map/collections/${regionId}/tasks/${taskId}`, data)
+}
+
+export async function rotateCampusMapCollectionAccessCode(regionId: string | number, taskId: string) {
+  return request.post(`/admin/campus-map/collections/${regionId}/tasks/${taskId}/access-code`)
+}
+
+export async function fetchCampusMapMarkerTemplates(regionId: string | number) {
+  return request.get(`/admin/campus-map/collections/${regionId}/templates`)
+}
+
+export async function createCampusMapMarkerTemplate(regionId: string | number, data: any) {
+  return request.post(`/admin/campus-map/collections/${regionId}/templates`, data)
+}
+
+export async function updateCampusMapMarkerTemplate(
+  regionId: string | number,
+  templateId: string,
+  data: any,
+) {
+  return request.patch(`/admin/campus-map/collections/${regionId}/templates/${templateId}`, data)
+}
+
 export async function saveRegionCampusMap(regionId: string | number, data: any) {
   return request.put(`/admin/campus-map/${regionId}`, data)
 }

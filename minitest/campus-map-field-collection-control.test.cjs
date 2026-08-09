@@ -42,3 +42,18 @@ test('PostgreSQL and MySQL Prisma schemas stay generated from the main schema', 
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
+
+test('admin collection model classifies accuracy and builds an ordered raw polyline', async () => {
+  const model = await import('../admin/src/views/region/components/campus-map/campusMapCollectionModel.mjs')
+
+  assert.deepEqual(model.accuracyBand(6), { key: 'good', label: '良好', color: '#16a34a' })
+  assert.deepEqual(model.accuracyBand(12), { key: 'review', label: '需复核', color: '#eab308' })
+  assert.deepEqual(model.accuracyBand(22), { key: 'poor', label: '较差', color: '#dc2626' })
+  assert.deepEqual(model.toRawPolyline([
+    { longitude: 106.5, latitude: 29.6 },
+    { longitude: 106.5001, latitude: 29.6001 },
+  ]), [
+    [106.5, 29.6],
+    [106.5001, 29.6001],
+  ])
+})
