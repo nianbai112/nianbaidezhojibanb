@@ -95,6 +95,36 @@ describe('CampusMapCollectionService', () => {
       .rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('returns only collector-safe task fields in the mobile context', async () => {
+    const prisma = createPrisma();
+    prisma.campusMapCollectionTask.findFirst.mockResolvedValue({
+      id: 'task-1',
+      regionId: 'region-1',
+      name: '一期道路采集',
+      instructions: '沿道路中心线行走',
+      status: 'ready',
+      createdBy: 'admin-secret-id',
+      accessCodeHash: 'private-hash',
+      accessCodeExpiresAt: new Date(Date.now() + 60_000),
+      assignments: [{ userId: 'user-1', assignedBy: 'admin-secret-id' }],
+    });
+    prisma.campusMapMarkerTemplate.findMany.mockResolvedValue([]);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    const result = await service.resolveCollectorContext('valid-code', 'user-1');
+
+    expect(result.task).toEqual({
+      id: 'task-1',
+      regionId: 'region-1',
+      name: '一期道路采集',
+      instructions: '沿道路中心线行走',
+      status: 'ready',
+    });
+    expect(result.task).not.toHaveProperty('createdBy');
+    expect(result.task).not.toHaveProperty('assignments');
+    expect(result.task).not.toHaveProperty('accessCodeHash');
+  });
+
   it('returns the existing owned session when a client retries the same session id', async () => {
     const prisma = createPrisma();
     const existing = {
@@ -275,6 +305,7 @@ describe('CampusMapCollectionService', () => {
       icon: 'gate',
       color: '#dc2626',
       behavior: 'entrance',
+      fieldSchema: [{ key: 'door', type: 'text', label: '门名称' }],
       requirePhoto: false,
       requireNote: false,
       requireStationarySample: false,
@@ -324,6 +355,29 @@ describe('CampusMapCollectionService', () => {
     });
   });
 
+  it('rejects a marker whose required custom field is missing', async () => {
+    const prisma = makeTransactional();
+    prisma.campusMapCollectionSession.findFirst.mockResolvedValue({
+      id: 'session-1', collectorUserId: 'user-1', status: 'recording', task: { regionId: 'region-1' },
+    });
+    prisma.campusMapCollectionMarker.findUnique.mockResolvedValue(null);
+    prisma.campusMapMarkerTemplate.findFirst.mockResolvedValue({
+      id: 'template-1', label: '道路障碍', behavior: 'barrier', fieldSchema: [
+        { key: 'passable', type: 'select', label: '是否可通行', required: true, options: ['可以', '不可以'] },
+      ],
+      requirePhoto: false, requireNote: false, requireStationarySample: false,
+      allowedBindings: { targetTypes: [], relationTypes: [] },
+    });
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect(service.createMarker('session-1', 'user-1', {
+      clientMarkerId: 'client-marker-1', templateId: 'template-1',
+      recordedAt: '2026-08-09T01:10:00.000Z', longitude: 106.5, latitude: 29.6, accuracy: 5,
+      fieldValues: {}, bindings: [], attachments: [],
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.campusMapCollectionMarker.create).not.toHaveBeenCalled();
+  });
+
   it('creates a scoped task with unique collector assignments', async () => {
     const prisma = makeTransactional();
     prisma.campusMapCollectionTask.create.mockImplementation(({ data }: any) => ({ id: 'task-1', ...data }));
@@ -370,6 +424,10 @@ describe('CampusMapCollectionService', () => {
 
     await expect(service.createTemplate('region-1', { ...dto, behavior: 'guess_route' }, 'admin-1'))
       .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.createTemplate('region-1', {
+      ...dto,
+      fieldSchema: [{ key: 'bad key', type: 'magic', label: '' }],
+    }, 'admin-1')).rejects.toBeInstanceOf(BadRequestException);
     const result = await service.createTemplate('region-1', dto, 'admin-1');
 
     expect(result).toMatchObject({ id: 'template-1', label: '雨天积水', behavior: 'passability_change' });

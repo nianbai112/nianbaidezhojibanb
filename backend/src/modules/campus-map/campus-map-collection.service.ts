@@ -19,6 +19,7 @@ import {
   StartCollectionSessionDto,
   UpdateCollectionTaskDto,
   UploadPointBatchDto,
+  validateMarkerFieldValues,
 } from './campus-map-collection.contract';
 
 const ACCESS_CODE_TTL_MS = 30 * 60 * 1000;
@@ -211,8 +212,14 @@ export class CampusMapCollectionService {
       },
       orderBy: [{ pinned: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    const { accessCodeHash, accessCodeExpiresAt, assignments, ...safeTask } = task;
-    return { task: safeTask, templates, accessCodeExpiresAt };
+    const safeTask = {
+      id: task.id,
+      regionId: task.regionId,
+      name: task.name,
+      instructions: task.instructions,
+      status: task.status,
+    };
+    return { task: safeTask, templates, accessCodeExpiresAt: task.accessCodeExpiresAt };
   }
 
   async startSession(taskId: string, userId: string, dto: StartCollectionSessionDto) {
@@ -363,6 +370,7 @@ export class CampusMapCollectionService {
     if (template.requireStationarySample && Number(input.stationarySampleCount || 0) < 3) {
       throw new BadRequestException('这个标记需要至少三次站定采样');
     }
+    const fieldValues = validateMarkerFieldValues(template.fieldSchema, input.fieldValues);
 
     const allowed = template.allowedBindings as { targetTypes?: unknown; relationTypes?: unknown };
     const targetTypes = Array.isArray(allowed?.targetTypes) ? allowed.targetTypes.map(String) : [];
@@ -388,7 +396,7 @@ export class CampusMapCollectionService {
           latitude: input.latitude,
           accuracy: input.accuracy,
           recordedAt: input.recordedAt,
-          fieldValues: input.fieldValues as Prisma.InputJsonValue,
+          fieldValues: fieldValues as Prisma.InputJsonValue,
           note: input.note,
           bindings: { create: input.bindings },
           attachments: {

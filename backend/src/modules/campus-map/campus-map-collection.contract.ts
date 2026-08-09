@@ -5,6 +5,7 @@ export const COLLECTION_SESSION_STATUSES = ['recording', 'paused', 'uploading', 
 export const MARKER_BEHAVIORS = ['info', 'entrance', 'junction', 'passability_change', 'barrier', 'calibration_point'] as const;
 export const BINDING_RELATIONS = ['belongs_to', 'entrance_of', 'connects', 'affects', 'blocks', 'alternative_to', 'references'] as const;
 export const BINDING_TARGET_TYPES = ['building', 'entrance', 'road', 'road_node', 'road_edge', 'gate', 'area', 'phase', 'task', 'marker'] as const;
+export const MARKER_FIELD_TYPES = ['text', 'number', 'select', 'multi', 'switch'] as const;
 export const MAX_POINTS_PER_BATCH = 100;
 
 export type CreateCollectionTaskDto = {
@@ -135,7 +136,36 @@ export function parseTemplate(dto: MarkerTemplateDto) {
   if (!MARKER_BEHAVIORS.includes(behavior as (typeof MARKER_BEHAVIORS)[number])) {
     throw new BadRequestException('标记模板系统行为无效');
   }
-  const fieldSchema = Array.isArray(dto.fieldSchema) ? dto.fieldSchema : [];
+  const rawFieldSchema = Array.isArray(dto.fieldSchema) ? dto.fieldSchema : [];
+  if (rawFieldSchema.length > 20) throw new BadRequestException('一个标记模板最多包含 20 个自定义字段');
+  const fieldKeys = new Set<string>();
+  const fieldSchema = rawFieldSchema.map((raw) => {
+    const key = String(raw?.key || '').trim();
+    const label = String(raw?.label || '').trim();
+    const type = String(raw?.type || '');
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key) || fieldKeys.has(key)) {
+      throw new BadRequestException('标记字段 key 格式无效或重复');
+    }
+    if (!label || label.length > 50) throw new BadRequestException('标记字段名称不能为空且不能超过 50 字');
+    if (!MARKER_FIELD_TYPES.includes(type as (typeof MARKER_FIELD_TYPES)[number])) {
+      throw new BadRequestException('标记字段类型无效');
+    }
+    fieldKeys.add(key);
+    const options = ['select', 'multi'].includes(type)
+      ? [...new Set((Array.isArray(raw.options) ? raw.options : []).map(String).map((value) => value.trim()).filter(Boolean))]
+      : [];
+    if (['select', 'multi'].includes(type) && (options.length === 0 || options.length > 20)) {
+      throw new BadRequestException('选择字段必须配置 1 至 20 个选项');
+    }
+    return {
+      key,
+      label,
+      type,
+      required: Boolean(raw.required),
+      ...(options.length ? { options } : {}),
+      ...(raw.placeholder ? { placeholder: String(raw.placeholder).slice(0, 100) } : {}),
+    };
+  });
   const bindings = dto.allowedBindings || {};
   const targetTypes = [...new Set((bindings.targetTypes || []).map(String))];
   const relationTypes = [...new Set((bindings.relationTypes || []).map(String))];
@@ -161,6 +191,51 @@ export function parseTemplate(dto: MarkerTemplateDto) {
     enabled: dto.enabled !== false,
     sortOrder: dto.sortOrder || 0,
   };
+}
+
+export function validateMarkerFieldValues(
+  fieldSchema: unknown,
+  values: Record<string, unknown>,
+) {
+  const fields = Array.isArray(fieldSchema) ? fieldSchema as Array<Record<string, unknown>> : [];
+  const allowedKeys = new Set(fields.map((field) => String(field.key)));
+  if (Object.keys(values).some((key) => !allowedKeys.has(key))) {
+    throw new BadRequestException('标记包含模板之外的自定义字段');
+  }
+  const normalized: Record<string, unknown> = {};
+  for (const field of fields) {
+    const key = String(field.key);
+    const label = String(field.label || key);
+    const type = String(field.type);
+    const value = values[key];
+    const missing = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+    if (missing) {
+      if (field.required) throw new BadRequestException(`标记字段“${label}”不能为空`);
+      continue;
+    }
+    if (type === 'text') {
+      if (typeof value !== 'string' || value.length > 500) throw new BadRequestException(`标记字段“${label}”格式无效`);
+      normalized[key] = value;
+    } else if (type === 'number') {
+      const number = Number(value);
+      if (!Number.isFinite(number)) throw new BadRequestException(`标记字段“${label}”必须是数字`);
+      normalized[key] = number;
+    } else if (type === 'switch') {
+      if (typeof value !== 'boolean') throw new BadRequestException(`标记字段“${label}”必须是开关值`);
+      normalized[key] = value;
+    } else if (type === 'select') {
+      const options = Array.isArray(field.options) ? field.options.map(String) : [];
+      if (typeof value !== 'string' || !options.includes(value)) throw new BadRequestException(`标记字段“${label}”选项无效`);
+      normalized[key] = value;
+    } else if (type === 'multi') {
+      const options = Array.isArray(field.options) ? field.options.map(String) : [];
+      if (!Array.isArray(value) || value.some((item) => !options.includes(String(item)))) {
+        throw new BadRequestException(`标记字段“${label}”选项无效`);
+      }
+      normalized[key] = [...new Set(value.map(String))];
+    }
+  }
+  return normalized;
 }
 
 export function parsePointBatch(batchNo: number, dto: UploadPointBatchDto) {
