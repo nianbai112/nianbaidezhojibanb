@@ -28,6 +28,7 @@
         @update:model-value="$emit('update:enabled', $event)"
       />
       <el-button :icon="UploadFilled" @click="$emit('import')">导入 CAD</el-button>
+      <el-button :icon="Position" @click="$emit('collection')">现场采集</el-button>
       <el-button :icon="RefreshRight" :loading="loading" @click="$emit('refresh')">刷新</el-button>
       <el-button :icon="Setting" @click="$emit('advanced')">高级</el-button>
       <el-button :icon="View" @click="$emit('preview')">预览</el-button>
@@ -47,6 +48,7 @@ import {
   Delete,
   DocumentChecked,
   MagicStick,
+  Position,
   RefreshRight,
   Setting,
   UploadFilled,
@@ -78,6 +80,7 @@ defineEmits<{
   'update:enabled': [value: boolean]
   assistant: []
   import: []
+  collection: []
   refresh: []
   advanced: []
   preview: []

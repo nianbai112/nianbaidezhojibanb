@@ -11,6 +11,30 @@ export function toRawPolyline(points = []) {
     .map((point) => [Number(point.longitude), Number(point.latitude)])
 }
 
+export function buildCollectorPath(accessCode) {
+  return `/campusMap/collector/index?code=${encodeURIComponent(String(accessCode || ''))}`
+}
+
+export function toSvgPolyline(points = [], width = 640, height = 320) {
+  const line = points.filter((point) => Array.isArray(point) && point.length >= 2)
+  if (!line.length) return ''
+  if (line.length === 1) return `${width / 2},${height / 2}`
+  const xs = line.map((point) => Number(point[0]))
+  const ys = line.map((point) => Number(point[1]))
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  const pad = 8
+  const xSpan = maxX - minX || 1
+  const ySpan = maxY - minY || 1
+  return line.map(([x, y]) => {
+    const px = pad + ((Number(x) - minX) / xSpan) * (width - pad * 2)
+    const py = height - pad - ((Number(y) - minY) / ySpan) * (height - pad * 2)
+    return `${Number(px.toFixed(1))},${Number(py.toFixed(1))}`
+  }).join(' ')
+}
+
 export function taskSessionCount(task = {}) {
   return Number(task?._count?.sessions ?? task?.sessions?.length ?? 0)
 }

@@ -56,4 +56,12 @@ test('admin collection model classifies accuracy and builds an ordered raw polyl
     [106.5, 29.6],
     [106.5001, 29.6001],
   ])
+  assert.equal(
+    model.buildCollectorPath('a code/with+symbols'),
+    '/campusMap/collector/index?code=a%20code%2Fwith%2Bsymbols',
+  )
+  assert.equal(
+    model.toSvgPolyline([[106.5, 29.6], [106.6, 29.7]], 200, 100),
+    '8,92 192,8',
+  )
 })

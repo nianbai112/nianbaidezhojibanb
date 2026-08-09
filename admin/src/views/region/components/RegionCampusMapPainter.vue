@@ -21,6 +21,7 @@
       @update:enabled="form.enabled = $event"
       @assistant="openAssistantDrawer"
       @import="openImportDrawer"
+      @collection="collectionDrawerVisible = true"
       @refresh="loadMap"
       @advanced="openAdvancedDrawer"
       @preview="openPreviewDrawer"
@@ -237,6 +238,12 @@
       @restored="handleVersionRestored"
     />
 
+    <CampusMapCollectionDrawer
+      v-model="collectionDrawerVisible"
+      :region-id="currentRegionId()"
+      :region-name="regionName"
+    />
+
     <el-drawer v-model="advancedDrawerVisible" title="高级设置" size="460px" append-to-body>
       <el-form label-position="top" class="advanced-form">
         <el-form-item label="地图名称">
@@ -291,6 +298,7 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import CampusMapActionBar from './campus-map/CampusMapActionBar.vue'
 import CampusMapAssistantDrawer from './campus-map/CampusMapAssistantDrawer.vue'
+import CampusMapCollectionDrawer from './campus-map/CampusMapCollectionDrawer.vue'
 import CampusMapAvailabilityPanel from './campus-map/CampusMapAvailabilityPanel.vue'
 import CampusMapCadWorkbench from './campus-map/CampusMapCadWorkbench.vue'
 import CampusMapImportDrawer from './campus-map/CampusMapImportDrawer.vue'
@@ -524,6 +532,7 @@ const advancedDrawerVisible = ref(false)
 const importDrawerVisible = ref(false)
 const assistantDrawerVisible = ref(false)
 const versionDrawerVisible = ref(false)
+const collectionDrawerVisible = ref(false)
 const hasUnsavedChanges = ref(false)
 const previewOpened = ref(false)
 const poiCategory = ref('building')
