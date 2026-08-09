@@ -2635,6 +2635,182 @@ model CampusMapAsset {
   @@map("campus_map_assets")
 }
 
+model CampusMapCollectionTask {
+  id                  String    @id @default(cuid())
+  regionId            String
+  name                String
+  instructions        String?   @db.Text
+  status              String    @default("draft")
+  accessCodeHash      String?   @db.VarChar(64)
+  accessCodeExpiresAt DateTime?
+  createdBy           String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  assignments CampusMapCollectionAssignment[]
+  sessions    CampusMapCollectionSession[]
+
+  @@index([regionId, status, updatedAt])
+  @@map("campus_map_collection_tasks")
+}
+
+model CampusMapCollectionAssignment {
+  id         String                  @id @default(cuid())
+  taskId     String
+  task       CampusMapCollectionTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  userId     String
+  assignedBy String
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+
+  @@unique([taskId, userId])
+  @@index([userId, createdAt])
+  @@map("campus_map_collection_assignments")
+}
+
+model CampusMapMarkerTemplate {
+  id                      String   @id @default(cuid())
+  regionId                String?
+  label                   String
+  description             String?  @db.Text
+  icon                    String?
+  color                   String?
+  behavior                String   @default("info")
+  fieldSchema             Json
+  allowedBindings         Json
+  pinned                  Boolean  @default(false)
+  requirePhoto            Boolean  @default(false)
+  requireNote             Boolean  @default(false)
+  requireStationarySample Boolean  @default(false)
+  enabled                 Boolean  @default(true)
+  sortOrder               Int      @default(0)
+  createdBy               String
+  updatedBy               String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  markers CampusMapCollectionMarker[]
+
+  @@index([regionId, enabled, sortOrder])
+  @@map("campus_map_marker_templates")
+}
+
+model CampusMapCollectionSession {
+  id              String                  @id @default(cuid())
+  taskId          String
+  task            CampusMapCollectionTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  collectorUserId String
+  clientSessionId String                  @unique
+  coordinateType  String                  @default("gcj02")
+  device          Json
+  status          String                  @default("recording")
+  startedAt       DateTime
+  endedAt         DateTime?
+  pointCount      Int                     @default(0)
+  markerCount     Int                     @default(0)
+  lastBatchNo     Int                     @default(-1)
+  uploadComplete  Boolean                 @default(false)
+  quality         Json?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  points      CampusMapCollectionPoint[]
+  markers     CampusMapCollectionMarker[]
+  attachments CampusMapCollectionAttachment[]
+
+  @@index([taskId, status, startedAt])
+  @@index([collectorUserId, startedAt])
+  @@map("campus_map_collection_sessions")
+}
+
+model CampusMapCollectionPoint {
+  id            String                     @id @default(cuid())
+  sessionId     String
+  session       CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  clientPointId String
+  batchNo       Int
+  pointSeq      Int
+  recordedAt    DateTime
+  longitude     Float
+  latitude      Float
+  accuracy      Float
+  speed         Float?
+  heading       Float?
+  altitude      Float?
+  raw           Json?
+  createdAt     DateTime                   @default(now())
+
+  @@unique([sessionId, clientPointId])
+  @@unique([sessionId, batchNo, pointSeq])
+  @@index([sessionId, recordedAt])
+  @@map("campus_map_collection_points")
+}
+
+model CampusMapCollectionMarker {
+  id                    String                     @id @default(cuid())
+  sessionId             String
+  session               CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  templateId            String
+  template              CampusMapMarkerTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  clientMarkerId        String
+  templateLabelSnapshot String
+  templateIconSnapshot  String?
+  templateColorSnapshot String?
+  behaviorSnapshot      String
+  longitude             Float
+  latitude              Float
+  accuracy              Float
+  recordedAt            DateTime
+  fieldValues           Json
+  note                  String?                    @db.Text
+  reviewStatus          String                     @default("pending")
+  createdAt             DateTime                   @default(now())
+
+  bindings    CampusMapCollectionMarkerBinding[]
+  attachments CampusMapCollectionAttachment[]
+
+  @@unique([sessionId, clientMarkerId])
+  @@index([templateId, reviewStatus])
+  @@index([sessionId, recordedAt])
+  @@map("campus_map_collection_markers")
+}
+
+model CampusMapCollectionMarkerBinding {
+  id           String                    @id @default(cuid())
+  markerId     String
+  marker       CampusMapCollectionMarker @relation(fields: [markerId], references: [id], onDelete: Restrict)
+  targetType   String
+  targetId     String
+  relationType String
+  state        String                    @default("active")
+  createdAt    DateTime                  @default(now())
+
+  @@unique([markerId, targetType, targetId, relationType])
+  @@index([targetType, targetId, state])
+  @@map("campus_map_collection_marker_bindings")
+}
+
+model CampusMapCollectionAttachment {
+  id         String                      @id @default(cuid())
+  sessionId  String?
+  session    CampusMapCollectionSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  markerId   String?
+  marker     CampusMapCollectionMarker?  @relation(fields: [markerId], references: [id], onDelete: Restrict)
+  kind       String                      @default("photo")
+  url        String                      @db.Text
+  storageKey String?                     @db.Text
+  mimeType   String?
+  byteSize   Int                         @default(0)
+  checksum   String?                     @db.VarChar(64)
+  metadata   Json?
+  uploadedAt DateTime                    @default(now())
+
+  @@index([sessionId, uploadedAt])
+  @@index([markerId, uploadedAt])
+  @@index([checksum])
+  @@map("campus_map_collection_attachments")
+}
+
 model SensitiveWord {
   id          String   @id @default(cuid())
   word        String   @unique
