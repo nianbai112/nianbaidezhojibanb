@@ -6,6 +6,9 @@ export const MARKER_BEHAVIORS = ['info', 'entrance', 'junction', 'passability_ch
 export const BINDING_RELATIONS = ['belongs_to', 'entrance_of', 'connects', 'affects', 'blocks', 'alternative_to', 'references'] as const;
 export const BINDING_TARGET_TYPES = ['building', 'entrance', 'road', 'road_node', 'road_edge', 'gate', 'area', 'phase', 'task', 'marker'] as const;
 export const MARKER_FIELD_TYPES = ['text', 'number', 'select', 'multi', 'switch'] as const;
+export const COLLECTION_CLIENTS = ['miniapp', 'rider_app'] as const;
+export const COLLECTION_OBJECT_TYPES = ['road', 'building', 'entrance', 'facility', 'issue'] as const;
+export const COLLECTION_OBJECT_REVIEW_STATUSES = ['pending', 'approved', 'resample', 'held', 'void'] as const;
 export const MAX_POINTS_PER_BATCH = 100;
 
 export type CreateCollectionTaskDto = {
@@ -13,6 +16,11 @@ export type CreateCollectionTaskDto = {
   instructions?: string;
   status?: string;
   collectorUserIds?: string[];
+  allowedClients?: string[];
+  objectTypes?: string[];
+  boundary?: Record<string, unknown>;
+  priority?: number;
+  dueAt?: string;
 };
 
 export type UpdateCollectionTaskDto = Partial<CreateCollectionTaskDto>;
@@ -42,8 +50,26 @@ export type MarkerTemplateDto = {
 export type StartCollectionSessionDto = {
   clientSessionId: string;
   coordinateType: string;
+  sourceClient?: string;
   startedAt: string;
   device: Record<string, unknown>;
+};
+
+export type CreateCollectionObjectDto = {
+  clientObjectId: string;
+  objectType: string;
+  geometry: {
+    type: 'Point' | 'LineString' | 'Polygon';
+    coordinates: unknown;
+  };
+  properties: Record<string, unknown>;
+  recordedAt: string;
+  accuracy?: number;
+  longitude?: number;
+  latitude?: number;
+  quality?: Record<string, unknown>;
+  bindings?: CollectionMarkerBindingDto[];
+  attachments?: CollectionAttachmentDto[];
 };
 
 export type CollectionPointDto = {
@@ -109,7 +135,11 @@ export function parseStartSession(dto: StartCollectionSessionDto) {
   if (!dto?.device || typeof dto.device !== 'object' || Array.isArray(dto.device)) {
     throw new BadRequestException('缺少采集设备信息');
   }
-  return { clientSessionId, coordinateType: 'gcj02', startedAt, device: dto.device };
+  const sourceClient = String(dto.sourceClient || 'miniapp');
+  if (!COLLECTION_CLIENTS.includes(sourceClient as (typeof COLLECTION_CLIENTS)[number])) {
+    throw new BadRequestException('采集端无效');
+  }
+  return { clientSessionId, coordinateType: 'gcj02', sourceClient, startedAt, device: dto.device };
 }
 
 export function parseTask(dto: CreateCollectionTaskDto) {
@@ -121,12 +151,80 @@ export function parseTask(dto: CreateCollectionTaskDto) {
   }
   const collectorUserIds = [...new Set((dto.collectorUserIds || []).map(String).map((id) => id.trim()).filter(Boolean))];
   if (status === 'ready' && collectorUserIds.length === 0) throw new BadRequestException('待采集任务至少需要一名采集人员');
+  const allowedClients = [...new Set((dto.allowedClients || ['miniapp']).map(String))];
+  if (!allowedClients.length || allowedClients.some((value) => !COLLECTION_CLIENTS.includes(value as (typeof COLLECTION_CLIENTS)[number]))) {
+    throw new BadRequestException('采集端无效');
+  }
+  const objectTypes = [...new Set((dto.objectTypes || COLLECTION_OBJECT_TYPES).map(String))];
+  if (!objectTypes.length || objectTypes.some((value) => !COLLECTION_OBJECT_TYPES.includes(value as (typeof COLLECTION_OBJECT_TYPES)[number]))) {
+    throw new BadRequestException('采集对象类型无效');
+  }
+  const priority = dto.priority === undefined ? 3 : Number(dto.priority);
+  if (!Number.isInteger(priority) || priority < 1 || priority > 5) throw new BadRequestException('任务优先级无效');
+  const dueAt = dto.dueAt ? new Date(dto.dueAt) : undefined;
+  if (dueAt && Number.isNaN(dueAt.getTime())) throw new BadRequestException('任务截止时间无效');
+  if (dto.boundary !== undefined && (!dto.boundary || typeof dto.boundary !== 'object' || Array.isArray(dto.boundary))) {
+    throw new BadRequestException('任务采集边界无效');
+  }
   return {
     name,
     instructions: String(dto.instructions || '').trim() || undefined,
     status,
     collectorUserIds,
+    allowedClients,
+    objectTypes,
+    boundary: dto.boundary,
+    priority,
+    dueAt,
   };
+}
+
+function coordinate(value: unknown) {
+  if (!Array.isArray(value) || value.length < 2) throw new BadRequestException('采集对象坐标无效');
+  const longitude = Number(value[0]);
+  const latitude = Number(value[1]);
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) throw new BadRequestException('采集对象经度无效');
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) throw new BadRequestException('采集对象纬度无效');
+  return [longitude, latitude];
+}
+
+export function parseCollectionObject(dto: CreateCollectionObjectDto) {
+  const clientObjectId = String(dto?.clientObjectId || '').trim();
+  const objectType = String(dto?.objectType || '').trim();
+  const recordedAt = new Date(dto?.recordedAt);
+  if (!clientObjectId || clientObjectId.length > 128) throw new BadRequestException('采集对象标识无效');
+  if (!COLLECTION_OBJECT_TYPES.includes(objectType as (typeof COLLECTION_OBJECT_TYPES)[number])) {
+    throw new BadRequestException('采集对象类型无效');
+  }
+  if (Number.isNaN(recordedAt.getTime())) throw new BadRequestException('采集对象时间无效');
+  if (!dto?.properties || typeof dto.properties !== 'object' || Array.isArray(dto.properties)) {
+    throw new BadRequestException('采集对象属性无效');
+  }
+  if (!dto?.geometry || typeof dto.geometry !== 'object') throw new BadRequestException('采集对象几何无效');
+
+  const expectedGeometry = objectType === 'road' ? 'LineString' : objectType === 'building' ? 'Polygon' : 'Point';
+  if (dto.geometry.type !== expectedGeometry) throw new BadRequestException('采集对象几何类型无效');
+  if (expectedGeometry === 'Point') {
+    coordinate(dto.geometry.coordinates);
+  } else if (expectedGeometry === 'LineString') {
+    const points = dto.geometry.coordinates;
+    if (!Array.isArray(points) || points.length < 2 || points.length > 10_000) throw new BadRequestException('道路轨迹至少需要两个点');
+    points.forEach(coordinate);
+  } else {
+    const rings = dto.geometry.coordinates;
+    if (!Array.isArray(rings) || rings.length !== 1 || !Array.isArray(rings[0]) || rings[0].length < 4 || rings[0].length > 10_000) {
+      throw new BadRequestException('建筑轮廓至少需要三个顶点并闭合');
+    }
+    const normalized = rings[0].map(coordinate);
+    const first = normalized[0];
+    const last = normalized[normalized.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) throw new BadRequestException('建筑轮廓必须闭合');
+  }
+  if (dto.accuracy !== undefined && (!Number.isFinite(dto.accuracy) || dto.accuracy < 0)) {
+    throw new BadRequestException('采集对象精度无效');
+  }
+
+  return { ...dto, clientObjectId, objectType, recordedAt };
 }
 
 export function parseTemplate(dto: MarkerTemplateDto) {

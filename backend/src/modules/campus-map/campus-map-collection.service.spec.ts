@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { CampusMapCollectionService } from './campus-map-collection.service';
+import * as collectionContract from './campus-map-collection.contract';
 
 describe('CampusMapCollectionService', () => {
   const createPrisma = () => ({
@@ -46,6 +47,46 @@ describe('CampusMapCollectionService', () => {
     prisma.$transaction.mockImplementation(async (callback: any) => callback(prisma));
     return prisma;
   };
+
+  it('keeps rider-only outdoor task scope in the normalized contract', () => {
+    const result = collectionContract.parseTask({
+      name: '一期校园室外采集',
+      status: 'ready',
+      collectorUserIds: ['rider-1'],
+      allowedClients: ['rider_app'],
+      objectTypes: ['road', 'building', 'entrance', 'facility', 'issue'],
+      priority: 2,
+      dueAt: '2026-08-31T15:59:59.000Z',
+    } as any);
+
+    expect(result).toMatchObject({
+      allowedClients: ['rider_app'],
+      objectTypes: ['road', 'building', 'entrance', 'facility', 'issue'],
+      priority: 2,
+      dueAt: new Date('2026-08-31T15:59:59.000Z'),
+    });
+  });
+
+  it('normalizes a GCJ-02 road object without changing its raw geometry', () => {
+    const input = {
+      clientObjectId: 'road-client-1',
+      objectType: 'road',
+      geometry: {
+        type: 'LineString',
+        coordinates: [[106.5, 29.6], [106.5001, 29.6001]],
+      },
+      properties: { surface: 'asphalt', accessible: true },
+      recordedAt: '2026-08-10T01:00:00.000Z',
+      accuracy: 6,
+    };
+
+    const result = (collectionContract as any).parseCollectionObject(input);
+
+    expect(result).toEqual({
+      ...input,
+      recordedAt: new Date('2026-08-10T01:00:00.000Z'),
+    });
+  });
 
   it('returns a short-lived access code while persisting only its SHA-256 hash', async () => {
     const prisma = createPrisma();
@@ -396,6 +437,11 @@ describe('CampusMapCollectionService', () => {
       instructions: '从第三校门走到图书馆',
       status: 'ready',
       collectorUserIds: ['user-1', 'user-1', 'user-2'],
+      allowedClients: ['rider_app'],
+      objectTypes: ['road', 'building', 'entrance'],
+      boundary: { type: 'Polygon', coordinates: [] },
+      priority: 1,
+      dueAt: '2026-08-31T15:59:59.000Z',
     }, 'admin-1');
 
     expect(result).toMatchObject({ id: 'task-1', regionId: 'region-1', status: 'ready' });
@@ -404,6 +450,11 @@ describe('CampusMapCollectionService', () => {
         regionId: 'region-1',
         name: '一期步行道路采集',
         createdBy: 'admin-1',
+        allowedClients: ['rider_app'],
+        objectTypes: ['road', 'building', 'entrance'],
+        boundary: { type: 'Polygon', coordinates: [] },
+        priority: 1,
+        dueAt: new Date('2026-08-31T15:59:59.000Z'),
         assignments: {
           create: [
             { userId: 'user-1', assignedBy: 'admin-1' },

@@ -2641,6 +2641,11 @@ model CampusMapCollectionTask {
   name                String
   instructions        String?   @db.Text
   status              String    @default("draft")
+  allowedClients      Json      @default("[\"miniapp\"]")
+  objectTypes         Json      @default("[\"road\",\"building\",\"entrance\",\"facility\",\"issue\"]")
+  boundary            Json?
+  priority            Int       @default(3)
+  dueAt               DateTime?
   accessCodeHash      String?   @db.VarChar(64)
   accessCodeExpiresAt DateTime?
   createdBy           String
@@ -2702,12 +2707,14 @@ model CampusMapCollectionSession {
   collectorUserId String
   clientSessionId String                  @unique
   coordinateType  String                  @default("gcj02")
+  sourceClient    String                  @default("miniapp")
   device          Json
   status          String                  @default("recording")
   startedAt       DateTime
   endedAt         DateTime?
   pointCount      Int                     @default(0)
   markerCount     Int                     @default(0)
+  objectCount     Int                     @default(0)
   lastBatchNo     Int                     @default(-1)
   uploadComplete  Boolean                 @default(false)
   quality         Json?
@@ -2716,11 +2723,41 @@ model CampusMapCollectionSession {
 
   points      CampusMapCollectionPoint[]
   markers     CampusMapCollectionMarker[]
+  objects     CampusMapCollectionObject[]
   attachments CampusMapCollectionAttachment[]
 
   @@index([taskId, status, startedAt])
   @@index([collectorUserId, startedAt])
   @@map("campus_map_collection_sessions")
+}
+
+model CampusMapCollectionObject {
+  id             String                     @id @default(cuid())
+  sessionId      String
+  session        CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  clientObjectId String
+  objectType     String
+  geometry       Json
+  properties     Json
+  bindings       Json
+  longitude      Float?
+  latitude       Float?
+  accuracy       Float?
+  recordedAt     DateTime
+  reviewStatus   String                     @default("pending")
+  reviewNote     String?                    @db.Text
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  quality        Json?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  attachments CampusMapCollectionAttachment[]
+
+  @@unique([sessionId, clientObjectId])
+  @@index([sessionId, objectType, recordedAt])
+  @@index([reviewStatus, updatedAt])
+  @@map("campus_map_collection_objects")
 }
 
 model CampusMapCollectionPoint {
@@ -2796,6 +2833,8 @@ model CampusMapCollectionAttachment {
   session    CampusMapCollectionSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   markerId   String?
   marker     CampusMapCollectionMarker?  @relation(fields: [markerId], references: [id], onDelete: Restrict)
+  objectId   String?
+  object     CampusMapCollectionObject?  @relation(fields: [objectId], references: [id], onDelete: Restrict)
   kind       String                      @default("photo")
   url        String                      @db.Text
   storageKey String?                     @db.Text
@@ -2807,6 +2846,7 @@ model CampusMapCollectionAttachment {
 
   @@index([sessionId, uploadedAt])
   @@index([markerId, uploadedAt])
+  @@index([objectId, uploadedAt])
   @@index([checksum])
   @@map("campus_map_collection_attachments")
 }

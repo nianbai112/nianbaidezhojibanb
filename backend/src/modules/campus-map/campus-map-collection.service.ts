@@ -36,6 +36,11 @@ export class CampusMapCollectionService {
         name: input.name,
         instructions: input.instructions,
         status: input.status,
+        allowedClients: input.allowedClients,
+        objectTypes: input.objectTypes,
+        boundary: input.boundary as Prisma.InputJsonValue | undefined,
+        priority: input.priority,
+        dueAt: input.dueAt,
         createdBy: adminId,
         assignments: {
           create: input.collectorUserIds.map((userId) => ({ userId, assignedBy: adminId })),
@@ -87,6 +92,7 @@ export class CampusMapCollectionService {
       include: {
         points: { orderBy: { recordedAt: 'asc' }, take: 5_000 },
         markers: { orderBy: { recordedAt: 'asc' }, include: { bindings: true, attachments: true } },
+        objects: { orderBy: { recordedAt: 'asc' }, include: { attachments: true } },
         attachments: true,
       },
     });
@@ -108,6 +114,11 @@ export class CampusMapCollectionService {
       instructions: dto.instructions ?? current.instructions ?? undefined,
       status: dto.status ?? current.status,
       collectorUserIds,
+      allowedClients: dto.allowedClients ?? current.allowedClients as string[] ?? undefined,
+      objectTypes: dto.objectTypes ?? current.objectTypes as string[] ?? undefined,
+      boundary: dto.boundary ?? current.boundary as Record<string, unknown> ?? undefined,
+      priority: dto.priority ?? current.priority ?? undefined,
+      dueAt: dto.dueAt ?? current.dueAt?.toISOString(),
     });
     return this.prisma.$transaction(async (tx) => {
       if (dto.collectorUserIds !== undefined) {
@@ -120,7 +131,16 @@ export class CampusMapCollectionService {
       }
       return tx.campusMapCollectionTask.update({
         where: { id: taskId },
-        data: { name: input.name, instructions: input.instructions, status: input.status },
+        data: {
+          name: input.name,
+          instructions: input.instructions,
+          status: input.status,
+          allowedClients: input.allowedClients,
+          objectTypes: input.objectTypes,
+          boundary: input.boundary as Prisma.InputJsonValue | undefined,
+          priority: input.priority,
+          dueAt: input.dueAt,
+        },
         include: { assignments: true, _count: { select: { sessions: true } } },
       });
     });
