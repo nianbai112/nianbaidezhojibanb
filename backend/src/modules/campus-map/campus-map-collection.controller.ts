@@ -169,6 +169,31 @@ export class CampusMapCollectionController {
     return this.service.resolveCollectorContext(code, this.collectorUserId(req));
   }
 
+  @Get('rider-app/campus-collection/tasks')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  listRiderTasks(@Req() req: AuthenticatedRequest) {
+    return this.service.listRiderTasks(this.collectorUserId(req));
+  }
+
+  @Get('rider-app/campus-collection/tasks/:taskId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getRiderTask(@Param('taskId') taskId: string, @Req() req: AuthenticatedRequest) {
+    return this.service.getRiderTask(this.collectorUserId(req), taskId);
+  }
+
+  @Post('rider-app/campus-collection/tasks/:taskId/sessions')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  startRiderSession(
+    @Param('taskId') taskId: string,
+    @Body() dto: StartCollectionSessionDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.startRiderSession(taskId, this.collectorUserId(req), dto);
+  }
+
   @Post('campus-map/collection/tasks/:taskId/sessions')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

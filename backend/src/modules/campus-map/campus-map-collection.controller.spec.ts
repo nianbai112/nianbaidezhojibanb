@@ -15,6 +15,9 @@ describe('CampusMapCollectionController', () => {
     listTemplates: jest.fn(),
     createTemplate: jest.fn(),
     updateTemplate: jest.fn(),
+    listRiderTasks: jest.fn(),
+    getRiderTask: jest.fn(),
+    startRiderSession: jest.fn(),
     resolveCollectorContext: jest.fn(),
     startSession: jest.fn(),
     uploadPointBatch: jest.fn(),
@@ -50,6 +53,14 @@ describe('CampusMapCollectionController', () => {
     expect(Reflect.getMetadata('__guards__', proto.resolveCollectorContext)).toEqual([JwtGuard]);
     expect(Reflect.getMetadata('path', proto.uploadPointBatch)).toBe('campus-map/collection/sessions/:sessionId/batches/:batchNo');
     expect(Reflect.getMetadata('method', proto.uploadPointBatch)).toBe(RequestMethod.PUT);
+  });
+
+  it('registers rider task discovery and rider session routes behind JWT auth', () => {
+    const proto = CampusMapCollectionController.prototype as any;
+    expect(Reflect.getMetadata('path', proto.listRiderTasks)).toBe('rider-app/campus-collection/tasks');
+    expect(Reflect.getMetadata('__guards__', proto.listRiderTasks)).toEqual([JwtGuard]);
+    expect(Reflect.getMetadata('path', proto.getRiderTask)).toBe('rider-app/campus-collection/tasks/:taskId');
+    expect(Reflect.getMetadata('path', proto.startRiderSession)).toBe('rider-app/campus-collection/tasks/:taskId/sessions');
   });
 
   it('checks admin region scope before reading task data', async () => {

@@ -39,6 +39,9 @@ describe('CampusMapCollectionService', () => {
       create: jest.fn(),
       count: jest.fn(),
     },
+    regionRider: {
+      findUnique: jest.fn(),
+    },
     $transaction: jest.fn(),
   });
 
@@ -86,6 +89,52 @@ describe('CampusMapCollectionService', () => {
       ...input,
       recordedAt: new Date('2026-08-10T01:00:00.000Z'),
     });
+  });
+
+  it('returns only assigned rider-app tasks for an approved official rider region', async () => {
+    const prisma = createPrisma();
+    prisma.regionRider.findUnique.mockResolvedValue({
+      userId: 'rider-1',
+      regionId: 'region-1',
+      riderType: 'official',
+      verifyStatus: 'approved',
+    });
+    prisma.campusMapCollectionTask.findMany.mockResolvedValue([
+      {
+        id: 'task-rider', regionId: 'region-1', name: '骑手任务', instructions: null,
+        status: 'ready', allowedClients: ['rider_app'], objectTypes: ['road'], priority: 1,
+        dueAt: null, boundary: null, createdBy: 'admin-secret', assignments: [{ userId: 'rider-1' }],
+        _count: { sessions: 0 },
+      },
+      {
+        id: 'task-mini', regionId: 'region-1', name: '小程序任务', instructions: null,
+        status: 'ready', allowedClients: ['miniapp'], objectTypes: ['road'], priority: 3,
+        dueAt: null, boundary: null, createdBy: 'admin-secret', assignments: [{ userId: 'rider-1' }],
+        _count: { sessions: 0 },
+      },
+    ]);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    const result = await (service as any).listRiderTasks('rider-1');
+
+    expect(result).toEqual([
+      {
+        id: 'task-rider', regionId: 'region-1', name: '骑手任务', instructions: null,
+        status: 'ready', objectTypes: ['road'], priority: 1, dueAt: null,
+        boundary: null, sessionCount: 0,
+      },
+    ]);
+  });
+
+  it('rejects campus task discovery for a non-official rider', async () => {
+    const prisma = createPrisma();
+    prisma.regionRider.findUnique.mockResolvedValue({
+      userId: 'rider-1', regionId: 'region-1', riderType: 'part_time', verifyStatus: 'approved',
+    });
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect((service as any).listRiderTasks('rider-1')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.campusMapCollectionTask.findMany).not.toHaveBeenCalled();
   });
 
   it('returns a short-lived access code while persisting only its SHA-256 hash', async () => {

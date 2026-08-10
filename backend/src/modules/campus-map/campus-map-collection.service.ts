@@ -28,6 +28,92 @@ const ACCESS_CODE_TTL_MS = 30 * 60 * 1000;
 export class CampusMapCollectionService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async requireOfficialRider(userId: string) {
+    const rider = await this.prisma.regionRider.findUnique({ where: { userId } });
+    if (!rider || rider.verifyStatus !== 'approved' || rider.riderType !== 'official' || !rider.regionId) {
+      throw new ForbiddenException('仅已认证并绑定区域的官方骑手可采集校园地图');
+    }
+    return rider;
+  }
+
+  private safeRiderTask(task: any) {
+    return {
+      id: task.id,
+      regionId: task.regionId,
+      name: task.name,
+      instructions: task.instructions,
+      status: task.status,
+      objectTypes: Array.isArray(task.objectTypes) ? task.objectTypes : [],
+      priority: task.priority,
+      dueAt: task.dueAt,
+      boundary: task.boundary,
+      sessionCount: Number(task._count?.sessions || 0),
+    };
+  }
+
+  async listRiderTasks(userId: string) {
+    const rider = await this.requireOfficialRider(userId);
+    const tasks = await this.prisma.campusMapCollectionTask.findMany({
+      where: {
+        regionId: rider.regionId,
+        status: { in: ['ready', 'collecting'] },
+        assignments: { some: { userId } },
+      },
+      include: { assignments: true, _count: { select: { sessions: true } } },
+      orderBy: [{ priority: 'asc' }, { dueAt: 'asc' }, { updatedAt: 'desc' }],
+    });
+    return tasks
+      .filter((task) => Array.isArray(task.allowedClients) && task.allowedClients.includes('rider_app'))
+      .map((task) => this.safeRiderTask(task));
+  }
+
+  async getRiderTask(userId: string, taskId: string) {
+    const rider = await this.requireOfficialRider(userId);
+    const task = await this.prisma.campusMapCollectionTask.findFirst({
+      where: {
+        id: taskId,
+        regionId: rider.regionId,
+        status: { in: ['ready', 'collecting'] },
+        assignments: { some: { userId } },
+      },
+      include: {
+        assignments: true,
+        sessions: { where: { collectorUserId: userId }, orderBy: { startedAt: 'desc' }, take: 10 },
+        _count: { select: { sessions: true } },
+      },
+    });
+    if (!task || !Array.isArray(task.allowedClients) || !task.allowedClients.includes('rider_app')) {
+      throw new NotFoundException('没有可执行的校园采集任务');
+    }
+    const templates = await this.prisma.campusMapMarkerTemplate.findMany({
+      where: { enabled: true, OR: [{ regionId: null }, { regionId: rider.regionId }] },
+      orderBy: [{ pinned: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return {
+      task: this.safeRiderTask(task),
+      sessions: task.sessions,
+      templates: templates.map((template) => ({
+        id: template.id,
+        label: template.label,
+        description: template.description,
+        icon: template.icon,
+        color: template.color,
+        behavior: template.behavior,
+        fieldSchema: template.fieldSchema,
+        allowedBindings: template.allowedBindings,
+        pinned: template.pinned,
+        requirePhoto: template.requirePhoto,
+        requireNote: template.requireNote,
+        requireStationarySample: template.requireStationarySample,
+      })),
+    };
+  }
+
+  async startRiderSession(taskId: string, userId: string, dto: StartCollectionSessionDto) {
+    await this.requireOfficialRider(userId);
+    return this.startSession(taskId, userId, { ...dto, sourceClient: 'rider_app' });
+  }
+
   createTask(regionId: string, dto: CreateCollectionTaskDto, adminId: string) {
     const input = parseTask(dto);
     return this.prisma.campusMapCollectionTask.create({
@@ -277,9 +363,11 @@ export class CampusMapCollectionService {
         status: { in: ['ready', 'collecting'] },
         assignments: { some: { userId } },
       },
-      select: { id: true },
+      select: { id: true, allowedClients: true },
     });
     if (!task) throw new ForbiddenException('无权开始这个采集任务');
+    const allowedClients = Array.isArray(task.allowedClients) ? task.allowedClients : ['miniapp'];
+    if (!allowedClients.includes(input.sourceClient)) throw new ForbiddenException('这个任务未开放给当前采集端');
     return this.prisma.campusMapCollectionSession.create({
       data: {
         taskId,
