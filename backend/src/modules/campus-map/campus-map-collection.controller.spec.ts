@@ -18,6 +18,8 @@ describe('CampusMapCollectionController', () => {
     listRiderTasks: jest.fn(),
     getRiderTask: jest.fn(),
     startRiderSession: jest.fn(),
+    createCollectionObject: jest.fn(),
+    reviewCollectionObject: jest.fn(),
     resolveCollectorContext: jest.fn(),
     startSession: jest.fn(),
     uploadPointBatch: jest.fn(),
@@ -61,6 +63,8 @@ describe('CampusMapCollectionController', () => {
     expect(Reflect.getMetadata('__guards__', proto.listRiderTasks)).toEqual([JwtGuard]);
     expect(Reflect.getMetadata('path', proto.getRiderTask)).toBe('rider-app/campus-collection/tasks/:taskId');
     expect(Reflect.getMetadata('path', proto.startRiderSession)).toBe('rider-app/campus-collection/tasks/:taskId/sessions');
+    expect(Reflect.getMetadata('path', proto.createRiderCollectionObject)).toBe('rider-app/campus-collection/sessions/:sessionId/objects');
+    expect(Reflect.getMetadata('path', proto.reviewCollectionObject)).toBe('admin/campus-map/collections/:regionId/objects/:objectId/review');
   });
 
   it('checks admin region scope before reading task data', async () => {

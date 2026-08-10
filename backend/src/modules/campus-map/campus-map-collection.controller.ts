@@ -8,9 +8,11 @@ import { AdminDataScopeService } from '../../common/services/admin-data-scope.se
 import { UploadService } from '../upload/upload.service';
 import {
   CreateCollectionMarkerDto,
+  CreateCollectionObjectDto,
   CreateCollectionTaskDto,
   FinishCollectionSessionDto,
   MarkerTemplateDto,
+  ReviewCollectionObjectDto,
   StartCollectionSessionDto,
   UpdateCollectionTaskDto,
   UploadPointBatchDto,
@@ -192,6 +194,31 @@ export class CampusMapCollectionController {
     @Req() req: AuthenticatedRequest,
   ) {
     return this.service.startRiderSession(taskId, this.collectorUserId(req), dto);
+  }
+
+  @Post('rider-app/campus-collection/sessions/:sessionId/objects')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createRiderCollectionObject(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: CreateCollectionObjectDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.createCollectionObject(sessionId, this.collectorUserId(req), dto);
+  }
+
+  @Patch('admin/campus-map/collections/:regionId/objects/:objectId/review')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('region:edit')
+  @ApiBearerAuth()
+  async reviewCollectionObject(
+    @Param('regionId') regionId: string,
+    @Param('objectId') objectId: string,
+    @Body() dto: ReviewCollectionObjectDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const adminId = await this.assertAdminRegion(req, regionId);
+    return this.service.reviewCollectionObject(regionId, objectId, dto, adminId);
   }
 
   @Post('campus-map/collection/tasks/:taskId/sessions')

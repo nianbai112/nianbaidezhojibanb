@@ -5,15 +5,19 @@ import { PrismaService } from '../../common/services/prisma.service';
 import {
   parsePointBatch,
   parseFinishSession,
+  parseCollectionObject,
   parseMarker,
+  parseObjectReview,
   parseStartSession,
   BINDING_RELATIONS,
   COLLECTION_TASK_STATUSES,
   CollectionTaskFilters,
+  CreateCollectionObjectDto,
   CreateCollectionTaskDto,
   CreateCollectionMarkerDto,
   FinishCollectionSessionDto,
   MarkerTemplateDto,
+  ReviewCollectionObjectDto,
   parseTask,
   parseTemplate,
   StartCollectionSessionDto,
@@ -431,6 +435,84 @@ export class CampusMapCollectionService {
     });
   }
 
+  async createCollectionObject(sessionId: string, userId: string, dto: CreateCollectionObjectDto) {
+    const input = parseCollectionObject(dto);
+    const existing = await this.prisma.campusMapCollectionObject.findUnique({
+      where: { sessionId_clientObjectId: { sessionId, clientObjectId: input.clientObjectId } },
+      include: { attachments: true },
+    });
+    if (existing) return existing;
+
+    const session = await this.prisma.campusMapCollectionSession.findFirst({
+      where: {
+        id: sessionId,
+        collectorUserId: userId,
+        status: { in: ['recording', 'paused', 'uploading'] },
+      },
+      select: { id: true, task: { select: { objectTypes: true } } },
+    });
+    if (!session) throw new ForbiddenException('无权上传这个采集会话的对象');
+    const allowedTypes = Array.isArray(session.task.objectTypes) ? session.task.objectTypes : [];
+    if (!allowedTypes.includes(input.objectType)) throw new ForbiddenException('这个任务未开放该采集对象类型');
+
+    return this.prisma.$transaction(async (tx) => {
+      const point = input.geometry.type === 'Point' ? input.geometry.coordinates as number[] : null;
+      const created = await tx.campusMapCollectionObject.create({
+        data: {
+          sessionId,
+          clientObjectId: input.clientObjectId,
+          objectType: input.objectType,
+          geometry: input.geometry as Prisma.InputJsonValue,
+          properties: input.properties as Prisma.InputJsonValue,
+          bindings: input.bindings as Prisma.InputJsonValue,
+          longitude: input.longitude ?? point?.[0],
+          latitude: input.latitude ?? point?.[1],
+          accuracy: input.accuracy,
+          recordedAt: input.recordedAt,
+          quality: input.quality as Prisma.InputJsonValue | undefined,
+          attachments: input.attachments.length ? {
+            create: input.attachments.map((attachment) => ({
+              kind: attachment.kind || 'photo',
+              url: attachment.url,
+              storageKey: attachment.storageKey,
+              mimeType: attachment.mimeType,
+              byteSize: attachment.byteSize || 0,
+              checksum: attachment.checksum,
+              metadata: attachment.metadata as Prisma.InputJsonValue | undefined,
+            })),
+          } : undefined,
+        },
+        include: { attachments: true },
+      });
+      const objectCount = await tx.campusMapCollectionObject.count({ where: { sessionId } });
+      await tx.campusMapCollectionSession.update({ where: { id: sessionId }, data: { objectCount } });
+      return created;
+    });
+  }
+
+  async reviewCollectionObject(
+    regionId: string,
+    objectId: string,
+    dto: ReviewCollectionObjectDto,
+    adminId: string,
+  ) {
+    const input = parseObjectReview(dto);
+    const object = await this.prisma.campusMapCollectionObject.findFirst({
+      where: { id: objectId, session: { task: { regionId } } },
+      select: { id: true },
+    });
+    if (!object) throw new NotFoundException('采集对象不存在');
+    return this.prisma.campusMapCollectionObject.update({
+      where: { id: objectId },
+      data: {
+        reviewStatus: input.decision,
+        reviewNote: input.note,
+        reviewedBy: adminId,
+        reviewedAt: new Date(),
+      },
+    });
+  }
+
   async finishSession(sessionId: string, userId: string, dto: FinishCollectionSessionDto) {
     const input = parseFinishSession(dto);
     const session = await this.prisma.campusMapCollectionSession.findFirst({
@@ -440,15 +522,21 @@ export class CampusMapCollectionService {
     if (session.status === 'completed' && session.uploadComplete) return session;
 
     return this.prisma.$transaction(async (tx) => {
-      const [pointCount, markerCount] = await Promise.all([
+      const [pointCount, markerCount, objectCount] = await Promise.all([
         tx.campusMapCollectionPoint.count({ where: { sessionId } }),
         tx.campusMapCollectionMarker.count({ where: { sessionId } }),
+        tx.campusMapCollectionObject.count({ where: { sessionId } }),
       ]);
-      if (pointCount !== input.clientPointCount || markerCount !== input.clientMarkerCount) {
+      if (
+        pointCount !== input.clientPointCount
+        || markerCount !== input.clientMarkerCount
+        || objectCount !== input.clientObjectCount
+      ) {
         throw new ConflictException({
           message: '仍有采集数据未完成上传',
           serverPointCount: pointCount,
           serverMarkerCount: markerCount,
+          serverObjectCount: objectCount,
         });
       }
       return tx.campusMapCollectionSession.update({
@@ -458,6 +546,7 @@ export class CampusMapCollectionService {
           endedAt: input.endedAt,
           pointCount,
           markerCount,
+          objectCount,
           uploadComplete: true,
         },
       });

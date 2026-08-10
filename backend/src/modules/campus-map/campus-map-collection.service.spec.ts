@@ -39,6 +39,13 @@ describe('CampusMapCollectionService', () => {
       create: jest.fn(),
       count: jest.fn(),
     },
+    campusMapCollectionObject: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
+    },
     regionRider: {
       findUnique: jest.fn(),
     },
@@ -88,6 +95,8 @@ describe('CampusMapCollectionService', () => {
     expect(result).toEqual({
       ...input,
       recordedAt: new Date('2026-08-10T01:00:00.000Z'),
+      bindings: [],
+      attachments: [],
     });
   });
 
@@ -135,6 +144,60 @@ describe('CampusMapCollectionService', () => {
 
     await expect((service as any).listRiderTasks('rider-1')).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.campusMapCollectionTask.findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns the existing immutable object when the same client object id is retried', async () => {
+    const prisma = makeTransactional();
+    const existing = {
+      id: 'object-1', sessionId: 'session-1', clientObjectId: 'road-client-1',
+      objectType: 'road', geometry: { type: 'LineString', coordinates: [[106.5, 29.6], [106.6, 29.7]] },
+    };
+    prisma.campusMapCollectionObject.findUnique.mockResolvedValue(existing);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect((service as any).createCollectionObject('session-1', 'rider-1', {
+      clientObjectId: 'road-client-1', objectType: 'road', geometry: existing.geometry,
+      properties: {}, recordedAt: '2026-08-10T01:00:00.000Z', accuracy: 6,
+    })).resolves.toBe(existing);
+    expect(prisma.campusMapCollectionObject.create).not.toHaveBeenCalled();
+  });
+
+  it('records object review state without replacing immutable raw geometry', async () => {
+    const prisma = createPrisma();
+    const rawGeometry = { type: 'Point', coordinates: [106.5, 29.6] };
+    prisma.campusMapCollectionObject.findFirst.mockResolvedValue({
+      id: 'object-1', geometry: rawGeometry, reviewStatus: 'pending', session: { task: { regionId: 'region-1' } },
+    });
+    prisma.campusMapCollectionObject.update.mockImplementation(({ data }: any) => ({
+      id: 'object-1', geometry: rawGeometry, ...data,
+    }));
+    const service = new CampusMapCollectionService(prisma as any);
+
+    const result = await (service as any).reviewCollectionObject(
+      'region-1', 'object-1', { decision: 'approved', note: '与现场照片一致' }, 'admin-1',
+    );
+
+    expect(result).toMatchObject({ reviewStatus: 'approved', reviewNote: '与现场照片一致', geometry: rawGeometry });
+    expect(prisma.campusMapCollectionObject.update.mock.calls[0][0].data).not.toHaveProperty('geometry');
+  });
+
+  it('keeps a session open while a professional object is not acknowledged by the client', async () => {
+    const prisma = makeTransactional();
+    prisma.campusMapCollectionSession.findFirst.mockResolvedValue({
+      id: 'session-1', collectorUserId: 'rider-1', status: 'recording', uploadComplete: false,
+    });
+    prisma.campusMapCollectionPoint.count.mockResolvedValue(0);
+    prisma.campusMapCollectionMarker.count.mockResolvedValue(0);
+    prisma.campusMapCollectionObject.count.mockResolvedValue(1);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect(service.finishSession('session-1', 'rider-1', {
+      clientPointCount: 0,
+      clientMarkerCount: 0,
+      clientObjectCount: 0,
+      endedAt: '2026-08-10T02:00:00.000Z',
+    } as any)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.campusMapCollectionSession.update).not.toHaveBeenCalled();
   });
 
   it('returns a short-lived access code while persisting only its SHA-256 hash', async () => {

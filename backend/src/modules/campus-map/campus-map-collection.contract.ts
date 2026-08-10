@@ -72,6 +72,11 @@ export type CreateCollectionObjectDto = {
   attachments?: CollectionAttachmentDto[];
 };
 
+export type ReviewCollectionObjectDto = {
+  decision: string;
+  note: string;
+};
+
 export type CollectionPointDto = {
   clientPointId: string;
   pointSeq: number;
@@ -93,6 +98,7 @@ export type UploadPointBatchDto = {
 export type FinishCollectionSessionDto = {
   clientPointCount: number;
   clientMarkerCount: number;
+  clientObjectCount?: number;
   endedAt: string;
 };
 
@@ -224,7 +230,41 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
     throw new BadRequestException('采集对象精度无效');
   }
 
-  return { ...dto, clientObjectId, objectType, recordedAt };
+  const bindingKeys = new Set<string>();
+  const bindings = (dto.bindings || []).map((binding) => {
+    const targetType = String(binding?.targetType || '').trim();
+    const targetId = String(binding?.targetId || '').trim();
+    const relationType = String(binding?.relationType || '').trim();
+    const key = `${targetType}:${targetId}:${relationType}`;
+    if (
+      !BINDING_TARGET_TYPES.includes(targetType as (typeof BINDING_TARGET_TYPES)[number])
+      || !BINDING_RELATIONS.includes(relationType as (typeof BINDING_RELATIONS)[number])
+      || !targetId
+      || bindingKeys.has(key)
+    ) throw new BadRequestException('采集对象绑定无效或重复');
+    bindingKeys.add(key);
+    return { targetType, targetId, relationType };
+  });
+  const attachments = (dto.attachments || []).map((attachment) => {
+    const url = String(attachment?.url || '').trim();
+    if (!url) throw new BadRequestException('附件地址不能为空');
+    if (attachment.byteSize !== undefined && (!Number.isInteger(attachment.byteSize) || attachment.byteSize < 0)) {
+      throw new BadRequestException('附件大小无效');
+    }
+    return { ...attachment, url };
+  });
+
+  return { ...dto, clientObjectId, objectType, recordedAt, bindings, attachments };
+}
+
+export function parseObjectReview(dto: ReviewCollectionObjectDto) {
+  const decision = String(dto?.decision || '').trim();
+  const note = String(dto?.note || '').trim();
+  if (!COLLECTION_OBJECT_REVIEW_STATUSES.slice(1).includes(decision as any)) {
+    throw new BadRequestException('采集对象审核决定无效');
+  }
+  if (!note || note.length > 500) throw new BadRequestException('审核理由不能为空且不能超过 500 字');
+  return { decision, note };
 }
 
 export function parseTemplate(dto: MarkerTemplateDto) {
@@ -378,9 +418,13 @@ export function parseFinishSession(dto: FinishCollectionSessionDto) {
   if (!Number.isInteger(dto?.clientMarkerCount) || dto.clientMarkerCount < 0) {
     throw new BadRequestException('客户端标记数量无效');
   }
+  const clientObjectCount = dto.clientObjectCount ?? 0;
+  if (!Number.isInteger(clientObjectCount) || clientObjectCount < 0) {
+    throw new BadRequestException('客户端采集对象数量无效');
+  }
   const endedAt = new Date(dto?.endedAt);
   if (Number.isNaN(endedAt.getTime())) throw new BadRequestException('采集结束时间无效');
-  return { ...dto, endedAt };
+  return { ...dto, clientObjectCount, endedAt };
 }
 
 export function parseMarker(dto: CreateCollectionMarkerDto) {
