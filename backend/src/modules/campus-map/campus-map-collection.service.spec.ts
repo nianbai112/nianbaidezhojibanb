@@ -48,6 +48,7 @@ describe('CampusMapCollectionService', () => {
     },
     regionRider: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
     },
     $transaction: jest.fn(),
   });
@@ -198,6 +199,33 @@ describe('CampusMapCollectionService', () => {
       endedAt: '2026-08-10T02:00:00.000Z',
     } as any)).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.campusMapCollectionSession.update).not.toHaveBeenCalled();
+  });
+
+  it('returns identifiable approved official rider options for one region', async () => {
+    const prisma = createPrisma();
+    prisma.regionRider.findMany.mockResolvedValue([{
+      userId: 'rider-1', regionId: 'region-1', realName: '王同学', phone: '13800138000',
+      riderType: 'official', verifyStatus: 'approved',
+      User: { id: 'rider-1', uid: 1008, nickname: '小王', avatar: 'https://img/avatar.jpg', status: 'ACTIVE' },
+    }]);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect((service as any).listCollectorOptions('region-1', '王')).resolves.toEqual([{
+      userId: 'rider-1', uid: 1008, nickname: '小王', realName: '王同学',
+      avatar: 'https://img/avatar.jpg', phone: '138****8000', regionId: 'region-1',
+    }]);
+  });
+
+  it('rejects rider-app task assignments that are not approved official riders in the region', async () => {
+    const prisma = createPrisma();
+    prisma.regionRider.findMany.mockResolvedValue([{ userId: 'rider-1' }]);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    await expect(service.createTask('region-1', {
+      name: '官方骑手采集', status: 'ready', collectorUserIds: ['rider-1', 'part-time-1'],
+      allowedClients: ['rider_app'], objectTypes: ['road'],
+    }, 'admin-1')).rejects.toThrow('采集人员必须是当前区域已审核的官方骑手');
+    expect(prisma.campusMapCollectionTask.create).not.toHaveBeenCalled();
   });
 
   it('returns a short-lived access code while persisting only its SHA-256 hash', async () => {
@@ -541,6 +569,7 @@ describe('CampusMapCollectionService', () => {
 
   it('creates a scoped task with unique collector assignments', async () => {
     const prisma = makeTransactional();
+    prisma.regionRider.findMany.mockResolvedValue([{ userId: 'user-1' }, { userId: 'user-2' }]);
     prisma.campusMapCollectionTask.create.mockImplementation(({ data }: any) => ({ id: 'task-1', ...data }));
     const service = new CampusMapCollectionService(prisma as any);
 

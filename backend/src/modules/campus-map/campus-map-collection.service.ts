@@ -55,6 +55,57 @@ export class CampusMapCollectionService {
     };
   }
 
+  async listCollectorOptions(regionId: string, keyword?: string) {
+    const search = String(keyword || '').trim().slice(0, 50);
+    const numericUid = /^\d+$/.test(search) ? Number(search) : null;
+    const searchOr: Prisma.RegionRiderWhereInput[] = search ? [
+      { realName: { contains: search } },
+      { phone: { contains: search } },
+      { User: { nickname: { contains: search } } },
+    ] : [];
+    if (numericUid !== null && Number.isSafeInteger(numericUid)) searchOr.push({ User: { uid: numericUid } });
+    const riders = await this.prisma.regionRider.findMany({
+      where: {
+        regionId,
+        riderType: 'official',
+        verifyStatus: 'approved',
+        ...(searchOr.length ? { OR: searchOr } : {}),
+      },
+      include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, status: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 30,
+    });
+    return riders
+      .filter((rider) => rider.User?.status === 'ACTIVE')
+      .map((rider) => ({
+        userId: rider.userId,
+        uid: rider.User.uid,
+        nickname: rider.User.nickname || rider.realName,
+        realName: rider.realName,
+        avatar: rider.User.avatar,
+        phone: rider.phone.replace(/^(\d{3})\d+(\d{4})$/, '$1****$2'),
+        regionId: rider.regionId,
+      }));
+  }
+
+  private async validateRiderAssignments(regionId: string, input: ReturnType<typeof parseTask>) {
+    if (!input.allowedClients.includes('rider_app')) return;
+    const riders = await this.prisma.regionRider.findMany({
+      where: {
+        regionId,
+        userId: { in: input.collectorUserIds },
+        riderType: 'official',
+        verifyStatus: 'approved',
+        User: { status: 'ACTIVE' },
+      },
+      select: { userId: true },
+    });
+    const validIds = new Set(riders.map((rider) => rider.userId));
+    if (input.collectorUserIds.some((userId) => !validIds.has(userId))) {
+      throw new BadRequestException('采集人员必须是当前区域已审核的官方骑手');
+    }
+  }
+
   async listRiderTasks(userId: string) {
     const rider = await this.requireOfficialRider(userId);
     const tasks = await this.prisma.campusMapCollectionTask.findMany({
@@ -118,8 +169,9 @@ export class CampusMapCollectionService {
     return this.startSession(taskId, userId, { ...dto, sourceClient: 'rider_app' });
   }
 
-  createTask(regionId: string, dto: CreateCollectionTaskDto, adminId: string) {
+  async createTask(regionId: string, dto: CreateCollectionTaskDto, adminId: string) {
     const input = parseTask(dto);
+    await this.validateRiderAssignments(regionId, input);
     return this.prisma.campusMapCollectionTask.create({
       data: {
         regionId,
@@ -210,6 +262,7 @@ export class CampusMapCollectionService {
       priority: dto.priority ?? current.priority ?? undefined,
       dueAt: dto.dueAt ?? current.dueAt?.toISOString(),
     });
+    await this.validateRiderAssignments(regionId, input);
     return this.prisma.$transaction(async (tx) => {
       if (dto.collectorUserIds !== undefined) {
         await tx.campusMapCollectionAssignment.deleteMany({ where: { taskId } });

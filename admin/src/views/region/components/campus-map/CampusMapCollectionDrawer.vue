@@ -2,7 +2,7 @@
   <el-drawer
     :model-value="modelValue"
     title="校园地图现场采集"
-    size="min(1080px, 92vw)"
+    size="min(1180px, 94vw)"
     append-to-body
     destroy-on-close
     @update:model-value="$emit('update:modelValue', $event)"
@@ -12,7 +12,7 @@
         type="warning"
         :closable="false"
         title="原始数据不会自动发布到校园地图"
-        description="现场轨迹和标记只进入审核区；清洗、路网审核和地图发布仍是后续独立步骤。"
+        description="骑手端道路、建筑、入口、设施和异常只进入审核区；审核通过后仍需进入地图草稿并单独发布。"
         show-icon
       />
 
@@ -58,7 +58,7 @@
                   </div>
                   <div>
                     <el-button @click="openTaskForm(selectedTask)">编辑</el-button>
-                    <el-button type="primary" @click="createAccessCode(selectedTask.id)">生成采集入口</el-button>
+                    <el-tag type="success">骑手 App 任务</el-tag>
                   </div>
                 </div>
                 <div class="metric-grid">
@@ -67,10 +67,10 @@
                   <div><span>原始会话</span><strong>{{ selectedTask.sessions?.length || 0 }}</strong></div>
                   <div><span>更新时间</span><strong>{{ formatDate(selectedTask.updatedAt) }}</strong></div>
                 </div>
-                <h4>已分配用户 ID</h4>
+                <h4>已分配官方骑手</h4>
                 <div class="chip-row">
                   <el-tag v-for="assignment in selectedTask.assignments" :key="assignment.id">
-                    {{ assignment.userId }}
+                    {{ collectorLabel(assignment.userId) }}
                   </el-tag>
                   <span v-if="!selectedTask.assignments?.length" class="muted">尚未分配采集人员</span>
                 </div>
@@ -80,6 +80,7 @@
                   <el-table-column prop="status" label="状态" width="100" />
                   <el-table-column prop="pointCount" label="点数" width="80" />
                   <el-table-column prop="markerCount" label="标记" width="80" />
+                  <el-table-column prop="objectCount" label="对象" width="80" />
                   <el-table-column label="上传" width="90">
                     <template #default="scope">{{ scope.row.uploadComplete ? '完整' : '待补传' }}</template>
                   </el-table-column>
@@ -103,7 +104,7 @@
                 @click="openSession(session)"
               >
                 <strong>{{ formatDate(session.startedAt) }}</strong>
-                <span>{{ session.pointCount }} 点 · {{ session.markerCount }} 标记</span>
+                <span>{{ session.pointCount }} 点 · {{ session.objectCount || 0 }} 对象</span>
                 <small>{{ session.uploadComplete ? '上传完整' : '存在待补传数据' }}</small>
               </button>
             </div>
@@ -137,6 +138,25 @@
                   </el-table-column>
                   <el-table-column prop="note" label="备注" min-width="180" show-overflow-tooltip />
                 </el-table>
+                <h4>专业采集对象</h4>
+                <el-table :data="selectedSession.objects || []" size="small">
+                  <el-table-column label="类型" width="100">
+                    <template #default="scope">{{ objectTypeLabel(scope.row.objectType) }}</template>
+                  </el-table-column>
+                  <el-table-column prop="reviewStatus" label="审核" width="100" />
+                  <el-table-column prop="accuracy" label="精度(m)" width="90" />
+                  <el-table-column label="属性" min-width="190" show-overflow-tooltip>
+                    <template #default="scope">{{ JSON.stringify(scope.row.properties || {}) }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="300" fixed="right">
+                    <template #default="scope">
+                      <el-button size="small" type="success" @click="reviewObject(scope.row, 'approved')">通过</el-button>
+                      <el-button size="small" type="warning" @click="reviewObject(scope.row, 'resample')">补采</el-button>
+                      <el-button size="small" @click="reviewObject(scope.row, 'held')">暂存</el-button>
+                      <el-button size="small" type="danger" @click="reviewObject(scope.row, 'void')">作废</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
               </template>
               <el-empty v-else description="选择一次会话查看原始轨迹" />
             </section>
@@ -145,7 +165,7 @@
 
         <el-tab-pane label="标注模板" name="templates">
           <div class="toolbar">
-            <div><strong>小程序现场快捷标注</strong><span> · 名称可自定义，系统行为保持受控</span></div>
+            <div><strong>骑手端现场快捷标注</strong><span> · 用于设施和异常的可配置字段</span></div>
             <el-button type="primary" @click="openTemplateForm()">新增模板</el-button>
           </div>
           <div class="template-grid">
@@ -159,7 +179,7 @@
       </el-tabs>
     </div>
 
-    <el-dialog v-model="taskDialogVisible" :title="taskForm.id ? '编辑采集任务' : '新建采集任务'" width="560px" append-to-body>
+    <el-dialog v-model="taskDialogVisible" :title="taskForm.id ? '编辑采集任务' : '新建采集任务'" width="720px" append-to-body>
       <el-form label-position="top">
         <el-form-item label="任务名称"><el-input v-model="taskForm.name" maxlength="100" /></el-form-item>
         <el-form-item label="现场说明"><el-input v-model="taskForm.instructions" type="textarea" :rows="3" /></el-form-item>
@@ -168,27 +188,39 @@
             <el-option v-for="item in taskStatuses" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="采集人员用户 ID（逗号分隔）">
-          <el-input v-model="taskForm.collectorUserIdsText" placeholder="user-id-1, user-id-2" />
+        <el-form-item label="分配官方骑手">
+          <el-select
+            v-model="taskForm.collectorUserIds"
+            multiple filterable remote reserve-keyword
+            :remote-method="searchCollectors"
+            :loading="collectorLoading"
+            placeholder="搜索姓名、昵称、手机号或 UID"
+            style="width: 100%"
+          >
+            <el-option v-for="item in collectorOptions" :key="item.value" :value="item.value" :label="`${item.label} · UID ${item.uid}`">
+              <span>{{ item.label }}（{{ item.realName || '未实名' }}）</span>
+              <small class="option-meta">{{ item.phone }} · UID {{ item.uid }}</small>
+            </el-option>
+          </el-select>
         </el-form-item>
+        <el-form-item label="采集对象">
+          <el-checkbox-group v-model="taskForm.objectTypes">
+            <el-checkbox v-for="item in objectTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <div class="form-grid">
+          <el-form-item label="优先级">
+            <el-select v-model="taskForm.priority" style="width: 100%">
+              <el-option label="紧急" :value="1" /><el-option label="高" :value="2" />
+              <el-option label="普通" :value="3" /><el-option label="低" :value="4" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="截止时间">
+            <el-date-picker v-model="taskForm.dueAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss.SSSZ" style="width: 100%" clearable />
+          </el-form-item>
+        </div>
       </el-form>
       <template #footer><el-button @click="taskDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveTask">保存</el-button></template>
-    </el-dialog>
-
-    <el-dialog v-model="accessDialogVisible" title="采集入口" width="520px" append-to-body @closed="clearAccessCode">
-      <div class="access-code-panel">
-        <img v-if="accessQr" :src="accessQr" alt="校园采集入口二维码" />
-        <strong>{{ accessQrIsMiniCode ? '微信扫一扫可直接进入隐藏采集页' : '当前图片仅用于保存入口文本，不能当作小程序码扫码' }}</strong>
-        <el-input :model-value="collectorPath" readonly />
-        <el-alert
-          :type="accessQrIsMiniCode ? 'warning' : 'error'"
-          :closable="false"
-          :title="accessQrIsMiniCode
-            ? '入口将在 30 分钟后过期；关闭窗口后后台不会保存明文采集码。'
-            : (accessQrError || '真实小程序码生成失败，请复制路径并检查微信与 COS 配置。')"
-        />
-        <el-button type="primary" @click="copyCollectorPath">复制入口路径</el-button>
-      </div>
     </el-dialog>
 
     <el-dialog v-model="templateDialogVisible" :title="templateForm.id ? '编辑标注模板' : '新增标注模板'" width="640px" append-to-body>
@@ -232,24 +264,25 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import QRCode from 'qrcode'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createCampusMapCollectionTask,
   createCampusMapMarkerTemplate,
+  fetchCampusMapCollectorOptions,
   fetchCampusMapCollectionSession,
   fetchCampusMapCollectionTask,
   fetchCampusMapCollectionTasks,
   fetchCampusMapMarkerTemplates,
-  rotateCampusMapCollectionAccessCode,
+  reviewCampusMapCollectionObject,
   updateCampusMapCollectionTask,
   updateCampusMapMarkerTemplate,
 } from '@/api/admin'
 import {
   accuracyBand,
-  buildCollectorPath,
+  buildProfessionalTaskPayload,
   formatSessionDuration,
   taskSessionCount,
+  toCollectorOption,
   toRawPolyline,
   toSvgPolyline,
 } from './campusMapCollectionModel.mjs'
@@ -267,13 +300,13 @@ const selectedTask = ref<any>(null)
 const selectedSession = ref<any>(null)
 const taskDialogVisible = ref(false)
 const templateDialogVisible = ref(false)
-const accessDialogVisible = ref(false)
-const accessCode = ref('')
-const accessQr = ref('')
-const accessQrIsMiniCode = ref(false)
-const accessQrError = ref('')
+const collectorLoading = ref(false)
+const collectorOptions = ref<any[]>([])
 
-const taskForm = reactive({ id: '', name: '', instructions: '', status: 'draft', collectorUserIdsText: '' })
+const taskForm = reactive({
+  id: '', name: '', instructions: '', status: 'draft', collectorUserIds: [] as string[],
+  objectTypes: ['road', 'building', 'entrance', 'facility', 'issue'] as string[], priority: 3, dueAt: '',
+})
 const templateForm = reactive({
   id: '', label: '', description: '', icon: 'pin', color: '#2563eb', behavior: 'info',
   fieldSchemaText: '[]', targetTypes: [] as string[], relationTypes: [] as string[], pinned: false,
@@ -299,8 +332,10 @@ const relationOptions = [
   ['belongs_to', '属于'], ['entrance_of', '入口'], ['connects', '连接'], ['affects', '影响'],
   ['blocks', '封闭'], ['alternative_to', '替代路线'], ['references', '参考位置'],
 ].map(([value, label]) => ({ value, label }))
+const objectTypeOptions = [
+  ['road', '道路'], ['building', '建筑'], ['entrance', '入口'], ['facility', '设施'], ['issue', '异常'],
+].map(([value, label]) => ({ value, label }))
 
-const collectorPath = computed(() => accessCode.value ? buildCollectorPath(accessCode.value) : '')
 const rawSvgPoints = computed(() => toSvgPolyline(toRawPolyline(selectedSession.value?.points || []), 640, 320))
 const accuracyCounts = computed(() => (selectedSession.value?.points || []).reduce((result: any, point: any) => {
   result[accuracyBand(point.accuracy).key] += 1
@@ -309,14 +344,13 @@ const accuracyCounts = computed(() => (selectedSession.value?.points || []).redu
 
 watch(() => props.modelValue, (visible) => {
   if (visible) loadAll()
-  else clearAccessCode()
 })
 
 async function loadAll() {
   if (!props.regionId) return
   loading.value = true
   try {
-    await Promise.all([loadTasks(), loadTemplates()])
+    await Promise.all([loadTasks(), loadTemplates(), searchCollectors('')])
   } finally {
     loading.value = false
   }
@@ -348,19 +382,18 @@ async function openSession(session: any) {
 function openTaskForm(task?: any) {
   Object.assign(taskForm, {
     id: task?.id || '', name: task?.name || '', instructions: task?.instructions || '', status: task?.status || 'draft',
-    collectorUserIdsText: (task?.assignments || []).map((item: any) => item.userId).join(', '),
+    collectorUserIds: (task?.assignments || []).map((item: any) => item.userId),
+    objectTypes: [...(task?.objectTypes || ['road', 'building', 'entrance', 'facility', 'issue'])],
+    priority: Number(task?.priority || 3), dueAt: task?.dueAt || '',
   })
   taskDialogVisible.value = true
 }
 
 async function saveTask() {
-  const payload = {
-    name: taskForm.name,
-    instructions: taskForm.instructions,
-    status: taskForm.status,
-    collectorUserIds: taskForm.collectorUserIdsText.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean),
-  }
+  const payload = buildProfessionalTaskPayload(taskForm)
   if (!payload.name.trim()) return ElMessage.warning('请输入任务名称')
+  if (payload.status === 'ready' && !payload.collectorUserIds.length) return ElMessage.warning('请选择至少一名官方骑手')
+  if (!payload.objectTypes.length) return ElMessage.warning('请选择至少一种采集对象')
   saving.value = true
   try {
     const saved: any = taskForm.id
@@ -375,25 +408,41 @@ async function saveTask() {
   }
 }
 
-async function createAccessCode(taskId: string) {
-  const data: any = await rotateCampusMapCollectionAccessCode(props.regionId, taskId)
-  accessCode.value = data.accessCode
-  accessQrIsMiniCode.value = Boolean(data.qrcodeUrl)
-  accessQrError.value = data.qrcodeError || ''
-  accessQr.value = data.qrcodeUrl || await QRCode.toDataURL(collectorPath.value, { width: 260, margin: 1 })
-  accessDialogVisible.value = true
+async function searchCollectors(keyword: string) {
+  if (!props.regionId) return
+  collectorLoading.value = true
+  try {
+    const data: any = await fetchCampusMapCollectorOptions(props.regionId, keyword)
+    const next = (Array.isArray(data) ? data : []).map(toCollectorOption)
+    const selected = collectorOptions.value.filter((item) => taskForm.collectorUserIds.includes(item.value))
+    collectorOptions.value = [...new Map([...selected, ...next].map((item) => [item.value, item])).values()]
+  } finally {
+    collectorLoading.value = false
+  }
 }
 
-function clearAccessCode() {
-  accessCode.value = ''
-  accessQr.value = ''
-  accessQrIsMiniCode.value = false
-  accessQrError.value = ''
+function collectorLabel(userId: string) {
+  const item = collectorOptions.value.find((option) => option.value === userId)
+  return item ? `${item.label} · UID ${item.uid}` : userId
 }
 
-async function copyCollectorPath() {
-  await navigator.clipboard.writeText(collectorPath.value)
-  ElMessage.success('采集入口已复制')
+function objectTypeLabel(value: string) {
+  return objectTypeOptions.find((item) => item.value === value)?.label || value
+}
+
+async function reviewObject(object: any, decision: 'approved' | 'resample' | 'held' | 'void') {
+  if (!selectedTask.value || !selectedSession.value) return
+  const labels = { approved: '通过', resample: '退回补采', held: '暂存', void: '作废' }
+  try {
+    const result = await ElMessageBox.prompt('请输入审核理由，原始几何和现场资料不会被修改。', `审核：${labels[decision]}`, {
+      confirmButtonText: '确认', cancelButtonText: '取消', inputPattern: /\S+/, inputErrorMessage: '审核理由不能为空',
+    })
+    await reviewCampusMapCollectionObject(props.regionId, object.id, { decision, note: result.value })
+    await openSession(selectedSession.value)
+    ElMessage.success(`已${labels[decision]}`)
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') throw error
+  }
 }
 
 function openTemplateForm(template?: any) {
@@ -474,8 +523,7 @@ function formatDate(value: string) { return value ? new Date(value).toLocaleStri
 .template-card span { display: grid; gap: 4px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .switch-row { justify-content: flex-start; flex-wrap: wrap; }
-.access-code-panel { display: grid; justify-items: center; gap: 14px; text-align: center; }
-.access-code-panel img { width: 260px; height: 260px; }
+.option-meta { float: right; color: #94a3b8; margin-left: 18px; }
 @media (max-width: 900px) {
   .task-layout, .session-layout { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: 1fr 1fr; }

@@ -710,6 +710,10 @@ export async function fetchCampusMapCollectionTasks(
   return request.get(`/admin/campus-map/collections/${regionId}/tasks`, { params })
 }
 
+export async function fetchCampusMapCollectorOptions(regionId: string | number, keyword = '') {
+  return request.get(`/admin/campus-map/collections/${regionId}/collector-options`, { params: { keyword } })
+}
+
 export async function createCampusMapCollectionTask(regionId: string | number, data: any) {
   return request.post(`/admin/campus-map/collections/${regionId}/tasks`, data)
 }
@@ -748,6 +752,14 @@ export async function updateCampusMapMarkerTemplate(
   data: any,
 ) {
   return request.patch(`/admin/campus-map/collections/${regionId}/templates/${templateId}`, data)
+}
+
+export async function reviewCampusMapCollectionObject(
+  regionId: string | number,
+  objectId: string,
+  data: { decision: 'approved' | 'resample' | 'held' | 'void'; note: string },
+) {
+  return request.patch(`/admin/campus-map/collections/${regionId}/objects/${objectId}/review`, data)
 }
 
 export async function saveRegionCampusMap(regionId: string | number, data: any) {

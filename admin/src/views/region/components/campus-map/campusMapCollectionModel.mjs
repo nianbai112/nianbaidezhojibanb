@@ -5,6 +5,51 @@ export function accuracyBand(accuracy) {
   return { key: 'poor', label: '较差', color: '#dc2626' }
 }
 
+export function toCollectorOption(value = {}) {
+  return {
+    value: String(value.userId || value.id || ''),
+    uid: Number(value.uid || 0),
+    label: String(value.nickname || value.realName || '未命名骑手'),
+    realName: String(value.realName || ''),
+    phone: String(value.phone || ''),
+    avatar: String(value.avatar || ''),
+    regionId: String(value.regionId || ''),
+  }
+}
+
+export function buildProfessionalTaskPayload(value = {}) {
+  const objectTypes = ['road', 'building', 'entrance', 'facility', 'issue']
+  return {
+    name: String(value.name || '').trim(),
+    instructions: String(value.instructions || '').trim(),
+    status: String(value.status || 'draft'),
+    collectorUserIds: [...new Set((value.collectorUserIds || []).map(String).filter(Boolean))],
+    allowedClients: ['rider_app'],
+    objectTypes: (value.objectTypes || []).filter((item) => objectTypes.includes(item)),
+    priority: Number(value.priority) || 3,
+    ...(value.dueAt ? { dueAt: String(value.dueAt) } : {}),
+    ...(value.boundary ? { boundary: value.boundary } : {}),
+  }
+}
+
+export function toCollectionFeatures(objects = []) {
+  return {
+    type: 'FeatureCollection',
+    features: objects
+      .filter((item) => item?.id && item?.geometry?.type && Array.isArray(item.geometry.coordinates))
+      .map((item) => ({
+        type: 'Feature',
+        id: item.id,
+        geometry: item.geometry,
+        properties: {
+          ...(item.properties || {}),
+          objectType: item.objectType,
+          reviewStatus: item.reviewStatus,
+        },
+      })),
+  }
+}
+
 export function toRawPolyline(points = []) {
   return points
     .filter((point) => Number.isFinite(Number(point?.longitude)) && Number.isFinite(Number(point?.latitude)))

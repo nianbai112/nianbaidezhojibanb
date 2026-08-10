@@ -45,6 +45,19 @@ export class CampusMapCollectionController {
     return this.service.listTasks(regionId, { status, page: Number(page) || 1, pageSize: Number(pageSize) || 20 });
   }
 
+  @Get('admin/campus-map/collections/:regionId/collector-options')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('region:view')
+  @ApiBearerAuth()
+  async listCollectorOptions(
+    @Param('regionId') regionId: string,
+    @Query('keyword') keyword: string | undefined,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.assertAdminRegion(req, regionId);
+    return this.service.listCollectorOptions(regionId, keyword);
+  }
+
   @Post('admin/campus-map/collections/:regionId/tasks')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('region:edit')

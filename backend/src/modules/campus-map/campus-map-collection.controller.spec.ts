@@ -20,6 +20,7 @@ describe('CampusMapCollectionController', () => {
     startRiderSession: jest.fn(),
     createCollectionObject: jest.fn(),
     reviewCollectionObject: jest.fn(),
+    listCollectorOptions: jest.fn(),
     resolveCollectorContext: jest.fn(),
     startSession: jest.fn(),
     uploadPointBatch: jest.fn(),
@@ -65,6 +66,7 @@ describe('CampusMapCollectionController', () => {
     expect(Reflect.getMetadata('path', proto.startRiderSession)).toBe('rider-app/campus-collection/tasks/:taskId/sessions');
     expect(Reflect.getMetadata('path', proto.createRiderCollectionObject)).toBe('rider-app/campus-collection/sessions/:sessionId/objects');
     expect(Reflect.getMetadata('path', proto.reviewCollectionObject)).toBe('admin/campus-map/collections/:regionId/objects/:objectId/review');
+    expect(Reflect.getMetadata('path', proto.listCollectorOptions)).toBe('admin/campus-map/collections/:regionId/collector-options');
   });
 
   it('checks admin region scope before reading task data', async () => {
