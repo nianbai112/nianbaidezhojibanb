@@ -1,5 +1,5 @@
 CREATE TEMPORARY TABLE `_rider_password_credential_keeper` (
-  `id` VARCHAR(191) NOT NULL PRIMARY KEY
+  `id` VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL PRIMARY KEY
 );
 
 INSERT INTO `_rider_password_credential_keeper` (`id`)
