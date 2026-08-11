@@ -14,6 +14,9 @@ describe('rider password fixed-row migration', () => {
   const mysqlAdditive = readSql(
     'prisma/additive-migrations/mysql/202608110003_rider_password_credential_fixed_id.sql',
   );
+  const mysqlSingleton = readSql(
+    'prisma/additive-migrations/mysql/202608110002_rider_password_credential_singleton.sql',
+  );
 
   it('keeps the PostgreSQL deploy and additive migrations identical', () => {
     expect(postgresqlAdditive).toBe(prismaMigration);
@@ -34,5 +37,11 @@ describe('rider password fixed-row migration', () => {
     expect(mysqlAdditive.indexOf('DELETE credential')).toBeLessThan(mysqlAdditive.indexOf('ADD CONSTRAINT'));
     expect(mysqlAdditive).toContain("WHERE BINARY `id` <> BINARY 'rider-password-login'");
     expect(mysqlAdditive).toContain("CHECK (BINARY `id` = BINARY ''rider-password-login'')");
+  });
+
+  it('uses the credential id collation for the MySQL singleton keeper table', () => {
+    expect(mysqlSingleton).toContain(
+      '`id` VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL PRIMARY KEY',
+    );
   });
 });
