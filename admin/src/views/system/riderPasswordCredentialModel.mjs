@@ -45,3 +45,15 @@ export function buildRiderPasswordCredentialPayload(form) {
     ...(password.trim() ? { password } : {}),
   }
 }
+
+export function createLatestRequestController() {
+  let latestRequest = 0
+  return {
+    begin: () => ++latestRequest,
+    commit: (request, callback) => {
+      if (request !== latestRequest) return false
+      callback()
+      return true
+    },
+  }
+}

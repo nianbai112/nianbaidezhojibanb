@@ -22,3 +22,22 @@ test('includes a non-blank password only in the save payload', () => {
     username: 'campus.test', password: 'Campus2026!', userId: 'user-1', enabled: true, expiresAt: '',
   }), { username: 'campus.test', password: 'Campus2026!', userId: 'user-1', enabled: true, expiresAt: null })
 })
+
+test('only lets the latest rider search completion publish results and clear loading', () => {
+  const controller = model.createLatestRequestController()
+  const state = { options: ['current'], loading: true }
+  const olderRequest = controller.begin()
+  const newerRequest = controller.begin()
+
+  assert.equal(controller.commit(olderRequest, () => {
+    state.options = ['stale']
+    state.loading = false
+  }), false)
+  assert.deepEqual(state, { options: ['current'], loading: true })
+
+  assert.equal(controller.commit(newerRequest, () => {
+    state.options = ['newest']
+    state.loading = false
+  }), true)
+  assert.deepEqual(state, { options: ['newest'], loading: false })
+})

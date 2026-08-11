@@ -218,7 +218,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
-import { buildRiderPasswordCredentialPayload, mapRiderPasswordCredential } from './riderPasswordCredentialModel.mjs'
+import { buildRiderPasswordCredentialPayload, createLatestRequestController, mapRiderPasswordCredential } from './riderPasswordCredentialModel.mjs'
 
 type FeatureKey = 'orderPool' | 'chat' | 'income' | 'incentives'
 type CredentialRiderOption = {
@@ -258,6 +258,7 @@ const credentialRiderLoading = ref(false)
 const credentialRiderOptions = ref<CredentialRiderOption[]>([])
 const credential = reactive(mapRiderPasswordCredential())
 const credentialForm = reactive({ username: '', password: '', userId: '', enabled: true, expiresAt: '' })
+const credentialRiderSearch = createLatestRequestController()
 let riderSessionTimer: number | undefined
 const featureItems: Array<{ key: FeatureKey; title: string; desc: string }> = [
   { key: 'orderPool', title: '订单大厅', desc: '控制订单池展示与接单入口' },
@@ -389,17 +390,20 @@ async function loadCredential() {
 }
 
 async function searchCredentialRiders(keyword: string) {
+  const searchRequest = credentialRiderSearch.begin()
   credentialRiderLoading.value = true
   try {
     const response: any = await request.get('/admin/rider-app/password-login/rider-options', { params: { keyword } })
     const rows = Array.isArray(response?.data || response) ? (response?.data || response) : []
     const next = rows.map(credentialRiderOption).filter(Boolean) as CredentialRiderOption[]
     const selected = credentialRiderOptions.value.filter((item) => item.userId === credentialForm.userId)
-    credentialRiderOptions.value = [...new Map([...selected, ...next].map((item) => [item.userId, item])).values()]
+    credentialRiderSearch.commit(searchRequest, () => {
+      credentialRiderOptions.value = [...new Map([...selected, ...next].map((item) => [item.userId, item])).values()]
+    })
   } catch (error: any) {
-    ElMessage.error(error?.message || '搜索官方骑手失败')
+    credentialRiderSearch.commit(searchRequest, () => ElMessage.error(error?.message || '搜索官方骑手失败'))
   } finally {
-    credentialRiderLoading.value = false
+    credentialRiderSearch.commit(searchRequest, () => { credentialRiderLoading.value = false })
   }
 }
 
