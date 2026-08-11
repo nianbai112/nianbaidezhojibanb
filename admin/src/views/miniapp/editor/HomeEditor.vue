@@ -472,7 +472,7 @@
                   :class="{ sel: editing === it.key }"
                   @click="startEdit(it.key)"
                 >
-                  <span class="ol-icon" v-html="it.icon" />
+                  <span class="ol-icon" aria-hidden="true">{{ it.icon }}</span>
                   <span class="ol-name">{{ it.name }}</span>
                   <el-icon v-if="it.toggle" class="ol-eye" :class="{ off: !it.on }" :title="it.on ? '点击隐藏' : '点击显示'" @click.stop="it.toggle()">
                     <View v-if="it.on" /><Hide v-else />
@@ -883,26 +883,16 @@ const applyPageTemplate = (t: any) => {
 const startEdit = (key: string) => { editing.value = key; panelTab.value = 'section' }
 
 // ============ 右侧默认面板：页面大纲 ============
-/** 大纲行内联 SVG 线性图标：16px / 1.5px 描边 / 圆角端点（Lucide 风格），stroke=currentColor 随选中态变色 */
-const OL_SVG = (inner: string) =>
-  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
+/** 大纲图标是受控文本，选中态仍通过 currentColor 变色。 */
 const OL_ICONS = {
-  // 自定义版块：宫格 + 加号（自由搭建）
-  decor: OL_SVG('<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13.5v7M13.5 17h7"/>'),
-  // Hero 区：靶心
-  hero: OL_SVG('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>'),
-  // 金刚区：2x2 宫格
-  kingkong: OL_SVG('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'),
-  // 轮播图：图片
-  carousel: OL_SVG('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4.5 18l4.5-4.5 3 3 3.5-3.5L20 17"/>'),
-  // 公告：喇叭
-  announcement: OL_SVG('<path d="M4 10v4l3 .6V9.4L4 10z"/><path d="M7 9.4L18 5v14l-11-4.4"/><path d="M10 15.5V18a2 2 0 004 0v-1.7"/>'),
-  // 热榜：火焰
-  hotlist: OL_SVG('<path d="M12 3s5.5 4.6 5.5 9.3a5.5 5.5 0 01-11 0c0-2.1 1.1-3.7 2.2-5.2.5 1.5 1.4 2.2 2.4 2.2-.5-2 .3-4.6.9-6.3z"/>'),
-  // 分类 Tab：标签
-  tabs: OL_SVG('<path d="M3.5 11V4.5H11L20.5 14l-6.5 6.5L3.5 11z"/><circle cx="8" cy="8" r="1.3"/>'),
-  // 底部导航：指南针
-  tabbar: OL_SVG('<circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2.1 4.9-4.9 2.1 2.1-4.9z"/>'),
+  decor: '⊞',
+  hero: '◎',
+  kingkong: '▦',
+  carousel: '▣',
+  announcement: '◁',
+  hotlist: '♨',
+  tabs: '◇',
+  tabbar: '⌖',
 }
 const outlineItems = computed(() => {
   const items: { key: string; name: string; icon: string; on?: boolean; toggle?: () => void }[] = []
@@ -1855,8 +1845,7 @@ onMounted(async () => {
 }
 .ol-row:hover { background: var(--mx-soft); }
 .ol-row.sel { border-left-color: var(--ds-brand, #16A34A); background: var(--ds-brand-soft, rgba(22, 163, 74, 0.10)); }
-.ol-icon { display: inline-flex; line-height: 0; color: var(--ds-neutral, #9CA3AF); }
-.ol-icon :deep(svg) { width: 16px; height: 16px; display: block; }
+.ol-icon { display: inline-flex; width: 16px; justify-content: center; font-size: 16px; line-height: 1; color: var(--ds-neutral, #9CA3AF); }
 .ol-row.sel .ol-icon { color: var(--ds-brand, #16A34A); }
 .ol-name { flex: 1; font-size: var(--ds-fs-body, 13px); color: var(--mx-text); }
 .ol-eye { color: var(--ds-brand, #16A34A); cursor: pointer; }

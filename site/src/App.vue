@@ -9,7 +9,9 @@
           <span>版本 {{ agreement.version }}</span>
           <span>更新时间 {{ agreement.updatedAt }}</span>
         </div>
-        <div class="agreement-content" v-html="agreement.content"></div>
+        <div class="agreement-content">
+          <p v-for="(paragraph, index) in agreementParagraphs" :key="index">{{ paragraph }}</p>
+        </div>
       </article>
     </section>
 
@@ -235,6 +237,13 @@ const agreementType = computed(() => {
 })
 
 const isAgreementPage = computed(() => Boolean(agreementType.value))
+const agreementParagraphs = computed(() => {
+  const document = new DOMParser().parseFromString(String(agreement.content || ''), 'text/html')
+  const blocks = Array.from(document.body.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'))
+    .map((element) => element.textContent?.trim() || '')
+    .filter(Boolean)
+  return blocks.length ? blocks : [document.body.textContent?.trim() || ''].filter(Boolean)
+})
 const brandLogo = computed(() => mediaUrl(site.siteLogo || site.logo || fallbackSite.siteLogo))
 const heroVideo = computed(() => mediaUrl(site.heroVideoUrl || ''))
 const heroPoster = computed(() => mediaUrl(site.heroPosterUrl || site.heroImageUrl || fallbackSite.heroPosterUrl))

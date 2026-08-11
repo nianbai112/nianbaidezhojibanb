@@ -103,7 +103,7 @@ function extractBackendRoutes() {
         controllerPrefix = parseDecoratorArg(controller[1]);
       }
 
-      const methodPattern = /@(Get|Post|Put|Patch|Delete)\s*\(([^)]*)\)/g;
+      const methodPattern = /@(Get|Post|Put|Patch|Delete)\s*\(([^)]{0,500})\)/g;
       let method;
       while ((method = methodPattern.exec(line))) {
         for (const route of parseDecoratorArgs(method[2])) {
