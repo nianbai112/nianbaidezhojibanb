@@ -2757,7 +2757,7 @@ model CampusMapCollectionObject {
   attachments CampusMapCollectionAttachment[]
 
   @@unique([sessionId, clientObjectId])
-  @@index([sessionId, objectType, recordedAt])
+  @@index([sessionId, objectType, recordedAt], map: "cmco_session_type_recorded_idx")
   @@index([reviewStatus, updatedAt])
   @@map("campus_map_collection_objects")
 }
