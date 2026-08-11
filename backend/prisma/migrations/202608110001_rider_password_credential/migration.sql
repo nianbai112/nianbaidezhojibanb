@@ -1,5 +1,5 @@
 CREATE TABLE "rider_app_password_credentials" (
-  "id" TEXT NOT NULL,
+  "id" TEXT NOT NULL DEFAULT 'rider-password-login',
   "username" TEXT NOT NULL,
   "normalizedUsername" TEXT NOT NULL,
   "passwordHash" TEXT NOT NULL,

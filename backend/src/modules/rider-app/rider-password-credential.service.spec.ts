@@ -21,9 +21,9 @@ describe("RiderPasswordCredentialService", () => {
   function createService() {
     const prisma = {
       riderAppPasswordCredential: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
+        upsert: jest.fn(),
       },
       regionRider: {
         findFirst: jest.fn().mockResolvedValue(rider),
@@ -47,16 +47,15 @@ describe("RiderPasswordCredentialService", () => {
 
   it("stores a bcrypt hash and never returns it", async () => {
     const { service, prisma } = createService();
-    prisma.riderAppPasswordCredential.create.mockImplementation(
-      async ({ data }) => ({
-        id: "credential-1",
+    prisma.riderAppPasswordCredential.upsert.mockImplementation(
+      async ({ create }) => ({
         failedAttempts: 0,
         lockedUntil: null,
         lastLoginAt: null,
         lastLoginIp: null,
         lastLoginDevice: null,
         passwordChangedAt: new Date("2026-08-11T00:00:00.000Z"),
-        ...data,
+        ...create,
       }),
     );
 
@@ -74,8 +73,9 @@ describe("RiderPasswordCredentialService", () => {
       "127.0.0.1",
     );
 
-    const data = prisma.riderAppPasswordCredential.create.mock.calls[0][0].data;
+    const data = prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].create;
     expect(data).toMatchObject({
+      id: "rider-password-login",
       username: "campus.test",
       normalizedUsername: "campus.test",
       userId: "user-1",
@@ -107,6 +107,56 @@ describe("RiderPasswordCredentialService", () => {
     });
   });
 
+  it("concurrent initial saves target one deterministic singleton row", async () => {
+    const { service, prisma } = createService();
+    prisma.riderAppPasswordCredential.upsert.mockImplementation(
+      async ({ create }) => ({
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: null,
+        lastLoginIp: null,
+        lastLoginDevice: null,
+        passwordChangedAt: new Date("2026-08-11T00:00:00.000Z"),
+        ...create,
+      }),
+    );
+
+    await Promise.all([
+      service.saveConfig(
+        {
+          username: "campus.one",
+          password: "Campus2026!",
+          userId: "user-1",
+          enabled: true,
+        },
+        "admin-1",
+        "127.0.0.1",
+      ),
+      service.saveConfig(
+        {
+          username: "campus.two",
+          password: "Campus2027!",
+          userId: "user-2",
+          enabled: true,
+        },
+        "admin-2",
+        "127.0.0.2",
+      ),
+    ]);
+
+    expect(prisma.riderAppPasswordCredential.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledTimes(2);
+    for (const [args] of prisma.riderAppPasswordCredential.findUnique.mock.calls) {
+      expect(args).toEqual({ where: { id: "rider-password-login" } });
+    }
+    for (const [args] of prisma.riderAppPasswordCredential.upsert.mock.calls) {
+      expect(args).toMatchObject({
+        where: { id: "rider-password-login" },
+        create: { id: "rider-password-login" },
+      });
+    }
+  });
+
   it("rejects a user who is not an approved official rider with a region", async () => {
     const { service, prisma } = createService();
     prisma.regionRider.findFirst.mockResolvedValue(null);
@@ -123,18 +173,68 @@ describe("RiderPasswordCredentialService", () => {
         "127.0.0.1",
       ),
     ).rejects.toThrow("官方骑手");
-    expect(prisma.riderAppPasswordCredential.create).not.toHaveBeenCalled();
+    expect(prisma.riderAppPasswordCredential.upsert).not.toHaveBeenCalled();
   });
 
-  it("rotates only the password-login session when password, rider, or enabled state changes", async () => {
+  it.each([
+    [
+      "password change",
+      true,
+      {
+        username: "campus.test",
+        password: "Changed2026!",
+        userId: "user-1",
+        enabled: true,
+      },
+      true,
+    ],
+    [
+      "rider reassignment",
+      true,
+      {
+        username: "campus.test",
+        password: "",
+        userId: "user-2",
+        enabled: true,
+      },
+      false,
+    ],
+    [
+      "disable",
+      true,
+      {
+        username: "campus.test",
+        password: "",
+        userId: "user-1",
+        enabled: false,
+      },
+      false,
+    ],
+    [
+      "re-enable",
+      false,
+      {
+        username: "campus.test",
+        password: "",
+        userId: "user-1",
+        enabled: true,
+      },
+      false,
+    ],
+  ])("rotates the password-login session on %s", async (
+    _label,
+    currentEnabled,
+    dto,
+    passwordChanged,
+  ) => {
     const { service, prisma, redis } = createService();
     const current = {
-      id: "credential-1",
+      id: "rider-password-login",
       username: "campus.test",
       normalizedUsername: "campus.test",
       passwordHash: "$2b$12$existing",
       userId: "user-1",
-      enabled: true,
+      enabled: currentEnabled,
       expiresAt: null,
       failedAttempts: 2,
       lockedUntil: null,
@@ -143,43 +243,41 @@ describe("RiderPasswordCredentialService", () => {
       lastLoginDevice: null,
       passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
     };
-    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue(current);
-    prisma.riderAppPasswordCredential.update.mockImplementation(
-      async ({ data }) => ({
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
+    prisma.riderAppPasswordCredential.upsert.mockImplementation(
+      async ({ update }) => ({
         ...current,
-        ...data,
+        ...update,
         sessionVersion: 2,
       }),
     );
 
-    await service.saveConfig(
-      {
-        username: "campus.test",
-        password: "Changed2026!",
-        userId: "user-1",
-        enabled: true,
-      },
-      "admin-1",
-      "127.0.0.1",
-    );
+    await service.saveConfig(dto, "admin-1", "127.0.0.1");
 
-    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
-      where: { id: "credential-1" },
-      data: expect.objectContaining({
-        passwordHash: expect.stringMatching(/^\$2/),
-        passwordChangedAt: expect.any(Date),
+    expect(prisma.riderAppPasswordCredential.upsert).toHaveBeenCalledWith({
+      where: { id: "rider-password-login" },
+      create: expect.objectContaining({ id: "rider-password-login" }),
+      update: expect.objectContaining({
+        passwordHash: passwordChanged
+          ? expect.stringMatching(/^\$2/)
+          : "$2b$12$existing",
         sessionVersion: { increment: 1 },
       }),
     });
+    if (passwordChanged) {
+      expect(
+        prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
+      ).toHaveProperty("passwordChangedAt", expect.any(Date));
+    }
     expect(redis.del).toHaveBeenCalledWith(
-      "refresh:rider_password:credential-1",
+      "refresh:rider_password:rider-password-login",
     );
   });
 
   it("keeps the existing password and session when only safe metadata changes", async () => {
     const { service, prisma, redis } = createService();
     const current = {
-      id: "credential-1",
+      id: "rider-password-login",
       username: "campus.test",
       normalizedUsername: "campus.test",
       passwordHash: "$2b$12$existing",
@@ -193,9 +291,9 @@ describe("RiderPasswordCredentialService", () => {
       lastLoginDevice: null,
       passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
     };
-    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue(current);
-    prisma.riderAppPasswordCredential.update.mockImplementation(
-      async ({ data }) => ({ ...current, ...data }),
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
+    prisma.riderAppPasswordCredential.upsert.mockImplementation(
+      async ({ update }) => ({ ...current, ...update }),
     );
 
     await service.saveConfig(
@@ -211,21 +309,21 @@ describe("RiderPasswordCredentialService", () => {
     );
 
     expect(
-      prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+      prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
     ).toMatchObject({
       passwordHash: "$2b$12$existing",
       expiresAt: new Date("2026-12-31T00:00:00.000Z"),
     });
     expect(
-      prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+      prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
     ).not.toHaveProperty("sessionVersion");
     expect(redis.del).not.toHaveBeenCalled();
   });
 
   it("returns safe config and sanitizes device metadata", async () => {
     const { service, prisma } = createService();
-    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue({
-      id: "credential-1",
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue({
+      id: "rider-password-login",
       username: "campus.test",
       passwordHash: "$2b$12$secret",
       userId: "user-1",
@@ -247,6 +345,10 @@ describe("RiderPasswordCredentialService", () => {
 
     const result = await service.getSafeConfig();
 
+    expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
+      where: { id: "rider-password-login" },
+      include: { User: true },
+    });
     expect(result).toMatchObject({
       configured: true,
       lastLoginDevice: {
@@ -264,7 +366,7 @@ describe("RiderPasswordCredentialService", () => {
   it("resets the lock without exposing secrets and logs only the reset action", async () => {
     const { service, prisma } = createService();
     const current = {
-      id: "credential-1",
+      id: "rider-password-login",
       username: "campus.test",
       passwordHash: "$2b$12$secret",
       userId: "user-1",
@@ -278,7 +380,7 @@ describe("RiderPasswordCredentialService", () => {
       passwordChangedAt: new Date(),
       User: rider.User,
     };
-    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue(current);
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
     prisma.riderAppPasswordCredential.update.mockResolvedValue({
       ...current,
       failedAttempts: 0,
@@ -287,8 +389,12 @@ describe("RiderPasswordCredentialService", () => {
 
     const result = await service.resetLock("admin-1", "127.0.0.1");
 
+    expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
+      where: { id: "rider-password-login" },
+      include: { User: true },
+    });
     expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
-      where: { id: "credential-1" },
+      where: { id: "rider-password-login" },
       data: { failedAttempts: 0, lockedUntil: null, updatedBy: "admin-1" },
     });
     expect(prisma.adminOperationLog.create).toHaveBeenCalledWith({
@@ -296,9 +402,12 @@ describe("RiderPasswordCredentialService", () => {
         accountId: "admin-1",
         action: "rider_password_reset_lock",
         module: "rider_app",
-        targetId: "credential-1",
+        targetId: "rider-password-login",
         targetType: "rider_password_credential",
-        detail: { credentialId: "credential-1", action: "reset_lock" },
+        detail: {
+          credentialId: "rider-password-login",
+          action: "reset_lock",
+        },
         ip: "127.0.0.1",
       },
     });

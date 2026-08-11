@@ -4763,7 +4763,7 @@ model RegionRider {
 }
 
 model RiderAppPasswordCredential {
-  id                 String    @id @default(cuid())
+  id                 String    @id @default("rider-password-login")
   username           String
   normalizedUsername String    @unique
   passwordHash       String

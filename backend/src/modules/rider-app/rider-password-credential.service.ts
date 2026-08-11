@@ -6,6 +6,7 @@ import { RedisService } from "../../common/services/redis.service";
 import { parseRiderPasswordCredentialInput } from "./rider-password-credential.contract";
 
 const PASSWORD_ROUNDS = 12;
+const RIDER_PASSWORD_CREDENTIAL_ID = "rider-password-login";
 const DEVICE_FIELDS = [
   "model",
   "os",
@@ -22,7 +23,8 @@ export class RiderPasswordCredentialService {
   ) {}
 
   async getSafeConfig() {
-    const credential = await this.prisma.riderAppPasswordCredential.findFirst({
+    const credential = await this.prisma.riderAppPasswordCredential.findUnique({
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
       include: { User: true },
     });
     if (!credential) return { configured: false };
@@ -31,7 +33,9 @@ export class RiderPasswordCredentialService {
   }
 
   async saveConfig(dto: any, operatorId?: string, ip?: string) {
-    const current = await this.prisma.riderAppPasswordCredential.findFirst();
+    const current = await this.prisma.riderAppPasswordCredential.findUnique({
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
+    });
     const input = parseRiderPasswordCredentialInput(
       dto,
       Boolean(current?.passwordHash),
@@ -76,17 +80,19 @@ export class RiderPasswordCredentialService {
       passwordHash,
       ...(passwordChanged ? { passwordChangedAt: new Date() } : {}),
     };
-    const saved = current
-      ? await this.prisma.riderAppPasswordCredential.update({
-          where: { id: current.id },
-          data: {
-            ...updateData,
-            ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
-          },
-        })
-      : await this.prisma.riderAppPasswordCredential.create({
-          data: { ...safeData, passwordHash, createdBy: operatorId },
-        });
+    const saved = await this.prisma.riderAppPasswordCredential.upsert({
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
+      create: {
+        id: RIDER_PASSWORD_CREDENTIAL_ID,
+        ...safeData,
+        passwordHash,
+        createdBy: operatorId,
+      },
+      update: {
+        ...updateData,
+        ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
+      },
+    });
 
     if (current && sessionChanged) {
       await this.redis
@@ -113,12 +119,13 @@ export class RiderPasswordCredentialService {
   }
 
   async resetLock(operatorId?: string, ip?: string) {
-    const current = await this.prisma.riderAppPasswordCredential.findFirst({
+    const current = await this.prisma.riderAppPasswordCredential.findUnique({
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
       include: { User: true },
     });
     if (!current) throw new BadRequestException("尚未配置密码登录账号");
     const saved = await this.prisma.riderAppPasswordCredential.update({
-      where: { id: current.id },
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
       data: { failedAttempts: 0, lockedUntil: null, updatedBy: operatorId },
     });
     await this.logCredentialChange(
