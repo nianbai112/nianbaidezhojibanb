@@ -50,6 +50,7 @@ describe('RiderAppService', () => {
       riderAppPasswordCredential: {
         findUnique: jest.fn().mockResolvedValue(passwordCredential),
         update: jest.fn().mockResolvedValue(passwordCredential),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       errandOrder: {
         count: jest.fn().mockResolvedValue(1),
@@ -190,8 +191,17 @@ describe('RiderAppService', () => {
       credentialId: 'rider-password-login',
       credentialVersion: 3,
     }, 'refresh:rider_password:rider-password-login');
-    expect(prisma.riderAppPasswordCredential.update).toHaveBeenLastCalledWith({
-      where: { id: 'rider-password-login' },
+    expect(prisma.riderAppPasswordCredential.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({
+        id: 'rider-password-login',
+        normalizedUsername: 'campus.test',
+        userId: 'user-1',
+        passwordHash,
+        sessionVersion: 3,
+        enabled: true,
+        failedAttempts: 0,
+        lockedUntil: null,
+      }),
       data: {
         failedAttempts: 0,
         lockedUntil: null,
@@ -369,6 +379,62 @@ describe('RiderAppService', () => {
     );
   });
 
+  it('rejects a stale correct login even if the Redis lease is lost before the fifth failure commits', async () => {
+    const { service, prisma, auth, redis } = createService();
+    redis.withLock.mockImplementation(async (_key: string, _ttl: number, task: () => Promise<unknown>) => task());
+    const state = {
+      ...passwordCredential,
+      failedAttempts: 4,
+      lockedUntil: null as Date | null,
+    };
+    prisma.riderAppPasswordCredential.findUnique.mockImplementation(
+      async () => ({ ...state, User: passwordCredential.User }),
+    );
+
+    let releaseCorrectPassword!: () => void;
+    const correctPasswordMayFinish = new Promise<void>((resolve) => {
+      releaseCorrectPassword = resolve;
+    });
+    (bcrypt.compare as unknown as jest.Mock)
+      .mockImplementationOnce(async () => {
+        await correctPasswordMayFinish;
+        return true;
+      })
+      .mockResolvedValueOnce(false);
+    prisma.riderAppPasswordCredential.update.mockImplementation(async ({ data }) => {
+      if (data.failedAttempts?.increment) state.failedAttempts += data.failedAttempts.increment;
+      if (data.lockedUntil instanceof Date) state.lockedUntil = data.lockedUntil;
+      if (data.failedAttempts === 0) state.failedAttempts = 0;
+      if (data.lockedUntil === null) state.lockedUntil = null;
+      return { ...state };
+    });
+    prisma.riderAppPasswordCredential.updateMany.mockImplementation(async ({ where, data }) => {
+      if (where.failedAttempts !== state.failedAttempts || where.lockedUntil !== state.lockedUntil) {
+        return { count: 0 };
+      }
+      if (data.failedAttempts === 0) state.failedAttempts = 0;
+      if (data.lockedUntil === null) state.lockedUntil = null;
+      return { count: 1 };
+    });
+
+    const correctLogin = service.loginPassword({
+      username: 'campus.test',
+      password: 'Campus2026!',
+    });
+    await Promise.resolve();
+    const fifthFailure = service.loginPassword({
+      username: 'campus.test',
+      password: 'Wrong2026!',
+    });
+    await expect(fifthFailure).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    releaseCorrectPassword();
+
+    await expect(correctLogin).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    expect(state.failedAttempts).toBe(5);
+    expect(state.lockedUntil).toBeInstanceOf(Date);
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
+  });
+
   it('clears a past lock and failure count after a successful password login', async () => {
     const { service, prisma } = createService();
     prisma.riderAppPasswordCredential.findUnique.mockResolvedValue({
@@ -379,8 +445,12 @@ describe('RiderAppService', () => {
 
     await service.loginPassword({ username: 'campus.test', password: 'Campus2026!' });
 
-    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
-      where: { id: 'rider-password-login' },
+    expect(prisma.riderAppPasswordCredential.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'rider-password-login',
+        failedAttempts: 5,
+        lockedUntil: new Date('2020-01-01T00:00:00.000Z'),
+      }),
       data: expect.objectContaining({ failedAttempts: 0, lockedUntil: null }),
     });
   });

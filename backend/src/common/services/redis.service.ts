@@ -71,18 +71,40 @@ export class RedisService {
     await this.redis.del(key);
   }
 
-  /**
-   * Runs a short scheduled job once across all application instances.
-   * ponytail: no lock renewal; scheduled jobs are bounded to small batches and
-   * should be moved to a worker queue if they can run longer than the TTL.
-   */
+  /** Runs one task across all application instances while its owned lease is renewed. */
   async withLock<T>(key: string, ttlSeconds: number, task: () => Promise<T>): Promise<T | undefined> {
     const token = randomUUID();
     const locked = await this.redis.set(key, token, 'EX', ttlSeconds, 'NX');
     if (locked !== 'OK') return undefined;
+    const ttlMs = Math.max(1, ttlSeconds) * 1000;
+    const renewEveryMs = Math.max(100, Math.floor(ttlMs / 3));
+    let stopped = false;
+    let lockLost = false;
+    let renewal = Promise.resolve();
+    const timer = setInterval(() => {
+      renewal = renewal.then(async () => {
+        if (stopped) return;
+        const renewed = await this.redis.eval(
+          'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) end return 0',
+          1,
+          key,
+          token,
+          ttlMs,
+        );
+        if (Number(renewed) !== 1) lockLost = true;
+      }).catch(() => {
+        lockLost = true;
+      });
+    }, renewEveryMs);
+    timer.unref?.();
     try {
-      return await task();
+      const result = await task();
+      if (lockLost) throw new Error(`Redis lock lease lost: ${key}`);
+      return result;
     } finally {
+      stopped = true;
+      clearInterval(timer);
+      await renewal;
       await this.redis.eval(
         'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0',
         1,

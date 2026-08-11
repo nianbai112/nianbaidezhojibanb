@@ -106,6 +106,28 @@ export class RiderAppService {
     const session = await this.buildSession(credential.userId);
     if (!session.allowed || !credential.User?.openid) throw invalidLogin();
 
+    const lastLoginDevice = sanitizeDeviceSummary(dto?.device, ua);
+    const claimed = await this.prisma.riderAppPasswordCredential.updateMany({
+      where: {
+        id: credential.id,
+        normalizedUsername: credential.normalizedUsername,
+        userId: credential.userId,
+        passwordHash: credential.passwordHash,
+        sessionVersion: credential.sessionVersion,
+        enabled: true,
+        failedAttempts: credential.failedAttempts,
+        lockedUntil: credential.lockedUntil,
+      },
+      data: {
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+        lastLoginIp: String(ip || '').trim().slice(0, 128) || null,
+        lastLoginDevice: lastLoginDevice || Prisma.DbNull,
+      },
+    });
+    if (claimed.count !== 1) throw invalidLogin();
+
     let tokens: { accessToken: string; refreshToken: string; expiresIn: number };
     try {
       tokens = await this.authService.issueActiveUserTokens(
@@ -122,18 +144,6 @@ export class RiderAppService {
       if (error instanceof UnauthorizedException) throw invalidLogin();
       throw error;
     }
-
-    const lastLoginDevice = sanitizeDeviceSummary(dto?.device, ua);
-    await this.prisma.riderAppPasswordCredential.update({
-      where: { id: credential.id },
-      data: {
-        failedAttempts: 0,
-        lockedUntil: null,
-        lastLoginAt: new Date(),
-        lastLoginIp: String(ip || '').trim().slice(0, 128) || null,
-        lastLoginDevice: lastLoginDevice || Prisma.DbNull,
-      },
-    });
     return { ...tokens, ...session };
   }
 
