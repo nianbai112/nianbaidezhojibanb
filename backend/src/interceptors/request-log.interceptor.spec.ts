@@ -6,7 +6,7 @@ describe('RequestLogInterceptor sensitive request bodies', () => {
     jest.restoreAllMocks();
   });
 
-  it('never persists short rider passwords, password hashes, secrets, or tokens', async () => {
+  it('never persists short values for credential-bearing sensitive keys', async () => {
     jest.spyOn(Math, 'random').mockReturnValue(0);
     const prisma = {
       serverLog: { create: jest.fn().mockResolvedValue({ id: 'log-1' }) },
@@ -25,6 +25,15 @@ describe('RequestLogInterceptor sensitive request bodies', () => {
         passwordHash: '$2b$12$short',
         client_secret: 'short-secret',
         accessToken: 'short-token',
+        refreshToken: 'short-refresh',
+        apiKey: 'short-api-key',
+        API_KEY: 'short-api-key-upper',
+        private_key: 'short-private-key',
+        privateKey: 'short-private-key-camel',
+        authorization: 'Basic short-auth',
+        pin: '1234',
+        certificate: 'short-cert',
+        signingKey: 'short-signing-key',
         hash: 'short-hash',
         profile: {
           phone: '13800138000',
@@ -50,6 +59,15 @@ describe('RequestLogInterceptor sensitive request bodies', () => {
       passwordHash: '[REDACTED]',
       client_secret: '[REDACTED]',
       accessToken: '[REDACTED]',
+      refreshToken: '[REDACTED]',
+      apiKey: '[REDACTED]',
+      API_KEY: '[REDACTED]',
+      private_key: '[REDACTED]',
+      privateKey: '[REDACTED]',
+      authorization: '[REDACTED]',
+      pin: '[REDACTED]',
+      certificate: '[REDACTED]',
+      signingKey: '[REDACTED]',
       hash: '[REDACTED]',
       profile: {
         phone: '138****8000',
@@ -61,6 +79,15 @@ describe('RequestLogInterceptor sensitive request bodies', () => {
     expect(JSON.stringify(persisted.detail)).not.toContain('$2b$12$short');
     expect(JSON.stringify(persisted.detail)).not.toContain('short-secret');
     expect(JSON.stringify(persisted.detail)).not.toContain('short-token');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-refresh');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-api-key');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-api-key-upper');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-private-key');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-private-key-camel');
+    expect(JSON.stringify(persisted.detail)).not.toContain('Basic short-auth');
+    expect(JSON.stringify(persisted.detail)).not.toContain('1234');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-cert');
+    expect(JSON.stringify(persisted.detail)).not.toContain('short-signing-key');
     expect(JSON.stringify(persisted.detail)).not.toContain('short-hash');
   });
 });
