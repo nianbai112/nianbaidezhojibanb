@@ -3,10 +3,13 @@ import { Prisma } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
-import { parseRiderPasswordCredentialInput } from "./rider-password-credential.contract";
+import {
+  parseRiderPasswordCredentialInput,
+  RIDER_PASSWORD_CREDENTIAL_ID,
+  RIDER_PASSWORD_WS_PUSH_CHANNEL,
+} from "./rider-password-credential.contract";
 
 const PASSWORD_ROUNDS = 12;
-const RIDER_PASSWORD_CREDENTIAL_ID = "rider-password-login";
 const DEVICE_FIELDS = [
   "model",
   "os",
@@ -70,13 +73,14 @@ export class RiderPasswordCredentialService {
     const passwordChanged = Boolean(input.password);
     const passwordHash = passwordChanged
       ? await bcrypt.hash(input.password!, PASSWORD_ROUNDS)
-      : current!.passwordHash;
+      : undefined;
     const sessionChanged =
       !current ||
       current.id !== RIDER_PASSWORD_CREDENTIAL_ID ||
       passwordChanged ||
       current.userId !== input.userId ||
-      current.enabled !== input.enabled;
+      current.enabled !== input.enabled ||
+      (current.expiresAt?.getTime() ?? null) !== (input.expiresAt?.getTime() ?? null);
     const safeData = {
       username: input.username,
       normalizedUsername: input.username,
@@ -87,16 +91,19 @@ export class RiderPasswordCredentialService {
     };
     const updateData = {
       ...safeData,
-      passwordHash,
-      ...(passwordChanged ? { passwordChangedAt: new Date() } : {}),
+      ...(passwordChanged
+        ? { passwordHash: passwordHash!, passwordChangedAt: new Date() }
+        : {}),
     };
-    const saved = current && current.id !== RIDER_PASSWORD_CREDENTIAL_ID
+    const saved = current
       ? await this.prisma.riderAppPasswordCredential.update({
           where: { id: current.id },
           data: {
-            id: RIDER_PASSWORD_CREDENTIAL_ID,
+            ...(current.id !== RIDER_PASSWORD_CREDENTIAL_ID
+              ? { id: RIDER_PASSWORD_CREDENTIAL_ID }
+              : {}),
             ...updateData,
-            sessionVersion: { increment: 1 },
+            ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
           },
         })
       : await this.prisma.riderAppPasswordCredential.upsert({
@@ -104,19 +111,28 @@ export class RiderPasswordCredentialService {
           create: {
             id: RIDER_PASSWORD_CREDENTIAL_ID,
             ...safeData,
-            passwordHash,
+            passwordHash: passwordHash!,
             createdBy: operatorId,
           },
           update: {
             ...updateData,
-            ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
+            sessionVersion: { increment: 1 },
           },
         });
 
     if (current && sessionChanged) {
-      await this.redis
-        .del(`refresh:rider_password:${current.id}`)
-        .catch(() => undefined);
+      await Promise.all([
+        this.redis
+          .del(`refresh:rider_password:${current.id}`)
+          .catch(() => undefined),
+        this.redis.publish(
+          RIDER_PASSWORD_WS_PUSH_CHANNEL,
+          JSON.stringify({
+            targetType: "rider_password_credential",
+            targetId: current.id,
+          }),
+        ).catch(() => undefined),
+      ]);
     }
     await this.logCredentialChange(
       operatorId,

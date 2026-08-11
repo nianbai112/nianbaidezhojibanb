@@ -57,3 +57,11 @@ export function createLatestRequestController() {
     },
   }
 }
+
+export function showUnsurfacedRequestError(error, fallback, show) {
+  if (error?.userMessage || error?.__silent || error?.code === 'ERR_CANCELED' || error === 'cancel' || error?.message === 'cancel') {
+    return false
+  }
+  show(String(error?.message || fallback))
+  return true
+}

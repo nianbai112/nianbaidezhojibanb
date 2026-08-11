@@ -137,6 +137,9 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
       const payload = await this.jwtService.verifyAsync(token, {
         secret: this.config.get('JWT_SECRET'),
       });
+      if (payload?.authSource === 'rider_password') {
+        throw new Error('Rider password sessions require the native WebSocket');
+      }
 
       // ── 4. 挂载身份信息 ──
       client.data.userId = payload.sub;

@@ -9,6 +9,7 @@ import { inferChatMessageType } from '../../common/utils/chat-message.util';
 import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
 import { RedisService } from '../../common/services/redis.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
+import { RIDER_PASSWORD_WS_PUSH_CHANNEL } from '../rider-app/rider-password-credential.contract';
 
 const NATIVE_CONNECT_WINDOW_SEC = 60;
 const NATIVE_CONNECT_MAX_PER_IP = 60;
@@ -28,6 +29,9 @@ interface NativeClient {
   socketId: string;
   regionId?: string;
   lastPongAt: number;
+  authSource?: 'rider_password';
+  credentialId?: string;
+  credentialVersion?: number;
 }
 
 export class WsNativeGateway {
@@ -39,7 +43,7 @@ export class WsNativeGateway {
   private sessionTouchAt: Map<string, number> = new Map();
   private pingInterval: NodeJS.Timeout;
   private readonly instanceId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  private readonly pushChannel = 'lm:ws:native:push';
+  private readonly pushChannel = RIDER_PASSWORD_WS_PUSH_CHANNEL;
   private redisSubscriber?: ReturnType<RedisService['getClient']>;
 
   constructor(
@@ -89,7 +93,7 @@ export class WsNativeGateway {
     this.setupRedisSubscriber();
   }
 
-  private checkClientHeartbeat(socketId: string, client: NativeClient, now: number) {
+  private async checkClientHeartbeat(socketId: string, client: NativeClient, now: number) {
     if (client.ws.readyState !== WebSocket.OPEN) {
       this.removeClient(socketId).catch(() => {});
       return;
@@ -100,6 +104,7 @@ export class WsNativeGateway {
       this.removeClient(socketId).catch(() => {});
       return;
     }
+    if (!(await this.assertPasswordCredentialClient(client))) return;
     client.ws.ping();
   }
 
@@ -187,6 +192,13 @@ export class WsNativeGateway {
         platform,
         socketId,
         lastPongAt: Date.now(),
+        ...(payload.authSource === 'rider_password'
+          ? {
+              authSource: 'rider_password' as const,
+              credentialId: String(payload.credentialId || ''),
+              credentialVersion: Number(payload.credentialVersion),
+            }
+          : {}),
       };
 
       this.clients.set(socketId, client);
@@ -323,12 +335,30 @@ export class WsNativeGateway {
 
   private async assertActiveClient(client: NativeClient): Promise<boolean> {
     if (client.isAdmin) return true;
+    if (!(await this.assertPasswordCredentialClient(client))) return false;
     try {
       await this.userAccess.assertActiveUser(client.userId, '使用实时服务');
       return true;
     } catch (error: any) {
       this.send(client.ws, { event: 'message_error', data: { message: error?.message || '账号当前不可用' } });
       client.ws.close(4003, 'Account inactive');
+      return false;
+    }
+  }
+
+  private async assertPasswordCredentialClient(client: NativeClient): Promise<boolean> {
+    if (client.authSource !== 'rider_password') return true;
+    try {
+      await assertRiderPasswordTokenActive(this.prisma, {
+        sub: client.userId,
+        authSource: client.authSource,
+        credentialId: client.credentialId,
+        credentialVersion: client.credentialVersion,
+      });
+      return true;
+    } catch (error: any) {
+      this.send(client.ws, { event: 'message_error', data: { message: error?.message || '登录状态已失效' } });
+      client.ws.close(4003, 'Credential revoked');
       return false;
     }
   }
@@ -701,7 +731,9 @@ export class WsNativeGateway {
       const event = JSON.parse(message);
       if (!event || event.originInstanceId === this.instanceId) return;
       const payload = event.payload;
-      if (event.targetType === 'user' && event.targetId) {
+      if (event.targetType === 'rider_password_credential' && event.targetId) {
+        this.disconnectPasswordCredential(String(event.targetId));
+      } else if (event.targetType === 'user' && event.targetId) {
         this.pushToUserLocal(String(event.targetId), payload);
       } else if (event.targetType === 'group' && event.targetId) {
         this.pushToGroupLocal(String(event.targetId), payload);
@@ -1384,6 +1416,20 @@ export class WsNativeGateway {
       }
     }
     this.logger.log(`Disconnected ${count} socket(s) for userId=${userId}`);
+    return count;
+  }
+
+  disconnectPasswordCredential(credentialId: string): number {
+    let count = 0;
+    this.clients.forEach((client) => {
+      if (client.authSource !== 'rider_password' || client.credentialId !== credentialId) return;
+      try {
+        client.ws.close(4003, 'Credential revoked');
+        count += 1;
+      } catch {
+        // Socket may already be closed.
+      }
+    });
     return count;
   }
 

@@ -58,6 +58,10 @@ export class RedisService {
     await this.redis.expire(key, seconds);
   }
 
+  async publish(channel: string, message: string): Promise<number> {
+    return this.redis.publish(channel, message);
+  }
+
   async getLock(key: string, ttlSeconds: number = 10): Promise<boolean> {
     const result = await this.redis.set(key, '1', 'EX', ttlSeconds, 'NX');
     return result === 'OK';

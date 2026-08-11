@@ -218,7 +218,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
-import { buildRiderPasswordCredentialPayload, createLatestRequestController, mapRiderPasswordCredential } from './riderPasswordCredentialModel.mjs'
+import { buildRiderPasswordCredentialPayload, createLatestRequestController, mapRiderPasswordCredential, showUnsurfacedRequestError } from './riderPasswordCredentialModel.mjs'
 
 type FeatureKey = 'orderPool' | 'chat' | 'income' | 'incentives'
 type CredentialRiderOption = {
@@ -383,7 +383,7 @@ async function loadCredential() {
     const response: any = await request.get('/admin/rider-app/password-login')
     assignCredential(response?.data || response)
   } catch (error: any) {
-    ElMessage.error(error?.message || '加载测试账号失败')
+    showUnsurfacedRequestError(error, '加载测试账号失败', (message) => ElMessage.error(message))
   } finally {
     credentialLoading.value = false
   }
@@ -401,7 +401,9 @@ async function searchCredentialRiders(keyword: string) {
       credentialRiderOptions.value = [...new Map([...selected, ...next].map((item) => [item.userId, item])).values()]
     })
   } catch (error: any) {
-    credentialRiderSearch.commit(searchRequest, () => ElMessage.error(error?.message || '搜索官方骑手失败'))
+    credentialRiderSearch.commit(searchRequest, () => {
+      showUnsurfacedRequestError(error, '搜索官方骑手失败', (message) => ElMessage.error(message))
+    })
   } finally {
     credentialRiderSearch.commit(searchRequest, () => { credentialRiderLoading.value = false })
   }
@@ -418,7 +420,7 @@ async function saveCredential() {
     assignCredential(response?.data || response)
     ElMessage.success('测试账号已保存')
   } catch (error: any) {
-    ElMessage.error(error?.message || '保存测试账号失败')
+    showUnsurfacedRequestError(error, '保存测试账号失败', (message) => ElMessage.error(message))
   } finally {
     credentialSaving.value = false
   }
@@ -432,7 +434,7 @@ async function resetCredentialLock() {
     assignCredential(response?.data || response)
     ElMessage.success('测试账号锁定已解除')
   } catch (error: any) {
-    if (error !== 'cancel' && error?.message !== 'cancel') ElMessage.error(error?.message || '解除锁定失败')
+    showUnsurfacedRequestError(error, '解除锁定失败', (message) => ElMessage.error(message))
   } finally {
     credentialSaving.value = false
   }

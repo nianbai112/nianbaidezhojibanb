@@ -41,3 +41,17 @@ test('only lets the latest rider search completion publish results and clear loa
   }), true)
   assert.deepEqual(state, { options: ['newest'], loading: false })
 })
+
+test('shows a local error only when the shared interceptor has not already surfaced it', () => {
+  const messages = []
+  const show = (message) => messages.push(message)
+
+  assert.equal(model.showUnsurfacedRequestError({
+    message: 'shared message',
+    userMessage: 'shared message',
+  }, 'fallback', show), false)
+  assert.deepEqual(messages, [])
+
+  assert.equal(model.showUnsurfacedRequestError(new Error('local validation'), 'fallback', show), true)
+  assert.deepEqual(messages, ['local validation'])
+})

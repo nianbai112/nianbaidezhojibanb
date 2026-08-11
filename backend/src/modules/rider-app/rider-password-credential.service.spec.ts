@@ -38,7 +38,10 @@ describe("RiderPasswordCredentialService", () => {
         create: jest.fn().mockResolvedValue({ id: "log-1" }),
       },
     };
-    const redis = { del: jest.fn().mockResolvedValue(undefined) };
+    const redis = {
+      del: jest.fn().mockResolvedValue(undefined),
+      publish: jest.fn().mockResolvedValue(1),
+    };
     return {
       service: new RiderPasswordCredentialService(prisma as any, redis as any),
       prisma,
@@ -156,6 +159,68 @@ describe("RiderPasswordCredentialService", () => {
         create: { id: "rider-password-login" },
       });
     }
+  });
+
+  it("does not let a concurrent blank-password metadata save restore the previous hash", async () => {
+    const { service, prisma } = createService();
+    const current = {
+      id: "rider-password-login",
+      username: "campus.test",
+      normalizedUsername: "campus.test",
+      passwordHash: "$2b$12$previous-fixture-hash",
+      userId: "user-1",
+      enabled: true,
+      expiresAt: null,
+      failedAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: null,
+      lastLoginIp: null,
+      lastLoginDevice: null,
+      passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
+    };
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
+
+    let releasePasswordReset!: () => void;
+    const passwordResetWritten = new Promise<void>((resolve) => {
+      releasePasswordReset = resolve;
+    });
+    let storedHash = current.passwordHash;
+    const updates: Record<string, unknown>[] = [];
+    prisma.riderAppPasswordCredential.update.mockImplementation(
+      async ({ data }) => {
+        updates.push(data);
+        if (data.passwordChangedAt) {
+          storedHash = data.passwordHash;
+          releasePasswordReset();
+        } else {
+          await passwordResetWritten;
+          if (Object.prototype.hasOwnProperty.call(data, "passwordHash")) {
+            storedHash = data.passwordHash;
+          }
+        }
+        return { ...current, ...data, passwordHash: storedHash };
+      },
+    );
+
+    const metadataSave = service.saveConfig({
+      username: "campus.renamed",
+      password: "",
+      userId: "user-1",
+      enabled: true,
+    });
+    const passwordReset = service.saveConfig({
+      username: "campus.test",
+      password: "Changed2026!",
+      userId: "user-1",
+      enabled: true,
+    });
+
+    await Promise.all([metadataSave, passwordReset]);
+
+    const metadataUpdate = updates.find((update) => !update.passwordChangedAt)!;
+    expect(metadataUpdate).not.toHaveProperty("passwordHash");
+    expect(metadataUpdate).not.toHaveProperty("passwordChangedAt");
+    expect(storedHash).not.toBe(current.passwordHash);
   });
 
   it("keeps a pre-existing single legacy credential visible during upgrade", async () => {
@@ -332,33 +397,97 @@ describe("RiderPasswordCredentialService", () => {
       passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
     };
     prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
-    prisma.riderAppPasswordCredential.upsert.mockImplementation(
-      async ({ update }) => ({
+    prisma.riderAppPasswordCredential.update.mockImplementation(
+      async ({ data }) => ({
         ...current,
-        ...update,
+        ...data,
         sessionVersion: 2,
       }),
     );
 
     await service.saveConfig(dto, "admin-1", "127.0.0.1");
 
-    expect(prisma.riderAppPasswordCredential.upsert).toHaveBeenCalledWith({
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
       where: { id: "rider-password-login" },
-      create: expect.objectContaining({ id: "rider-password-login" }),
-      update: expect.objectContaining({
-        passwordHash: passwordChanged
-          ? expect.stringMatching(/^\$2/)
-          : "$2b$12$existing",
+      data: expect.objectContaining({
         sessionVersion: { increment: 1 },
       }),
     });
     if (passwordChanged) {
       expect(
-        prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
+        prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+      ).toHaveProperty("passwordHash", expect.stringMatching(/^\$2/));
+      expect(
+        prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
       ).toHaveProperty("passwordChangedAt", expect.any(Date));
+    } else {
+      expect(
+        prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+      ).not.toHaveProperty("passwordHash");
+      expect(
+        prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+      ).not.toHaveProperty("passwordChangedAt");
     }
     expect(redis.del).toHaveBeenCalledWith(
       "refresh:rider_password:rider-password-login",
+    );
+    expect(redis.publish).toHaveBeenCalledWith(
+      "lm:ws:native:push",
+      expect.any(String),
+    );
+    expect(JSON.parse(redis.publish.mock.calls[0][1])).toMatchObject({
+      targetType: "rider_password_credential",
+      targetId: "rider-password-login",
+    });
+  });
+
+  it.each([
+    ["sets", null, "2026-12-31T00:00:00.000Z"],
+    ["clears", new Date("2026-12-31T00:00:00.000Z"), null],
+  ])("rotates and revokes the password session when expiry %s", async (
+    _label,
+    currentExpiry,
+    nextExpiry,
+  ) => {
+    const { service, prisma, redis } = createService();
+    const current = {
+      id: "rider-password-login",
+      username: "campus.test",
+      normalizedUsername: "campus.test",
+      passwordHash: "$2b$12$existing",
+      userId: "user-1",
+      enabled: true,
+      expiresAt: currentExpiry,
+      failedAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: null,
+      lastLoginIp: null,
+      lastLoginDevice: null,
+      passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
+    };
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
+    prisma.riderAppPasswordCredential.update.mockImplementation(
+      async ({ data }) => ({ ...current, ...data, sessionVersion: 2 }),
+    );
+
+    await service.saveConfig({
+      username: "campus.test",
+      password: "",
+      userId: "user-1",
+      enabled: true,
+      expiresAt: nextExpiry,
+    });
+
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
+      where: { id: "rider-password-login" },
+      data: expect.objectContaining({ sessionVersion: { increment: 1 } }),
+    });
+    expect(redis.del).toHaveBeenCalledWith(
+      "refresh:rider_password:rider-password-login",
+    );
+    expect(redis.publish).toHaveBeenCalledWith(
+      "lm:ws:native:push",
+      expect.any(String),
     );
   });
 
@@ -380,30 +509,29 @@ describe("RiderPasswordCredentialService", () => {
       passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
     };
     prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(current);
-    prisma.riderAppPasswordCredential.upsert.mockImplementation(
-      async ({ update }) => ({ ...current, ...update }),
+    prisma.riderAppPasswordCredential.update.mockImplementation(
+      async ({ data }) => ({ ...current, ...data }),
     );
 
     await service.saveConfig(
       {
-        username: "campus.test",
+        username: "campus.renamed",
         password: "",
         userId: "user-1",
         enabled: true,
-        expiresAt: "2026-12-31T00:00:00.000Z",
       },
       "admin-1",
       "127.0.0.1",
     );
 
     expect(
-      prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
-    ).toMatchObject({
-      passwordHash: "$2b$12$existing",
-      expiresAt: new Date("2026-12-31T00:00:00.000Z"),
-    });
+      prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+    ).toMatchObject({ username: "campus.renamed" });
     expect(
-      prisma.riderAppPasswordCredential.upsert.mock.calls[0][0].update,
+      prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
+    ).not.toHaveProperty("passwordHash");
+    expect(
+      prisma.riderAppPasswordCredential.update.mock.calls[0][0].data,
     ).not.toHaveProperty("sessionVersion");
     expect(redis.del).not.toHaveBeenCalled();
   });

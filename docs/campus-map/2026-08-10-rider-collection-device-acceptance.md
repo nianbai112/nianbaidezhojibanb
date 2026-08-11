@@ -44,6 +44,16 @@
 - [ ] 已绑定官方骑手只看到分配给其所在区域的校园地图现场采集任务，不能读取其他骑手或其他区域任务。
 - [ ] 检查 App 本地存储、抓包网络日志、管理后台响应和操作日志：均不包含明文密码或 `passwordHash`。
 
+## 隐藏密码登录新增运行时/部署门禁（尚未执行）
+
+- [ ] 在目标 PostgreSQL/MySQL 数据库执行新增 `003` 迁移，确认固定行 `rider-password-login` 可用、任意其他 ID 被数据库约束拒绝，且重复执行不报错。
+- [ ] MySQL 迁移前核对目标库/表字符集与排序规则；本地真库回归使用 `utf8mb4_unicode_ci`，目标环境必须通过完整 `001`–`003` 迁移预演。
+- [ ] 在至少两个后端实例与共享 Redis 下建立原生 WebSocket；禁用、重置密码、改绑骑手或改变/清空过期时间后，所有实例上的旧密码会话都应立即关闭。
+- [ ] 保持已连接原生 WebSocket 直到心跳/业务消息，确认凭据状态会被重新校验；使用密码 token 连接旧 Socket.IO 入口必须被拒绝。
+- [ ] 抓包确认密码、短信和微信公开登录请求不带 `Authorization`；公开登录返回 401 时仅发出一次原请求，不调用 refresh，已登录受保护请求的既有 refresh 流程仍可用。
+- [ ] 抓包确认密码登录设备摘要仅包含有界的 `model`/`platform`/`system`/`appVersion`，且 `appVersion` 与安装包版本一致。
+- [ ] 管理后台账号请求失败时只显示一次错误提示；过期搜索请求的结果与错误均不覆盖最新搜索。
+
 ## 真机验收清单
 
 - [ ] 未分配任务的骑手看不到现场采集入口。
@@ -67,12 +77,13 @@
 ## 已完成的本地自动验证
 
 - 本次最终验证使用 Node `v22.22.2`。后端 `db:sync-schemas` 确认 PostgreSQL/MySQL schema 已是最新；`db:generate` 成功生成 Prisma Client `v5.22.0`。
-- 后端 `npm --workspace backend test -- --runInBand`：104/104 Jest suites、863/863 tests 通过；其中密码凭据的控制器/服务响应以及 `AdminOperationLog.detail` 不包含 `password` 或 `passwordHash` 有回归测试覆盖。
+- 后端安全/并发/WebSocket/迁移聚焦集：12/12 Jest suites、107/107 tests 通过；后端全量 `npm --workspace backend test -- --runInBand`：105/105 suites、885/885 tests 通过。密码凭据的控制器/服务响应以及 `AdminOperationLog.detail` 不包含 `password` 或 `passwordHash` 有回归测试覆盖。
+- 新增 `003` 在临时 PostgreSQL 15 和 MySQL 8.0 真库中从 `001`–`002` 后已存在第二行的状态升级成功：确定性保留/归一固定行，任意 ID 和大小写变体均被约束拒绝，且重复执行 `003` 成功。
 - 后端 `npm --workspace backend run build` 成功（退出码 0）。
-- 管理后台 `riderPasswordCredentialModel.test.mjs`：4/4 通过；`typecheck` 和 Vite 生产构建均成功（构建仅有既有组件命名冲突和 chunk 体积警告）。
-- 骑手端 `npm --prefix '/Users/nianbaidediannao/Desktop/骑手端app' test`：50/50 tests 通过，包含十击/5 秒触发和仅调用 `/rider-app/login/password` 的契约。
-- 源码安全扫描未发现 `Campus2026` 或 `ValidPassword123`。骑手端生产源码未出现 `passwordHash`；管理后台仅在通用 `DetailDrawer` 的防御性隐藏键集中出现一次 `passwordHash`，用于禁止原始敏感字段展示，并非密码登录响应映射。其是否满足“生产源码零出现”的更严格文字门槛，需要在后续安全审查中明确决定。
-- 骑手端与 `/Users/nianbaidediannao/Desktop/骑手端app备份/20260811-hidden-login-before` 比对，只包含计划中的 5 个文件：隐藏触发器、骑手 API、登录页和 2 个测试文件。
+- 管理后台 `riderPasswordCredentialModel.test.mjs`：5/5 通过；`typecheck` 和 Vite 生产构建均成功（构建仅有既有组件命名冲突和 chunk 体积警告）。
+- 骑手端 `npm --prefix '/Users/nianbaidediannao/Desktop/骑手端app' test`：54/54 tests 通过，包含隐藏入口触发/生命周期复位、公开认证不带 Authorization 且不 refresh/retry，以及实际 `appVersion` 设备载荷契约。
+- 生产源码安全扫描未发现受控测试密码哨兵。骑手端生产源码未出现 `passwordHash`；管理后台仅在通用 `DetailDrawer` 的防御性隐藏键集中出现一次 `passwordHash`，用于禁止原始敏感字段展示，并非密码登录响应映射。
+- 骑手端与 `/Users/nianbaidediannao/Desktop/骑手端app备份/20260811-hidden-login-before` 比对，只包含计划中的 6 个文件：隐藏触发器、通用请求层、骑手 API、登录页和 2 个测试文件。
 
 ## 尚未完成的验收边界
 

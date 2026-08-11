@@ -2,17 +2,23 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/services/prisma.service';
+import { RedisService } from '../../common/services/redis.service';
 import { AuthService } from '../auth/auth.service';
 import { ErrandService } from '../errand/errand.service';
 import { SystemConfigService } from '../system-config/system-config.service';
 import {
+  isRiderPasswordWithinBcryptLimit,
   normalizeRiderPasswordUsername,
   PASSWORD_LOGIN_GENERIC_MESSAGE,
+  RIDER_PASSWORD_CREDENTIAL_ID,
 } from './rider-password-credential.contract';
 import { sanitizeDeviceSummary } from './rider-password-credential.service';
 
 const DUMMY_PASSWORD_HASH = '$2b$12$Z99xdBiy0l2THrMH4ie8kupph4vSYhzaJuxApZa.xrDxGlsHddjjC';
 const PASSWORD_LOCK_MINUTES = 15;
+const PASSWORD_LOGIN_LOCK_TTL_SECONDS = 10;
+const PASSWORD_LOGIN_LOCK_ATTEMPTS = 20;
+const PASSWORD_LOGIN_LOCK_RETRY_MS = 25;
 
 @Injectable()
 export class RiderAppService {
@@ -21,6 +27,7 @@ export class RiderAppService {
     private readonly authService: AuthService,
     private readonly errandService: ErrandService,
     private readonly systemConfigService: SystemConfigService,
+    private readonly redis: RedisService,
   ) {}
 
   async sendPhoneCode(dto: { phone?: string; mobile?: string }, ip?: string) {
@@ -45,25 +52,52 @@ export class RiderAppService {
     ua?: string,
   ) {
     const invalidLogin = () => new UnauthorizedException(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    for (let attempt = 0; attempt < PASSWORD_LOGIN_LOCK_ATTEMPTS; attempt += 1) {
+      const result = await this.redis.withLock(
+        `lock:rider_password:${RIDER_PASSWORD_CREDENTIAL_ID}`,
+        PASSWORD_LOGIN_LOCK_TTL_SECONDS,
+        async () => ({ value: await this.loginPasswordLocked(dto, ip, ua) }),
+      );
+      if (result) return result.value;
+      if (attempt + 1 < PASSWORD_LOGIN_LOCK_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, PASSWORD_LOGIN_LOCK_RETRY_MS));
+      }
+    }
+    throw invalidLogin();
+  }
+
+  private async loginPasswordLocked(
+    dto: { username?: string; password?: string; device?: Record<string, unknown> },
+    ip?: string,
+    ua?: string,
+  ) {
+    const invalidLogin = () => new UnauthorizedException(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    const normalizedUsername = normalizeRiderPasswordUsername(dto?.username);
     const credential = await this.prisma.riderAppPasswordCredential.findUnique({
-      where: { normalizedUsername: normalizeRiderPasswordUsername(dto?.username) },
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
       include: { User: { select: { openid: true } } },
     });
+    const usernameMatches = Boolean(
+      credential
+      && normalizeRiderPasswordUsername(credential.username) === normalizedUsername,
+    );
+    const password = String(dto?.password || '');
+    const passwordWithinLimit = isRiderPasswordWithinBcryptLimit(password);
     let passwordMatches = false;
     try {
       passwordMatches = await bcrypt.compare(
-        String(dto?.password || ''),
-        credential?.passwordHash || DUMMY_PASSWORD_HASH,
+        passwordWithinLimit ? password : '',
+        usernameMatches ? credential!.passwordHash : DUMMY_PASSWORD_HASH,
       );
     } catch {
       throw invalidLogin();
     }
 
-    if (!credential) throw invalidLogin();
+    if (!credential || !usernameMatches) throw invalidLogin();
     const now = Date.now();
     const locked = Boolean(credential.lockedUntil && credential.lockedUntil.getTime() > now);
     const expired = Boolean(credential.expiresAt && credential.expiresAt.getTime() <= now);
-    if (!passwordMatches) {
+    if (!passwordWithinLimit || !passwordMatches) {
       if (!locked) await this.recordPasswordFailure(credential.id);
       throw invalidLogin();
     }

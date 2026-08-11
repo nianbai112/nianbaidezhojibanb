@@ -1,6 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 
 export const PASSWORD_LOGIN_GENERIC_MESSAGE = '账号或密码错误，或账号暂不可用';
+export const RIDER_PASSWORD_CREDENTIAL_ID = 'rider-password-login';
+export const RIDER_PASSWORD_WS_PUSH_CHANNEL = 'lm:ws:native:push';
+
+export function isRiderPasswordWithinBcryptLimit(value: unknown): boolean {
+  return Buffer.byteLength(String(value || ''), 'utf8') <= 72;
+}
 
 export interface RiderPasswordCredentialInput {
   username: string;
@@ -21,6 +27,9 @@ export function parseRiderPasswordCredentialInput(value: any, hasPassword: boole
   if (!/^[a-z0-9._-]{4,40}$/.test(username)) throw new BadRequestException('账号需为 4-40 位字母、数字或 ._-');
   if (!userId) throw new BadRequestException('请选择绑定的官方骑手');
   if (!password && !hasPassword) throw new BadRequestException('请设置登录密码');
+  if (password && !isRiderPasswordWithinBcryptLimit(password)) {
+    throw new BadRequestException('密码 UTF-8 编码不能超过 72 字节');
+  }
   if (password && (password.length < 10 || password.length > 64 || !/[A-Za-z]/.test(password) || !/\d/.test(password))) {
     throw new BadRequestException('密码需为 10-64 位并同时包含字母和数字');
   }
