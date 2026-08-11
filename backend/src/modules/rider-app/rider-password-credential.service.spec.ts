@@ -22,6 +22,7 @@ describe("RiderPasswordCredentialService", () => {
     const prisma = {
       riderAppPasswordCredential: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
         upsert: jest.fn(),
       },
@@ -155,6 +156,93 @@ describe("RiderPasswordCredentialService", () => {
         create: { id: "rider-password-login" },
       });
     }
+  });
+
+  it("keeps a pre-existing single legacy credential visible during upgrade", async () => {
+    const { service, prisma } = createService();
+    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue({
+      id: "cm-legacy-credential",
+      username: "campus.legacy",
+      normalizedUsername: "campus.legacy",
+      passwordHash: "$2b$12$existing",
+      userId: "user-1",
+      enabled: true,
+      expiresAt: null,
+      failedAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: null,
+      lastLoginIp: null,
+      lastLoginDevice: null,
+      passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-11T00:00:00.000Z"),
+      User: rider.User,
+    });
+
+    await expect(service.getSafeConfig()).resolves.toMatchObject({
+      configured: true,
+      username: "campus.legacy",
+      userId: "user-1",
+    });
+    expect(prisma.riderAppPasswordCredential.findFirst).toHaveBeenCalledWith({
+      orderBy: [
+        { updatedAt: "desc" },
+        { createdAt: "desc" },
+        { id: "asc" },
+      ],
+    });
+  });
+
+  it("adopts a pre-existing single legacy credential instead of creating a second row", async () => {
+    const { service, prisma, redis } = createService();
+    const legacy = {
+      id: "cm-legacy-credential",
+      username: "campus.legacy",
+      normalizedUsername: "campus.legacy",
+      passwordHash: "$2b$12$existing",
+      userId: "user-1",
+      enabled: true,
+      expiresAt: null,
+      failedAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: null,
+      lastLoginIp: null,
+      lastLoginDevice: null,
+      passwordChangedAt: new Date("2026-08-10T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-11T00:00:00.000Z"),
+    };
+    prisma.riderAppPasswordCredential.findFirst.mockResolvedValue(legacy);
+    prisma.riderAppPasswordCredential.update.mockImplementation(
+      async ({ data }) => ({ ...legacy, ...data }),
+    );
+    prisma.riderAppPasswordCredential.upsert.mockImplementation(
+      async ({ create }) => ({
+        ...legacy,
+        ...create,
+      }),
+    );
+
+    await service.saveConfig(
+      {
+        username: "campus.legacy",
+        password: "",
+        userId: "user-1",
+        enabled: true,
+      },
+      "admin-1",
+      "127.0.0.1",
+    );
+
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
+      where: { id: "cm-legacy-credential" },
+      data: expect.objectContaining({
+        id: "rider-password-login",
+        sessionVersion: { increment: 1 },
+      }),
+    });
+    expect(prisma.riderAppPasswordCredential.upsert).not.toHaveBeenCalled();
+    expect(redis.del).toHaveBeenCalledWith(
+      "refresh:rider_password:cm-legacy-credential",
+    );
   });
 
   it("rejects a user who is not an approved official rider with a region", async () => {
@@ -347,7 +435,6 @@ describe("RiderPasswordCredentialService", () => {
 
     expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
       where: { id: "rider-password-login" },
-      include: { User: true },
     });
     expect(result).toMatchObject({
       configured: true,
@@ -391,7 +478,6 @@ describe("RiderPasswordCredentialService", () => {
 
     expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
       where: { id: "rider-password-login" },
-      include: { User: true },
     });
     expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
       where: { id: "rider-password-login" },

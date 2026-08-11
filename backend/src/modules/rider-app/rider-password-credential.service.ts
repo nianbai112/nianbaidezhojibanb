@@ -23,19 +23,14 @@ export class RiderPasswordCredentialService {
   ) {}
 
   async getSafeConfig() {
-    const credential = await this.prisma.riderAppPasswordCredential.findUnique({
-      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
-      include: { User: true },
-    });
+    const credential = await this.findManagedCredential();
     if (!credential) return { configured: false };
     const { rider, region } = await this.getRiderContext(credential.userId);
     return this.toSafeConfig(credential, rider, region);
   }
 
   async saveConfig(dto: any, operatorId?: string, ip?: string) {
-    const current = await this.prisma.riderAppPasswordCredential.findUnique({
-      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
-    });
+    const current = await this.findManagedCredential();
     const input = parseRiderPasswordCredentialInput(
       dto,
       Boolean(current?.passwordHash),
@@ -64,6 +59,7 @@ export class RiderPasswordCredentialService {
       : current!.passwordHash;
     const sessionChanged =
       !current ||
+      current.id !== RIDER_PASSWORD_CREDENTIAL_ID ||
       passwordChanged ||
       current.userId !== input.userId ||
       current.enabled !== input.enabled;
@@ -80,19 +76,28 @@ export class RiderPasswordCredentialService {
       passwordHash,
       ...(passwordChanged ? { passwordChangedAt: new Date() } : {}),
     };
-    const saved = await this.prisma.riderAppPasswordCredential.upsert({
-      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
-      create: {
-        id: RIDER_PASSWORD_CREDENTIAL_ID,
-        ...safeData,
-        passwordHash,
-        createdBy: operatorId,
-      },
-      update: {
-        ...updateData,
-        ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
-      },
-    });
+    const saved = current && current.id !== RIDER_PASSWORD_CREDENTIAL_ID
+      ? await this.prisma.riderAppPasswordCredential.update({
+          where: { id: current.id },
+          data: {
+            id: RIDER_PASSWORD_CREDENTIAL_ID,
+            ...updateData,
+            sessionVersion: { increment: 1 },
+          },
+        })
+      : await this.prisma.riderAppPasswordCredential.upsert({
+          where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
+          create: {
+            id: RIDER_PASSWORD_CREDENTIAL_ID,
+            ...safeData,
+            passwordHash,
+            createdBy: operatorId,
+          },
+          update: {
+            ...updateData,
+            ...(sessionChanged ? { sessionVersion: { increment: 1 } } : {}),
+          },
+        });
 
     if (current && sessionChanged) {
       await this.redis
@@ -119,13 +124,10 @@ export class RiderPasswordCredentialService {
   }
 
   async resetLock(operatorId?: string, ip?: string) {
-    const current = await this.prisma.riderAppPasswordCredential.findUnique({
-      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
-      include: { User: true },
-    });
+    const current = await this.findManagedCredential();
     if (!current) throw new BadRequestException("尚未配置密码登录账号");
     const saved = await this.prisma.riderAppPasswordCredential.update({
-      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
+      where: { id: current.id },
       data: { failedAttempts: 0, lockedUntil: null, updatedBy: operatorId },
     });
     await this.logCredentialChange(
@@ -184,6 +186,20 @@ export class RiderPasswordCredentialService {
       regionId: rider.regionId,
       regionName: regionNames.get(rider.regionId) || "",
     }));
+  }
+
+  private async findManagedCredential() {
+    const fixed = await this.prisma.riderAppPasswordCredential.findUnique({
+      where: { id: RIDER_PASSWORD_CREDENTIAL_ID },
+    });
+    if (fixed) return fixed;
+    return this.prisma.riderAppPasswordCredential.findFirst({
+      orderBy: [
+        { updatedAt: "desc" },
+        { createdAt: "desc" },
+        { id: "asc" },
+      ],
+    });
   }
 
   private async getRiderContext(userId: string) {

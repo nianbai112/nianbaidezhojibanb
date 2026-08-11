@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS `rider_app_password_credentials` (
-  `id` VARCHAR(191) NOT NULL DEFAULT 'rider-password-login',
+  `id` VARCHAR(191) NOT NULL,
   `username` VARCHAR(191) NOT NULL,
   `normalizedUsername` VARCHAR(191) NOT NULL,
   `passwordHash` VARCHAR(191) NOT NULL,
