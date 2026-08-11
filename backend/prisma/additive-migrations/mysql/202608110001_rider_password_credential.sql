@@ -1,0 +1,25 @@
+CREATE TABLE IF NOT EXISTS `rider_app_password_credentials` (
+  `id` VARCHAR(191) NOT NULL,
+  `username` VARCHAR(191) NOT NULL,
+  `normalizedUsername` VARCHAR(191) NOT NULL,
+  `passwordHash` VARCHAR(191) NOT NULL,
+  `userId` VARCHAR(191) NOT NULL,
+  `enabled` BOOLEAN NOT NULL DEFAULT true,
+  `expiresAt` DATETIME(3) NULL,
+  `failedAttempts` INTEGER NOT NULL DEFAULT 0,
+  `lockedUntil` DATETIME(3) NULL,
+  `sessionVersion` INTEGER NOT NULL DEFAULT 1,
+  `lastLoginAt` DATETIME(3) NULL,
+  `lastLoginIp` VARCHAR(191) NULL,
+  `lastLoginDevice` JSON NULL,
+  `passwordChangedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `createdBy` VARCHAR(191) NULL,
+  `updatedBy` VARCHAR(191) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `rider_app_password_credentials_normalizedUsername_key` (`normalizedUsername`),
+  UNIQUE INDEX `rider_app_password_credentials_userId_key` (`userId`),
+  CONSTRAINT `rider_app_password_credentials_userId_fkey`
+    FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

@@ -3,18 +3,52 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request } from 'express';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { RequirePermission } from '../../decorators/require-permission.decorator';
+import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { RiderAppService } from './rider-app.service';
+import { RiderPasswordCredentialService } from './rider-password-credential.service';
 
 @ApiTags('官方骑手 App')
 @Controller()
 export class RiderAppController {
-  constructor(private readonly riderAppService: RiderAppService) {}
+  constructor(
+    private readonly riderAppService: RiderAppService,
+    private readonly credentialService: RiderPasswordCredentialService,
+  ) {}
 
   private clientIp(req: Request) {
     const forwarded = req.headers['x-forwarded-for'];
     const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded || req.ip || '';
     return String(raw).split(',')[0].trim();
+  }
+
+  @Get('admin/rider-app/password-login')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('rider-app:config')
+  getPasswordLoginConfig() {
+    return this.credentialService.getSafeConfig();
+  }
+
+  @Put('admin/rider-app/password-login')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('rider-app:config')
+  savePasswordLoginConfig(@Body() dto: any, @CurrentUser('sub') adminId: string, @Req() req: Request) {
+    return this.credentialService.saveConfig(dto, adminId, this.clientIp(req));
+  }
+
+  @Post('admin/rider-app/password-login/reset-lock')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('rider-app:config')
+  resetPasswordLoginLock(@CurrentUser('sub') adminId: string, @Req() req: Request) {
+    return this.credentialService.resetLock(adminId, this.clientIp(req));
+  }
+
+  @Get('admin/rider-app/password-login/rider-options')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('rider-app:config')
+  listPasswordLoginRiders(@Query('keyword') keyword?: string) {
+    return this.credentialService.listRiderOptions(keyword);
   }
 
   @Post('rider-app/login/phone/send-code')
