@@ -125,7 +125,7 @@ function extractMiniProgramRootPrefixes() {
   const source = fs.readFileSync(miniProgramCompatPath, "utf8");
   const list = source.match(/MINI_PROGRAM_ROOT_PREFIX_LIST\s*=\s*\[([\s\S]*?)\];/);
   if (!list) throw new Error(`未找到小程序根路径配置：${miniProgramCompatPath}`);
-  return new Set(Array.from(list[1].matchAll(/['\"]([^'\"]+)['\"]/g), (match) => match[1]));
+  return new Set(Array.from(list[1].matchAll(/['"]([^'"]+)['"]/g), (match) => match[1]));
 }
 
 function findMissingRootCompatibility(requests) {
