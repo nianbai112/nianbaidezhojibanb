@@ -1,4 +1,5 @@
 import { RequestMethod } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { RiderAppController } from './rider-app.controller';
@@ -24,6 +25,36 @@ describe('RiderAppController', () => {
       '203.0.113.8',
       'rider-app',
     );
+  });
+
+  it('passes whitelisted password-login input and client context to the service', async () => {
+    const service = {
+      loginPassword: jest.fn().mockResolvedValue({ accessToken: 'token', allowed: true }),
+    };
+    const controller = new RiderAppController(service as any, {} as any);
+    const dto = {
+      username: 'campus.test',
+      password: 'Campus2026!',
+      device: { model: 'LM Phone', token: 'untrusted' },
+    };
+    const req = {
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'rider-app', 'x-forwarded-for': '203.0.113.8, 10.0.0.1' },
+    } as any;
+
+    await controller.loginPassword(dto, req);
+
+    expect(service.loginPassword).toHaveBeenCalledWith(dto, '203.0.113.8', 'rider-app');
+  });
+
+  it('exposes password login as a five-per-minute throttled public route', () => {
+    const handler = RiderAppController.prototype.loginPassword;
+
+    expect(Reflect.getMetadata('path', handler)).toBe('rider-app/login/password');
+    expect(Reflect.getMetadata('method', handler)).toBe(RequestMethod.POST);
+    expect(Reflect.getMetadata('__guards__', handler)).toEqual([ThrottlerGuard]);
+    expect(Reflect.getMetadata('THROTTLER:TTLauth', handler)).toBe(60000);
+    expect(Reflect.getMetadata('THROTTLER:LIMITauth', handler)).toBe(5);
   });
 
   it('returns the current authenticated rider session', async () => {

@@ -1,8 +1,18 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/services/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { ErrandService } from '../errand/errand.service';
 import { SystemConfigService } from '../system-config/system-config.service';
+import {
+  normalizeRiderPasswordUsername,
+  PASSWORD_LOGIN_GENERIC_MESSAGE,
+} from './rider-password-credential.contract';
+import { sanitizeDeviceSummary } from './rider-password-credential.service';
+
+const DUMMY_PASSWORD_HASH = '$2b$12$Z99xdBiy0l2THrMH4ie8kupph4vSYhzaJuxApZa.xrDxGlsHddjjC';
+const PASSWORD_LOCK_MINUTES = 15;
 
 @Injectable()
 export class RiderAppService {
@@ -27,6 +37,70 @@ export class RiderAppService {
       ...login,
       ...(await this.buildSession(login.id)),
     };
+  }
+
+  async loginPassword(
+    dto: { username?: string; password?: string; device?: Record<string, unknown> },
+    ip?: string,
+    ua?: string,
+  ) {
+    const invalidLogin = () => new UnauthorizedException(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    const credential = await this.prisma.riderAppPasswordCredential.findUnique({
+      where: { normalizedUsername: normalizeRiderPasswordUsername(dto?.username) },
+      include: { User: { select: { openid: true } } },
+    });
+    let passwordMatches = false;
+    try {
+      passwordMatches = await bcrypt.compare(
+        String(dto?.password || ''),
+        credential?.passwordHash || DUMMY_PASSWORD_HASH,
+      );
+    } catch {
+      throw invalidLogin();
+    }
+
+    if (!credential) throw invalidLogin();
+    const now = Date.now();
+    const locked = Boolean(credential.lockedUntil && credential.lockedUntil.getTime() > now);
+    const expired = Boolean(credential.expiresAt && credential.expiresAt.getTime() <= now);
+    if (!passwordMatches) {
+      if (!locked) await this.recordPasswordFailure(credential.id);
+      throw invalidLogin();
+    }
+    if (!credential.enabled || expired || locked) throw invalidLogin();
+
+    const session = await this.buildSession(credential.userId);
+    if (!session.allowed || !credential.User?.openid) throw invalidLogin();
+
+    let tokens: { accessToken: string; refreshToken: string; expiresIn: number };
+    try {
+      tokens = await this.authService.issueActiveUserTokens(
+        credential.userId,
+        credential.User.openid,
+        {
+          authSource: 'rider_password',
+          credentialId: credential.id,
+          credentialVersion: credential.sessionVersion,
+        },
+        `refresh:rider_password:${credential.id}`,
+      );
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw invalidLogin();
+      throw error;
+    }
+
+    const lastLoginDevice = sanitizeDeviceSummary(dto?.device, ua);
+    await this.prisma.riderAppPasswordCredential.update({
+      where: { id: credential.id },
+      data: {
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+        lastLoginIp: String(ip || '').trim().slice(0, 128) || null,
+        lastLoginDevice: lastLoginDevice || Prisma.DbNull,
+      },
+    });
+    return { ...tokens, ...session };
   }
 
   loginWechat() {
@@ -257,16 +331,34 @@ export class RiderAppService {
     return session;
   }
 
+  private async recordPasswordFailure(credentialId: string) {
+    const failed = await this.prisma.riderAppPasswordCredential.update({
+      where: { id: credentialId },
+      data: { failedAttempts: { increment: 1 } },
+    });
+    if (failed.failedAttempts >= 5) {
+      await this.prisma.riderAppPasswordCredential.update({
+        where: { id: credentialId },
+        data: {
+          lockedUntil: new Date(Date.now() + PASSWORD_LOCK_MINUTES * 60 * 1000),
+        },
+      });
+    }
+  }
+
   private async buildSession(userId: string) {
     const [user, rider] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, nickname: true, avatar: true, phone: true },
+        select: { id: true, nickname: true, avatar: true, phone: true, status: true },
       }),
       this.prisma.regionRider.findUnique({ where: { userId } }),
     ]);
     if (!user) {
       return { allowed: false, message: '账号不存在，请重新登录', user: null, rider: null };
+    }
+    if (user.status !== 'ACTIVE') {
+      return { allowed: false, message: '账号当前不可用，请联系管理员', user: null, rider: null };
     }
 
     const region = rider?.regionId
@@ -286,13 +378,21 @@ export class RiderAppService {
       message = '当前是兼职骑手账号，请联系管理员开通官方骑手后再使用 App';
     } else if (!rider.regionId) {
       message = '账号未绑定区域，请联系管理员分配所属区域';
+    } else if (!region) {
+      message = '骑手所属区域不存在，请联系管理员重新分配';
     }
 
     const allowed = Boolean(rider && !message);
+    const sessionUser = {
+      id: user.id,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      phone: user.phone,
+    };
     return {
       allowed,
       message,
-      user,
+      user: sessionUser,
       rider: rider
         ? {
             id: rider.id,

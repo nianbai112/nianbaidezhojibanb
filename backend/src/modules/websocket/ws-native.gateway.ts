@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/services/prisma.service';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { Server } from 'http';
+import { assertRiderPasswordTokenActive } from '../../common/auth/rider-password-token.util';
 import { inferChatMessageType } from '../../common/utils/chat-message.util';
 import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
 import { RedisService } from '../../common/services/redis.service';
@@ -150,6 +151,7 @@ export class WsNativeGateway {
       const payload = await this.jwtService.verifyAsync(token, {
         secret: this.config.get('JWT_SECRET'),
       });
+      await assertRiderPasswordTokenActive(this.prisma, payload);
 
       const userId = payload.sub;
       const isAdmin = payload.isAdmin === true;
@@ -159,10 +161,21 @@ export class WsNativeGateway {
         await this.userAccess.assertActiveUser(userId, '连接实时服务');
         if (url.searchParams.get('client') === 'rider_app') {
           const rider = await this.prisma.regionRider.findFirst({
-            where: { userId, verifyStatus: 'approved', riderType: 'official' },
-            select: { id: true },
+            where: {
+              userId,
+              verifyStatus: 'approved',
+              riderType: 'official',
+              regionId: { not: '' },
+            },
+            select: { id: true, regionId: true },
           });
-          if (!rider) throw new Error('Official rider required');
+          const region = rider
+            ? await this.prisma.region.findUnique({
+                where: { id: rider.regionId },
+                select: { id: true },
+              })
+            : null;
+          if (!rider || !region) throw new Error('Official rider required');
           platform = 'rider_app';
         }
       }

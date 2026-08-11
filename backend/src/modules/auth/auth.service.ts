@@ -9,6 +9,7 @@ import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
 import { IpGeoService } from '../ip-geo/ip-geo.service';
 import { checkPasswordStrength } from '../../common/utils/password-policy';
+import { assertRiderPasswordTokenActive } from '../../common/auth/rider-password-token.util';
 
 type MiniLoginDeviceInput = {
   brand?: string;
@@ -712,14 +713,35 @@ export class AuthService {
       const payload = await this.jwtService.verifyAsync(refreshToken, {
         secret: this.config.get('JWT_SECRET'),
       });
-      const stored = await this.redis.get(`refresh:${payload.sub}`);
+      await assertRiderPasswordTokenActive(this.prisma, payload);
+      const isPasswordToken = payload.authSource === 'rider_password';
+      const refreshKey = isPasswordToken
+        ? `refresh:rider_password:${String(payload.credentialId)}`
+        : `refresh:${payload.sub}`;
+      const stored = await this.redis.get(refreshKey);
       if (stored !== refreshToken) {
         throw new UnauthorizedException('刷新令牌已失效');
       }
-      return this.generateTokens(payload.sub, payload.openid);
+      const extraClaims = isPasswordToken
+        ? {
+            authSource: 'rider_password',
+            credentialId: String(payload.credentialId),
+            credentialVersion: Number(payload.credentialVersion),
+          }
+        : {};
+      return this.generateTokens(payload.sub, payload.openid, extraClaims, refreshKey);
     } catch {
       throw new UnauthorizedException('刷新令牌无效');
     }
+  }
+
+  async issueActiveUserTokens(
+    userId: string,
+    openid: string,
+    extraClaims: Record<string, unknown>,
+    refreshKey: string,
+  ) {
+    return this.generateTokens(userId, openid, extraClaims, refreshKey);
   }
 
   async getProfile(userId: string) {
@@ -1450,7 +1472,12 @@ export class AuthService {
     };
   }
 
-  private async generateTokens(userId: string, openid: string) {
+  private async generateTokens(
+    userId: string,
+    openid: string,
+    extraClaims: Record<string, unknown> = {},
+    refreshKey = `refresh:${userId}`,
+  ) {
     // AUD-P1-178: 签发 token 前必须校验用户状态为 ACTIVE，封禁/禁用/已删除用户不得获取新 token
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -1458,7 +1485,7 @@ export class AuthService {
     });
     if (!user || user.status !== 'ACTIVE') {
       // 清理可能残留的 refresh token，防止旧 token 被刷新
-      await this.redis.del(`refresh:${userId}`).catch(() => undefined);
+      await this.redis.del(refreshKey).catch(() => undefined);
       if (!user) {
         throw new UnauthorizedException('用户不存在');
       }
@@ -1474,14 +1501,14 @@ export class AuthService {
       throw new UnauthorizedException('账号状态异常，暂无法登录');
     }
 
-    const payload = { sub: userId, openid, isAdmin: false };
+    const payload = { ...extraClaims, sub: userId, openid, isAdmin: false };
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.config.get('JWT_ACCESS_EXPIRES_IN') || '2h',
     });
     const refreshToken = this.jwtService.sign(payload, {
       expiresIn: this.config.get('JWT_REFRESH_EXPIRES_IN') || '7d',
     });
-    await this.redis.set(`refresh:${userId}`, refreshToken, 7 * 24 * 3600);
+    await this.redis.set(refreshKey, refreshToken, 7 * 24 * 3600);
     return { accessToken, refreshToken, expiresIn: 7200 };
   }
 

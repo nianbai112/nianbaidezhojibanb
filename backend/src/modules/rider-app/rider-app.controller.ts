@@ -74,6 +74,21 @@ export class RiderAppController {
     );
   }
 
+  @Post('rider-app/login/password')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: '骑手 App 密码登录' })
+  loginPassword(
+    @Body() dto: { username?: string; password?: string; device?: Record<string, unknown> },
+    @Req() req: Request,
+  ) {
+    return this.riderAppService.loginPassword(
+      dto,
+      this.clientIp(req),
+      String(req.headers['user-agent'] || ''),
+    );
+  }
+
   @Post('rider-app/login/wechat')
   @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })

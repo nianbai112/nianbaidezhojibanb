@@ -15,6 +15,20 @@ const DEVICE_FIELDS = [
   "appVersion",
 ] as const;
 
+export function sanitizeDeviceSummary(value: unknown, ua?: string) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const safe: Record<string, string> = {};
+  for (const field of DEVICE_FIELDS) {
+    const fieldValue = String(source[field] || "").trim().slice(0, 100);
+    if (fieldValue) safe[field] = fieldValue;
+  }
+  const userAgent = String(ua || "").trim().slice(0, 200);
+  if (userAgent) safe.userAgent = userAgent;
+  return Object.keys(safe).length ? safe : null;
+}
+
 @Injectable()
 export class RiderPasswordCredentialService {
   constructor(
@@ -242,17 +256,7 @@ export class RiderPasswordCredentialService {
   }
 
   private sanitizeDevice(value: unknown) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return null;
-    const source = value as Record<string, unknown>;
-    const safe: Record<string, string> = {};
-    for (const field of DEVICE_FIELDS) {
-      const fieldValue = String(source[field] || "")
-        .trim()
-        .slice(0, 100);
-      if (fieldValue) safe[field] = fieldValue;
-    }
-    return Object.keys(safe).length ? safe : null;
+    return sanitizeDeviceSummary(value);
   }
 
   private maskPhone(value: unknown) {

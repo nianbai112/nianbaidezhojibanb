@@ -2,6 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
+import { assertRiderPasswordTokenActive } from '../common/auth/rider-password-token.util';
 import { PrismaService } from '../common/services/prisma.service';
 
 type AuthenticatedRequest = Request & {
@@ -32,6 +33,7 @@ export class JwtGuard implements CanActivate {
       const payload = await this.jwtService.verifyAsync(token, {
         secret: this.configService.get('JWT_SECRET'),
       });
+      await assertRiderPasswordTokenActive(this.prisma, payload);
       request['user'] = payload;
 
       // AUD-P1-179: 普通用户 JWT（非 admin token）必须校验 User.status。

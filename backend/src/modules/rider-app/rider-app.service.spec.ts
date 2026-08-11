@@ -1,6 +1,27 @@
+import * as bcrypt from 'bcrypt';
+import { PASSWORD_LOGIN_GENERIC_MESSAGE } from './rider-password-credential.contract';
 import { RiderAppService } from './rider-app.service';
 
+jest.mock('bcrypt', () => {
+  const actual = jest.requireActual('bcrypt');
+  return { ...actual, compare: jest.fn(actual.compare) };
+});
+
 describe('RiderAppService', () => {
+  const passwordHash = '$2b$12$Y3j8QVyuzfToeqISpWkTmusFAkmq.bDLq9bWjc4eIiiqp3opYux/m';
+  const passwordCredential = {
+    id: 'rider-password-login',
+    username: 'campus.test',
+    normalizedUsername: 'campus.test',
+    passwordHash,
+    userId: 'user-1',
+    enabled: true,
+    expiresAt: null,
+    failedAttempts: 0,
+    lockedUntil: null,
+    sessionVersion: 3,
+    User: { openid: 'openid-1' },
+  };
   const officialRider = {
     id: 'rider-1',
     userId: 'user-1',
@@ -21,11 +42,15 @@ describe('RiderAppService', () => {
     const prisma = {
       user: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'user-1', nickname: '小骑手', avatar: 'avatar.png', phone: '13800138000',
+          id: 'user-1', nickname: '小骑手', avatar: 'avatar.png', phone: '13800138000', status: 'ACTIVE',
         }),
       },
       regionRider: { findUnique: jest.fn().mockResolvedValue(rider) },
       region: { findUnique: jest.fn().mockResolvedValue({ name: '测试区域' }) },
+      riderAppPasswordCredential: {
+        findUnique: jest.fn().mockResolvedValue(passwordCredential),
+        update: jest.fn().mockResolvedValue(passwordCredential),
+      },
       errandOrder: {
         count: jest.fn().mockResolvedValue(1),
         findMany: jest.fn().mockResolvedValue([{ id: 'order-1' }]),
@@ -49,6 +74,9 @@ describe('RiderAppService', () => {
       sendPhoneLoginCode: jest.fn().mockResolvedValue({ success: true, expiresIn: 300 }),
       phoneLogin: jest.fn().mockResolvedValue({
         id: 'user-1', token: 'access', accessToken: 'access', refreshToken: 'refresh',
+      }),
+      issueActiveUserTokens: jest.fn().mockResolvedValue({
+        accessToken: 'password-access', refreshToken: 'password-refresh', expiresIn: 7200,
       }),
     };
     const errand = {
@@ -103,12 +131,201 @@ describe('RiderAppService', () => {
     const { service, auth } = createService();
     const dto = { phone: '13800138000', code: '123456' };
 
-    await expect(service.loginPhone(dto, '127.0.0.1', 'rider-app')).resolves.toMatchObject({
+    const result = await service.loginPhone(dto, '127.0.0.1', 'rider-app');
+    expect(result).toMatchObject({
       token: 'access',
       refreshToken: 'refresh',
       allowed: true,
     });
+    expect(result.user).toEqual({
+      id: 'user-1',
+      nickname: '小骑手',
+      avatar: 'avatar.png',
+      phone: '13800138000',
+    });
     expect(auth.phoneLogin).toHaveBeenCalledWith(dto, '127.0.0.1', 'rider-app');
+  });
+
+  it('authenticates the bound official rider with isolated revocable token claims', async () => {
+    const { service, prisma, auth } = createService();
+
+    await expect(service.loginPassword({
+      username: ' Campus.Test ',
+      password: 'Campus2026!',
+      device: {
+        model: 'LM Phone',
+        platform: 'android',
+        appVersion: '1.2.3',
+        token: 'must-not-be-stored',
+      },
+    }, '203.0.113.8', 'rider-app/1.2.3')).resolves.toMatchObject({
+      accessToken: 'password-access',
+      refreshToken: 'password-refresh',
+      allowed: true,
+      user: { id: 'user-1' },
+    });
+
+    expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
+      where: { normalizedUsername: 'campus.test' },
+      include: { User: { select: { openid: true } } },
+    });
+    expect(auth.issueActiveUserTokens).toHaveBeenCalledWith('user-1', 'openid-1', {
+      authSource: 'rider_password',
+      credentialId: 'rider-password-login',
+      credentialVersion: 3,
+    }, 'refresh:rider_password:rider-password-login');
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenLastCalledWith({
+      where: { id: 'rider-password-login' },
+      data: {
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: expect.any(Date),
+        lastLoginIp: '203.0.113.8',
+        lastLoginDevice: {
+          model: 'LM Phone',
+          platform: 'android',
+          appVersion: '1.2.3',
+          userAgent: 'rider-app/1.2.3',
+        },
+      },
+    });
+    expect(JSON.stringify(prisma.riderAppPasswordCredential.update.mock.calls)).not.toContain('must-not-be-stored');
+  });
+
+  it('performs a real dummy bcrypt comparison for an unknown username without mutating a credential', async () => {
+    const { service, prisma, auth } = createService();
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue(null);
+    const compare = bcrypt.compare as unknown as jest.Mock;
+    compare.mockClear();
+
+    await expect(service.loginPassword({
+      username: 'unknown.account',
+      password: 'not-a-real-password',
+    }, '203.0.113.8', 'rider-app')).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+
+    expect(compare).toHaveBeenCalledWith(
+      'not-a-real-password',
+      expect.stringMatching(/^\$2[aby]\$12\$/),
+    );
+    expect(compare.mock.calls[0][1]).not.toBe(passwordHash);
+    expect(prisma.riderAppPasswordCredential.update).not.toHaveBeenCalled();
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
+  });
+
+  it('returns the generic public error and atomically increments a known wrong password', async () => {
+    const { service, prisma, auth } = createService();
+    prisma.riderAppPasswordCredential.update.mockResolvedValue({
+      ...passwordCredential,
+      failedAttempts: 1,
+    });
+
+    await expect(service.loginPassword({
+      username: 'campus.test',
+      password: 'Wrong2026!',
+    }, '203.0.113.8', 'rider-app')).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
+      where: { id: 'rider-password-login' },
+      data: { failedAttempts: { increment: 1 } },
+    });
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
+  });
+
+  it('locks the known credential for fifteen minutes when the fifth failure wins', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-11T01:00:00.000Z'));
+    const { service, prisma } = createService();
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue({
+      ...passwordCredential,
+      failedAttempts: 4,
+    });
+    prisma.riderAppPasswordCredential.update
+      .mockResolvedValueOnce({ ...passwordCredential, failedAttempts: 5 })
+      .mockResolvedValueOnce({
+        ...passwordCredential,
+        failedAttempts: 5,
+        lockedUntil: new Date('2026-08-11T01:15:00.000Z'),
+      });
+
+    await expect(service.loginPassword({
+      username: 'campus.test',
+      password: 'Wrong2026!',
+    })).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenNthCalledWith(1, {
+      where: { id: 'rider-password-login' },
+      data: { failedAttempts: { increment: 1 } },
+    });
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenNthCalledWith(2, {
+      where: { id: 'rider-password-login' },
+      data: { lockedUntil: new Date('2026-08-11T01:15:00.000Z') },
+    });
+    jest.useRealTimers();
+  });
+
+  it('clears a past lock and failure count after a successful password login', async () => {
+    const { service, prisma } = createService();
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue({
+      ...passwordCredential,
+      failedAttempts: 5,
+      lockedUntil: new Date('2020-01-01T00:00:00.000Z'),
+    });
+
+    await service.loginPassword({ username: 'campus.test', password: 'Campus2026!' });
+
+    expect(prisma.riderAppPasswordCredential.update).toHaveBeenCalledWith({
+      where: { id: 'rider-password-login' },
+      data: expect.objectContaining({ failedAttempts: 0, lockedUntil: null }),
+    });
+  });
+
+  it.each([
+    ['disabled', { enabled: false }],
+    ['expired', { expiresAt: new Date('2020-01-01T00:00:00.000Z') }],
+    ['locked', { lockedUntil: new Date('2099-01-01T00:00:00.000Z') }],
+  ])('rejects a %s credential with the same generic public error', async (_label, override) => {
+    const { service, prisma, auth } = createService();
+    prisma.riderAppPasswordCredential.findUnique.mockResolvedValue({
+      ...passwordCredential,
+      ...override,
+    });
+
+    await expect(service.loginPassword({
+      username: 'campus.test',
+      password: 'Campus2026!',
+    })).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unapproved rider', { rider: { ...officialRider, verifyStatus: 'pending' } }],
+    ['part-time rider', { rider: { ...officialRider, riderType: 'part_time' } }],
+    ['regionless rider', { rider: { ...officialRider, regionId: '' } }],
+    ['inactive user', { userStatus: 'INACTIVE' }],
+  ])('rejects a credential bound to an %s', async (_label, fixture) => {
+    const { service, prisma, auth } = createService((fixture as any).rider || officialRider);
+    if ((fixture as any).userStatus) {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1', nickname: '小骑手', avatar: 'avatar.png', phone: '13800138000',
+        status: (fixture as any).userStatus,
+      });
+    }
+
+    await expect(service.loginPassword({
+      username: 'campus.test',
+      password: 'Campus2026!',
+    })).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
+  });
+
+  it('rejects a credential whose assigned region no longer exists', async () => {
+    const { service, prisma, auth } = createService();
+    prisma.region.findUnique.mockResolvedValue(null);
+
+    await expect(service.loginPassword({
+      username: 'campus.test',
+      password: 'Campus2026!',
+    })).rejects.toThrow(PASSWORD_LOGIN_GENERIC_MESSAGE);
+    expect(auth.issueActiveUserTokens).not.toHaveBeenCalled();
   });
 
   it('delegates SMS code sending to the existing throttled auth service', async () => {

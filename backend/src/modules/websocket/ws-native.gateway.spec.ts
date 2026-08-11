@@ -24,7 +24,8 @@ describe('WsNativeGateway account lifecycle', () => {
 
   it('records an approved official rider connection as rider_app', async () => {
     const prisma: any = {
-      regionRider: { findFirst: jest.fn().mockResolvedValue({ id: 'rider-1' }) },
+      regionRider: { findFirst: jest.fn().mockResolvedValue({ id: 'rider-1', regionId: 'region-1' }) },
+      region: { findUnique: jest.fn().mockResolvedValue({ id: 'region-1' }) },
       realtimeSession: {
         create: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -52,6 +53,86 @@ describe('WsNativeGateway account lifecycle', () => {
     expect(prisma.realtimeSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ userId: 'user-1', platform: 'rider_app', online: true }),
     });
+  });
+
+  it('rejects rider_app identity when its assigned region no longer exists', async () => {
+    const prisma: any = {
+      regionRider: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'rider-1', regionId: 'missing-region' }),
+      },
+      region: { findUnique: jest.fn().mockResolvedValue(null) },
+      realtimeSession: {
+        create: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const gateway = new WsNativeGateway(
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) } as any,
+      { get: jest.fn().mockReturnValue('secret') } as any,
+      prisma,
+      {} as any,
+      {} as any,
+      { assertActiveUser: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+    (gateway as any).isRedisRateLimited = jest.fn().mockResolvedValue(false);
+    (gateway as any).markPresenceOnline = jest.fn().mockResolvedValue(false);
+    (gateway as any).getUnreadSummaryForUser = jest.fn().mockResolvedValue({ total: 0 });
+    const ws = { on: jest.fn(), send: jest.fn(), close: jest.fn(), readyState: 1 };
+
+    await (gateway as any).handleConnection(ws, {
+      url: '/ws-native?token=valid&client=rider_app',
+      headers: { host: 'localhost' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+
+    expect(ws.close).toHaveBeenCalledWith(4003, 'Invalid token');
+    expect(prisma.realtimeSession.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rotated password token before protected WebSocket access', async () => {
+    const userAccess = { assertActiveUser: jest.fn().mockResolvedValue(undefined) };
+    const prisma: any = {
+      riderAppPasswordCredential: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'credential-1',
+          userId: 'user-1',
+          enabled: true,
+          expiresAt: null,
+          sessionVersion: 4,
+        }),
+      },
+      regionRider: { findFirst: jest.fn() },
+      realtimeSession: { create: jest.fn(), updateMany: jest.fn() },
+    };
+    const gateway = new WsNativeGateway(
+      { verifyAsync: jest.fn().mockResolvedValue({
+        sub: 'user-1',
+        authSource: 'rider_password',
+        credentialId: 'credential-1',
+        credentialVersion: 3,
+      }) } as any,
+      { get: jest.fn().mockReturnValue('secret') } as any,
+      prisma,
+      {} as any,
+      {} as any,
+      userAccess as any,
+    );
+    (gateway as any).isRedisRateLimited = jest.fn().mockResolvedValue(false);
+    const ws = { on: jest.fn(), send: jest.fn(), close: jest.fn(), readyState: 1 };
+
+    await (gateway as any).handleConnection(ws, {
+      url: '/ws-native?token=rotated&client=rider_app',
+      headers: { host: 'localhost' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+
+    expect(prisma.riderAppPasswordCredential.findUnique).toHaveBeenCalledWith({
+      where: { id: 'credential-1' },
+    });
+    expect(userAccess.assertActiveUser).not.toHaveBeenCalled();
+    expect(prisma.regionRider.findFirst).not.toHaveBeenCalled();
+    expect(prisma.realtimeSession.create).not.toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledWith(4003, 'Invalid token');
   });
 
   it('rejects rider_app identity for a non-official account', async () => {
