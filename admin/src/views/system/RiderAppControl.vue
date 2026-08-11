@@ -136,17 +136,99 @@
           <el-table-column prop="userAgent" label="设备" min-width="220" show-overflow-tooltip />
         </el-table>
       </el-card>
+
+      <el-card shadow="never" class="credential-card" v-loading="credentialLoading">
+        <template #header>
+          <div class="session-header">
+            <div>
+              <span class="card-title">隐藏测试登录</span>
+              <span class="session-summary">仅限官方骑手 App 的测试入口</span>
+            </div>
+            <el-button :loading="credentialLoading" @click="loadCredential">刷新</el-button>
+          </div>
+        </template>
+        <el-alert
+          title="此账号拥有完整官方骑手 App 权限；请只用于受控测试，妥善保管并在测试结束后停用。"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="session-alert"
+        />
+        <el-form label-position="top">
+          <div class="two-cols">
+            <el-form-item label="启用测试登录">
+              <el-switch v-model="credentialForm.enabled" active-text="允许登录" inactive-text="停用" />
+            </el-form-item>
+            <el-form-item label="失效时间（可选）">
+              <el-date-picker
+                v-model="credentialForm.expiresAt"
+                type="datetime"
+                value-format="YYYY-MM-DDTHH:mm:ss.SSSZ"
+                placeholder="不设置则长期有效"
+                clearable
+                style="width: 100%"
+              />
+            </el-form-item>
+          </div>
+          <el-form-item label="绑定官方骑手">
+            <el-select
+              v-model="credentialForm.userId"
+              filterable
+              remote
+              reserve-keyword
+              :remote-method="searchCredentialRiders"
+              :loading="credentialRiderLoading"
+              placeholder="搜索姓名、昵称或手机号"
+              style="width: 100%"
+            >
+              <el-option v-for="item in credentialRiderOptions" :key="item.userId" :value="item.userId" :label="credentialRiderLabel(item)">
+                <span>{{ item.nickname || item.realName || '未命名骑手' }}</span>
+                <small class="option-meta">{{ item.phone || '未留手机号' }} · {{ item.regionName || '未分配区域' }}</small>
+              </el-option>
+            </el-select>
+          </el-form-item>
+          <div class="two-cols">
+            <el-form-item label="登录账号">
+              <el-input v-model="credentialForm.username" autocomplete="off" maxlength="40" placeholder="4-40 位字母、数字或 ._-" />
+            </el-form-item>
+            <el-form-item :label="credential.configured ? '登录密码（留空表示不修改）' : '登录密码'">
+              <el-input v-model="credentialForm.password" type="password" show-password autocomplete="new-password" placeholder="10-64 位，需同时包含字母和数字" />
+            </el-form-item>
+          </div>
+        </el-form>
+        <el-descriptions :column="2" border class="credential-status">
+          <el-descriptions-item label="绑定骑手">{{ credentialRiderSummary }}</el-descriptions-item>
+          <el-descriptions-item label="所属区域">{{ credential.region?.name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最近登录">{{ formatTime(credential.lastLoginAt) }}</el-descriptions-item>
+          <el-descriptions-item label="失败次数">{{ credential.failedAttempts || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="锁定至">{{ formatTime(credential.lockedUntil) }}</el-descriptions-item>
+          <el-descriptions-item label="登录 IP">{{ credential.lastLoginIp || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="credential-actions">
+          <el-button type="primary" :loading="credentialSaving" @click="saveCredential">保存测试账号</el-button>
+          <el-button :disabled="!credential.configured" :loading="credentialSaving" @click="resetCredentialLock">解除锁定</el-button>
+        </div>
+      </el-card>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
+import { buildRiderPasswordCredentialPayload, mapRiderPasswordCredential } from './riderPasswordCredentialModel.mjs'
 
 type FeatureKey = 'orderPool' | 'chat' | 'income' | 'incentives'
+type CredentialRiderOption = {
+  userId: string
+  nickname: string
+  realName: string
+  phone: string
+  regionId: string
+  regionName: string
+}
 
 const defaults = () => ({
   enabled: true,
@@ -170,6 +252,12 @@ const saving = ref(false)
 const riderSessionLoading = ref(false)
 const riderSessions = ref<any[]>([])
 const riderOnlineCount = ref(0)
+const credentialLoading = ref(false)
+const credentialSaving = ref(false)
+const credentialRiderLoading = ref(false)
+const credentialRiderOptions = ref<CredentialRiderOption[]>([])
+const credential = reactive(mapRiderPasswordCredential())
+const credentialForm = reactive({ username: '', password: '', userId: '', enabled: true, expiresAt: '' })
 let riderSessionTimer: number | undefined
 const featureItems: Array<{ key: FeatureKey; title: string; desc: string }> = [
   { key: 'orderPool', title: '订单大厅', desc: '控制订单池展示与接单入口' },
@@ -250,6 +338,102 @@ function formatTime(value?: string) {
   return value ? new Date(value).toLocaleString('zh-CN') : '-'
 }
 
+function credentialRiderLabel(item: CredentialRiderOption) {
+  return `${item.nickname || item.realName || '未命名骑手'} · ${item.regionName || '未分配区域'}`
+}
+
+function credentialRiderOption(value: any): CredentialRiderOption | null {
+  const userId = String(value?.userId || '').trim()
+  if (!userId) return null
+  return {
+    userId,
+    nickname: String(value?.nickname || ''),
+    realName: String(value?.realName || ''),
+    phone: String(value?.phone || ''),
+    regionId: String(value?.regionId || ''),
+    regionName: String(value?.regionName || ''),
+  }
+}
+
+function assignCredential(value: any) {
+  const next = mapRiderPasswordCredential(value)
+  Object.assign(credential, next)
+  Object.assign(credentialForm, {
+    username: next.username,
+    password: '',
+    userId: next.userId,
+    enabled: next.enabled,
+    expiresAt: next.expiresAt,
+  })
+  const selected = credentialRiderOption({ ...next.rider, regionId: next.region?.id, regionName: next.region?.name })
+  if (selected) {
+    credentialRiderOptions.value = [selected, ...credentialRiderOptions.value.filter((item) => item.userId !== selected.userId)]
+  }
+}
+
+const credentialRiderSummary = computed(() => {
+  const rider = credential.rider
+  return rider ? `${rider.nickname || rider.realName || '未命名骑手'}${rider.phone ? `（${rider.phone}）` : ''}` : '-'
+})
+
+async function loadCredential() {
+  credentialLoading.value = true
+  try {
+    const response: any = await request.get('/admin/rider-app/password-login')
+    assignCredential(response?.data || response)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载测试账号失败')
+  } finally {
+    credentialLoading.value = false
+  }
+}
+
+async function searchCredentialRiders(keyword: string) {
+  credentialRiderLoading.value = true
+  try {
+    const response: any = await request.get('/admin/rider-app/password-login/rider-options', { params: { keyword } })
+    const rows = Array.isArray(response?.data || response) ? (response?.data || response) : []
+    const next = rows.map(credentialRiderOption).filter(Boolean) as CredentialRiderOption[]
+    const selected = credentialRiderOptions.value.filter((item) => item.userId === credentialForm.userId)
+    credentialRiderOptions.value = [...new Map([...selected, ...next].map((item) => [item.userId, item])).values()]
+  } catch (error: any) {
+    ElMessage.error(error?.message || '搜索官方骑手失败')
+  } finally {
+    credentialRiderLoading.value = false
+  }
+}
+
+async function saveCredential() {
+  try {
+    const payload = buildRiderPasswordCredentialPayload(credentialForm)
+    if (!payload.username) throw new Error('请输入登录账号')
+    if (!payload.userId) throw new Error('请选择绑定的官方骑手')
+    if (!credential.configured && !payload.password) throw new Error('请设置登录密码')
+    credentialSaving.value = true
+    const response: any = await request.put('/admin/rider-app/password-login', payload)
+    assignCredential(response?.data || response)
+    ElMessage.success('测试账号已保存')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '保存测试账号失败')
+  } finally {
+    credentialSaving.value = false
+  }
+}
+
+async function resetCredentialLock() {
+  try {
+    await ElMessageBox.confirm('解除锁定会立即恢复该测试账号的密码登录尝试次数，确认继续？', '解除测试账号锁定', { type: 'warning' })
+    credentialSaving.value = true
+    const response: any = await request.post('/admin/rider-app/password-login/reset-lock')
+    assignCredential(response?.data || response)
+    ElMessage.success('测试账号锁定已解除')
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.message !== 'cancel') ElMessage.error(error?.message || '解除锁定失败')
+  } finally {
+    credentialSaving.value = false
+  }
+}
+
 function riderBusinessStatus(value?: string) {
   return ({ online: '可接单', busy: '配送中', offline: '未上线' } as Record<string, string>)[String(value || '')] || '-'
 }
@@ -290,6 +474,7 @@ async function loadRiderSessions(showSuccess = false) {
 onMounted(() => {
   loadConfig()
   loadRiderSessions()
+  loadCredential()
   riderSessionTimer = window.setInterval(() => loadRiderSessions(), 30000)
 })
 
@@ -308,12 +493,16 @@ onBeforeUnmount(() => {
 .switch-desc, .form-tip { margin-top: 4px; color: var(--mx-muted); font-size: 12px; }
 .unit { margin-left: 8px; color: var(--mx-muted); }
 .rider-session-card { grid-column: 1 / -1; }
+.credential-card { grid-column: 1 / -1; }
 .session-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .session-summary { margin-left: 12px; color: var(--mx-muted); font-size: 13px; font-weight: 400; }
 .session-alert { margin-bottom: 14px; }
 .rider-cell { display: flex; align-items: center; gap: 10px; }
 .rider-name { font-weight: 600; color: var(--mx-text); }
 .rider-subtitle { margin-top: 2px; color: var(--mx-muted); font-size: 12px; }
+.option-meta { display: block; margin-top: 2px; color: var(--mx-muted); font-size: 12px; }
+.credential-status { margin-top: 16px; }
+.credential-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px; }
 @media (max-width: 900px) {
   .config-grid, .two-cols { grid-template-columns: 1fr; }
 }
