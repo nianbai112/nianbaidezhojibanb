@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsOptional, IsBoolean, IsNumber, IsArray, Min, Max } from 'class-validator';
+import { IsString, IsInt, IsOptional, IsBoolean, IsNumber, IsArray, IsObject, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // ==================== 邮箱配置 ====================
@@ -28,10 +28,45 @@ export class WebsiteInfoDto {
   @IsOptional() @IsString() siteName?: string;
   @IsOptional() @IsString() siteShortName?: string;
   @IsOptional() @IsString() siteLogo?: string;
+  @IsOptional() @IsString() logo?: string;
+  @IsOptional() @IsString() favicon?: string;
+  @IsOptional() @IsString() adminTitle?: string;
+  @IsOptional() @IsString() adminSubtitle?: string;
+  @IsOptional() @IsString() loginSlogan?: string;
+  @IsOptional() @IsString() browserTitle?: string;
+  @IsOptional() @IsString() siteSlogan?: string;
+  @IsOptional() @IsString() siteDescription?: string;
+  @IsOptional() @IsString() heroTitle?: string;
+  @IsOptional() @IsString() heroSubtitle?: string;
+  @IsOptional() @IsString() heroVideoUrl?: string;
+  @IsOptional() @IsString() heroPosterUrl?: string;
+  @IsOptional() @IsString() heroImageUrl?: string;
+  @IsOptional() @IsString() mascotUrl?: string;
+  @IsOptional() @IsString() previewImageUrl?: string;
+  @IsOptional() @IsString() productPreviewImageUrl?: string;
+  @IsOptional() @IsString() storyImageOneUrl?: string;
+  @IsOptional() @IsString() storyImageTwoUrl?: string;
+  @IsOptional() @IsString() storyImageThreeUrl?: string;
+  @IsOptional() @IsString() cooperationImageUrl?: string;
+  @IsOptional() @IsString() miniappQrUrl?: string;
+  @IsOptional() @IsString() androidDownloadUrl?: string;
+  @IsOptional() @IsString() iosDownloadUrl?: string;
+  @IsOptional() @IsString() appStoreUrl?: string;
+  @IsOptional() @IsString() apkUrl?: string;
+  @IsOptional() @IsString() miniappUrl?: string;
+  @IsOptional() @IsString() adminPath?: string;
+  @IsOptional() @IsString() icp?: string;
   @IsOptional() @IsString() icpNumber?: string;
   @IsOptional() @IsString() policeNumber?: string;
   @IsOptional() @IsString() policeLink?: string;
   @IsOptional() @IsString() copyright?: string;
+  @IsOptional() @IsString() contactEmail?: string;
+  @IsOptional() @IsString() contactPhone?: string;
+  @IsOptional() @IsString() contactWechat?: string;
+  @IsOptional() @IsString() cooperationTitle?: string;
+  @IsOptional() @IsString() cooperationSubtitle?: string;
+  @IsOptional() @IsString() cooperationEmail?: string;
+  @IsOptional() @IsString() cooperationPhone?: string;
 }
 
 // ==================== 微信模板消息 ====================
@@ -47,7 +82,12 @@ export class CreateWechatTemplateDto {
   @IsString() platformType: string;
   @IsString() templateType: string;
   @IsString() templateId: string;
+  @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() defaultPage?: string;
+  @IsOptional() @IsString() pageTemplate?: string;
+  @IsOptional() @IsObject() fieldMapping?: Record<string, any>;
+  @IsOptional() @IsObject() exampleData?: Record<string, any>;
+  @IsOptional() @IsString() regionId?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 
@@ -55,7 +95,12 @@ export class UpdateWechatTemplateDto {
   @IsOptional() @IsString() platformType?: string;
   @IsOptional() @IsString() templateType?: string;
   @IsOptional() @IsString() templateId?: string;
+  @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() defaultPage?: string;
+  @IsOptional() @IsString() pageTemplate?: string;
+  @IsOptional() @IsObject() fieldMapping?: Record<string, any>;
+  @IsOptional() @IsObject() exampleData?: Record<string, any>;
+  @IsOptional() @IsString() regionId?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 
@@ -91,9 +136,13 @@ export class UpdateMiniappPageDto {
 
 export class UploadFileQueryDto {
   @IsOptional() @IsString() fileType?: string;
+  @IsOptional() @IsString() type?: string;
   @IsOptional() @IsString() scene?: string;
   @IsOptional() @IsString() keyword?: string;
   @IsOptional() @IsString() userId?: string;
+  @IsOptional() date?: any;
+  @IsOptional() startDate?: any;
+  @IsOptional() endDate?: any;
   @IsOptional() @Type(() => Number) @IsInt() page?: number = 1;
   @IsOptional() @Type(() => Number) @IsInt() pageSize?: number = 20;
 }

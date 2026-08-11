@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsBoolean, IsEnum, IsNumber, IsNotEmpty } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Gender } from '@prisma/client';
 
@@ -15,8 +16,17 @@ export class UpdateProfileDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsEnum(Gender)
-  gender?: Gender;
+  gender?: Gender | number | string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  riderGender?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  riderGenderText?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -42,6 +52,51 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   dormitory?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  mobile?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  wechat_account?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  wechatAccount?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  birthday?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  zodiac?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  background_url?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  backgroundUrl?: string;
 }
 
 export class UpdateSettingsDto {
@@ -79,58 +134,26 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsBoolean()
   notifyFollow?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  notifySquat?: boolean;
 }
 
 export class StudentVerifyDto {
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  realName?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  studentId?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  schoolName?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：姓名' })
-  @IsOptional()
-  @IsString()
-  name?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学号' })
-  @IsOptional()
-  @IsString()
-  student_id?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学校' })
-  @IsOptional()
-  @IsString()
-  university?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  major?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  grade?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  cardImage?: string;
-
-  @ApiProperty({ required: false, description: '小程序字段：学生证照片' })
-  @IsOptional()
-  @IsString()
-  photo_url?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() realName?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() studentId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() schoolName?: string;
+  @ApiProperty({ required: false, description: '小程序字段：姓名' }) @IsOptional() @IsString() name?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学号' }) @IsOptional() @IsString() student_id?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学校' }) @IsOptional() @IsString() university?: string;
+  @ApiProperty({ required: false, description: '学校ID' }) @IsOptional() @IsString() school_id?: string;
+  @ApiProperty({ required: false, description: '学校ID(驼峰)' }) @IsOptional() @IsString() schoolId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() major?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() grade?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() cardImage?: string;
+  @ApiProperty({ required: false, description: '小程序字段：学生证照片' }) @IsOptional() @IsString() photo_url?: string;
 }
 
 export class FollowDto {
@@ -147,11 +170,24 @@ export class FollowDto {
 export class ListQueryDto {
   @ApiProperty({ required: false, default: 1 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   page?: number = 1;
 
   @ApiProperty({ required: false, default: 20 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   pageSize?: number = 20;
+
+  @ApiProperty({ required: false, default: 20, description: '兼容小程序旧参数，等同于 pageSize' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  limit?: number;
+
+  @ApiProperty({ required: false, enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  order?: 'asc' | 'desc' = 'desc';
 }

@@ -1,28 +1,99 @@
 <template>
   <div class="page-shell">
     <GlassPageHeader :title="config.title" :subtitle="config.subtitle">
-      <template #actions><el-button :icon="Calendar">2025-05-19</el-button><el-button :icon="Refresh">刷新</el-button></template>
+      <template #actions><el-button :icon="Calendar">{{ today }}</el-button><el-button :icon="Refresh" :loading="loading" @click="refreshPage">刷新</el-button></template>
     </GlassPageHeader>
-    <StatGrid :items="config.stats" />
-    <div class="page-two-col">
-      <div class="page-shell">
-        <SearchPanel :fields="config.search" @search="onSearch" />
-        <div class="action-bar">
-          <div class="btn-row">
-            <el-button v-for="(a,idx) in config.actions" :key="a" :type="idx===0 ? 'primary' : idx > 1 ? 'warning' : 'default'" :icon="idx===0 ? Plus : idx===1 ? Download : Operation">{{ a }}</el-button>
-          </div>
-          <div class="muted">{{ loading ? '正在连接真实接口...' : error || ('接口：' + (config.endpoint || '待配置')) }}</div>
+    <StatGrid :items="liveStats" />
+    <div class="page-main-col">
+      <SearchPanel :fields="config.search" @search="onSearch" />
+      <div class="module-toolbar glass-card">
+        <div class="btn-row">
+          <el-button v-for="(a,idx) in config.actions" :key="a" :loading="actionLoading === a" :type="idx===0 ? 'primary' : idx > 1 ? 'warning' : 'default'" :icon="idx===0 ? Plus : idx===1 ? Download : Operation" @click="handleTopAction(a)">{{ a }}</el-button>
         </div>
-        <DataTableCard v-loading="loading" :title="config.title.replace('管理','列表')" :columns="config.columns" :rows="rows" :total="total" @detail="openDetail" />
+        <div class="action-bar-right">
+          <span class="muted">{{ loading ? '正在连接真实接口...' : error || statsError || ('接口：' + (config.endpoint || '待配置')) }}</span>
+          <el-button v-if="hasSidePanels" :icon="DataAnalysis" :type="showAnalytics ? 'primary' : 'default'" @click="showAnalytics = !showAnalytics">
+            {{ showAnalytics ? '隐藏分析' : '显示分析' }}
+          </el-button>
+        </div>
       </div>
-      <SidePanels :chart-title="config.chartTitle" :side-title="config.sideTitle" :metrics="config.sideMetrics" />
+    <DataTableCard v-loading="loading" :title="config.title.replace('管理','列表')" :columns="config.columns" :rows="rows" :total="total" :module-key="props.moduleKey" @detail="openDetail" @edit="openForm('update', $event)" @row-action="handleRowAction" @selection-change="selectedRows = $event" />
     </div>
+    <Transition name="analytics-slide">
+      <div v-if="showAnalytics && hasSidePanels" class="analytics-section">
+        <SidePanels :chart-title="config.chartTitle" :side-title="config.sideTitle" :metrics="config.sideMetrics" />
+      </div>
+    </Transition>
     <DetailDrawer ref="drawer" />
+    <el-dialog v-model="formVisible" :title="formTitle" width="680px">
+      <el-form :model="formModel" label-position="top">
+        <div class="form-grid two">
+          <el-form-item v-for="field in formFields" :key="field.key" :label="field.label">
+            <el-input-number v-if="field.kind === 'number'" v-model="formModel[field.key]" style="width:100%" />
+            <el-select v-else-if="field.kind === 'status'" v-model="formModel[field.key]" style="width:100%">
+              <el-option label="正常/启用" value="enabled" />
+              <el-option label="待审核" value="pending" />
+              <el-option label="禁用" value="disabled" />
+              <el-option label="已完成" value="completed" />
+            </el-select>
+            <el-input v-else v-model="formModel[field.key]" :type="field.kind === 'textarea' ? 'textarea' : 'text'" />
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="formVisible=false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="uploadVisible" title="上传文件" width="520px">
+      <el-upload drag :http-request="uploadFile" :show-file-list="true" :limit="1">
+        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <div class="el-upload__text">拖拽文件到这里，或点击上传</div>
+      </el-upload>
+    </el-dialog>
+    <el-dialog v-model="specialVisible" :title="specialTitle" width="560px">
+      <el-form :model="specialModel" label-position="top">
+        <el-form-item v-if="specialAction === 'assign'" label="选择骑手">
+          <el-select v-model="specialModel.riderId" filterable placeholder="请选择在线骑手" style="width:100%">
+            <el-option v-for="r in riders" :key="r.id" :label="r.name || r.realName || r.nickname || r.phone || r.id" :value="r.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'batchTag'" label="选择用户标签">
+          <el-select v-model="specialModel.tagIds" multiple filterable placeholder="请选择标签" style="width:100%">
+            <el-option v-for="t in userTags" :key="t.id" :label="t.name || t.tagName || t.title" :value="t.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'complete' && props.moduleKey === 'refunds'" label="退款转账流水号">
+          <el-input v-model="specialModel.transferNo" placeholder="请输入第三方转账/退款流水号" />
+        </el-form-item>
+        <el-form-item v-if="specialAction === 'resetPassword'" label="新密码">
+          <el-input v-model="specialModel.password" type="password" show-password placeholder="请输入新密码" />
+        </el-form-item>
+        <template v-if="specialAction === 'refund' && props.moduleKey === 'orders'">
+          <el-alert title="商家备餐或骑手配送中的订单不能直接退款，需先完成履约处置。" type="warning" :closable="false" show-icon />
+          <el-form-item label="退款金额（元）" style="margin-top:16px">
+            <el-input-number v-model="specialModel.amount" :min="0.01" :precision="2" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="退款原因" required>
+            <el-input v-model="specialModel.reason" type="textarea" placeholder="请填写退款原因，系统会写入审计记录" />
+          </el-form-item>
+        </template>
+        <el-form-item v-if="['reject','batchReject','cancel'].includes(specialAction)" label="处理原因">
+          <el-input v-model="specialModel.reason" type="textarea" placeholder="请输入处理原因" />
+        </el-form-item>
+        <div class="muted">将处理 {{ specialRows.length }} 条数据</div>
+      </el-form>
+      <template #footer>
+        <el-button @click="specialVisible=false">取消</el-button>
+        <el-button type="primary" :loading="actionLoading === specialTitle" @click="submitSpecial">确认执行</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Calendar, Refresh, Plus, Download, Operation } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Calendar, Refresh, Plus, Download, Operation, UploadFilled, DataAnalysis } from '@element-plus/icons-vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
 import SearchPanel from '@/components/glass/SearchPanel.vue'
@@ -30,30 +101,281 @@ import DataTableCard from '@/components/glass/DataTableCard.vue'
 import SidePanels from '@/components/glass/SidePanels.vue'
 import DetailDrawer from '@/components/glass/DetailDrawer.vue'
 import { moduleConfigs } from '@/data/moduleConfigs'
-import { fetchModulePage } from '@/api/admin'
+import { fetchModulePage, fetchRiders, fetchUserTags, runModuleAction, uploadAdminFile, fetchModuleStats, type ModuleAction } from '@/api/admin'
 const props = defineProps<{ moduleKey:string }>()
 const config = computed(() => moduleConfigs[props.moduleKey])
+const liveStats = ref<any[]>(config.value.stats)
 const rows = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
+const saving = ref(false)
 const error = ref('')
+const statsError = ref('')
+const actionLoading = ref('')
+const selectedRows = ref<any[]>([])
+const lastQuery = ref<Record<string, any>>({})
 const drawer = ref<InstanceType<typeof DetailDrawer>>()
+const formVisible = ref(false)
+const uploadVisible = ref(false)
+const specialVisible = ref(false)
+const showAnalytics = ref(false)
+const formMode = ref<'create' | 'update'>('create')
+const editingRow = ref<any>(null)
+const formModel = reactive<Record<string, any>>({})
+const specialModel = reactive<Record<string, any>>({})
+const specialAction = ref<ModuleAction>('assign')
+const specialRows = ref<any[]>([])
+const riders = ref<any[]>([])
+const userTags = ref<any[]>([])
+const today = new Date().toISOString().slice(0, 10)
+const hasSidePanels = computed(() => !!(config.value.sideMetrics?.length || config.value.chartTitle))
+const formTitle = computed(() => `${formMode.value === 'create' ? '新增' : '编辑'}${config.value.title}`)
+const specialTitle = computed(() => {
+  const label: Record<string, string> = {
+    assign: '跑腿派单',
+    batchTag: '批量设置用户标签',
+    complete: '完成退款处理',
+    refund: '发起退款',
+    resetPassword: '重置管理员密码',
+    reject: '驳回处理',
+    batchReject: '批量驳回',
+    cancel: '取消业务'
+  }
+  return label[specialAction.value] || '业务处理'
+})
+const readonlyProps = new Set(['id', 'createdAt', 'updatedAt', 'posts', 'orders', 'amount', 'gmv', 'userCount', 'merchantCount', 'sales', 'views', 'comments', 'likes', 'settledAt', 'lastLogin'])
+const formFields = computed(() => config.value.columns
+  .filter(col => !readonlyProps.has(col.prop) && !['image', 'rating', 'progress'].includes(col.type || ''))
+  .slice(0, 10)
+  .map(col => ({ key: col.prop, label: col.label, kind: col.type === 'number' || col.type === 'money' ? 'number' : col.type === 'tag' ? 'status' : col.minWidth && col.minWidth > 200 ? 'textarea' : 'text' })))
+
+async function loadStats() {
+  try {
+    const data = await fetchModuleStats(props.moduleKey)
+    statsError.value = ''
+    if (!data || !Object.keys(data).length) return true
+    liveStats.value = config.value.stats.map(s => {
+      const raw = data[s.key]
+      if (raw === undefined || raw === null) return s
+      if (typeof raw === 'number') {
+        return { ...s, value: s.label.includes('¥') ? `¥${raw.toLocaleString()}` : raw.toLocaleString(), delta: '-' }
+      }
+      return { ...s, value: raw, delta: '-' }
+    })
+    return true
+  } catch (e: any) {
+    statsError.value = e?.message || '统计数据加载失败'
+    return false
+  }
+}
 async function load(params: Record<string, any> = {}) {
   loading.value = true
   error.value = ''
+  lastQuery.value = params
   try {
     const data = await fetchModulePage(props.moduleKey, params)
     rows.value = data.rows
     total.value = data.total
+    return true
   } catch (e: any) {
     rows.value = []
     total.value = 0
     error.value = e?.message || '接口连接失败'
+    return false
   } finally {
     loading.value = false
   }
 }
+async function refreshPage() {
+  const [listOk, statOk] = await Promise.all([load(lastQuery.value), loadStats()])
+  if (listOk && statOk) ElMessage.success('数据已刷新')
+  else ElMessage.warning(error.value || statsError.value || '部分数据刷新失败')
+}
 function onSearch(params: Record<string, any>){ load(params) }
 function openDetail(row:any){ drawer.value?.open(row, { title: config.value.title + '详情', tabs: config.value.detailTabs }) }
-onMounted(() => load())
+function openForm(mode: 'create' | 'update', row?: any) {
+  formMode.value = mode
+  editingRow.value = row || null
+  Object.keys(formModel).forEach(key => delete formModel[key])
+  for (const field of formFields.value) {
+    const value = row?.[field.key]
+    formModel[field.key] = typeof value === 'object' && value ? value.name : value ?? ''
+  }
+  formVisible.value = true
+}
+async function submitForm() {
+  saving.value = true
+  try {
+    await runModuleAction(props.moduleKey, formMode.value, { row: editingRow.value, data: formModel })
+    ElMessage.success('保存成功')
+    formVisible.value = false
+    await load(lastQuery.value)
+  } finally {
+    saving.value = false
+  }
+}
+async function uploadFile(option: any) {
+  saving.value = true
+  try {
+    await uploadAdminFile(option.file)
+    option.onSuccess?.({})
+    ElMessage.success('上传成功')
+    uploadVisible.value = false
+    await load(lastQuery.value)
+  } catch (e) {
+    option.onError?.(e)
+    ElMessage.error('上传失败，请检查文件或存储配置')
+  } finally {
+    saving.value = false
+  }
+}
+function rowsForAction(action: ModuleAction, row?: any) {
+  if (row) return [row]
+  if (selectedRows.value.length) return selectedRows.value
+  return rows.value
+}
+function topAction(label: string): ModuleAction | 'createForm' {
+  if (/新增|创建|发布/.test(label)) return 'createForm'
+  if (/批量标签/.test(label)) return 'batchTag'
+  if (/派单|改派/.test(label)) return 'assign'
+  if (/导出/.test(label)) return 'export'
+  if (/批量通过|批量审核|批量同意/.test(label)) return 'batchApprove'
+  if (/批量驳回/.test(label)) return 'batchReject'
+  if (/批量启用|批量上架/.test(label)) return 'batchEnable'
+  if (/批量禁用|批量下架|批量删除|清理/.test(label)) return label.includes('删除') || label.includes('清理') ? 'batchDelete' : 'batchDisable'
+  if (/刷新/.test(label)) return 'export'
+  return 'export'
+}
+async function askReason(action: ModuleAction) {
+  if (!['reject', 'batchReject', 'cancel'].includes(action)) return ''
+  return ElMessageBox.prompt('请输入处理原因', '业务处理', { inputType: 'textarea', confirmButtonText: '确认', cancelButtonText: '取消' }).then(res => res.value)
+}
+function needsSpecial(action: ModuleAction) {
+  return action === 'assign'
+    || action === 'batchTag'
+    || action === 'resetPassword'
+    || (action === 'complete' && props.moduleKey === 'refunds')
+    || (action === 'refund' && props.moduleKey === 'orders')
+    || ['reject', 'batchReject', 'cancel'].includes(action)
+}
+async function openSpecial(action: ModuleAction, targetRows: any[]) {
+  specialAction.value = action
+  specialRows.value = targetRows
+  Object.keys(specialModel).forEach(key => delete specialModel[key])
+  if (action === 'assign') riders.value = await fetchRiders()
+  if (action === 'batchTag') userTags.value = await fetchUserTags()
+  if (action === 'batchTag') specialModel.tagIds = []
+  if (action === 'refund' && props.moduleKey === 'orders') {
+    specialModel.amount = Number(targetRows[0]?.amount ?? targetRows[0]?.__raw?.payAmount ?? 0)
+    specialModel.reason = ''
+  }
+  specialVisible.value = true
+}
+async function submitSpecial() {
+  actionLoading.value = specialTitle.value
+  try {
+    await runModuleAction(props.moduleKey, specialAction.value, { rows: specialRows.value, data: specialModel, reason: specialModel.reason })
+    ElMessage.success('操作成功')
+    specialVisible.value = false
+    await load(lastQuery.value)
+  } finally {
+    actionLoading.value = ''
+  }
+}
+async function execute(action: ModuleAction, row?: any, label = '处理') {
+  const targetRows = rowsForAction(action, row)
+  if (!targetRows.length) {
+    ElMessage.warning('请先选择要处理的数据')
+    return
+  }
+  const danger = ['delete', 'batchDelete', 'disable', 'batchDisable', 'reject', 'batchReject', 'cancel'].includes(action)
+  if (danger) await ElMessageBox.confirm(`确认对 ${targetRows.length} 条数据执行「${label}」吗？`, '确认操作', { type: 'warning' })
+  if (needsSpecial(action)) {
+    await openSpecial(action, targetRows)
+    return
+  }
+  const reason = await askReason(action)
+  actionLoading.value = label
+  try {
+    await runModuleAction(props.moduleKey, action, { rows: targetRows, row, reason })
+    ElMessage.success('操作成功')
+    await load(lastQuery.value)
+  } finally {
+    actionLoading.value = ''
+  }
+}
+function handleTopAction(label: string) {
+  if (/刷新/.test(label)) {
+    refreshPage()
+    return
+  }
+  if (/上传/.test(label)) {
+    uploadVisible.value = true
+    return
+  }
+  const action = topAction(label)
+  if (action === 'createForm') openForm('create')
+  else execute(action, undefined, label)
+}
+function handleRowAction(action: string, row: any) {
+  execute(action as ModuleAction, row, action)
+}
+onMounted(() => { load(); loadStats() })
 </script>
+<style scoped>
+.page-main-col {
+  display: grid;
+  gap: 18px;
+}
+
+.module-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  box-shadow: none;
+}
+
+.action-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.analytics-section {
+  margin-top: 4px;
+}
+
+.analytics-slide-enter-active,
+.analytics-slide-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.analytics-slide-enter-from,
+.analytics-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+:deep(.el-dialog) .form-grid {
+  margin-top: 8px;
+}
+:deep(.el-dialog) .el-form-item {
+  margin-bottom: 18px;
+}
+:deep(.el-dialog) .muted {
+  margin-top: 8px;
+}
+
+@media (max-width: 980px) {
+  .module-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .action-bar-right {
+    justify-content: flex-start;
+  }
+}
+</style>

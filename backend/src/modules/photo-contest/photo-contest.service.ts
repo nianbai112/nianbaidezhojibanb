@@ -5,10 +5,40 @@ import { PrismaService } from '../../common/services/prisma.service';
 export class PhotoContestService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeOptionalString(value: unknown) {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+
+  private normalizeOptionalDate(value: unknown) {
+    if (!value) return undefined;
+    const date = value instanceof Date ? value : new Date(String(value));
+    if (Number.isNaN(date.getTime())) return undefined;
+    return date;
+  }
+
+  private normalizeContestPayload(dto: any) {
+    const payload: any = { ...dto };
+    for (const key of ['regionId', 'cover', 'circleId', 'createdBy', 'rewardType', 'adminNote', 'description']) {
+      if (key in payload) payload[key] = this.normalizeOptionalString(payload[key]);
+    }
+    for (const key of ['startAt', 'endAt', 'voteEndAt']) {
+      if (key in payload) payload[key] = this.normalizeOptionalDate(payload[key]);
+    }
+    for (const key of ['maxVotesPerUser', 'maxVotesPerDay', 'maxVotesPerPhoto']) {
+      if (payload[key] === '' || payload[key] === null) payload[key] = undefined;
+      if (payload[key] !== undefined) payload[key] = Number(payload[key]);
+    }
+    Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
+    return payload;
+  }
+
   // ==================== Contest CRUD ====================
 
   async getContests(query: any) {
-    const { page = 1, limit = 20, regionId, status, keyword } = query;
+    const { page = 1, regionId, status, keyword } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (regionId) where.regionId = regionId;
     if (status) where.status = status;
@@ -17,14 +47,26 @@ export class PhotoContestService {
     const [list, total] = await Promise.all([
       this.prisma.photoContest.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: { _count: { select: { entries: true } } },
       }),
       this.prisma.photoContest.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    const regionIds = Array.from(new Set(list.map((item) => item.regionId).filter(Boolean))) as string[];
+    const regions = regionIds.length
+      ? await this.prisma.region.findMany({
+          where: { id: { in: regionIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const regionMap = new Map(regions.map((region) => [region.id, region]));
+    const withRegions = list.map((item) => ({
+      ...item,
+      region: item.regionId ? regionMap.get(item.regionId) || null : null,
+    }));
+    return { list: withRegions, total, page: Number(page), pageSize: limit };
   }
 
   async getContestDetail(id: string) {
@@ -39,16 +81,21 @@ export class PhotoContestService {
   }
 
   async createContest(dto: any) {
-    if (dto.endAt && dto.startAt && new Date(dto.endAt) <= new Date(dto.startAt)) {
+    const data = this.normalizeContestPayload(dto);
+    if (data.endAt && data.startAt && data.endAt <= data.startAt) {
       throw new BadRequestException('征集截止时间必须晚于开始时间');
     }
-    return this.prisma.photoContest.create({ data: dto });
+    return this.prisma.photoContest.create({ data });
   }
 
   async updateContest(id: string, dto: any) {
     const existing = await this.prisma.photoContest.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('评选项目不存在');
-    return this.prisma.photoContest.update({ where: { id }, data: dto });
+    const data = this.normalizeContestPayload(dto);
+    if (data.endAt && data.startAt && data.endAt <= data.startAt) {
+      throw new BadRequestException('征集截止时间必须晚于开始时间');
+    }
+    return this.prisma.photoContest.update({ where: { id }, data });
   }
 
   async deleteContest(id: string) {
@@ -60,7 +107,8 @@ export class PhotoContestService {
   // ==================== Entry Management ====================
 
   async getEntries(query: any) {
-    const { page = 1, limit = 20, contestId, status, keyword, userId } = query;
+    const { page = 1, contestId, status, keyword, userId } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (contestId) where.contestId = contestId;
     if (status) where.status = status;
@@ -76,8 +124,8 @@ export class PhotoContestService {
     const [list, total] = await Promise.all([
       this.prisma.photoContestEntry.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           user: { select: { id: true, nickname: true, avatar: true } },
@@ -87,7 +135,7 @@ export class PhotoContestService {
       }),
       this.prisma.photoContestEntry.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async getPendingEntries(query: any) {
@@ -160,7 +208,8 @@ export class PhotoContestService {
   // ==================== Rating Management ====================
 
   async getRatings(query: any) {
-    const { page = 1, limit = 20, contestId, entryId } = query;
+    const { page = 1, contestId, entryId } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (entryId) {
       where.entryId = entryId;
@@ -171,8 +220,8 @@ export class PhotoContestService {
     const [list, total] = await Promise.all([
       this.prisma.photoContestRating.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           user: { select: { id: true, nickname: true, avatar: true } },
@@ -181,7 +230,7 @@ export class PhotoContestService {
       }),
       this.prisma.photoContestRating.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async auditRating(id: string, dto: { status: string }) {
@@ -193,9 +242,9 @@ export class PhotoContestService {
 
   // ==================== Winners Management ====================
 
-  async getWinners(contestId: string) {
+  async getWinners(contestId?: string) {
     return this.prisma.photoContestWinner.findMany({
-      where: { competitionId: contestId },
+      where: contestId ? { competitionId: contestId } : {},
       orderBy: { winnerRank: 'asc' },
       include: {
         entry: { select: { id: true, title: true, imageUrl: true, voteCount: true } },

@@ -16,6 +16,18 @@ export class PostController {
     return this.postService.listByRegion(regionId, query);
   }
 
+  @Get('posts/region-posts/:regionId/echoes')
+  @ApiOperation({ summary: '区域校园回声列表' })
+  campusEchoes(@Param('regionId') regionId: string) {
+    return this.postService.listCampusEchoes(regionId);
+  }
+
+  @Get('posts/region-posts/:regionId/echoes/:echoId')
+  @ApiOperation({ summary: '校园回声关联笔记' })
+  campusEchoDetail(@Param('regionId') regionId: string, @Param('echoId') echoId: string) {
+    return this.postService.campusEchoDetail(regionId, echoId);
+  }
+
   @Get('posts/region-posts/:regionId/nearby-followed-posts')
   @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '附近关注帖子' })
@@ -56,6 +68,14 @@ export class PostController {
   @ApiOperation({ summary: '发布帖子' })
   create(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.postService.create(userId, dto);
+  }
+
+  @Post('posts/:postId/echo-interactions')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '切换校园回声轻互动' })
+  echoInteraction(@Param('postId') postId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.postService.toggleCampusEchoInteraction(postId, userId, dto?.action);
   }
 
   @Put('posts/:postId')
@@ -168,6 +188,14 @@ export class PostController {
     return this.postService.squatPost(postId, userId);
   }
 
+  @Delete('squats/:postId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '取消蹲守帖子' })
+  unsquatPost(@Param('postId') postId: string, @CurrentUser('sub') userId: string) {
+    return this.postService.unsquatPost(postId, userId);
+  }
+
   @Get('squats/check/:postId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -185,9 +213,10 @@ export class PostController {
   }
 
   @Get('api/post-votes/meta')
+  @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '投票元信息' })
-  getVoteMeta(@Query('post_id') postId: string) {
-    return this.postService.getVoteMeta(postId);
+  getVoteMeta(@Query('post_id') postId: string, @CurrentUser('sub') userId?: string) {
+    return this.postService.getVoteMeta(postId, userId);
   }
 
   @Get('api/post-votes/stats')

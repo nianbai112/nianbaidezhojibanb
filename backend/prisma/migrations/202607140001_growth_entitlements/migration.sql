@@ -1,0 +1,3 @@
+ALTER TABLE "user_levels"
+  ADD COLUMN IF NOT EXISTS "levelTitleId" TEXT,
+  ADD COLUMN IF NOT EXISTS "contentBoostWeight" INTEGER NOT NULL DEFAULT 0;

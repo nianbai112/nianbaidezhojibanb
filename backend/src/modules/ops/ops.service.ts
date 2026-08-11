@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
+import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
 import * as os from "os";
 import * as childProcess from "child_process";
 import * as util from "util";
@@ -19,6 +20,15 @@ const ALLOWED_RESTART_COMMANDS = [
   "systemctl restart lingmeng-backend",
 ];
 
+type OpsConfigStatus = {
+  key: string;
+  name: string;
+  status: "ok" | "warning" | "missing" | "disabled";
+  label: string;
+  message: string;
+  configured: boolean;
+};
+
 @Injectable()
 export class OpsService {
   private readonly startTime = Date.now();
@@ -27,7 +37,194 @@ export class OpsService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly redis: RedisService,
+    private readonly adminDataScope: AdminDataScopeService,
   ) {}
+
+  private async logAdminOperation(accountId: string, action: string, targetId: string, detail: any = {}) {
+    try {
+      await this.prisma.adminOperationLog.create({
+        data: {
+          accountId,
+          action,
+          module: "ops_alert",
+          targetId,
+          targetType: "system_alert",
+          detail,
+        },
+      });
+    } catch {
+      // 运维处理日志失败不影响处理动作。
+    }
+  }
+
+  private hasConfigValue(value: any): boolean {
+    if (value === undefined || value === null) return false;
+    if (typeof value === "string") {
+      const v = value.trim();
+      return !!v && v !== "******" && v !== "********";
+    }
+    if (typeof value === "object") {
+      if ("isConfigured" in value) return Boolean(value.isConfigured);
+      return Object.values(value).some((item) => this.hasConfigValue(item));
+    }
+    return Boolean(value);
+  }
+
+  private async getConfigValues(keys: string[]) {
+    const rows = await this.prisma.config.findMany({
+      where: { key: { in: keys } },
+      select: { key: true, value: true },
+    });
+    return rows.reduce((acc, row) => {
+      acc[row.key] = row.value as any;
+      return acc;
+    }, {} as Record<string, any>);
+  }
+
+  private async getThirdPartyConfigStatus(): Promise<OpsConfigStatus[]> {
+    const configs = await this.getConfigValues([
+      "miniapp",
+      "wechat_official",
+      "official",
+      "wechat_pay",
+      "amap",
+      "storage",
+      "ai",
+      "ai_ops_config",
+    ]);
+
+    const miniapp = configs.miniapp || {};
+    const miniAppId =
+      miniapp.appId ||
+      this.configService.get("WX_MINI_APPID") ||
+      this.configService.get("WX_APPID");
+    const miniSecret =
+      miniapp.appSecret ||
+      miniapp.secret ||
+      this.configService.get("WX_MINI_SECRET") ||
+      this.configService.get("WX_SECRET");
+    const miniOk = this.hasConfigValue(miniAppId) && this.hasConfigValue(miniSecret);
+
+    const official = configs.wechat_official || configs.official || {};
+    const officialOk =
+      this.hasConfigValue(official.appId) &&
+      this.hasConfigValue(official.appSecret || official.secret);
+
+    const pay = configs.wechat_pay || {};
+    const payOk =
+      this.hasConfigValue(pay.mchId || this.configService.get("WX_PAY_MCHID")) &&
+      this.hasConfigValue(pay.apiV3Key || this.configService.get("WX_PAY_API_V3_KEY"));
+
+    const amap = configs.amap || {};
+    const amapOk =
+      this.hasConfigValue(amap.webServiceKey) && this.hasConfigValue(amap.jsApiKey);
+
+    const storage = configs.storage || null;
+    const provider = storage?.provider || "local";
+    let storageStatus: OpsConfigStatus;
+    if (!storage) {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: "warning",
+        label: "默认本地",
+        message: "未保存存储配置，当前会使用默认本地 uploads 目录，建议确认访问域名和上传限制",
+        configured: false,
+      };
+    } else if (provider === "local") {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: this.hasConfigValue(storage.local?.uploadDir) ? "ok" : "warning",
+        label: this.hasConfigValue(storage.local?.uploadDir) ? "本地可用" : "待确认",
+        message: this.hasConfigValue(storage.local?.uploadDir)
+          ? `本地目录：${storage.local.uploadDir}`
+          : "本地存储缺少上传目录",
+        configured: this.hasConfigValue(storage.local?.uploadDir),
+      };
+    } else if (provider === "cos") {
+      const cos = storage.cos || {};
+      const ok =
+        this.hasConfigValue(cos.secretId) &&
+        this.hasConfigValue(cos.secretKey) &&
+        this.hasConfigValue(cos.bucket) &&
+        this.hasConfigValue(cos.region);
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: ok ? "ok" : "warning",
+        label: ok ? "COS 已配置" : "COS 未完整",
+        message: ok ? `COS Bucket：${cos.bucket}` : "COS 需要 SecretId、SecretKey、Bucket、Region 都配置",
+        configured: ok,
+      };
+    } else {
+      storageStatus = {
+        key: "storage",
+        name: "存储上传",
+        status: "warning",
+        label: "未接通",
+        message: `${provider} 已选择，但当前后端仅提供本地存储和 COS 的真实连接测试`,
+        configured: false,
+      };
+    }
+
+    const ai = configs.ai_ops_config || configs.ai || {};
+    const aiEnabled = Boolean(ai.enabled);
+    const aiKey =
+      ai.apiKey ||
+      this.configService.get("AI_API_KEY") ||
+      this.configService.get("OPENAI_API_KEY") ||
+      this.configService.get("DEEPSEEK_API_KEY");
+    const aiOk = aiEnabled && this.hasConfigValue(aiKey);
+
+    return [
+      {
+        key: "miniapp",
+        name: "微信小程序",
+        status: miniOk ? "ok" : "missing",
+        label: miniOk ? "已配置" : "未配置",
+        message: miniOk ? "AppID 与 AppSecret 已检测到" : "缺少小程序 AppID 或 AppSecret",
+        configured: miniOk,
+      },
+      {
+        key: "official",
+        name: "微信公众号",
+        status: officialOk ? "ok" : "missing",
+        label: officialOk ? "已配置" : "未配置",
+        message: officialOk ? "公众号 AppID 与 AppSecret 已检测到" : "未配置公众号 AppID/AppSecret",
+        configured: officialOk,
+      },
+      {
+        key: "amap",
+        name: "高德地图",
+        status: amapOk ? "ok" : "missing",
+        label: amapOk ? "已配置" : "未配置",
+        message: amapOk ? "Web服务 Key 与 JS API Key 已检测到" : "缺少高德 Web服务 Key 或 JS API Key",
+        configured: amapOk,
+      },
+      storageStatus,
+      {
+        key: "payment",
+        name: "微信支付",
+        status: payOk ? "ok" : "missing",
+        label: payOk ? "已配置" : "未配置",
+        message: payOk ? "商户号与 APIv3 密钥已检测到" : "缺少微信支付商户号或 APIv3 密钥",
+        configured: payOk,
+      },
+      {
+        key: "ai",
+        name: "AI 模型",
+        status: aiOk ? "ok" : aiEnabled ? "warning" : "disabled",
+        label: aiOk ? "已启用" : aiEnabled ? "缺少密钥" : "未启用",
+        message: aiOk
+          ? "AI 开关和密钥已检测到"
+          : aiEnabled
+            ? "AI 已启用但缺少 API Key"
+            : "AI 功能未启用，不会执行真实模型调用",
+        configured: aiOk,
+      },
+    ];
+  }
 
   /** 严格校验：仅 super_admin 角色可通过 */
   async ensureSuperAdmin(accountId: string): Promise<void> {
@@ -92,6 +289,9 @@ export class OpsService {
 
     const health = await this.getHealth();
 
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const statusMap = Object.fromEntries(configStatus.map((item) => [item.key, item]));
+
     return {
       backendStatus: "running",
       uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
@@ -108,6 +308,13 @@ export class OpsService {
       version: "1.0.0",
       nodeVersion: process.version,
       environment: this.configService.get("NODE_ENV") || "development",
+      configStatus,
+      wxConfigured: Boolean(statusMap.miniapp?.configured),
+      wxOfficialConfigured: Boolean(statusMap.official?.configured),
+      amapConfigured: Boolean(statusMap.amap?.configured),
+      storageConfigured: Boolean(statusMap.storage?.configured),
+      aiConfigured: Boolean(statusMap.ai?.configured),
+      wxPayConfigured: Boolean(statusMap.payment?.configured),
     };
   }
 
@@ -151,6 +358,9 @@ export class OpsService {
         ? "healthy"
         : "degraded";
 
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const statusMap = Object.fromEntries(configStatus.map((item) => [item.key, item]));
+
     return {
       cpuUsage: Math.round(cpuUsage * 10000) / 100,
       memoryUsage: Math.round(memoryUsage * 10000) / 100,
@@ -163,10 +373,15 @@ export class OpsService {
       redisStatus,
       status,
       envSecurity: {
-        cosConfigured: !!this.configService.get("COS_SECRET_ID"),
-        wxPayConfigured: !!this.configService.get("WX_PAY_MCHID"),
-        aiConfigured: !!this.configService.get("AI_API_KEY"),
+        storageConfigured: Boolean(statusMap.storage?.configured),
+        cosConfigured: Boolean(statusMap.storage?.configured),
+        wxMiniConfigured: Boolean(statusMap.miniapp?.configured),
+        wxOfficialConfigured: Boolean(statusMap.official?.configured),
+        amapConfigured: Boolean(statusMap.amap?.configured),
+        wxPayConfigured: Boolean(statusMap.payment?.configured),
+        aiConfigured: Boolean(statusMap.ai?.configured),
       },
+      configStatus,
     };
   }
 
@@ -343,5 +558,168 @@ export class OpsService {
     } catch {
       return 0;
     }
+  }
+
+  async getAlerts(query: any, operatorId?: string) {
+    const { page = 1, pageSize = 20, type, level, status, regionId, businessId, startTime, endTime } = query;
+    const where: any = {
+      ...(await this.adminDataScope.regionFieldWhere("regionId", operatorId, regionId)),
+    };
+
+    if (type) where.type = type;
+    if (level) where.level = level;
+    if (status) where.status = status;
+    if (businessId) where.businessId = String(businessId);
+    if (startTime || endTime) {
+      where.createdAt = {};
+      if (startTime) where.createdAt.gte = new Date(startTime);
+      if (endTime) where.createdAt.lte = new Date(endTime);
+    }
+
+    const [list, total] = await Promise.all([
+      this.prisma.systemAlert.findMany({
+        where,
+        skip: (+page - 1) * +pageSize,
+        take: +pageSize,
+        orderBy: { createdAt: "desc" },
+        include: { region: { select: { id: true, name: true } } },
+      }),
+      this.prisma.systemAlert.count({ where }),
+    ]);
+
+    return { list, total, page: +page, pageSize: +pageSize };
+  }
+
+  async getAlertSummary(operatorId?: string) {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const alertRegionWhere = await this.adminDataScope.regionFieldWhere("regionId", operatorId);
+    const postRegionWhere = await this.adminDataScope.regionFieldWhere("regionId", operatorId);
+
+    const [
+      pendingAuditCount,
+      pendingRefundCount,
+      pendingWithdrawCount,
+      abnormalOrderCount,
+      aiTaskFailCount,
+      errorLogCount,
+      pendingAlertCount,
+      highRiskAlertCount,
+    ] = await Promise.all([
+      this.prisma.post.count({ where: { status: "PENDING", ...postRegionWhere } }).catch(() => 0),
+      this.prisma.refund.count({ where: { status: "PENDING" } }).catch(() => 0),
+      this.prisma.withdraw.count({ where: { status: "PENDING" } }).catch(() => 0),
+      this.prisma.order.count({ where: { status: "REFUNDING" } }).catch(() => 0),
+      this.prisma.botPostTask.count({ where: { status: "failed" } }).catch(() => 0),
+      this.prisma.serverLog.count({ where: { level: "error", createdAt: { gte: todayStart } } }),
+      this.prisma.systemAlert.count({ where: { status: "pending", ...alertRegionWhere } }),
+      this.prisma.systemAlert.count({ where: { level: { in: ["high", "critical"] }, status: "pending", ...alertRegionWhere } }),
+    ]);
+
+    return {
+      pendingAuditCount,
+      pendingRefundCount,
+      pendingWithdrawCount,
+      abnormalOrderCount,
+      aiTaskFailCount,
+      errorLogCount,
+      pendingAlertCount,
+      highRiskAlertCount,
+    };
+  }
+
+  async resolveAlert(id: string, accountId: string, note?: string) {
+    const alert = await this.prisma.systemAlert.findUnique({ where: { id } });
+    if (!alert) throw new BadRequestException("异常记录不存在");
+    await this.adminDataScope.assertRegionAccess(accountId, alert.regionId);
+
+    await this.prisma.systemAlert.update({
+      where: { id },
+      data: { status: "resolved", resolvedBy: accountId, resolvedAt: new Date(), resolveNote: note },
+    });
+    await this.logAdminOperation(accountId, "RESOLVE", id, { regionId: alert.regionId, type: alert.type, level: alert.level, note });
+
+    return { success: true };
+  }
+
+  async ignoreAlert(id: string, accountId: string, reason?: string) {
+    const alert = await this.prisma.systemAlert.findUnique({ where: { id } });
+    if (!alert) throw new BadRequestException("异常记录不存在");
+    await this.adminDataScope.assertRegionAccess(accountId, alert.regionId);
+
+    await this.prisma.systemAlert.update({
+      where: { id },
+      data: { status: "ignored", resolvedBy: accountId, resolvedAt: new Date(), resolveNote: reason },
+    });
+    await this.logAdminOperation(accountId, "IGNORE", id, { regionId: alert.regionId, type: alert.type, level: alert.level, reason });
+
+    return { success: true };
+  }
+
+  async getLaunchCheck() {
+    const items: Array<{ key: string; name: string; status: string; message: string; level: string }> = [];
+
+    // 1. 后端服务
+    items.push({ key: "backend", name: "后端服务", status: "pass", message: "服务运行中", level: "required" });
+
+    // 2. 数据库
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      items.push({ key: "database", name: "数据库连接", status: "pass", message: "连接正常", level: "required" });
+    } catch {
+      items.push({ key: "database", name: "数据库连接", status: "failed", message: "连接失败", level: "required" });
+    }
+
+    // 3. Redis
+    try {
+      await this.redis.getClient().ping();
+      items.push({ key: "redis", name: "Redis 连接", status: "pass", message: "连接正常", level: "required" });
+    } catch {
+      items.push({ key: "redis", name: "Redis 连接", status: "failed", message: "连接失败", level: "required" });
+    }
+
+    // 4. 第三方/业务配置：从真实 Config 表和环境变量判断，不再用硬编码状态。
+    const configStatus = await this.getThirdPartyConfigStatus();
+    const levelMap: Record<string, string> = {
+      miniapp: "recommended",
+      official: "optional",
+      amap: "optional",
+      storage: "recommended",
+      payment: "optional",
+      ai: "optional",
+    };
+    for (const item of configStatus) {
+      items.push({
+        key: `config_${item.key}`,
+        name: `${item.name}配置`,
+        status: item.status === "ok" || item.status === "disabled" ? "pass" : "warning",
+        message: item.message,
+        level: levelMap[item.key] || "optional",
+      });
+    }
+
+    // 9. 管理员账号
+    const adminCount = await this.prisma.adminAccount.count();
+    items.push({
+      key: "admin", name: "管理员账号", status: adminCount > 0 ? "pass" : "failed",
+      message: `共 ${adminCount} 个管理员`, level: "required",
+    });
+
+    // 10. 最近 24 小时严重错误
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentErrors = await this.prisma.serverLog.count({
+      where: { level: "error", createdAt: { gte: oneDayAgo } },
+    });
+    items.push({
+      key: "recent_errors", name: "最近 24 小时错误", status: recentErrors === 0 ? "pass" : "warning",
+      message: `${recentErrors} 条错误`, level: "recommended",
+    });
+
+    const failedCount = items.filter((i) => i.status === "failed").length;
+    const warningCount = items.filter((i) => i.status === "warning").length;
+    const score = Math.max(0, 100 - failedCount * 20 - warningCount * 5);
+    const status = failedCount > 0 ? "failed" : warningCount > 2 ? "warning" : "pass";
+
+    return { score, status, items };
   }
 }

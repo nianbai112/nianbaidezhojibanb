@@ -9,12 +9,19 @@ import { RedisService } from '../services/redis.service';
     {
       provide: 'REDIS_CLIENT',
       useFactory: (config: ConfigService) => {
-        return new Redis({
+        const setupMode = String(config.get('SETUP_WIZARD') || '').toLowerCase() === 'true';
+        const client = new Redis({
           host: config.get('REDIS_HOST'),
           port: config.get('REDIS_PORT'),
           password: config.get('REDIS_PASSWORD') || undefined,
           db: config.get('REDIS_DB') || 0,
+          lazyConnect: setupMode,
+          enableOfflineQueue: !setupMode,
+          maxRetriesPerRequest: setupMode ? 0 : undefined,
+          retryStrategy: setupMode ? () => null : undefined,
         });
+        client.on('error', () => undefined);
+        return client;
       },
       inject: [ConfigService],
     },

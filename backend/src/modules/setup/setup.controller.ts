@@ -16,8 +16,11 @@ export class SetupController {
 
   @Post('check')
   @ApiOperation({ summary: '部署环境检查（未初始化时公开；已初始化后仅超级管理员可访问）' })
-  async check(@Headers('x-setup-token') setupToken: string) {
-    return this.setupService.checkEnvironment(setupToken);
+  async check(
+    @Body() dto: Partial<SetupInitDto> = {},
+    @Headers('x-setup-token') setupToken: string,
+  ) {
+    return this.setupService.checkEnvironment(setupToken, dto);
   }
 
   @Post('init')

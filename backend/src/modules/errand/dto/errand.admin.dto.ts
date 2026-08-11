@@ -1,7 +1,23 @@
-import { IsString, IsOptional, IsNumber, IsBoolean } from 'class-validator';
+import { Allow, IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateErrandConfigDto {
+  @Allow()
+  @IsOptional()
+  id?: string;
+
+  @Allow()
+  @IsOptional()
+  regionId?: string;
+
+  @Allow()
+  @IsOptional()
+  createdAt?: any;
+
+  @Allow()
+  @IsOptional()
+  updatedAt?: any;
+
   @IsNumber()
   @IsOptional()
   basePrice?: number;
@@ -33,6 +49,70 @@ export class UpdateErrandConfigDto {
   @IsBoolean()
   @IsOptional()
   isOpen?: boolean;
+
+  @IsArray()
+  @IsOptional()
+  banners?: any[];
+
+  @IsArray()
+  @IsOptional()
+  bannerJson?: any[];
+
+  @IsArray()
+  @IsOptional()
+  banner_json?: any[];
+
+  @IsObject()
+  @IsOptional()
+  serviceDescriptions?: Record<string, string>;
+
+  @IsObject()
+  @IsOptional()
+  service_descriptions?: Record<string, string>;
+
+  @IsObject()
+  @IsOptional()
+  baseFees?: Record<string, number>;
+
+  @IsObject()
+  @IsOptional()
+  base_fees?: Record<string, number>;
+
+  @IsObject()
+  @IsOptional()
+  serviceSwitches?: Record<string, boolean>;
+
+  @IsObject()
+  @IsOptional()
+  service_switches?: Record<string, boolean>;
+
+  @IsArray()
+  @IsOptional()
+  tipOptions?: any[];
+
+  @IsArray()
+  @IsOptional()
+  customTaskTipOptions?: any[];
+
+  @IsObject()
+  @IsOptional()
+  orderTakingPolicy?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  order_taking_policy?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  riskTagConfig?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  risk_tag_config?: Record<string, any>;
+
+  @IsObject()
+  @IsOptional()
+  pageConfig?: Record<string, any>;
 }
 
 export class CreateErrandItemSizeDto {
@@ -64,6 +144,10 @@ export class CreateErrandItemSizeDto {
 }
 
 export class UpdateErrandItemSizeDto {
+  @IsString()
+  @IsOptional()
+  regionId?: string;
+
   @IsString()
   @IsOptional()
   name?: string;
@@ -120,6 +204,10 @@ export class CreateErrandPickupPointDto {
 export class UpdateErrandPickupPointDto {
   @IsString()
   @IsOptional()
+  regionId?: string;
+
+  @IsString()
+  @IsOptional()
   name?: string;
 
   @IsString()
@@ -148,6 +236,22 @@ export class ErrandQueryDto {
   @IsOptional()
   regionId?: string;
 
+  @IsString()
+  @IsOptional()
+  keyword?: string;
+
+  @IsString()
+  @IsOptional()
+  applyTo?: string;
+
+  @IsString()
+  @IsOptional()
+  type?: string;
+
+  @IsString()
+  @IsOptional()
+  isOpen?: string;
+
   @IsNumber()
   @IsOptional()
   @Type(() => Number)
@@ -157,4 +261,9 @@ export class ErrandQueryDto {
   @IsOptional()
   @Type(() => Number)
   limit?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  pageSize?: number;
 }

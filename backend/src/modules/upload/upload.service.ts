@@ -2,7 +2,10 @@ import { Injectable, BadRequestException, Logger, InternalServerErrorException }
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../../common/services/redis.service';
 import { PrismaService } from '../../common/services/prisma.service';
+import { Request } from 'express';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import axios from 'axios';
 
 // cos-nodejs-sdk-v5 是 CommonJS 模块，导出为构造函数，需用 require 方式导入
@@ -14,11 +17,12 @@ const COS = require('cos-nodejs-sdk-v5');
 // =============================================================================
 
 /** 业务场景：决定不同的文件大小限制 */
-export type UploadScene = 'avatar' | 'post' | 'admin' | 'region' | 'config' | 'ad';
+export type UploadScene = 'avatar' | 'post' | 'message' | 'admin' | 'region' | 'config' | 'ad' | 'marketing-popup' | 'share-invite';
+export type UploadFileKind = 'image' | 'video' | 'audio';
 
 /** 上传选项 */
 interface UploadOptions {
-  type: 'image' | 'video';
+  type: UploadFileKind;
   folder: string;
   /** 业务场景，默认 'post'。avatar=2MB, post=10MB（可通过配置覆盖） */
   scene?: UploadScene;
@@ -30,7 +34,7 @@ export interface UploadResult {
   key: string;
   size: number;
   mimeType: string;
-  type: 'image' | 'video';
+  type: UploadFileKind;
 }
 
 /** 小程序码生成参数 */
@@ -75,6 +79,19 @@ const ALLOWED_VIDEO_MIMES = new Set<string>([
   'video/webm',
 ]);
 
+/** 白名单：允许的语音 MIME 类型 */
+const ALLOWED_AUDIO_MIMES = new Set<string>([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/aac',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/amr',
+  'audio/wav',
+  'audio/wave',
+  'audio/x-wav',
+]);
+
 /** 白名单：允许的图片后缀（不含点） */
 const ALLOWED_IMAGE_EXTS = new Set<string>([
   'jpg', 'jpeg', 'png', 'webp', 'gif',
@@ -83,6 +100,11 @@ const ALLOWED_IMAGE_EXTS = new Set<string>([
 /** 白名单：允许的视频后缀（不含点） */
 const ALLOWED_VIDEO_EXTS = new Set<string>([
   'mp4', 'mov', 'webm',
+]);
+
+/** 白名单：允许的语音后缀（不含点） */
+const ALLOWED_AUDIO_EXTS = new Set<string>([
+  'mp3', 'aac', 'm4a', 'amr', 'wav',
 ]);
 
 /**
@@ -97,6 +119,15 @@ const MIME_TO_EXT: Record<string, Set<string>> = {
   'video/mp4': new Set(['mp4']),
   'video/quicktime': new Set(['mov']),
   'video/webm': new Set(['webm']),
+  'audio/mpeg': new Set(['mp3']),
+  'audio/mp3': new Set(['mp3']),
+  'audio/aac': new Set(['aac']),
+  'audio/mp4': new Set(['m4a']),
+  'audio/x-m4a': new Set(['m4a']),
+  'audio/amr': new Set(['amr']),
+  'audio/wav': new Set(['wav']),
+  'audio/wave': new Set(['wav']),
+  'audio/x-wav': new Set(['wav']),
 };
 
 /** 危险类型黑名单：脚本、HTML、可执行文件等 */
@@ -128,15 +159,24 @@ const DANGEROUS_EXTS = new Set<string>([
 const SCENE_SIZE_LIMITS: Record<UploadScene, number> = {
   avatar: 2,   // 头像：最大 2MB
   post: 10,    // 帖子图片：最大 10MB
+  message: 20, // 私信语音/图片：最大 20MB
   admin: 10,   // 后台通用上传
   region: 10,  // 区域封面
   config: 10,  // 系统配置图片
   ad: 10,      // 广告图片
+  'marketing-popup': 10, // 首页权益卡片图片
+  'share-invite': 10, // 分享有礼封面
 };
 
 // =============================================================================
-// Service
+// 存储提供者类型
 // =============================================================================
+
+type StorageProvider = 'cos' | 'oss' | 's3' | 'minio' | 'local';
+
+// =============================================================================
+// Service
+// =============================================================================()
 
 @Injectable()
 export class UploadService {
@@ -155,18 +195,71 @@ export class UploadService {
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * 获取存储配置
+   * 优先从数据库读取，fallback 到 .env 环境变量
+   */
   private async getStorageConfig(): Promise<Record<string, any>> {
     const dbConfig = await this.prisma.config.findUnique({ where: { key: 'storage' } });
-    const value = (dbConfig?.value || {}) as Record<string, any>;
+    const dbValue = (dbConfig?.value || {}) as Record<string, any>;
 
-    return {
-      secretId: value.secretId || value.accessKey || value.COS_SECRET_ID || this.config.get('COS_SECRET_ID'),
-      secretKey: value.secretKey || value.COS_SECRET_KEY || this.config.get('COS_SECRET_KEY'),
-      bucket: value.bucket || value.COS_BUCKET || this.config.get('COS_BUCKET'),
-      region: value.region || value.endpoint || value.COS_REGION || this.config.get('COS_REGION'),
-      domain: value.domain || value.cdnDomain || value.COS_DOMAIN || this.config.get('COS_DOMAIN'),
-      maxSize: value.maxSize || value.maxUploadMb,
-    };
+    // 确定 provider
+    const provider: StorageProvider = dbValue.provider || 'local';
+
+    // 根据 provider 获取对应的配置
+    let providerConfig: Record<string, any> = {};
+
+    switch (provider) {
+      case 'cos':
+        providerConfig = dbValue.cos || {};
+        // 后台已保存存储配置后，域名留空表示使用 COS 默认访问域名，不能再被本地 .env 覆盖。
+        const hasCosDomainField = Object.prototype.hasOwnProperty.call(dbValue, 'domain');
+        const cosDomain = typeof dbValue.domain === 'string' ? dbValue.domain.trim() : '';
+        return {
+          provider,
+          domain: cosDomain || (hasCosDomainField ? '' : this.config.get('COS_DOMAIN') || ''),
+          uploadPrefix: dbValue.uploadPrefix || '',
+          limits: dbValue.limits || {},
+          secretId: providerConfig.secretId || this.config.get('COS_SECRET_ID') || '',
+          secretKey: providerConfig.secretKey || this.config.get('COS_SECRET_KEY') || '',
+          bucket: providerConfig.bucket || this.config.get('COS_BUCKET') || '',
+          region: this.normalizeCosRegion(providerConfig.region || this.config.get('COS_REGION') || ''),
+        };
+
+      case 'local':
+        providerConfig = dbValue.local || {};
+        return {
+          provider,
+          domain: dbValue.domain || '',
+          uploadPrefix: dbValue.uploadPrefix || '',
+          limits: dbValue.limits || {},
+          uploadDir: providerConfig.uploadDir || 'uploads',
+          accessUrl: providerConfig.accessUrl || '',
+        };
+
+      case 'oss':
+      case 's3':
+      case 'minio':
+        // 这些 provider 暂未实现，返回配置但会在上传时提示
+        providerConfig = dbValue[provider] || {};
+        return {
+          provider,
+          domain: dbValue.domain || '',
+          uploadPrefix: dbValue.uploadPrefix || '',
+          limits: dbValue.limits || {},
+          ...providerConfig,
+        };
+
+      default:
+        return {
+          provider: 'local',
+          domain: '',
+          uploadPrefix: '',
+          limits: {},
+          uploadDir: 'uploads',
+          accessUrl: '',
+        };
+    }
   }
 
   /** 获取 COS 客户端，配置缺失时抛出 BadRequestException */
@@ -189,20 +282,24 @@ export class UploadService {
   }
 
   /** 获取 COS Bucket 配置，缺失时抛出 BadRequestException */
-  private async getBucketConfig(): Promise<{ secretId: string; secretKey: string; bucket: string; region: string; domain: string; maxSize?: number }> {
+  private async getCosBucketConfig(): Promise<{ secretId: string; secretKey: string; bucket: string; region: string; domain: string; maxSize?: number }> {
     const storage = await this.getStorageConfig();
+
+    if (storage.provider !== 'cos') {
+      throw new BadRequestException('当前存储方式不是腾讯云 COS');
+    }
+
     const secretId = String(storage.secretId || '');
     const secretKey = String(storage.secretKey || '');
     const bucket = String(storage.bucket || '');
-    const region = String(storage.region || '');
-    const domain = String(storage.domain || '');
+    const region = this.normalizeCosRegion(storage.region || '');
+    const domain = String(storage.domain || '').trim() || this.buildCosDefaultDomain(bucket, region);
 
     const missing: string[] = [];
     if (!secretId) missing.push('SecretId');
     if (!secretKey) missing.push('SecretKey');
     if (!bucket) missing.push('存储桶');
     if (!region) missing.push('所属地域');
-    if (!domain) missing.push('访问域名');
 
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -210,24 +307,64 @@ export class UploadService {
       );
     }
 
-    return { secretId, secretKey, bucket, region, domain, maxSize: Number(storage.maxSize || 0) || undefined };
+    const limits = storage.limits || {};
+    const maxSize = limits.maxFileSize || limits.maxImageSize || 10;
+
+    return { secretId, secretKey, bucket, region, domain, maxSize };
   }
 
   // ============ 文件上传 ============
 
   /**
-   * 上传文件到腾讯云 COS
+   * 上传文件（根据 provider 分流）
    */
   async upload(file: Express.Multer.File, opts: UploadOptions): Promise<UploadResult> {
     this.validateFileExists(file);
     this.validateFileSecurity(file, opts.type, opts.scene);
 
-    const { secretId, secretKey, bucket, region, domain, maxSize } = await this.getBucketConfig();
+    const storage = await this.getStorageConfig();
+    const provider = storage.provider as StorageProvider;
+
+    // 检查文件大小限制
+    const limits = storage.limits || {};
+    const maxSize = limits.maxFileSize
+      || (opts.type === 'video' ? limits.maxVideoSize : undefined)
+      || (opts.type === 'audio' ? limits.maxAudioSize : undefined)
+      || (opts.type === 'image' ? limits.maxImageSize : undefined)
+      || (opts.type === 'audio' ? 20 : 10);
     if (maxSize && file.size > maxSize * 1024 * 1024) {
       throw new BadRequestException(`文件大小超过后台配置限制 ${maxSize}MB`);
     }
+
+    const key = this.applyUploadPrefix(this.generateSafeKey(file, opts.folder), storage.uploadPrefix);
+
+    switch (provider) {
+      case 'cos':
+        return await this.uploadToCos(file, key, storage, opts.type);
+
+      case 'local':
+        return await this.uploadToLocal(file, key, storage, opts.type);
+
+      case 'oss':
+        throw new BadRequestException('阿里云 OSS 支持正在开发中，请先使用腾讯云 COS 或本地存储');
+
+      case 's3':
+        throw new BadRequestException('AWS S3 支持正在开发中，请先使用腾讯云 COS 或本地存储');
+
+      case 'minio':
+        throw new BadRequestException('MinIO 支持正在开发中，请先使用腾讯云 COS 或本地存储');
+
+      default:
+        throw new BadRequestException(`不支持的存储方式: ${provider}`);
+    }
+  }
+
+  /**
+   * 上传到腾讯云 COS
+   */
+  private async uploadToCos(file: Express.Multer.File, key: string, storage: Record<string, any>, type: UploadFileKind): Promise<UploadResult> {
+    const { secretId, secretKey, bucket, region, domain } = await this.getCosBucketConfig();
     const cos = this.getCosClient(secretId, secretKey);
-    const key = this.generateSafeKey(file, opts.folder);
     const url = await this.putObject(cos, bucket, region, domain, key, file);
 
     return {
@@ -235,7 +372,42 @@ export class UploadService {
       key,
       size: file.size,
       mimeType: file.mimetype,
-      type: opts.type,
+      type,
+    };
+  }
+
+  /**
+   * 上传到本地存储
+   */
+  private async uploadToLocal(file: Express.Multer.File, key: string, storage: Record<string, any>, type: UploadFileKind): Promise<UploadResult> {
+    const uploadDir = storage.uploadDir || 'uploads';
+    const accessUrl = storage.accessUrl || storage.domain || '';
+
+    // 构建完整的文件路径
+    const fullDir = path.resolve(process.cwd(), uploadDir);
+    const filePath = path.join(fullDir, key);
+
+    // 确保目录存在
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // 写入文件
+    fs.writeFileSync(filePath, file.buffer);
+
+    // 构建访问 URL
+    const urlPrefix = accessUrl.replace(/\/$/, '');
+    const publicPrefix = !urlPrefix ? uploadDir.replace(/^\/+|\/+$/g, '') : '';
+    const urlParts = [urlPrefix, publicPrefix, key].filter(Boolean);
+    const url = `${urlPrefix ? '' : '/'}${urlParts.join('/')}`;
+
+    return {
+      url,
+      key,
+      size: file.size,
+      mimeType: file.mimetype,
+      type,
     };
   }
 
@@ -252,11 +424,19 @@ export class UploadService {
     const accessToken = await this.getWxAccessToken();
     const qrcodeBuffer = await this.callWxGetWxaCodeUnlimit(accessToken, dto);
 
-    const { secretId, secretKey, bucket, region, domain } = await this.getBucketConfig();
-    const cos = this.getCosClient(secretId, secretKey);
+    const storage = await this.getStorageConfig();
+    const provider = storage.provider as StorageProvider;
 
     const randomHex = crypto.randomBytes(16).toString('hex');
-    const key = `qrcode/${Date.now()}_${randomHex}.jpg`;
+    const key = this.applyUploadPrefix(`qrcode/${Date.now()}_${randomHex}.jpg`, storage.uploadPrefix);
+
+    // 小程序码暂时只支持 COS
+    if (provider !== 'cos') {
+      throw new BadRequestException('小程序码生成功能仅支持腾讯云 COS 存储');
+    }
+
+    const { secretId, secretKey, bucket, region, domain } = await this.getCosBucketConfig();
+    const cos = this.getCosClient(secretId, secretKey);
 
     const url = await this.putBuffer(cos, bucket, region, domain, key, qrcodeBuffer, 'image/jpeg');
 
@@ -494,7 +674,7 @@ export class UploadService {
    */
   private validateFileSecurity(
     file: Express.Multer.File,
-    type: 'image' | 'video',
+    type: UploadFileKind,
     scene?: UploadScene,
   ): void {
     const mimetype = (file.mimetype || '').toLowerCase();
@@ -508,11 +688,20 @@ export class UploadService {
       throw new BadRequestException(`禁止上传危险文件后缀: .${ext}`);
     }
 
+    // ---- 魔数字检测（文件真实类型） ----
+    if (!this.validateFileMagic(file, mimetype)) {
+      throw new BadRequestException(
+        `文件头部魔数与声明的 MIME 类型 ${mimetype} 不匹配，文件可能被篡改或类型伪造`,
+      );
+    }
+
     // ---- 白名单 + MIME-后缀一致性 ----
     if (type === 'image') {
       this.validateImage(mimetype, ext, file.size, scene);
     } else if (type === 'video') {
       this.validateVideo(mimetype, ext, file.size);
+    } else if (type === 'audio') {
+      this.validateAudio(mimetype, ext, file.size);
     }
   }
 
@@ -577,6 +766,34 @@ export class UploadService {
     }
   }
 
+  private validateAudio(mimetype: string, ext: string, size: number): void {
+    const isOctetStreamAudio = mimetype === 'application/octet-stream' && ALLOWED_AUDIO_EXTS.has(ext);
+    if (!ALLOWED_AUDIO_MIMES.has(mimetype) && !isOctetStreamAudio) {
+      throw new BadRequestException(
+        `不支持的语音格式: ${mimetype || '未知'}，仅支持 mp3、aac、m4a、amr、wav`,
+      );
+    }
+
+    if (!ALLOWED_AUDIO_EXTS.has(ext)) {
+      throw new BadRequestException(
+        `不支持的语音后缀: .${ext || '无后缀'}，仅支持 ${Array.from(ALLOWED_AUDIO_EXTS).join(', ')}`,
+      );
+    }
+
+    if (!isOctetStreamAudio) {
+      this.validateMimeExtMatch(mimetype, ext);
+    }
+
+    const maxBytes = this.getMaxBytes('UPLOAD_AUDIO_MAX_SIZE_MB', 20);
+    if (size > maxBytes) {
+      const maxMB = maxBytes / 1024 / 1024;
+      const actualMB = (size / 1024 / 1024).toFixed(2);
+      throw new BadRequestException(
+        `语音大小 ${actualMB}MB 超过限制 ${maxMB}MB`,
+      );
+    }
+  }
+
   /**
    * MIME ↔ 后缀交叉校验
    *
@@ -605,7 +822,10 @@ export class UploadService {
    * - 'avatar' 场景：固定 2MB（头像不需要更大）
    * - 'post' 场景：使用 UPLOAD_IMAGE_MAX_SIZE_MB 配置，默认 10MB
    */
-  private getSceneMaxBytes(type: 'image' | 'video', scene?: UploadScene): number {
+  private getSceneMaxBytes(type: UploadFileKind, scene?: UploadScene): number {
+    if (type === 'audio') {
+      return this.getMaxBytes('UPLOAD_AUDIO_MAX_SIZE_MB', 20);
+    }
     if (type === 'image' && scene && scene in SCENE_SIZE_LIMITS) {
       return SCENE_SIZE_LIMITS[scene] * 1024 * 1024;
     }
@@ -622,12 +842,18 @@ export class UploadService {
         return `users/${userId}/avatar`;
       case 'post':
         return `users/${userId}/posts`;
+      case 'message':
+        return `users/${userId}/messages`;
       case 'region':
         return `admin/regions/${userId}`;
       case 'config':
         return `admin/config/${userId}`;
       case 'ad':
         return `admin/ads/${userId}`;
+      case 'marketing-popup':
+        return `admin/marketing-popups/${userId}`;
+      case 'share-invite':
+        return `admin/share-invites/${userId}`;
       case 'admin':
       default:
         return `admin/uploads/${userId}`;
@@ -648,6 +874,23 @@ export class UploadService {
     return `${folder}/${Date.now()}_${randomHex}.${safeExt}`;
   }
 
+  private applyUploadPrefix(key: string, uploadPrefix?: string): string {
+    const prefix = String(uploadPrefix || '').trim().replace(/^\/+|\/+$/g, '');
+    return prefix ? `${prefix}/${key.replace(/^\/+/, '')}` : key;
+  }
+
+  private buildCosDefaultDomain(bucket: string, region: string): string {
+    if (!bucket || !region) return '';
+    return `https://${bucket}.cos.${region}.myqcloud.com`;
+  }
+
+  private normalizeCosRegion(value: any): string {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const match = text.match(/cos\.([a-z0-9-]+)\.myqcloud\.com/i);
+    return match?.[1] || text;
+  }
+
   private inferSafeExt(mimetype: string): string {
     const map: Record<string, string> = {
       'image/jpeg': 'jpg',
@@ -657,6 +900,15 @@ export class UploadService {
       'video/mp4': 'mp4',
       'video/quicktime': 'mov',
       'video/webm': 'webm',
+      'audio/mpeg': 'mp3',
+      'audio/mp3': 'mp3',
+      'audio/aac': 'aac',
+      'audio/mp4': 'm4a',
+      'audio/x-m4a': 'm4a',
+      'audio/amr': 'amr',
+      'audio/wav': 'wav',
+      'audio/wave': 'wav',
+      'audio/x-wav': 'wav',
     };
     return map[mimetype] || 'bin';
   }
@@ -698,5 +950,130 @@ export class UploadService {
         },
       );
     });
+  }
+
+  // =============================================================================
+  // 魔数字检测（文件真实类型）
+  // =============================================================================
+
+  /**
+   * 读取文件头部魔数字节并与允许的 MIME 类型交叉验证。
+   * 仅当魔数明确指向不同类型时才拒绝（例如声称 image/jpeg 但魔数是 PNG 头）。
+   * 无法识别的魔数放行（可能是合法但未列入白名单的格式变体）。
+   */
+  validateFileMagic(file: Express.Multer.File, expectedMime?: string): boolean {
+    const buf = file.buffer;
+    if (!buf || buf.length < 4) return true; // 太小无法检测，放行
+
+    const mime = (expectedMime || file.mimetype?.toLowerCase() || '');
+    if (mime === 'application/octet-stream') return true;
+
+    if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF') {
+      const riffType = buf.toString('ascii', 8, 12);
+      const detectedMime = riffType === 'WEBP' ? 'image/webp' : riffType === 'WAVE' ? 'audio/wav' : '';
+      if (detectedMime) {
+        if (detectedMime === mime || (detectedMime === 'audio/wav' && ['audio/wave', 'audio/x-wav'].includes(mime))) {
+          return true;
+        }
+        this.logger.warn(`魔数检测拒绝: 声称 ${mime} 但文件头匹配 ${detectedMime}`);
+        return false;
+      }
+    }
+
+    if (buf.length >= 3 && buf.toString('ascii', 0, 3) === 'ID3') {
+      return ['audio/mpeg', 'audio/mp3'].includes(mime);
+    }
+    if (buf.length >= 2 && buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) {
+      return ['audio/mpeg', 'audio/mp3', 'audio/aac'].includes(mime);
+    }
+    if (buf.length >= 6 && buf.toString('ascii', 0, 6) === '#!AMR\n') {
+      return mime === 'audio/amr';
+    }
+
+    // 文件头魔数 → MIME 映射
+    const magicToMime: Array<{ bytes: number[]; offset: number; mime: string }> = [
+      { bytes: [0xFF, 0xD8, 0xFF], offset: 0, mime: 'image/jpeg' },
+      { bytes: [0x89, 0x50, 0x4E, 0x47], offset: 0, mime: 'image/png' },
+      { bytes: [0x47, 0x49, 0x46, 0x38], offset: 0, mime: 'image/gif' },
+      { bytes: [0x1A, 0x45, 0xDF, 0xA3], offset: 0, mime: 'video/webm' },
+    ];
+
+    for (const item of magicToMime) {
+      if (item.bytes.every((b, i) => buf[item.offset + i] === b)) {
+        // 魔数匹配了某个已知类型
+        if (item.mime === mime) return true; // 匹配 → 通过
+
+        // 魔数指向了不同的类型 → 拒绝
+        this.logger.warn(
+          `魔数检测拒绝: 声称 ${mime} 但文件头匹配 ${item.mime}`,
+        );
+        return false;
+      }
+    }
+
+    // 未匹配到任何已知魔数 → 放行（可能是合法格式变体）
+    return true;
+  }
+
+  // =============================================================================
+  // COS 占位配置检查
+  // =============================================================================
+
+  /** 检查 COS 配置是否仍为占位值 */
+  async validateStorageConfigNotPlaceholder(): Promise<void> {
+    const storage = await this.getStorageConfig();
+
+    if (storage.provider !== 'cos') {
+      return; // 非 COS 不检查
+    }
+
+    const checks: Array<{ name: string; value: string }> = [
+      { name: 'SecretId', value: String(storage.secretId || '') },
+      { name: 'SecretKey', value: String(storage.secretKey || '') },
+      { name: 'Bucket', value: String(storage.bucket || '') },
+    ];
+
+    const placeholderPattern = /(your[-_])|(change[-_]?me)|(test[-_])|(demo[-_])|(125xxxxxx)|(placeholder)|(example)/i;
+
+    for (const c of checks) {
+      if (placeholderPattern.test(c.value)) {
+        throw new BadRequestException(
+          `COS ${c.name} 仍为占位值，请到后台「系统设置 → 文件存储」填写真实配置`,
+        );
+      }
+    }
+  }
+
+  // =============================================================================
+  // 上传记录入库
+  // =============================================================================
+
+  /**
+   * 记录上传到数据库（失败不阻塞主流程）
+   */
+  async recordUpload(
+    uploaderId: string,
+    uploaderType: 'user' | 'admin',
+    result: UploadResult,
+    scene: string,
+    req?: Request,
+  ): Promise<void> {
+    try {
+      await this.prisma.uploadRecord.create({
+        data: {
+          userId: uploaderId,
+          fileName: result.key.split('/').pop() || 'unknown',
+          fileSize: result.size,
+          fileType: result.type,
+          mimeType: result.mimeType,
+          url: result.url,
+          scene,
+          hash: `key:${result.key}`,
+          ip: req?.ip || req?.headers?.['x-forwarded-for'] as string || '',
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`上传记录入库失败: ${e.message}`);
+    }
   }
 }

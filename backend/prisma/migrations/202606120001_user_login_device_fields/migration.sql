@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginDevice" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastLoginUserAgent" TEXT;

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
+import { GrowthService } from '../growth/growth.service';
 import {
   UserLevelQueryDto, CreateUserLevelDto, UpdateUserLevelDto,
   UserExperienceQueryDto, CreateUserExperienceDto,
@@ -15,6 +16,7 @@ export class UserAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly growthService: GrowthService,
   ) {}
 
   // ==================== 操作日志 ====================
@@ -26,42 +28,174 @@ export class UserAdminService {
     } catch { /* ignore */ }
   }
 
+  private async runWithLock<T>(key: string, message: string, fn: () => Promise<T>, ttlSeconds = 300): Promise<T> {
+    const locked = await this.redis.getLock(key, ttlSeconds);
+    if (!locked) throw new BadRequestException(message);
+    try {
+      return await fn();
+    } finally {
+      await this.redis.releaseLock(key).catch(() => undefined);
+    }
+  }
+
   // ==================== 用户等级 ====================
+
+  private normalizeRegionId(value?: string | null) {
+    const text = String(value || '').trim();
+    if (!text || text === '__global__') return null;
+    return text;
+  }
+
+  private async invalidateGrowthProfileCaches() {
+    await Promise.all([
+      this.redis.delPattern('user:profile:v2:*').catch(() => undefined),
+      this.redis.delPattern('user:profile:*').catch(() => undefined),
+      this.redis.delPattern('post:feed:*').catch(() => undefined),
+    ]);
+  }
+
+  async getLevelTitleOptions(regionId?: string) {
+    const normalizedRegionId = this.normalizeRegionId(regionId);
+    return this.prisma.userTitle.findMany({
+      where: {
+        isEnabled: true,
+        OR: normalizedRegionId ? [{ regionId: normalizedRegionId }, { regionId: null }] : [{ regionId: null }],
+      },
+      select: { id: true, name: true, regionId: true, icon: true, image: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+      take: 200,
+    });
+  }
+
+  private async assertLevelTitle(titleId: any, regionId?: string | null) {
+    const id = String(titleId || '').trim();
+    if (!id) return;
+    const title = await this.prisma.userTitle.findFirst({
+      where: {
+        id,
+        isEnabled: true,
+        OR: regionId ? [{ regionId }, { regionId: null }] : [{ regionId: null }],
+      },
+      select: { id: true },
+    });
+    if (!title) throw new BadRequestException('请选择当前等级范围内已启用的称号');
+  }
+
+  private async attachLevelRegionNames<T extends any[]>(list: T): Promise<T> {
+    const regionIds = Array.from(new Set(list.map((item: any) => item.regionId).filter(Boolean)));
+    if (!regionIds.length) return list;
+    const regions = await this.prisma.region.findMany({
+      where: { id: { in: regionIds } },
+      select: { id: true, name: true },
+    });
+    const regionMap = new Map(regions.map((region) => [region.id, region.name]));
+    return list.map((item: any) => ({
+      ...item,
+      regionName: regionMap.get(item.regionId) || '',
+      region_name: regionMap.get(item.regionId) || '',
+    })) as T;
+  }
+
+  async getLevelRegionOptions() {
+    return this.prisma.region.findMany({
+      select: { id: true, name: true, code: true, isOpen: true },
+      orderBy: [{ isOpen: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'desc' }],
+      take: 500,
+    });
+  }
 
   async getLevelList(q: UserLevelQueryDto) {
     const page = q.page || 1;
     const pageSize = q.pageSize || 20;
     const where: any = {};
-    if (q.regionId) where.regionId = q.regionId;
+    if (q.regionId === '__global__') where.regionId = null;
+    else if (q.regionId) where.regionId = q.regionId;
     if (q.keyword) where.levelName = { contains: q.keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.userLevel.findMany({ where, orderBy: [{ regionId: 'asc' }, { levelNumber: 'asc' }], skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.userLevel.count({ where }),
     ]);
-    return { list, total, page, pageSize };
+    return { list: await this.attachLevelRegionNames(list), total, page, pageSize };
   }
 
   async createLevel(dto: CreateUserLevelDto) {
-    return this.prisma.userLevel.create({ data: dto as any });
+    const data = this.normalizeLevelInput(dto) as any;
+    if (Number(data.levelNumber) === 1) data.requiredExp = 0;
+    await this.assertLevelTitle(data.levelTitleId, data.regionId);
+    const created = await this.prisma.userLevel.create({ data });
+    await this.invalidateGrowthProfileCaches();
+    return created;
   }
 
   async updateLevel(id: string, dto: UpdateUserLevelDto) {
     const level = await this.prisma.userLevel.findUnique({ where: { id } });
     if (!level) throw new NotFoundException('等级不存在');
-    return this.prisma.userLevel.update({ where: { id }, data: dto as any });
+    const data = this.normalizeLevelInput(dto, false) as any;
+    if (Number(data.levelNumber ?? level.levelNumber) === 1) data.requiredExp = 0;
+    await this.assertLevelTitle(data.levelTitleId ?? level.levelTitleId, data.regionId ?? level.regionId);
+    const updated = await this.prisma.userLevel.update({ where: { id }, data });
+    await this.invalidateGrowthProfileCaches();
+    return updated;
   }
 
   async deleteLevel(id: string) {
     const level = await this.prisma.userLevel.findUnique({ where: { id } });
     if (!level) throw new NotFoundException('等级不存在');
-    return this.prisma.userLevel.delete({ where: { id } });
+    const deleted = await this.prisma.userLevel.delete({ where: { id } });
+    await this.invalidateGrowthProfileCaches();
+    return deleted;
   }
 
   async getAllLevels(regionId?: string) {
     const where: any = { isActive: true };
-    if (regionId) where.regionId = regionId;
-    return this.prisma.userLevel.findMany({ where, orderBy: { levelNumber: 'asc' } });
+    if (regionId === '__global__') where.regionId = null;
+    else if (regionId) where.regionId = regionId;
+    const list = await this.prisma.userLevel.findMany({ where, orderBy: { levelNumber: 'asc' } });
+    return this.attachLevelRegionNames(list);
+  }
+
+  private normalizeLevelInput(dto: any, withDefaults = true) {
+    const data: any = { ...dto };
+    if (withDefaults || data.regionId !== undefined) {
+      data.regionId = data.regionId === '__global__' ? null : data.regionId || null;
+    }
+    data.levelIcon = data.levelIcon ?? data.level_icon ?? data.icon ?? data.iconUrl ?? (withDefaults ? '' : undefined);
+    data.levelBadgeImage = data.levelBadgeImage ?? data.level_badge_image ?? data.badgeImage ?? data.badge_image ?? (withDefaults ? '' : undefined);
+    if (data.levelBenefits !== undefined) {
+      const list = Array.isArray(data.levelBenefits) ? data.levelBenefits : [];
+      const seen = new Set<string>();
+      const benefits = list.slice(0, 3).map((item: any, index: number) => {
+        const type = String(item?.type || item?.key || '').trim();
+        if (!['identity', 'title', 'content_boost'].includes(type) || seen.has(type)) return null;
+        seen.add(type);
+        const value = type === 'content_boost' ? Math.max(0, Math.min(20, Math.trunc(Number(item?.value || 0)))) : undefined;
+        return {
+          id: String(item?.id || type), type, enabled: item?.enabled !== false, sortOrder: index,
+          name: String(item?.name || '').trim().slice(0, 24), description: String(item?.description || '').trim().slice(0, 80),
+          icon: String(item?.icon || '').trim(), titleId: type === 'title' ? String(item?.titleId || '').trim() : '', value,
+        };
+      }).filter(Boolean);
+      if (!benefits.some((item: any) => item.type === 'identity')) benefits.unshift({ id: 'identity', type: 'identity', enabled: true, sortOrder: 0, name: '', description: '', icon: '', titleId: '' });
+      data.levelBenefits = JSON.stringify(benefits.map((item: any, index: number) => ({ ...item, sortOrder: index })));
+      const title = benefits.find((item: any) => item.type === 'title' && item.enabled && item.titleId);
+      const boost = benefits.find((item: any) => item.type === 'content_boost' && item.enabled);
+      data.levelTitleId = title?.titleId || null;
+      data.contentBoostWeight = Number(boost?.value || 0);
+    }
+    if (withDefaults || data.levelTitleId !== undefined) data.levelTitleId = String(data.levelTitleId || '').trim() || null;
+    if (withDefaults || data.contentBoostWeight !== undefined) data.contentBoostWeight = Math.max(0, Math.min(20, Math.trunc(Number(data.contentBoostWeight || 0))));
+    delete data.level_icon;
+    delete data.icon;
+    delete data.iconUrl;
+    delete data.level_badge_image;
+    delete data.badgeImage;
+    delete data.badge_image;
+    delete data.levelMedalImage;
+    delete data.level_medal_image;
+    delete data.medalImage;
+    delete data.medal_image;
+    return data;
   }
 
   // ==================== 用户经验 ====================
@@ -70,12 +204,18 @@ export class UserAdminService {
     const page = q.page || 1;
     const pageSize = q.pageSize || 20;
     const where: any = {};
+    const regionId = this.normalizeRegionId(q.regionId);
+    if (regionId) where.regionId = regionId;
+    else if (q.regionId === '__global__') where.regionId = null;
     if (q.userId) where.userId = q.userId;
 
     const [list, total] = await Promise.all([
       this.prisma.userExperience.findMany({
         where,
-        include: { user: { select: { id: true, nickname: true, avatar: true } } },
+        include: {
+          user: { select: { id: true, nickname: true, avatar: true } },
+          region: { select: { id: true, name: true } },
+        },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -86,42 +226,35 @@ export class UserAdminService {
   }
 
   async addExperience(dto: CreateUserExperienceDto, operatorId: string, ip?: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.userId }, include: { experiences: { orderBy: { createdAt: 'desc' }, take: 1 } } });
-    if (!user) throw new NotFoundException('用户不存在');
-
-    // Calculate current exp and level
-    const totalExp = dto.changeAmount; // relative change handled below
-    const currentExp = user.experiences[0]?.afterExp || 0;
-    const newExp = Math.max(0, currentExp + dto.changeAmount);
-
-    // Determine level based on experience
-    const levels = await this.prisma.userLevel.findMany({
-      where: { isActive: true },
-      orderBy: { levelNumber: 'asc' },
-    });
-
-    let currentLevel: any = null;
-    let newLevel: any = null;
-    for (const lv of levels) {
-      if (currentExp >= lv.requiredExp) currentLevel = lv;
-      if (newExp >= lv.requiredExp) newLevel = lv;
+    const amount = Number(dto.changeAmount || 0);
+    if (!Number.isFinite(amount) || amount === 0) {
+      throw new BadRequestException('经验变动不能为0');
     }
-
-    const record = await this.prisma.userExperience.create({
-      data: {
-        userId: dto.userId,
-        changeAmount: dto.changeAmount,
-        reason: dto.reason,
-        beforeLevel: currentLevel?.levelName || '无等级',
-        afterLevel: newLevel?.levelName || '无等级',
-        beforeExp: currentExp,
-        afterExp: newExp,
-      },
+    const regionId = this.normalizeRegionId(dto.regionId);
+    if (!regionId) {
+      throw new BadRequestException('请选择经验归属区域');
+    }
+    const result: any = await this.growthService.awardExperience({
+      userId: dto.userId,
+      regionId,
+      amount,
+      reason: dto.reason || '后台调整',
+      source: 'admin_adjust',
     });
 
-    await this.logOp(operatorId, 'add_experience', 'user_experience', dto.userId, { changeAmount: dto.changeAmount, afterExp: newExp, level: newLevel?.levelName }, ip);
+    await this.logOp(operatorId, 'add_experience', 'user_experience', dto.userId, {
+      changeAmount: dto.changeAmount,
+      regionId,
+      afterExp: result.currentExp,
+      level: result.currentLevel?.levelName,
+    }, ip);
 
-    return { record, currentExp: newExp, currentLevel: newLevel };
+    return {
+      record: result.record,
+      currentExp: result.currentExp,
+      currentLevel: result.currentLevel,
+      growthSummary: result,
+    };
   }
 
   // ==================== 用户标签定义 ====================
@@ -149,13 +282,28 @@ export class UserAdminService {
   }
 
   async createTagDef(dto: CreateUserTagDefDto) {
-    return this.prisma.userTagDefinition.create({ data: dto as any });
+    const data = this.normalizeTagDefInput(dto);
+    return this.prisma.userTagDefinition.create({ data });
   }
 
   async updateTagDef(id: string, dto: UpdateUserTagDefDto) {
     const def = await this.prisma.userTagDefinition.findUnique({ where: { id } });
     if (!def) throw new NotFoundException('标签定义不存在');
-    return this.prisma.userTagDefinition.update({ where: { id }, data: dto as any });
+    const data = this.normalizeTagDefInput(dto, false);
+    return this.prisma.userTagDefinition.update({ where: { id }, data });
+  }
+
+  private normalizeTagDefInput(dto: any, withDefaults = true) {
+    const data: any = { ...dto };
+    if (data.name !== undefined && data.tagName === undefined) data.tagName = data.name;
+    if (data.description !== undefined && data.tagDesc === undefined) data.tagDesc = data.description;
+    delete data.name;
+    delete data.description;
+    if (data.tagName !== undefined) data.tagName = String(data.tagName).trim();
+    if (data.tagDesc !== undefined) data.tagDesc = String(data.tagDesc || '').trim();
+    if (withDefaults && (data.tagLevel === undefined || data.tagLevel === null)) data.tagLevel = 1;
+    if (withDefaults && data.isActive === undefined) data.isActive = true;
+    return data;
   }
 
   async deleteTagDef(id: string) {
@@ -168,7 +316,7 @@ export class UserAdminService {
 
   async getAllTagDefs(regionId?: string) {
     const where: any = { isActive: true };
-    if (regionId) where.regionId = regionId;
+    if (regionId) where.OR = [{ regionId }, { regionId: null }];
     return this.prisma.userTagDefinition.findMany({ where, orderBy: { displayOrder: 'asc' } });
   }
 
@@ -179,6 +327,7 @@ export class UserAdminService {
     const pageSize = q.pageSize || 20;
     const where: any = {};
     if (q.userId) where.userId = q.userId;
+    if (q.regionId) where.regionId = q.regionId;
     if (q.keyword) {
       where.OR = [
         { name: { contains: q.keyword } },
@@ -218,6 +367,29 @@ export class UserAdminService {
   }
 
   // ==================== 用户引导 ====================
+
+  async getGuidanceSettings() {
+    const config = await this.prisma.config.findUnique({ where: { key: 'force_guidance_enabled' } });
+    const enabled = config?.value === true;
+    return {
+      force_guidance_enabled: enabled,
+      forceGuidanceEnabled: enabled,
+    };
+  }
+
+  async saveGuidanceSettings(dto: Record<string, any>) {
+    const enabled = dto?.force_guidance_enabled === true || dto?.forceGuidanceEnabled === true;
+    await this.prisma.config.upsert({
+      where: { key: 'force_guidance_enabled' },
+      create: { key: 'force_guidance_enabled', group: 'user_guidance', value: enabled },
+      update: { group: 'user_guidance', value: enabled },
+    });
+    return {
+      success: true,
+      force_guidance_enabled: enabled,
+      forceGuidanceEnabled: enabled,
+    };
+  }
 
   async getGuidanceList(q: UserGuidanceQueryDto) {
     const page = q.page || 1;
@@ -266,6 +438,14 @@ export class UserAdminService {
   // ==================== 余额批量操作 ====================
 
   async batchBalanceClear(dto: BatchBalanceClearDto, adminId: string, ip?: string) {
+    return this.runWithLock(
+      `admin:balance:${adminId}:clear`,
+      '批量清空余额任务正在处理中，请稍后再试',
+      () => this.batchBalanceClearUnlocked(dto, adminId, ip),
+    );
+  }
+
+  private async batchBalanceClearUnlocked(dto: BatchBalanceClearDto, adminId: string, ip?: string) {
     if (!dto.userIds || dto.userIds.length === 0) {
       throw new BadRequestException('请选择用户');
     }
@@ -324,6 +504,14 @@ export class UserAdminService {
   }
 
   async batchBalanceAdd(dto: BatchUserBalanceDto, adminId: string, ip?: string) {
+    return this.runWithLock(
+      `admin:balance:${adminId}:add`,
+      '批量增加余额任务正在处理中，请稍后再试',
+      () => this.batchBalanceAddUnlocked(dto, adminId, ip),
+    );
+  }
+
+  private async batchBalanceAddUnlocked(dto: BatchUserBalanceDto, adminId: string, ip?: string) {
     if (!dto.userIds || dto.userIds.length === 0) throw new BadRequestException('请选择用户');
     if (!dto.amount) throw new BadRequestException('请输入金额');
 
@@ -375,6 +563,14 @@ export class UserAdminService {
   }
 
   async batchBalanceDeduct(dto: BatchUserBalanceDto, adminId: string, ip?: string) {
+    return this.runWithLock(
+      `admin:balance:${adminId}:deduct`,
+      '批量扣除余额任务正在处理中，请稍后再试',
+      () => this.batchBalanceDeductUnlocked(dto, adminId, ip),
+    );
+  }
+
+  private async batchBalanceDeductUnlocked(dto: BatchUserBalanceDto, adminId: string, ip?: string) {
     if (!dto.userIds || dto.userIds.length === 0) throw new BadRequestException('请选择用户');
     if (!dto.amount) throw new BadRequestException('请输入金额');
 
@@ -451,6 +647,7 @@ export class UserAdminService {
     const page = q.page || 1;
     const pageSize = q.pageSize || 20;
     const where: any = {};
+    const regionId = this.normalizeRegionId(q.regionId);
     if (q.keyword) {
       where.user = { OR: [{ nickname: { contains: q.keyword } }, { phone: { contains: q.keyword } }] };
     }
@@ -461,7 +658,11 @@ export class UserAdminService {
         where: { ...where, status: { not: 'DELETED' } },
         select: {
           id: true, nickname: true, avatar: true, phone: true,
-          experiences: { orderBy: { createdAt: 'desc' }, take: 1 },
+          experiences: {
+            where: { regionId },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
@@ -470,29 +671,30 @@ export class UserAdminService {
       this.prisma.user.count({ where: { ...where, status: { not: 'DELETED' } } }),
     ]);
 
-    // Enrich with level info
-    const allLevels = await this.prisma.userLevel.findMany({ where: { isActive: true }, orderBy: { levelNumber: 'asc' } });
-
-    const list = users.map((u: any) => {
+    const list = await Promise.all(users.map(async (u: any) => {
       const currentExp = u.experiences[0]?.afterExp || 0;
-      const currentLevelName = u.experiences[0]?.afterLevel || '无等级';
-      // Find next level
-      const currentLevelIdx = allLevels.findIndex((l: any) => l.levelName === currentLevelName);
-      const nextLevel = currentLevelIdx >= 0 && currentLevelIdx < allLevels.length - 1 ? allLevels[currentLevelIdx + 1] : null;
-      const nextExp = nextLevel?.requiredExp || currentExp;
+      const growth = await this.growthService.getUserGrowthSummary(u.id, regionId).catch(() => null);
+      const currentLevel = growth?.currentLevel || null;
+      const nextLevel = growth?.nextLevel || null;
 
       return {
         userId: u.id,
         nickname: u.nickname,
         avatar: u.avatar,
         phone: u.phone,
-        currentExp,
-        currentLevelName,
+        currentExp: growth?.currentExp ?? currentExp,
+        currentLevelName: currentLevel?.levelName || u.experiences[0]?.afterLevel || '无等级',
         nextLevelName: nextLevel?.levelName || null,
-        nextExp,
-        maxLevel: !nextLevel,
+        nextExp: nextLevel?.requiredExp || growth?.currentExp || currentExp,
+        maxLevel: growth?.maxLevel ?? !nextLevel,
+        levelConfigIncomplete: growth?.levelConfigIncomplete ?? false,
+        currentLevel,
+        nextLevel,
+        progress: growth?.progress || 0,
+        expToNextLevel: growth?.expToNextLevel || 0,
+        growthSummary: growth,
       };
-    });
+    }));
 
     return { list, total, page, pageSize };
   }

@@ -65,7 +65,21 @@ function makeRedis(): RedisService {
   } as unknown as RedisService;
 }
 
-function makePrisma(value: Record<string, any> | null = null): PrismaService {
+function makeStorageConfig(overrides: Record<string, any> = {}): Record<string, any> {
+  return {
+    provider: "cos",
+    domain: "https://cdn.example.com",
+    cos: {
+      secretId: "test-id",
+      secretKey: "test-key",
+      bucket: "test-bucket",
+      region: "ap-guangzhou",
+    },
+    ...overrides,
+  };
+}
+
+function makePrisma(value: Record<string, any> | null = makeStorageConfig()): PrismaService {
   return {
     config: {
       findUnique: jest.fn().mockResolvedValue(value ? { value } : null),
@@ -173,6 +187,19 @@ describe("UploadService", () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  it("should accept valid MP3 voice file", async () => {
+    const result = await service.upload(
+      makeFile({
+        originalname: "voice.mp3",
+        mimetype: "audio/mpeg",
+        buffer: Buffer.from("ID3mock-voice-data"),
+      }),
+      { type: "audio", folder: "users/u1/messages", scene: "message" },
+    );
+    expect(result.type).toBe("audio");
+    expect(result.key).toMatch(/^users\/u1\/messages\/\d+_[a-f0-9]{32}\.mp3$/);
+  });
+
   // ============ COS 配置缺失 ============
   it("should throw BadRequestException when COS_SECRET_ID missing", async () => {
     const badModule = await Test.createTestingModule({
@@ -183,7 +210,19 @@ describe("UploadService", () => {
           useValue: makeConfig({ COS_SECRET_ID: undefined }),
         },
         { provide: RedisService, useValue: makeRedis() },
-        { provide: PrismaService, useValue: makePrisma() },
+        {
+          provide: PrismaService,
+          useValue: makePrisma(
+            makeStorageConfig({
+              cos: {
+                secretId: "",
+                secretKey: "test-key",
+                bucket: "test-bucket",
+                region: "ap-guangzhou",
+              },
+            }),
+          ),
+        },
       ],
     }).compile();
     const svc = badModule.get<UploadService>(UploadService);

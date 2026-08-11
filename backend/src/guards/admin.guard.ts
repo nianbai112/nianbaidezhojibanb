@@ -1,6 +1,7 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../common/services/prisma.service';
+import { AdminDataScopeService } from '../common/services/admin-data-scope.service';
 
 /**
  * AdminGuard - 验证当前请求来自管理员
@@ -14,7 +15,12 @@ export class AdminGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const { user } = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest();
+    if (this.isVerifiedMiniappFileRequest(request)) {
+      return true;
+    }
+
+    const { user } = request;
 
     if (!user?.sub || !user?.isAdmin) {
       throw new UnauthorizedException('需要管理员权限');
@@ -23,14 +29,49 @@ export class AdminGuard implements CanActivate {
     // 验证管理员账号是否仍为 active
     const account = await this.prisma.adminAccount.findUnique({
       where: { id: user.sub },
-      select: { status: true },
+      select: { status: true, passwordResetRequired: true, passwordChangedAt: true },
     });
 
     if (!account || account.status !== 'active') {
       throw new UnauthorizedException('管理员账号已被禁用');
     }
 
+    if (account.passwordChangedAt && Number(user.iat || 0) * 1000 < account.passwordChangedAt.getTime()) {
+      throw new UnauthorizedException('管理员登录状态已失效，请重新登录');
+    }
+
+    // AUD-P1-161: 强制改密 - 要求改密的管理员只能访问改密接口
+    if (account.passwordResetRequired && !this.isPasswordResetEndpoint(request)) {
+      throw new UnauthorizedException('请先修改初始密码后再访问后台功能');
+    }
+
     return true;
+  }
+
+  private isVerifiedMiniappFileRequest(request: { method?: string; path?: string; url?: string }): boolean {
+    if (request.method?.toUpperCase() !== 'GET') return false;
+    const requestPath = String(request.path || request.url || '').split('?')[0]
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '');
+    return requestPath === '/admin/license-runtime/miniapp/file'
+      || requestPath === '/api/admin/license-runtime/miniapp/file';
+  }
+
+  /**
+   * AUD-P1-161: 判断是否为密码重置相关端点
+   * 要求改密的管理员只能访问这些端点
+   */
+  private isPasswordResetEndpoint(request: { method?: string; path?: string; url?: string }): boolean {
+    const method = request.method?.toUpperCase() || '';
+    const path = String(request.path || request.url || '').split('?')[0]
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '');
+
+    // 允许：POST 密码重置、GET profile（获取当前用户信息）、POST 登出
+    if (method === 'POST' && path.includes('/auth/admin/reset-password')) return true;
+    if (method === 'GET' && path.includes('/auth/admin/profile')) return true;
+    if (method === 'POST' && path.includes('/auth/admin/logout')) return true;
+    return false;
   }
 }
 
@@ -126,6 +167,51 @@ export class AdminPermissionGuard implements CanActivate {
       );
     }
 
+    // AUD-P1-074: 检查 OR 权限（满足任意一个即可）
+    const requiredAnyPermissions = this.reflector.getAllAndOverride<string[]>(
+      'admin_permissions_any',
+      [context.getHandler(), context.getClass()],
+    );
+    if (requiredAnyPermissions && requiredAnyPermissions.length > 0) {
+      const hasAny = requiredAnyPermissions.some((p) => userPermissions.has(p));
+      if (!hasAny) {
+        throw new UnauthorizedException(
+          `缺少权限: ${requiredAnyPermissions.join(' 或 ')}`,
+        );
+      }
+    }
+
     return true;
+  }
+}
+
+/** Protect system-wide legacy and runtime operations that are not safe to delegate. */
+@Injectable()
+export class SuperAdminGuard implements CanActivate {
+  constructor(private readonly adminDataScope: AdminDataScopeService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    if (this.isVerifiedMiniappFileRequest(request)) return true;
+
+    const user = request?.user;
+    if (!user?.sub || !user?.isAdmin) {
+      throw new UnauthorizedException('需要管理员权限');
+    }
+
+    const scope = await this.adminDataScope.getAdminContext(user.sub);
+    if (!scope.isSuperAdmin) {
+      throw new ForbiddenException('仅超级管理员可执行此操作');
+    }
+    return true;
+  }
+
+  private isVerifiedMiniappFileRequest(request: { method?: string; path?: string; url?: string }): boolean {
+    if (request?.method?.toUpperCase() !== 'GET') return false;
+    const requestPath = String(request.path || request.url || '').split('?')[0]
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '');
+    return requestPath === '/admin/license-runtime/miniapp/file'
+      || requestPath === '/api/admin/license-runtime/miniapp/file';
   }
 }

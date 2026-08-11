@@ -24,6 +24,30 @@ export class ErrandController {
     return this.errandService.getPickupPoints(regionId, type);
   }
 
+  @Get('errand/order/available-coupons')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getAvailableCoupons(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.errandService.getAvailableCoupons(userId, query);
+  }
+
+  @Post('errand/order/estimate')
+  estimateOrderTiming(@Body() dto: any) {
+    return this.errandService.estimateOrderTiming(dto);
+  }
+
+  @Post('errand/order/risk-preview')
+  previewOrderRisk(@Body() dto: any) {
+    return this.errandService.previewOrderRisk(dto);
+  }
+
+  @Post('errand/order/quote')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  quoteOrder(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.errandService.quoteOrder(userId, dto);
+  }
+
   @Post('errand/order/create')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -52,11 +76,46 @@ export class ErrandController {
     return this.errandService.updateRiderStatus(orderId, userId, dto);
   }
 
+  @Post('errand/order/:orderId/confirm-receipt')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  confirmReceipt(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.errandService.confirmReceipt(orderId, userId);
+  }
+
+  @Post('errand/order/:orderId/review')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createReview(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.errandService.createReview(userId, orderId, dto);
+  }
+
+  @Get('errand/order/:orderId/review')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getReview(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.errandService.getReview(userId, orderId);
+  }
+
   @Post('errand/order/refund/:orderId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   refundOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.refundOrder(orderId, userId, dto);
+  }
+
+  @Post('errand/order/cancel/:orderId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  cancelOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.errandService.cancelOrder(orderId, userId, dto);
+  }
+
+  @Get(['errand/order/detail/:orderId', 'api/delivery-orders/:orderId', 'delivery-orders/:orderId'])
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getOrderDetail(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
+    return this.errandService.getOrderDetail(orderId, userId);
   }
 
   @Get('errand/order/user-orders')
@@ -76,100 +135,106 @@ export class ErrandController {
     return this.errandService.getPageConfig(regionId);
   }
 
-  @Post('api/delivery-orders')
+  @Post(['api/delivery-orders', 'delivery-orders'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   receiveOrder(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.receiveOrder(userId, dto);
   }
 
-  @Get('api/delivery-orders/distribution/list')
+  @Get(['api/delivery-orders/distribution/list', 'delivery-orders/distribution/list'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getDeliveryOrdersList(@CurrentUser('sub') userId: string, @Query() query: any) {
     return this.errandService.getDeliveryOrdersList(userId, query);
   }
 
-  @Put('api/delivery-orders/:orderId')
+  @Put(['api/delivery-orders/:orderId', 'delivery-orders/:orderId'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   updateDeliveryOrder(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.updateDeliveryOrder(orderId, userId, dto);
   }
 
-  @Post('api/return-to-pool/:orderId')
+  @Post(['api/return-to-pool/:orderId', 'return-to-pool/:orderId'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   returnToPool(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.returnToPool(orderId, userId, dto);
   }
 
-  @Get('api/current/rider')
+  @Get(['api/current/rider', 'current/rider'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getRiderInfo(@CurrentUser('sub') userId: string) {
     return this.errandService.getRiderInfo(userId);
   }
 
-  @Put('api/riders/current')
+  @Put(['api/riders/current', 'riders/current'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   updateRiderInfo(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.updateRiderInfo(userId, dto);
   }
 
-  @Get('api/current/rider/orders/stats')
+  @Get(['api/current/rider/orders/stats', 'current/rider/orders/stats'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getOrderStats(@CurrentUser('sub') userId: string) {
     return this.errandService.getOrderStats(userId);
   }
 
-  @Post('api/rider/apply')
+  @Post(['api/rider/apply', 'rider/apply'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   applyRider(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.applyRider(userId, dto);
   }
 
-  @Post('api/location')
+  @Post(['api/location', 'location'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   updateLocation(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.updateLocation(userId, dto);
   }
 
-  @Get('api/location/:riderId')
-  getRiderLocation(@Param('riderId') riderId: string) {
-    return this.errandService.getRiderLocation(riderId);
+  @Get(['api/location/:riderId', 'location/:riderId'])
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getRiderLocation(
+    @CurrentUser('sub') userId: string,
+    @Param('riderId') riderId: string,
+    @Query('order_id') orderId?: string,
+  ) {
+    return this.errandService.getRiderLocation(userId, riderId, orderId);
   }
 
-  @Post('api/transfer/request/:orderId')
+  @Post(['api/transfer/request/:orderId', 'transfer/request/:orderId'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   requestTransfer(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.requestTransfer(orderId, userId, dto);
   }
 
-  @Get('api/transfer/requests')
+  @Get(['api/transfer/requests', 'transfer/requests'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   getTransferRequests(@CurrentUser('sub') userId: string) {
     return this.errandService.getTransferRequests(userId);
   }
 
-  @Post('api/transfer/respond/:transferId')
+  @Post(['api/transfer/respond/:transferId', 'transfer/respond/:transferId'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   respondToTransfer(@Param('transferId') transferId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.errandService.respondToTransfer(transferId, userId, dto);
   }
 
-  @Get('api/region-riders')
+  @Get(['api/region-riders', 'region-riders'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getRegionRiders() {
-    return this.errandService.getRegionRiders();
+  getRegionRiders(@CurrentUser('sub') userId: string) {
+    return this.errandService.getRegionRiders(userId);
   }
 
   @Get('api/region/incentives/my-records')

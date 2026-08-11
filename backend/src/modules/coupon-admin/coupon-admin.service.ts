@@ -6,18 +6,33 @@ import { CouponQueryDto, CreateCouponDto, UpdateCouponDto, CouponUsageQueryDto }
 export class CouponAdminService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeBusinessScope(scope: any) {
+    const value = String(scope || '').trim().toLowerCase()
+    return ['all', 'shop', 'mall', 'errand', 'activity', 'membership'].includes(value) ? value : 'all'
+  }
+
+  private normalizeCouponPayload(dto: any, current?: any) {
+    return {
+      ...dto,
+      businessScope: dto?.businessScope !== undefined
+        ? this.normalizeBusinessScope(dto?.businessScope)
+        : this.normalizeBusinessScope(current?.businessScope || 'all'),
+    }
+  }
+
   async getCoupons(query: CouponQueryDto) {
-    const { page = 1, pageSize = 20, keyword, type, status, regionId } = query
+    const { page = 1, pageSize = 20, keyword, type, status, regionId, businessScope } = query
     const where: any = {}
     if (keyword) {
       where.OR = [
-        { name: { contains: keyword, mode: 'insensitive' } },
-        { code: { contains: keyword, mode: 'insensitive' } },
+        { name: { contains: keyword } },
+        { code: { contains: keyword } },
       ]
     }
     if (type) where.type = type
     if (status) where.status = status
     if (regionId) where.regionId = regionId
+    if (businessScope) where.businessScope = this.normalizeBusinessScope(businessScope)
 
     const [list, total] = await Promise.all([
       this.prisma.coupon.findMany({
@@ -48,7 +63,7 @@ export class CouponAdminService {
   async createCoupon(dto: CreateCouponDto) {
     return this.prisma.coupon.create({
       data: {
-        ...dto,
+        ...this.normalizeCouponPayload(dto),
         receivedCount: 0,
         usedCount: 0,
       } as any,
@@ -56,9 +71,10 @@ export class CouponAdminService {
   }
 
   async updateCoupon(id: string, dto: UpdateCouponDto) {
+    const current = await this.prisma.coupon.findUnique({ where: { id } })
     return this.prisma.coupon.update({
       where: { id },
-      data: dto as any,
+      data: this.normalizeCouponPayload(dto, current) as any,
     })
   }
 

@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UserService } from './user.service';
+import { FinanceService } from '../finance/finance.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import {
@@ -12,14 +13,49 @@ import {
 @ApiTags('用户')
 @Controller()
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly financeService: FinanceService,
+  ) {}
 
   @Get('auth/me')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取当前用户信息' })
-  getMe(@CurrentUser('sub') userId: string, @Query('user_id') targetId?: string) {
-    return this.userService.getProfile(targetId || userId);
+  getMe(
+    @CurrentUser('sub') userId: string,
+    @Query('user_id') targetId?: string,
+    @Query('region_id') regionId?: string,
+  ) {
+    return this.userService.getProfile(targetId || userId, regionId, userId);
+  }
+
+  @Get('auth/admin/bound-user')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取当前登录账号绑定用户（小程序兼容）' })
+  getAdminBoundUser(@CurrentUser('sub') userId: string) {
+    return this.userService.getProfile(userId, undefined, userId);
+  }
+
+  @Get('city-agent/application/current')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取我的区域合作申请状态' })
+  getMyCityAgentApplication(
+    @CurrentUser('sub') userId: string,
+    @Query('region_id') regionId?: string,
+    @Query('regionId') regionIdCamel?: string,
+  ) {
+    return this.userService.getCityAgentApplication(userId, regionId || regionIdCamel);
+  }
+
+  @Post('city-agent/applications')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '提交区域合作申请' })
+  submitCityAgentApplication(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.userService.submitCityAgentApplication(userId, dto);
   }
 
   @Get('auth/user/nickname-avatar')
@@ -66,8 +102,9 @@ export class UserController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '申请提现' })
-  applyWithdraw(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.userService.applyWithdraw(userId, dto);
+  async applyWithdraw(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    // AUD-P0-004: 提现必须走 FinanceService.withdraw，该校验余额、检查处理中提现、冻结余额并写 walletTransaction
+    return this.financeService.withdraw(userId, dto);
   }
 
   @Get('auth/user/withdrawals/pending-total')
@@ -94,10 +131,20 @@ export class UserController {
     return this.userService.payUnban(userId);
   }
 
+  @Post('auth/user/cancel-account')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '注销账号' })
+  cancelAccount(@CurrentUser('sub') userId: string) {
+    return this.userService.cancelAccount(userId);
+  }
+
   @Get('auth/user/self-unban-config')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '自助解封配置' })
-  getSelfUnbanConfig() {
-    return this.userService.getSelfUnbanConfig();
+  getSelfUnbanConfig(@CurrentUser('sub') userId: string) {
+    return this.userService.getSelfUnbanConfig(userId);
   }
 
   @Post('circle/student-verification/api/verification')
@@ -139,15 +186,27 @@ export class UserController {
   }
 
   @Get('user-followers/followers')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '粉丝列表' })
   getFollowers(@Query() query: any, @CurrentUser('sub') userId?: string) {
     return this.userService.getFollowers(query, userId);
   }
 
   @Get('user-followers/followings')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '关注列表' })
   getFollowings(@Query() query: any, @CurrentUser('sub') userId?: string) {
     return this.userService.getFollowings(query, userId);
+  }
+
+  @Get('user-mentions/search')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '搜索可艾特用户' })
+  searchMentionUsers(@Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.userService.searchMentionUsers(query, userId);
   }
 
   @Get('likes/user-views')

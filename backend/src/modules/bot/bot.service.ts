@@ -1,9 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
+import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
+import { AiAdminService } from '../ai-admin/ai-admin.service';
+import { UserSessionRevocationService } from '../websocket/user-session-revocation.service';
 
 @Injectable()
 export class BotService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiRuntime: AiRuntimeService,
+    private readonly aiAdminService: AiAdminService,
+    private readonly userSessionRevocation: UserSessionRevocationService,
+  ) {}
 
   async bots(query: any) {
     const { page = 1, pageSize = 20, status, keyword, regionId } = query;
@@ -37,6 +45,18 @@ export class BotService {
     const user = await this.prisma.user.create({
       data: { openid: `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, nickname, avatar, userType: 4 },
     });
+    await Promise.all([
+      this.prisma.userProfile.upsert({
+        where: { userId: user.id },
+        update: { bio: dto.bio || dto.description || '校园 AI 运营账号' },
+        create: { userId: user.id, bio: dto.bio || dto.description || '校园 AI 运营账号' },
+      }).catch(() => undefined),
+      this.prisma.userSettings.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: { userId: user.id },
+      }).catch(() => undefined),
+    ]);
     const bot = await this.prisma.botAccount.create({
       data: { userId: user.id, personaId: personaId ? String(personaId) : undefined, regionId: regionId ? String(regionId) : undefined, tags, dailyLimit, status: 'active' },
       include: { user: { select: { id: true, nickname: true, avatar: true } }, persona: true },
@@ -71,8 +91,9 @@ export class BotService {
   async deleteBot(id: string) {
     const bot = await this.prisma.botAccount.findUnique({ where: { id } });
     if (bot) {
-      await this.prisma.botAccount.delete({ where: { id } });
-      await this.prisma.user.delete({ where: { id: bot.userId } });
+      await this.prisma.botAccount.update({ where: { id }, data: { status: 'disabled' } });
+      await this.prisma.user.update({ where: { id: bot.userId }, data: { status: 'INACTIVE' as any } }).catch(() => undefined);
+      await this.userSessionRevocation.revoke(bot.userId);
     }
     return { success: true };
   }
@@ -174,54 +195,9 @@ export class BotService {
   }
 
   async runTask(id: string) {
-    const task = await this.prisma.botPostTask.findUnique({ where: { id }, include: { bot: { include: { user: true } } } });
-    if (!task) return { code: 404, message: '任务不存在' };
-    if (task.status !== 'approved' && task.status !== 'pending') return { code: 400, message: '任务状态不可执行' };
-
     try {
-      let postId: string | null = null;
-      if (task.type === 'post') {
-        const post = await this.prisma.post.create({
-          data: {
-            userId: task.bot.userId,
-            regionId: task.regionId,
-            title: task.title || undefined,
-            content: task.content || '',
-            status: 'PUBLISHED',
-            auditStatus: 'approved',
-            type: Array.isArray(task.mediaUrls) && task.mediaUrls.length > 0 ? 'IMAGE' : 'TEXT',
-            media: Array.isArray(task.mediaUrls) && task.mediaUrls.length > 0
-              ? { create: task.mediaUrls.map((url: string, index: number) => ({ type: 'IMAGE', url, sortOrder: index })) }
-              : undefined,
-          },
-        });
-        postId = post.id;
-      } else if (task.type === 'comment' && task.targetPostId) {
-        const comment = await this.prisma.comment.create({
-          data: {
-            postId: task.targetPostId,
-            userId: task.bot.userId,
-            content: task.content || '',
-            status: 'active',
-            auditStatus: 'approved',
-          },
-        });
-        postId = comment.id;
-      }
-
-      await this.prisma.botPostTask.update({
-        where: { id },
-        data: { status: 'completed', publishedPostId: postId },
-      });
-      await this.prisma.botActionLog.create({
-        data: { botId: task.botId, action: `create_${task.type}`, targetType: task.type, targetId: postId || undefined },
-      });
-      return { success: true, data: { publishedPostId: postId } };
+      return await this.aiAdminService.runTask(id, 'legacy-bot-api');
     } catch (err: any) {
-      await this.prisma.botPostTask.update({
-        where: { id },
-        data: { status: 'failed', failReason: err.message },
-      });
       return { code: 500, message: err.message };
     }
   }

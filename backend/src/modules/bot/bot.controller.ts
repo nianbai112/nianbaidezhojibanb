@@ -78,8 +78,8 @@ export class BotController {
   @RequirePermission('robot:post')
   @UseGuards(AdminPermissionGuard)
   async generateRobotPost(@Body() dto: any) {
-    if (!this.aiService.isConfigured()) {
-      return { code: 501, message: 'AI 未配置，请设置 AI_API_KEY 环境变量' };
+    if (!(await this.aiService.isConfigured())) {
+      return { code: 501, message: 'AI 未配置，请先在 AI运营中心 / AI配置 中填写并启用模型配置' };
     }
     const prompt = `请为本地生活社区生成一篇真实自然的帖子。主题：${dto.topic || dto.prompt || ''}`;
     const content = await this.aiService.generateContent(prompt, 'post');
@@ -90,8 +90,8 @@ export class BotController {
   @RequirePermission('robot:comment')
   @UseGuards(AdminPermissionGuard)
   async generateRobotComments(@Body() dto: any) {
-    if (!this.aiService.isConfigured()) {
-      return { code: 501, message: 'AI 未配置，请设置 AI_API_KEY 环境变量' };
+    if (!(await this.aiService.isConfigured())) {
+      return { code: 501, message: 'AI 未配置，请先在 AI运营中心 / AI配置 中填写并启用模型配置' };
     }
     const count = Number(dto.count || dto.robotIds?.length || 3);
     const prompt = `请生成 ${count} 条本地生活社区帖子评论，方向：${dto.direction || '自然互动'}。每条一行，不要编号。`;
@@ -258,8 +258,8 @@ export class BotController {
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: 'AI生成内容' })
   async aiGenerate(@Body() dto: { prompt: string; type?: string }) {
-    if (!this.aiService.isConfigured()) {
-      return { code: 501, message: 'AI 未配置，请设置 AI_API_KEY 环境变量' };
+    if (!(await this.aiService.isConfigured())) {
+      return { code: 501, message: 'AI 未配置，请先在 AI运营中心 / AI配置 中填写并启用模型配置' };
     }
     const content = await this.aiService.generateContent(dto.prompt, dto.type);
     return { success: true, data: { content } };

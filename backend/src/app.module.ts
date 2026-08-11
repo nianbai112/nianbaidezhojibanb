@@ -1,9 +1,11 @@
+import './config/bootstrap-env';
 import { Module, Provider } from '@nestjs/common';
 import { APP_INTERCEPTOR, APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { validate } from './config/env.validation';
+import { getEnvFilePaths } from './config/env-loader';
 import { PrismaModule } from './common/modules/prisma.module';
 import { RedisModule } from './common/modules/redis.module';
 import { LoggerModule } from './common/modules/logger.module';
@@ -14,18 +16,23 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { RegionModule } from './modules/region/region.module';
 import { PostModule } from './modules/post/post.module';
+import { PostShareModule } from './modules/post-share/post-share.module';
 import { CommentModule } from './modules/comment/comment.module';
 import { CircleModule } from './modules/circle/circle.module';
 import { ShopModule } from './modules/shop/shop.module';
-import { DeliveryModule } from './modules/delivery/delivery.module';
+// SEC-P0-B5: DeliveryModule 为历史遗留空壳（订单池恒空、骑手表无写入、orderPool 越权泄露地址电话），已下线。
+// 其唯一有用副作用（写 Redis rider:location）已迁移至 ErrandService.updateLocation。
+// import { DeliveryModule } from './modules/delivery/delivery.module';
 import { ErrandModule } from './modules/errand/errand.module';
+import { RiderAppModule } from './modules/rider-app/rider-app.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { FinanceAdminModule } from './modules/finance-admin/finance-admin.module';
 import { CouponAdminModule } from './modules/coupon-admin/coupon-admin.module';
 import { DatingAdminModule } from './modules/dating-admin/dating-admin.module';
 import { ErrandAdminModule } from './modules/errand-admin/errand-admin.module';
 import { MessageModule } from './modules/message/message.module';
-import { NotificationModule } from './modules/notification/notification.module';
+import { NotifyModule } from './modules/notify/notify.module';
+import { WechatModule } from './modules/wechat/wechat.module';
 import { OperationModule } from './modules/operation/operation.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PaymentModule } from './modules/payment/payment.module';
@@ -52,6 +59,24 @@ import { SecondHandModule } from './modules/second-hand/second-hand.module';
 import { NetDiskModule } from './modules/netdisk/netdisk.module';
 import { UserAdminModule } from './modules/user-admin/user-admin.module';
 import { SystemAdminModule } from './modules/system-admin/system-admin.module';
+import { OrderCenterModule } from './modules/order-center/order-center.module';
+import { OrderAppealModule } from './modules/order-appeal/order-appeal.module';
+import { AssistantTicketModule } from './modules/assistant-ticket/assistant-ticket.module';
+import { LayoutConfigModule } from './modules/layout-config/layout-config.module';
+import { DecorVersionModule } from './modules/decor-version/decor-version.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { MarketingAdminModule } from './modules/marketing-admin/marketing-admin.module';
+import { AiAdminModule } from './modules/ai-admin/ai-admin.module';
+import { AiRuntimeModule } from './modules/ai-runtime/ai-runtime.module';
+import { TrackingModule } from './modules/tracking/tracking.module';
+import { RecommendModule } from './modules/recommend/recommend.module';
+import { ABTestModule } from './modules/ab-test/ab-test.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
+import { SchoolModule } from './modules/school/school.module';
+import { LicenseRuntimeModule } from './modules/license-runtime/license-runtime.module';
+import { MembershipModule } from './modules/membership/membership.module';
+import { SearchModule } from './modules/search/search.module';
+import { CampusMapModule } from './modules/campus-map/campus-map.module';
 import { RequestLogInterceptor } from './interceptors/request-log.interceptor';
 import { AllExceptionsFilter } from './filters/all-exceptions.filter';
 
@@ -70,12 +95,25 @@ const adminAuthThrottleLimit = parseInt(
   process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30',
   10,
 );
+const uploadUserThrottleLimit = parseInt(process.env.UPLOAD_USER_THROTTLE_LIMIT || '180', 10);
+const uploadBatchThrottleLimit = parseInt(process.env.UPLOAD_BATCH_THROTTLE_LIMIT || '30', 10);
+const uploadVideoThrottleLimit = parseInt(process.env.UPLOAD_VIDEO_THROTTLE_LIMIT || '20', 10);
+const uploadAdminImageThrottleLimit = parseInt(
+  process.env.UPLOAD_ADMIN_IMAGE_THROTTLE_LIMIT || '180',
+  10,
+);
+const uploadAdminVideoThrottleLimit = parseInt(
+  process.env.UPLOAD_ADMIN_VIDEO_THROTTLE_LIMIT || '20',
+  10,
+);
+const uploadQrcodeThrottleLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || '60', 10);
+const envFilePath = getEnvFilePaths();
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
+      envFilePath,
       validate,
     }),
     ThrottlerModule.forRootAsync({
@@ -93,6 +131,36 @@ const adminAuthThrottleLimit = parseInt(
             ttl: throttleTtl * 1000,
             limit: adminAuthThrottleLimit,
           },
+          {
+            name: 'upload_user',
+            ttl: throttleTtl * 1000,
+            limit: uploadUserThrottleLimit,
+          },
+          {
+            name: 'upload_user_batch',
+            ttl: throttleTtl * 1000,
+            limit: uploadBatchThrottleLimit,
+          },
+          {
+            name: 'upload_video',
+            ttl: throttleTtl * 1000,
+            limit: uploadVideoThrottleLimit,
+          },
+          {
+            name: 'upload_admin_image',
+            ttl: throttleTtl * 1000,
+            limit: uploadAdminImageThrottleLimit,
+          },
+          {
+            name: 'upload_admin_video',
+            ttl: throttleTtl * 1000,
+            limit: uploadAdminVideoThrottleLimit,
+          },
+          {
+            name: 'upload_qrcode',
+            ttl: throttleTtl * 1000,
+            limit: uploadQrcodeThrottleLimit,
+          },
         ],
       }),
     }),
@@ -105,11 +173,13 @@ const adminAuthThrottleLimit = parseInt(
     UserModule,
     RegionModule,
     PostModule,
+    PostShareModule,
     CommentModule,
     CircleModule,
     ShopModule,
-    DeliveryModule,
+    // DeliveryModule 已下线（见上方 import 处说明）
     ErrandModule,
+    RiderAppModule,
     FinanceModule,
     FinanceAdminModule,
     CouponAdminModule,
@@ -117,7 +187,8 @@ const adminAuthThrottleLimit = parseInt(
     ErrandAdminModule,
     PaymentModule,
     MessageModule,
-    NotificationModule,
+    NotifyModule,
+    WechatModule,
     OperationModule,
     AdminModule,
     AddressModule,
@@ -143,6 +214,24 @@ const adminAuthThrottleLimit = parseInt(
     NetDiskModule,
     UserAdminModule,
     SystemAdminModule,
+    OrderCenterModule,
+    OrderAppealModule,
+    AssistantTicketModule,
+    LayoutConfigModule,
+    DecorVersionModule,
+    AnalyticsModule,
+    MarketingAdminModule,
+    AiRuntimeModule,
+    AiAdminModule,
+    TrackingModule,
+    RecommendModule,
+    ABTestModule,
+    SchedulerModule,
+    SchoolModule,
+    LicenseRuntimeModule,
+    MembershipModule,
+    SearchModule,
+    CampusMapModule,
   ],
   providers: [
     {

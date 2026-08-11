@@ -5,6 +5,40 @@ import { PrismaService } from '../../common/services/prisma.service';
 export class RatingAdminService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeOptionalString(value: unknown) {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+
+  private normalizeCategoryPayload(dto: any) {
+    const payload: any = { ...dto };
+    for (const key of ['regionId', 'icon', 'description']) {
+      if (key in payload) payload[key] = this.normalizeOptionalString(payload[key]);
+    }
+    if ('sortOrder' in payload && payload.sortOrder !== undefined && payload.sortOrder !== null && payload.sortOrder !== '') {
+      payload.sortOrder = Number(payload.sortOrder);
+    }
+    Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
+    return payload;
+  }
+
+  private normalizeItemPayload(dto: any) {
+    const payload: any = { ...dto };
+    if ('isEnabled' in payload && !('status' in payload)) {
+      payload.status = payload.isEnabled ? 'enabled' : 'disabled';
+    }
+    delete payload.isEnabled;
+    for (const key of ['regionId', 'cover', 'description']) {
+      if (key in payload) payload[key] = this.normalizeOptionalString(payload[key]);
+    }
+    if ('sortOrder' in payload && payload.sortOrder !== undefined && payload.sortOrder !== null && payload.sortOrder !== '') {
+      payload.sortOrder = Number(payload.sortOrder);
+    }
+    Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
+    return payload;
+  }
+
   // ==================== Dashboard ====================
 
   async getDashboard(regionId?: string) {
@@ -52,31 +86,32 @@ export class RatingAdminService {
   // ==================== Category CRUD ====================
 
   async getCategories(query: any) {
-    const { page = 1, limit = 20, regionId } = query;
+    const { page = 1, regionId } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (regionId) where.regionId = regionId;
 
     const [list, total] = await Promise.all([
       this.prisma.ratingCategory.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { sortOrder: 'asc' },
         include: { _count: { select: { items: true } } },
       }),
       this.prisma.ratingCategory.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async createCategory(dto: any) {
-    return this.prisma.ratingCategory.create({ data: dto });
+    return this.prisma.ratingCategory.create({ data: this.normalizeCategoryPayload(dto) });
   }
 
   async updateCategory(id: string, dto: any) {
     const cat = await this.prisma.ratingCategory.findUnique({ where: { id } });
     if (!cat) throw new NotFoundException('分类不存在');
-    return this.prisma.ratingCategory.update({ where: { id }, data: dto });
+    return this.prisma.ratingCategory.update({ where: { id }, data: this.normalizeCategoryPayload(dto) });
   }
 
   async deleteCategory(id: string) {
@@ -92,34 +127,35 @@ export class RatingAdminService {
   // ==================== Item CRUD ====================
 
   async getItems(query: any) {
-    const { page = 1, limit = 20, categoryId, regionId, keyword, status } = query;
+    const { page = 1, categoryId, regionId, keyword, status } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (categoryId) where.categoryId = categoryId;
     if (regionId) where.regionId = regionId;
     if (status) where.status = status;
-    if (keyword) where.name = { contains: keyword, mode: 'insensitive' };
+    if (keyword) where.name = { contains: keyword };
 
     const [list, total] = await Promise.all([
       this.prisma.ratingItem.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { sortOrder: 'asc' },
         include: { category: { select: { id: true, name: true } } },
       }),
       this.prisma.ratingItem.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async createItem(dto: any) {
-    return this.prisma.ratingItem.create({ data: dto });
+    return this.prisma.ratingItem.create({ data: this.normalizeItemPayload(dto) });
   }
 
   async updateItem(id: string, dto: any) {
     const item = await this.prisma.ratingItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('评分项目不存在');
-    return this.prisma.ratingItem.update({ where: { id }, data: dto });
+    return this.prisma.ratingItem.update({ where: { id }, data: this.normalizeItemPayload(dto) });
   }
 
   async deleteItem(id: string) {
@@ -135,7 +171,8 @@ export class RatingAdminService {
   // ==================== Rating Records ====================
 
   async getRecords(query: any) {
-    const { page = 1, limit = 20, itemId, userId, regionId, scoreMin, scoreMax, keyword } = query;
+    const { page = 1, itemId, userId, regionId, scoreMin, scoreMax, keyword } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (itemId) where.itemId = itemId;
     if (userId) where.userId = userId;
@@ -144,16 +181,16 @@ export class RatingAdminService {
     if (scoreMax !== undefined) where.score = { ...(where.score || {}), lte: Number(scoreMax) };
     if (keyword) {
       where.OR = [
-        { content: { contains: keyword, mode: 'insensitive' } },
-        { User: { nickname: { contains: keyword, mode: 'insensitive' } } },
+        { content: { contains: keyword } },
+        { User: { nickname: { contains: keyword } } },
       ];
     }
 
     const [list, total] = await Promise.all([
       this.prisma.userRating.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           item: { select: { id: true, name: true, categoryId: true } },
@@ -162,7 +199,7 @@ export class RatingAdminService {
       }),
       this.prisma.userRating.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async deleteRecord(id: string) {
@@ -191,7 +228,8 @@ export class RatingAdminService {
   // ==================== Replies ====================
 
   async getReplies(query: any) {
-    const { page = 1, limit = 20, ratingId, userId, status } = query;
+    const { page = 1, ratingId, userId, status } = query;
+    const limit = Number(query.limit || query.pageSize || 20);
     const where: any = {};
     if (ratingId) where.ratingId = ratingId;
     if (userId) where.userId = userId;
@@ -200,8 +238,8 @@ export class RatingAdminService {
     const [list, total] = await Promise.all([
       this.prisma.ratingReply.findMany({
         where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (Number(page) - 1) * limit,
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           rating: { select: { id: true, score: true, item: { select: { id: true, name: true } } } },
@@ -210,7 +248,7 @@ export class RatingAdminService {
       }),
       this.prisma.ratingReply.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    return { list, total, page: Number(page), pageSize: limit };
   }
 
   async auditReply(id: string, dto: any) {

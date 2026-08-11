@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -21,12 +22,44 @@ export class RedisService {
     await this.redis.del(key);
   }
 
+  async delPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        deleted += await this.redis.del(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
+  }
+
+  async getJson<T = unknown>(key: string): Promise<T | null> {
+    const value = await this.get(key);
+    if (!value) return null;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      await this.del(key).catch(() => undefined);
+      return null;
+    }
+  }
+
+  async setJson(key: string, value: unknown, ttl?: number): Promise<void> {
+    await this.set(key, JSON.stringify(value), ttl);
+  }
+
   async incr(key: string): Promise<number> {
     return this.redis.incr(key);
   }
 
   async expire(key: string, seconds: number): Promise<void> {
     await this.redis.expire(key, seconds);
+  }
+
+  async publish(channel: string, message: string): Promise<number> {
+    return this.redis.publish(channel, message);
   }
 
   async getLock(key: string, ttlSeconds: number = 10): Promise<boolean> {
@@ -36,6 +69,49 @@ export class RedisService {
 
   async releaseLock(key: string): Promise<void> {
     await this.redis.del(key);
+  }
+
+  /** Runs one task across all application instances while its owned lease is renewed. */
+  async withLock<T>(key: string, ttlSeconds: number, task: () => Promise<T>): Promise<T | undefined> {
+    const token = randomUUID();
+    const locked = await this.redis.set(key, token, 'EX', ttlSeconds, 'NX');
+    if (locked !== 'OK') return undefined;
+    const ttlMs = Math.max(1, ttlSeconds) * 1000;
+    const renewEveryMs = Math.max(100, Math.floor(ttlMs / 3));
+    let stopped = false;
+    let lockLost = false;
+    let renewal = Promise.resolve();
+    const timer = setInterval(() => {
+      renewal = renewal.then(async () => {
+        if (stopped) return;
+        const renewed = await this.redis.eval(
+          'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) end return 0',
+          1,
+          key,
+          token,
+          ttlMs,
+        );
+        if (Number(renewed) !== 1) lockLost = true;
+      }).catch(() => {
+        lockLost = true;
+      });
+    }, renewEveryMs);
+    timer.unref?.();
+    try {
+      const result = await task();
+      if (lockLost) throw new Error(`Redis lock lease lost: ${key}`);
+      return result;
+    } finally {
+      stopped = true;
+      clearInterval(timer);
+      await renewal;
+      await this.redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0',
+        1,
+        key,
+        token,
+      );
+    }
   }
 
   async lpush(key: string, ...values: string[]): Promise<number> {
@@ -48,6 +124,34 @@ export class RedisService {
 
   async hset(key: string, field: string, value: string): Promise<void> {
     await this.redis.hset(key, field, value);
+  }
+
+  async hsetIfNewer(
+    key: string,
+    field: string,
+    value: { time: number; [name: string]: unknown },
+  ): Promise<boolean> {
+    const time = Number(value?.time);
+    if (!Number.isFinite(time)) throw new Error('Redis freshness value requires a finite time');
+    const result = await this.redis.eval(
+      `local current = redis.call('HGET', KEYS[1], ARGV[1])
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and decoded['time'] ~= nil then
+    local current_time = tonumber(decoded['time'])
+    local incoming_time = tonumber(ARGV[2])
+    if current_time and incoming_time and current_time >= incoming_time then return 0 end
+  end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+return 1`,
+      1,
+      key,
+      field,
+      time,
+      JSON.stringify(value),
+    );
+    return Number(result) === 1;
   }
 
   async hget(key: string, field: string): Promise<string | null> {
@@ -76,6 +180,10 @@ export class RedisService {
 
   async zrem(key: string, member: string): Promise<void> {
     await this.redis.zrem(key, member);
+  }
+
+  async flushdb(): Promise<void> {
+    await this.redis.flushdb();
   }
 
   getClient(): Redis {

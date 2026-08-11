@@ -28,6 +28,10 @@ export class CouponQueryDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
+  businessScope?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
   regionId?: string
 }
 
@@ -74,6 +78,11 @@ export class CreateCouponDto {
   @IsOptional()
   @IsString()
   status?: string
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  businessScope?: string
 
   @ApiProperty({ required: false })
   @IsOptional()

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tmagic runtime</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; }
+    .tmagic-page { position: relative; overflow: hidden; }
+    .tmagic-node { position: absolute; box-sizing: border-box; }
+    .tmagic-node-img img { width: 100%; height: 100%; display: block; }
+    .tmagic-node-text { white-space: pre-wrap; word-break: break-all; }
+    .tmagic-node-button {
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; user-select: none; overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+<script>
+/**
+ * tmagic 编辑器画布的极简自包含运行时（vanilla JS，无外部依赖）。
+ *
+ * 工作原理：@tmagic/stage 在同源 iframe 加载本页后，会向 iframe.contentWindow 注入
+ * window.magic = { onPageElUpdate, onRuntimeReady }，随后编辑器通过 runtime 对象
+ * 推送 DSL 变化（updateRootConfig / updatePageId / add / update / remove / sortNode）。
+ * 本运行时收到任何变化都全量重渲染当前页（物料只有 text/img/button，足够快）。
+ *
+ * 与编辑器的 DOM 约定：
+ * - 每个节点根元素带 data-tmagic-id="<node.id>"（stage 用它定位选中元素）；
+ * - 页面根元素带 magic-ui-container class（编辑器默认识别为可投放容器）。
+ */
+(function () {
+  var root = null; // MApp DSL
+  var pageId = null;
+
+  /** 不需要 px 单位的 CSS 属性 */
+  var UNITLESS = { zIndex: 1, opacity: 1, fontWeight: 1, lineHeight: 1, flex: 1, flexGrow: 1, flexShrink: 1 };
+
+  function toKebab(name) {
+    return name.replace(/[A-Z]/g, function (m) { return '-' + m.toLowerCase(); });
+  }
+
+  function applyStyle(el, style, skipLayout) {
+    if (!style) return;
+    Object.keys(style).forEach(function (key) {
+      if (skipLayout && (key === 'position' || key === 'left' || key === 'top')) return;
+      var value = style[key];
+      if (value === null || value === undefined || value === '') return;
+      if (typeof value === 'number' && !UNITLESS[key]) value = value + 'px';
+      el.style.setProperty(toKebab(key), String(value));
+    });
+  }
+
+  function getPage() {
+    if (!root || !Array.isArray(root.items) || !root.items.length) return null;
+    if (pageId !== null && pageId !== undefined) {
+      for (var i = 0; i < root.items.length; i++) {
+        if (String(root.items[i].id) === String(pageId)) return root.items[i];
+      }
+    }
+    return root.items[0];
+  }
+
+  function renderNode(node) {
+    var el = document.createElement('div');
+    el.className = 'tmagic-node tmagic-node-' + node.type;
+    el.setAttribute('data-tmagic-id', String(node.id));
+    applyStyle(el, node.style);
+
+    if (node.type === 'img') {
+      var img = document.createElement('img');
+      img.src = node.src || '';
+      img.alt = '';
+      img.draggable = false;
+      el.appendChild(img);
+    } else if (node.type === 'button') {
+      el.textContent = node.text || '按钮';
+      if (!node.style || !node.style.background && !node.style.backgroundColor) {
+        el.style.background = '#36A853';
+      }
+      if (!node.style || !node.style.color) el.style.color = '#ffffff';
+      if (!node.style || !node.style.borderRadius) el.style.borderRadius = '8px';
+    } else {
+      // text 及其他未知类型按文本渲染
+      el.textContent = node.text || '';
+    }
+    return el;
+  }
+
+  function render() {
+    document.body.innerHTML = '';
+    var page = getPage();
+    if (!page) return;
+
+    var pageEl = document.createElement('div');
+    pageEl.className = 'tmagic-page magic-ui-container';
+    pageEl.setAttribute('data-tmagic-id', String(page.id));
+    applyStyle(pageEl, page.style);
+    if (!page.style || !page.style.width) pageEl.style.width = '375px';
+    if (!page.style || !page.style.height) pageEl.style.height = '667px';
+
+    (Array.isArray(page.items) ? page.items : []).forEach(function (node) {
+      if (!node || node.visible === false) return;
+      pageEl.appendChild(renderNode(node));
+    });
+
+    document.body.appendChild(pageEl);
+
+    // 通知 stage 页面根元素已更新，stage 会同步画布尺寸
+    if (window.magic && window.magic.onPageElUpdate) {
+      window.magic.onPageElUpdate(pageEl);
+    }
+  }
+
+  function syncRoot(data) {
+    if (data && data.root) root = data.root;
+    render();
+  }
+
+  var runtime = {
+    updateRootConfig: function (config) { root = config; render(); },
+    updatePageId: function (id) { pageId = id; render(); },
+    add: syncRoot,
+    update: syncRoot,
+    sortNode: syncRoot,
+    remove: syncRoot,
+    select: function (id) {
+      return document.querySelector('[data-tmagic-id="' + id + '"]');
+    },
+  };
+
+  // stage 在 iframe load 后才注入 window.magic，轮询等待
+  (function waitMagic() {
+    if (window.magic && window.magic.onRuntimeReady) {
+      window.magic.onRuntimeReady(runtime);
+    } else {
+      setTimeout(waitMagic, 30);
+    }
+  })();
+})();
+</script>
+</body>
+</html>

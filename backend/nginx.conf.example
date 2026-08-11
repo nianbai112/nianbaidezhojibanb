@@ -26,6 +26,41 @@ server {
 
     client_max_body_size 200M;
 
+    # 小程序统一配置 https://域名/api 时，WebSocket 会使用
+    # wss://域名/api/ws-native。此 location 必须放在 /api/ 前面。
+    location /api/ws-native {
+        proxy_pass http://lingmeng_backend/ws-native;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+    }
+
+    # 兼容老版本或运维工具直接连接 /ws-native。
+    location /ws-native {
+        proxy_pass http://lingmeng_backend/ws-native;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+    }
+
     location / {
         proxy_pass http://lingmeng_backend;
         proxy_http_version 1.1;
@@ -62,6 +97,32 @@ server {
 #     ssl_ciphers HIGH:!aNULL:!MD5;
 #
 #     client_max_body_size 200M;
+#
+#     location /api/ws-native {
+#         proxy_pass http://lingmeng_backend/ws-native;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_set_header Upgrade $http_upgrade;
+#         proxy_set_header Connection "upgrade";
+#         proxy_send_timeout 3600s;
+#         proxy_read_timeout 3600s;
+#     }
+#
+#     location /ws-native {
+#         proxy_pass http://lingmeng_backend/ws-native;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_set_header Upgrade $http_upgrade;
+#         proxy_set_header Connection "upgrade";
+#         proxy_send_timeout 3600s;
+#         proxy_read_timeout 3600s;
+#     }
 #
 #     location / {
 #         proxy_pass http://lingmeng_backend;

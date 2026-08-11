@@ -65,6 +65,86 @@ export class UpdateShareSettingsDto {
   @IsOptional()
   @IsString()
   endTime?: string;
+
+  @ApiPropertyOptional({ description: '邀请人需绑定手机号' })
+  @IsOptional() @IsBoolean() @Type(() => Boolean)
+  requireInviterPhone?: boolean;
+
+  @ApiPropertyOptional({ description: '被邀请人需绑定手机号' })
+  @IsOptional() @IsBoolean() @Type(() => Boolean)
+  requireInviteePhone?: boolean;
+
+  @ApiPropertyOptional({ description: '邀请人需通过学生认证' })
+  @IsOptional() @IsBoolean() @Type(() => Boolean)
+  requireInviterStudentVerify?: boolean;
+
+  @ApiPropertyOptional({ description: '被邀请人需通过学生认证' })
+  @IsOptional() @IsBoolean() @Type(() => Boolean)
+  requireInviteeStudentVerify?: boolean;
+
+  @ApiPropertyOptional({ description: '邀请人账号最小注册天数' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  minInviterAccountAgeDays?: number;
+
+  @ApiPropertyOptional({ description: '被邀请人账号最小注册分钟数' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  minInviteeAccountAgeMinutes?: number;
+
+  @ApiPropertyOptional({ description: '邀请冷却分钟' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  inviteCooldownMinutes?: number;
+
+  @ApiPropertyOptional({ description: '短时间窗口内最多奖励次数' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  maxRecentInvites?: number;
+
+  @ApiPropertyOptional({ description: '短时间窗口分钟数' })
+  @IsOptional() @IsInt() @Min(1) @Type(() => Number)
+  recentWindowMinutes?: number;
+
+  @ApiPropertyOptional({ description: '同 IP 每日奖励上限' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  sameIpDailyLimit?: number;
+
+  @ApiPropertyOptional({ description: '同设备每日奖励上限' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  sameDeviceDailyLimit?: number;
+
+  @ApiPropertyOptional({ description: '同设备累计奖励上限' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  sameDeviceTotalLimit?: number;
+
+  @ApiPropertyOptional({ description: '活动总奖励预算' })
+  @IsOptional() @IsNumber() @Min(0) @Type(() => Number)
+  totalRewardBudget?: number;
+
+  @ApiPropertyOptional({ description: '单人单次奖励封顶' })
+  @IsOptional() @IsNumber() @Min(0) @Type(() => Number)
+  singleRewardCap?: number;
+
+  @ApiPropertyOptional({ description: '奖励发放方式 immediate/manual/delayed/qualified' })
+  @IsOptional() @IsString()
+  rewardReleaseMode?: string;
+
+  @ApiPropertyOptional({ description: '延迟发放小时数' })
+  @IsOptional() @IsInt() @Min(0) @Type(() => Number)
+  rewardDelayHours?: number;
+
+  @ApiPropertyOptional({ description: '邀请人白名单，数组或分隔字符串' })
+  @IsOptional()
+  inviterWhitelist?: any;
+
+  @ApiPropertyOptional({ description: '邀请人黑名单，数组或分隔字符串' })
+  @IsOptional()
+  inviterBlacklist?: any;
+
+  @ApiPropertyOptional({ description: '被邀请人黑名单，数组或分隔字符串' })
+  @IsOptional()
+  inviteeBlacklist?: any;
+
+  @ApiPropertyOptional({ description: '禁止参与的手机号段，数组或分隔字符串' })
+  @IsOptional()
+  blockedPhonePrefixes?: any;
 }
 
 // ==================== 查询 DTO ====================

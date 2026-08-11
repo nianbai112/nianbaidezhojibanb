@@ -7,7 +7,7 @@ import { PrismaService } from '../common/services/prisma.service';
 // 敏感数据脱敏规则
 // =============================================================================
 
-/** 字段名关键字（不区分大小写）——命中则脱敏处理 */
+/** 凭据字段名关键字（不区分大小写）——命中则始终完全隐藏 */
 const SENSITIVE_KEYS = [
   'password',
   'token',
@@ -15,17 +15,17 @@ const SENSITIVE_KEYS = [
   'key',
   'cert',
   'privatekey',
-  'idcard',
-  'bankcard',
-  'phone',
-  'mobile',
-  'tel',
   'authorization',
   'accesstoken',
   'refreshtoken',
   'apikey',
   'pin',
+  'hash',
 ];
+
+/** 个人数据字段仍使用现有的值感知脱敏（例如保留手机号前后段） */
+const VALUE_MASKED_KEYS = ['idcard', 'bankcard', 'phone', 'mobile', 'tel'];
+const REDACTED_VALUE = '[REDACTED]';
 
 /** 中国大陆手机号正则（1xx-xxxx-xxxx） */
 const PHONE_RE = /^1[3-9]\d{9}$/;
@@ -95,9 +95,24 @@ function maskSensitiveValue(value: any): any {
 /**
  * 检查字段名是否匹配敏感关键字
  */
-function isSensitiveFieldName(key: string): boolean {
+function matchesSensitiveFieldName(key: string, sensitiveKeys: string[]): boolean {
   const normalized = key.toLowerCase().replace(/[_-]/g, '');
-  return SENSITIVE_KEYS.some((sk) => normalized.includes(sk));
+  return sensitiveKeys.some((sensitiveKey) => normalized.includes(sensitiveKey));
+}
+
+function maskSensitiveField(key: string, value: any): any {
+  if (isSensitiveFieldName(key)) {
+    return REDACTED_VALUE;
+  }
+  return maskSensitiveValue(value);
+}
+
+function isSensitiveFieldName(key: string): boolean {
+  return matchesSensitiveFieldName(key, SENSITIVE_KEYS);
+}
+
+function isValueMaskedFieldName(key: string): boolean {
+  return matchesSensitiveFieldName(key, VALUE_MASKED_KEYS);
 }
 
 /**
@@ -109,8 +124,8 @@ function maskSensitive(data: any): any {
 
   const masked: any = {};
   for (const [k, v] of Object.entries(data)) {
-    if (isSensitiveFieldName(k)) {
-      masked[k] = maskSensitiveValue(v);
+    if (isSensitiveFieldName(k) || isValueMaskedFieldName(k)) {
+      masked[k] = maskSensitiveField(k, v);
     } else if (typeof v === 'object' && v !== null) {
       masked[k] = maskSensitive(v);
     } else {
@@ -130,8 +145,8 @@ function deepMask(obj: any): any {
 
   const result: any = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (isSensitiveFieldName(k)) {
-      result[k] = maskSensitiveValue(v);
+    if (isSensitiveFieldName(k) || isValueMaskedFieldName(k)) {
+      result[k] = maskSensitiveField(k, v);
     } else if (typeof v === 'string') {
       result[k] = maskSensitiveValue(v);
     } else if (typeof v === 'object' && v !== null) {
@@ -172,7 +187,10 @@ export class RequestLogInterceptor implements NestInterceptor {
     // 脱敏敏感 headers（Authorization 等）
     const safeHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(headers || {})) {
-      safeHeaders[k] = isSensitiveFieldName(k) ? maskSensitiveValue(v as string) : (v as string);
+      safeHeaders[k] =
+        isSensitiveFieldName(k) || isValueMaskedFieldName(k)
+          ? maskSensitiveField(k, v as string)
+          : (v as string);
     }
 
     return next.handle().pipe(

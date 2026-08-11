@@ -28,6 +28,56 @@ export class CreatePrinterConfigDto {
   @IsString()
   key?: string;
 
+  @ApiPropertyOptional({ description: '设备归属模式', enum: ['merchant_owned', 'platform_managed'], default: 'merchant_owned' })
+  @IsOptional()
+  @IsString()
+  connectionMode?: string;
+
+  @ApiPropertyOptional({ description: '飞鹅云 USER（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  user?: string;
+
+  @ApiPropertyOptional({ description: '飞鹅云 UKEY（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  ukey?: string;
+
+  @ApiPropertyOptional({ description: '易联云 Client ID（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @ApiPropertyOptional({ description: '易联云 Client Secret（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  clientSecret?: string;
+
+  @ApiPropertyOptional({ description: '设备密钥，可选，仅加密保存' })
+  @IsOptional()
+  @IsString()
+  deviceKey?: string;
+
+  @ApiPropertyOptional({ description: '芯烨云开发者 ID（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  xpyUser?: string;
+
+  @ApiPropertyOptional({ description: '芯烨云 UserKEY（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  xpyUserKey?: string;
+
+  @ApiPropertyOptional({ description: '佳博云商户编码（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  gpMemberCode?: string;
+
+  @ApiPropertyOptional({ description: '佳博云 API 密钥（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  gpApiKey?: string;
+
   @ApiPropertyOptional({ description: '自动打印' })
   @IsOptional()
   @IsBoolean()
@@ -39,6 +89,11 @@ export class CreatePrinterConfigDto {
   @IsBoolean()
   @Type(() => Boolean)
   isDefault?: boolean;
+
+  @ApiPropertyOptional({ description: '状态' })
+  @IsOptional()
+  @IsString()
+  status?: string;
 }
 
 export class UpdatePrinterConfigDto {
@@ -61,6 +116,56 @@ export class UpdatePrinterConfigDto {
   @IsOptional()
   @IsString()
   key?: string;
+
+  @ApiPropertyOptional({ description: '设备归属模式', enum: ['merchant_owned', 'platform_managed'] })
+  @IsOptional()
+  @IsString()
+  connectionMode?: string;
+
+  @ApiPropertyOptional({ description: '飞鹅云 USER（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  user?: string;
+
+  @ApiPropertyOptional({ description: '飞鹅云 UKEY（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  ukey?: string;
+
+  @ApiPropertyOptional({ description: '易联云 Client ID（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @ApiPropertyOptional({ description: '易联云 Client Secret（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  clientSecret?: string;
+
+  @ApiPropertyOptional({ description: '设备密钥，可选，仅加密保存' })
+  @IsOptional()
+  @IsString()
+  deviceKey?: string;
+
+  @ApiPropertyOptional({ description: '芯烨云开发者 ID（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  xpyUser?: string;
+
+  @ApiPropertyOptional({ description: '芯烨云 UserKEY（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  xpyUserKey?: string;
+
+  @ApiPropertyOptional({ description: '佳博云商户编码（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  gpMemberCode?: string;
+
+  @ApiPropertyOptional({ description: '佳博云 API 密钥（商家自有设备）' })
+  @IsOptional()
+  @IsString()
+  gpApiKey?: string;
 
   @ApiPropertyOptional({ description: '自动打印' })
   @IsOptional()

@@ -24,6 +24,13 @@ export class PunchInAdminController {
 
   // ==================== 分类管理 ====================
 
+  @Get('admin/punch-in-categories')
+  @ApiOperation({ summary: '获取打卡分类列表' })
+  @RequirePermission('punch:view')
+  getCategoriesAlias(@Query() query: PunchQueryDto) {
+    return this.punchInService.getCategories(query);
+  }
+
   @Get('admin/punch/categories')
   @ApiOperation({ summary: '获取打卡分类列表' })
   @RequirePermission('punch:view')
@@ -36,6 +43,13 @@ export class PunchInAdminController {
   @RequirePermission('punch:view')
   getCategory(@Param('id') id: string) {
     return this.punchInService.getCategory(id);
+  }
+
+  @Post('admin/punch-in-categories')
+  @ApiOperation({ summary: '新增打卡分类' })
+  @RequirePermission('punch:edit')
+  createCategoryAlias(@Body() dto: CreatePunchCategoryDto) {
+    return this.punchInService.createCategory(dto);
   }
 
   @Post('admin/punch/categories')
@@ -121,6 +135,13 @@ export class PunchInAdminController {
 
   // ==================== 评论管理 ====================
 
+  @Get('admin/punch-in-comments')
+  @ApiOperation({ summary: '获取打卡评论列表' })
+  @RequirePermission('punch:view')
+  getCommentsAlias(@Query() query: any) {
+    return this.punchInService.getComments(query);
+  }
+
   @Get('admin/punch/comments')
   @ApiOperation({ summary: '获取打卡评论列表' })
   @RequirePermission('punch:view')
@@ -151,11 +172,25 @@ export class PunchInAdminController {
     return this.punchInService.getConfigs(query);
   }
 
+  @Get('admin/punch-in/configs/:regionId')
+  @ApiOperation({ summary: '获取区域配置详情' })
+  @RequirePermission('punch:config')
+  getConfigAlias(@Param('regionId') regionId: string) {
+    return this.punchInService.getConfig(regionId);
+  }
+
   @Get('admin/punch/configs/:regionId')
   @ApiOperation({ summary: '获取区域配置详情' })
   @RequirePermission('punch:config')
   getConfig(@Param('regionId') regionId: string) {
     return this.punchInService.getConfig(regionId);
+  }
+
+  @Put('admin/punch-in/configs/:regionId')
+  @ApiOperation({ summary: '更新区域配置' })
+  @RequirePermission('punch:config')
+  updateConfigAlias(@Param('regionId') regionId: string, @Body() dto: UpdatePunchConfigDto) {
+    return this.punchInService.updateConfig(regionId, dto);
   }
 
   @Put('admin/punch/configs/:regionId')
@@ -173,6 +208,13 @@ export class PunchInAdminController {
   }
 
   // ==================== 数据统计 ====================
+
+  @Get('admin/punch-in/stats')
+  @ApiOperation({ summary: '打卡数据总览' })
+  @RequirePermission('punch:view')
+  getStatsOverviewAlias() {
+    return this.punchInService.getStatsOverview();
+  }
 
   @Get('admin/punch/stats/overview')
   @ApiOperation({ summary: '打卡数据总览' })

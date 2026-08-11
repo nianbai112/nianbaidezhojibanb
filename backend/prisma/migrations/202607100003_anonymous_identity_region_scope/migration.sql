@@ -1,0 +1,3 @@
+-- The region-scoped anonymous identity columns and backfill are covered by
+-- 202607100001_region_anonymous_identity. Keep this historical migration as
+-- an explicit no-op so Prisma can record a complete, reproducible baseline.
