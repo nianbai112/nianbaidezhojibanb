@@ -25,7 +25,11 @@ const SENSITIVE_KEYS = [
   'refreshtoken',
   'apikey',
   'pin',
+  'hash',
 ];
+
+const UNCONDITIONALLY_REDACTED_KEYS = ['password', 'secret', 'token', 'hash'];
+const REDACTED_VALUE = '[REDACTED]';
 
 /** 中国大陆手机号正则（1xx-xxxx-xxxx） */
 const PHONE_RE = /^1[3-9]\d{9}$/;
@@ -100,6 +104,14 @@ function isSensitiveFieldName(key: string): boolean {
   return SENSITIVE_KEYS.some((sk) => normalized.includes(sk));
 }
 
+function maskSensitiveField(key: string, value: any): any {
+  const normalized = key.toLowerCase().replace(/[_-]/g, '');
+  if (UNCONDITIONALLY_REDACTED_KEYS.some((term) => normalized.includes(term))) {
+    return REDACTED_VALUE;
+  }
+  return maskSensitiveValue(value);
+}
+
 /**
  * 递归脱敏对象中的所有敏感字段
  */
@@ -110,7 +122,7 @@ function maskSensitive(data: any): any {
   const masked: any = {};
   for (const [k, v] of Object.entries(data)) {
     if (isSensitiveFieldName(k)) {
-      masked[k] = maskSensitiveValue(v);
+      masked[k] = maskSensitiveField(k, v);
     } else if (typeof v === 'object' && v !== null) {
       masked[k] = maskSensitive(v);
     } else {
@@ -131,7 +143,7 @@ function deepMask(obj: any): any {
   const result: any = {};
   for (const [k, v] of Object.entries(obj)) {
     if (isSensitiveFieldName(k)) {
-      result[k] = maskSensitiveValue(v);
+      result[k] = maskSensitiveField(k, v);
     } else if (typeof v === 'string') {
       result[k] = maskSensitiveValue(v);
     } else if (typeof v === 'object' && v !== null) {
@@ -172,7 +184,7 @@ export class RequestLogInterceptor implements NestInterceptor {
     // 脱敏敏感 headers（Authorization 等）
     const safeHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(headers || {})) {
-      safeHeaders[k] = isSensitiveFieldName(k) ? maskSensitiveValue(v as string) : (v as string);
+      safeHeaders[k] = isSensitiveFieldName(k) ? maskSensitiveField(k, v as string) : (v as string);
     }
 
     return next.handle().pipe(
