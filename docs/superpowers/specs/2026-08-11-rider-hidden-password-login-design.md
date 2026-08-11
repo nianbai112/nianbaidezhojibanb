@@ -44,6 +44,7 @@
 - `sessionVersion`
 - `lastLoginAt`
 - `lastLoginIp`
+- `lastLoginDevice`，只保存设备型号、系统和 App 版本等白名单摘要
 - `passwordChangedAt`
 - `createdBy`、`updatedBy`
 - `createdAt`、`updatedAt`
@@ -56,7 +57,7 @@
 2. 后端按规范化账号查找凭据，并用 bcrypt 验证密码。未知账号也执行一次固定哈希校验，减少账号枚举和时序差异。
 3. 后端确认凭据已启用、未过期、未锁定。
 4. 后端确认绑定用户状态为 `ACTIVE`，且 `RegionRider` 为 `approved + official + 已绑定区域`。
-5. 验证通过后签发普通用户访问令牌和刷新令牌，因此现有骑手接口继续使用同一身份与权限检查。
+5. 验证通过后签发普通用户访问令牌和刷新令牌，因此现有骑手接口继续使用同一身份与权限检查。密码登录刷新令牌使用独立的 `refresh:rider_password:<credentialId>` Redis 键，不覆盖该用户的手机号登录刷新令牌。
 6. 密码登录令牌额外携带 `authSource=rider_password`、`credentialId` 和 `credentialVersion`。
 7. HTTP JWT 守卫和原生 WebSocket 鉴权共同验证凭据仍启用且版本匹配。后台停用、改密或换绑时递增 `sessionVersion`，旧令牌立即失效。
 8. 登录成功后失败计数归零，并记录登录时间、IP 和设备摘要。
@@ -69,7 +70,7 @@
 - 同一账号连续失败 5 次后锁定 15 分钟；成功登录后清零。
 - 错误统一显示“账号或密码错误，或账号暂不可用”，不暴露账号是否存在、是否过期或是否绑定骑手。
 - 密码至少 10 位，并同时包含字母和数字；不允许将掩码值当成新密码保存。
-- 改密、换绑或停用时清除该用户已有的密码登录刷新令牌，并通过 `sessionVersion` 立即拒绝旧访问令牌和旧 WebSocket。
+- 改密、换绑或停用时清除该凭据独立的密码登录刷新令牌，并通过 `sessionVersion` 立即拒绝旧访问令牌和旧 WebSocket；手机号登录刷新令牌不受影响。
 - 已登录时如果骑手资格被撤销、用户被禁用或区域解绑，现有骑手业务接口仍通过原有官方骑手校验拒绝操作。
 - 客户端不写日志、不埋点、不持久化账号密码。
 
