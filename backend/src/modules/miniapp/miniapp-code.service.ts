@@ -313,24 +313,23 @@ export class MiniappCodeService {
   }
 
   saveAsset(name: string, base64: string) {
-    const rawName = String(name || '').replace(/[\\/]/g, '');
+    const rawName = String(name || '').slice(0, 120).replace(/[\\/]/g, '');
     const ext = (rawName.match(/\.(png|jpe?g|gif|webp|svg)$/i) || [])[0]?.toLowerCase();
     if (!ext) {
       throw new BadRequestException('仅支持 png/jpg/jpeg/gif/webp/svg 图片');
     }
-    const m = /^data:image\/[\w+.-]+;base64,(.+)$/.exec(String(base64 || ''));
-    if (!m) {
+    const encoded = String(base64 || '');
+    const comma = encoded.indexOf(',');
+    const header = comma >= 0 ? encoded.slice(0, comma) : '';
+    const payload = comma >= 0 ? encoded.slice(comma + 1) : '';
+    if (!/^data:image\/[A-Za-z0-9+.-]{1,32};base64$/.test(header) || !payload || payload.length > 7 * 1024 * 1024) {
       throw new BadRequestException('图片数据格式无效（需要 base64 data URL）');
     }
-    const buf = Buffer.from(m[1], 'base64');
+    const buf = Buffer.from(payload, 'base64');
     if (!buf.length || buf.length > 5 * 1024 * 1024) {
       throw new BadRequestException('图片大小需在 5MB 以内');
     }
-    const base = rawName
-      .replace(/\.[^.]+$/, '')
-      .replace(/[^\w一-龥-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'img';
+    const base = this.safeAssetBase(rawName.replace(/\.[^.]{1,10}$/, ''));
     const fileName = `${Date.now()}-${base}${ext}`;
     fs.writeFileSync(path.join(this.assetsDir(), fileName), buf);
     return {
@@ -338,6 +337,15 @@ export class MiniappCodeService {
       message: '素材已写入代码包',
       data: { name: fileName, path: `/static/editor/${fileName}`, previewUrl: `/miniapp-static/editor/${fileName}`, size: buf.length },
     };
+  }
+
+  private safeAssetBase(value: string) {
+    const normalized = String(value || '').slice(0, 120).replace(/[^\w一-龥-]+/g, '-');
+    let start = 0;
+    let end = normalized.length;
+    while (start < end && normalized[start] === '-') start += 1;
+    while (end > start && normalized[end - 1] === '-') end -= 1;
+    return normalized.slice(start, end).slice(0, 40) || 'img';
   }
 
   deleteAsset(name: string) {

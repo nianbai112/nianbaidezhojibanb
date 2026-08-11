@@ -238,7 +238,7 @@ export class LicenseRuntimeService implements OnModuleInit {
       update,
     };
     await this.writeJsonConfig(DOWNLOAD_KEY, state, "license");
-    this.downloading = this.performSystemUpdateDownload(update)
+    this.downloading = this.performSystemUpdateDownload(update, cfg.server)
       .catch((error) => this.writeJsonConfig(DOWNLOAD_KEY, {
         ...state,
         status: "failed",
@@ -256,20 +256,22 @@ export class LicenseRuntimeService implements OnModuleInit {
     return this.readJsonConfig<Record<string, unknown>>(DOWNLOAD_KEY);
   }
 
-  private async performSystemUpdateDownload(update: Record<string, any>) {
+  private async performSystemUpdateDownload(update: Record<string, any>, licenseServer: string) {
     const targetVersion = String(update.version || "unknown");
     const targetDir = path.join(this.updateRoot(), targetVersion);
     await fsp.mkdir(targetDir, { recursive: true });
-    const fileName = this.safeFileName(String(update.packageUrl).split("/").pop() || `lingmeng-${targetVersion}.zip`);
+    const packageUrl = this.trustedPackageUrl(update.packageUrl, licenseServer);
+    const fileName = this.safeFileName(new URL(packageUrl).pathname.split("/").pop() || `lingmeng-${targetVersion}.zip`);
     const filePath = path.join(targetDir, fileName);
     const partPath = `${filePath}.part`;
     const offset = (await fsp.stat(partPath).catch(() => null))?.size || 0;
-    const response = await axios.get<NodeJS.ReadableStream>(String(update.packageUrl), {
+    const response = await axios.get<NodeJS.ReadableStream>(packageUrl, {
       responseType: "stream",
       timeout: UPDATE_TRANSFER_TIMEOUT_MS,
       headers: offset > 0 ? { Range: `bytes=${offset}-` } : undefined,
       maxContentLength: 1024 * 1024 * 1024,
       maxBodyLength: 1024 * 1024 * 1024,
+      maxRedirects: 0,
     });
     const resumed = offset > 0 && response.status === 206;
     await pipeline(response.data, fs.createWriteStream(partPath, { flags: resumed ? "a" : "w" }));
@@ -310,14 +312,16 @@ export class LicenseRuntimeService implements OnModuleInit {
 
     const targetDir = path.join(this.miniappDownloadRoot(), String(update.version || "unknown"));
     await fsp.mkdir(targetDir, { recursive: true });
-    const fileName = this.safeFileName(String(update.packageUrl).split("/").pop() || `lingmeng-miniapp-${update.version}.zip`);
+    const packageUrl = this.trustedPackageUrl(update.packageUrl, cfg.server);
+    const fileName = this.safeFileName(new URL(packageUrl).pathname.split("/").pop() || `lingmeng-miniapp-${update.version}.zip`);
     const filePath = path.join(targetDir, fileName);
 
-    const response = await axios.get<ArrayBuffer>(String(update.packageUrl), {
+    const response = await axios.get<ArrayBuffer>(packageUrl, {
       responseType: "arraybuffer",
       timeout: UPDATE_TRANSFER_TIMEOUT_MS,
       maxContentLength: 1024 * 1024 * 1024,
       maxBodyLength: 1024 * 1024 * 1024,
+      maxRedirects: 0,
     });
     const buffer = Buffer.from(response.data);
     await fsp.writeFile(filePath, buffer);
@@ -1038,6 +1042,19 @@ export class LicenseRuntimeService implements OnModuleInit {
     const base = String(server || "").replace(/\/$/, "");
     if (!base) throw new BadRequestException("授权中心地址未配置");
     return `${base}${pathname}`;
+  }
+
+  private trustedPackageUrl(packageUrl: unknown, licenseServer: string) {
+    try {
+      const candidate = new URL(String(packageUrl || ""));
+      const trustedOrigin = new URL(String(licenseServer || "")).origin;
+      if (candidate.protocol !== "https:" || candidate.origin !== trustedOrigin || candidate.username || candidate.password) {
+        throw new Error("untrusted");
+      }
+      return candidate.href;
+    } catch {
+      throw new BadRequestException("更新包地址不可信，必须使用授权中心的 HTTPS 地址");
+    }
   }
 
   private currentVersion() {

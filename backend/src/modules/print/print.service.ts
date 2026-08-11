@@ -439,7 +439,17 @@ export class PrintService {
   private safe(value: any) { return String(value ?? '').replace(/[<>]/g, (char) => char === '<' ? '＜' : '＞').replace(/[\r\n]+/g, ' ').trim(); }
   private center(value: string) { return `<C>${value}</C>`; }
   private money(value: any) { return Number(value || 0).toFixed(2); }
-  private gprinterContent(content: string) { return content.replace(/<BR>/gi, '\n').replace(/<[^>]+>/g, ''); }
+  private gprinterContent(content: string) {
+    return content
+      .replaceAll('<BR>', '\n')
+      .replaceAll('<br>', '\n')
+      .replaceAll('<B>', '')
+      .replaceAll('</B>', '')
+      .replaceAll('<C>', '')
+      .replaceAll('</C>', '')
+      .replaceAll('<', '＜')
+      .replaceAll('>', '＞');
+  }
   private time(value: any) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; }
   private compactJson(value: any): string {
     if (!value) return '';

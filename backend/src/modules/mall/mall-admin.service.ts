@@ -156,6 +156,9 @@ export class MallAdminService {
   }
 
   async sortCategories(ids: string[], operatorId?: string, ip?: string) {
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 500 || ids.some((id) => typeof id !== "string" || !id.trim())) {
+      throw new BadRequestException("分类排序列表必须包含 1 至 500 个有效 ID");
+    }
     for (let i = 0; i < ids.length; i++) {
       await this.prisma.mallCategory.update({
         where: { id: ids[i] },

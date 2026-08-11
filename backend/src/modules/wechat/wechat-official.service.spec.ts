@@ -45,4 +45,11 @@ describe('WechatOfficialService callback signature', () => {
 
     await expect(service.handleCallback('', { ...signedQuery(), echostr: 'challenge' })).resolves.toBe('challenge');
   });
+
+  it('rejects a signed challenge containing markup or control characters', async () => {
+    const service = createService();
+
+    await expect(service.handleCallback('', { ...signedQuery(), echostr: '<script>alert(1)</script>' })).resolves.toBe('error');
+    await expect(service.handleCallback('', { ...signedQuery(), echostr: 'ok\r\nX-Test: injected' })).resolves.toBe('error');
+  });
 });

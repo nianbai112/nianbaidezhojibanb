@@ -12,6 +12,7 @@ import * as nodemailer from 'nodemailer';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
+import { get as httpsGet } from 'https';
 
 const SECRET_MASK = '******';
 const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|pass$/i;
@@ -71,7 +72,7 @@ export class SystemAdminService {
         from: cfg.fromEmail || cfg.user,
         to: dto.toEmail,
         subject: dto.subject || '测试邮件',
-        html: dto.content || `<p>这是一封测试邮件</p>${cfg.emailSignature || ''}`,
+        text: String(dto.content || '这是一封测试邮件'),
       });
       return { success: true, messageId: info.messageId, response: info.response };
     } catch (e: any) {
@@ -909,29 +910,57 @@ export class SystemAdminService {
   // ==================== 微信文章图片提取 ====================
 
   async extractArticleImages(url: string) {
-    try {
-      const https = require('https');
-      const http = require('http');
-      const mod = url.startsWith('https') ? https : http;
-
-      return new Promise((resolve, reject) => {
-        mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res: any) => {
-          let data = '';
-          res.on('data', (chunk: string) => data += chunk);
-          res.on('end', () => {
-            const images: string[] = [];
-            const regex = /data-src="([^"]+)"/g;
-            let match;
-            while ((match = regex.exec(data)) !== null) {
-              if (!images.includes(match[1])) images.push(match[1]);
-            }
-            const titleMatch = data.match(/<title>([^<]+)<\/title>/);
-            resolve({ title: titleMatch?.[1] || '', total: images.length, images });
-          });
-        }).on('error', reject);
+    const requestPath = this.trustedWechatArticlePath(url);
+    return new Promise((resolve, reject) => {
+      const request = httpsGet({
+        protocol: 'https:',
+        hostname: 'mp.weixin.qq.com',
+        port: 443,
+        path: requestPath,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 10000,
+      }, (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new BadRequestException(`获取文章失败: HTTP ${res.statusCode || 0}`));
+          return;
+        }
+        let data = '';
+        let bytes = 0;
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > 2 * 1024 * 1024) {
+            request.destroy(new BadRequestException('文章内容过大'));
+            return;
+          }
+          data += chunk;
+        });
+        res.on('end', () => {
+          const images: string[] = [];
+          const regex = /data-src="([^"]{1,2048})"/g;
+          let match;
+          while ((match = regex.exec(data)) !== null) {
+            if (!images.includes(match[1])) images.push(match[1]);
+          }
+          const titleMatch = data.match(/<title>([^<]{1,500})<\/title>/);
+          resolve({ title: titleMatch?.[1] || '', total: images.length, images });
+        });
       });
-    } catch (e: any) {
-      throw new BadRequestException('获取文章失败: ' + e.message);
+      request.on('error', reject);
+      request.on('timeout', () => request.destroy(new BadRequestException('获取文章超时')));
+    });
+  }
+
+  private trustedWechatArticlePath(value: unknown) {
+    try {
+      const url = new URL(String(value || ''));
+      if (url.protocol !== 'https:' || url.hostname !== 'mp.weixin.qq.com' || url.port || url.username || url.password) {
+        throw new Error('untrusted');
+      }
+      return `${url.pathname}${url.search}`;
+    } catch {
+      throw new BadRequestException('文章链接不可信，仅支持微信公众号 HTTPS 链接');
     }
   }
 }

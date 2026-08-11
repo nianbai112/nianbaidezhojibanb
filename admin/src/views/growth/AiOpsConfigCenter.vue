@@ -712,6 +712,7 @@ const modeLabel = computed(() => {
 
 function deepMerge(target: any, source: any) {
   for (const key of Object.keys(source)) {
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') continue
     if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
       if (!target[key]) target[key] = {}
       deepMerge(target[key], source[key])

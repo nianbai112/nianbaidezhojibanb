@@ -1971,14 +1971,14 @@ export class AdminService {
         const suffix =
           String(Date.now()).slice(-6) + String(i).padStart(3, "0");
         const nickname = `${nicknamePrefix}${suffix}`;
-        const openid = `bot_${regionId}_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 8)}`;
+        const openid = `bot_${regionId}_${Date.now()}_${i}_${crypto.randomUUID().slice(0, 8)}`;
         const selectedGender =
           gender === "random"
-            ? genders[Math.floor(Math.random() * 3)]
+            ? genders[crypto.randomInt(genders.length)]
             : gender.toUpperCase();
         const avatarUrl =
           avatarMode === "random"
-            ? avatars[Math.floor(Math.random() * avatars.length)] + openid
+            ? avatars[crypto.randomInt(avatars.length)] + openid
             : "";
 
         const user = await this.prisma.user.create({
@@ -3674,27 +3674,35 @@ export class AdminService {
   }
 
   private normalizeRegionCode(value: any) {
-    const code = String(value || "")
+    const code = this.trimRegionSeparators(String(value || "")
+      .slice(0, 256)
       .trim()
       .toLowerCase()
       .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+      .replace(/[^a-z0-9_-]/g, ""));
     if (!code)
-      return `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      return `region_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`;
     if (code.length > 48) return code.slice(0, 48);
     return code;
   }
 
   private generateRegionCode(name: string) {
-    const ascii = name
+    const ascii = this.trimRegionSeparators(String(name || "")
+      .slice(0, 256)
       .toLowerCase()
       .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
-      .replace(/^[-_]+|[-_]+$/g, "");
+      .replace(/[^a-z0-9_-]/g, ""));
     return (
-      ascii || `region_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      ascii || `region_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`
     );
+  }
+
+  private trimRegionSeparators(value: string) {
+    let start = 0;
+    let end = value.length;
+    while (start < end && (value[start] === "-" || value[start] === "_")) start += 1;
+    while (end > start && (value[end - 1] === "-" || value[end - 1] === "_")) end -= 1;
+    return value.slice(start, end);
   }
 
   private nullableString(value: any) {
@@ -8342,7 +8350,7 @@ export class AdminService {
         `COS 配置不完整，缺少：${missing.join("、")}`,
       );
     }
-    if (/^https?:\/\//i.test(region) || region.includes(".myqcloud.com")) {
+    if (!/^ap-[a-z0-9-]{2,32}$/.test(region)) {
       throw new BadRequestException(
         "所属城市/地域填写错误：这里请选择 ap-chongqing 这类地域代码，不要填写 COS 访问域名",
       );

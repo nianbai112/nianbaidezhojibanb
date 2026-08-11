@@ -96,7 +96,8 @@ export class WechatOfficialService {
 
     // GET 请求用于服务器验证
     if (query.echostr) {
-      return query.echostr;
+      const challenge = String(query.echostr).trim();
+      return /^[A-Za-z0-9_-]{1,128}$/.test(challenge) ? challenge : 'error';
     }
 
     // POST 请求处理事件

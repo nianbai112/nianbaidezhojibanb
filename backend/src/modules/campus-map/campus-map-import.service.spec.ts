@@ -175,6 +175,17 @@ describe('CampusMapImportService', () => {
     }));
   });
 
+  it('rejects disk-path uploads and only persists the in-memory upload buffer', async () => {
+    const service = new CampusMapImportService(createPrisma() as any);
+
+    await expect(service.createImport('region-1', {
+      originalname: 'campus.geojson',
+      mimetype: 'application/geo+json',
+      size: 68,
+      path: '/etc/passwd',
+    } as any, 'admin-1')).rejects.toThrow('上传文件内容为空');
+  });
+
   it('reports DWG converter readiness from the server ODA path', async () => {
     const prisma = createPrisma();
     prisma.config.findUnique.mockResolvedValue(null);

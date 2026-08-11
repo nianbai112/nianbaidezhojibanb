@@ -940,7 +940,7 @@ async function main() {
     process.exit(1);
   }
   if (defaultPassword.length < 12) {
-    console.error('❌ ADMIN_DEFAULT_PASSWORD 长度不足 12 位 (当前: ' + defaultPassword.length + ' 位)');
+    console.error('❌ ADMIN_DEFAULT_PASSWORD 长度不足 12 位');
     process.exit(1);
   }
   // 检查字符类型: 至少包含大写字母、小写字母、数字、特殊字符中的3种

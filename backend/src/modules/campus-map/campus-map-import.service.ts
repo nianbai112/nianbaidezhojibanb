@@ -128,13 +128,10 @@ export class CampusMapImportService implements OnModuleInit {
     const absolutePath = path.join(this.projectRoot(), relativePath);
 
     await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
-    if (file.buffer) {
-      await fs.promises.writeFile(absolutePath, file.buffer);
-    } else if ((file as any).path) {
-      await fs.promises.copyFile((file as any).path, absolutePath);
-    } else {
+    if (!file.buffer) {
       throw new BadRequestException('上传文件内容为空，无法导入 CAD');
     }
+    await fs.promises.writeFile(absolutePath, file.buffer);
 
     const job: CampusMapImportJob = {
       id: jobId,

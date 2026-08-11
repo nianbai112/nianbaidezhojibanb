@@ -32,6 +32,10 @@ export class NewUiCompatController {
     private readonly prisma: PrismaService,
   ) {}
 
+  private escapeSqlLike(value: unknown) {
+    return String(value || '').replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // 仪表盘
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1756,10 +1760,10 @@ export class NewUiCompatController {
     let listSql = `SELECT "schoolName", COUNT(*)::int as cnt FROM "student_verifies" WHERE "schoolName" IS NOT NULL`;
     const params: any[] = [];
     if (hasKeyword) {
-      const clause = ` AND "schoolName" ILIKE $1`;
+      const clause = ` AND "schoolName" ILIKE $1 ESCAPE '\\'`;
       countSql += clause;
       listSql += clause;
-      params.push(`%${String(keyword).replace(/%/g, "\\%")}%`);
+      params.push(`%${this.escapeSqlLike(keyword)}%`);
     }
     listSql += ` GROUP BY "schoolName" ORDER BY cnt DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     const [list, total] = await Promise.all([

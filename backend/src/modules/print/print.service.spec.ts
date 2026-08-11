@@ -103,4 +103,10 @@ describe('PrintService', () => {
 
     expect(axios.post).toHaveBeenCalledWith(expectedUrl, expect.anything(), expect.any(Object));
   });
+
+  it('converts only the receipt tags supported by Gprinter', () => {
+    const { service } = createService();
+    expect((service as any).gprinterContent('<C><B>标题</B></C><BR><img onerror=alert(1)>'))
+      .toBe('标题\n＜img onerror=alert(1)＞');
+  });
 });

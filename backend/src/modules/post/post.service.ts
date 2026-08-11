@@ -366,7 +366,7 @@ export class PostService {
   }
 
   private compactCoverText(value: any, maxChars: number) {
-    const text = String(value || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    const text = String(value || '').replaceAll('<', '＜').replaceAll('>', '＞').replace(/\s+/g, ' ').trim();
     if (!text) return '';
     const chars = Array.from(text);
     return chars.length > maxChars ? `${chars.slice(0, maxChars).join('')}...` : text;

@@ -26,6 +26,14 @@ function makeService(order: any, mallServiceMock?: any) {
 }
 
 describe('AUD-P1-183 商城后台通用状态接口：资金终态防护', () => {
+  it('拒绝超大分类排序列表，避免用户控制无界循环', async () => {
+    const { service, prisma } = makeService({ id: 'order1' });
+    prisma.mallCategory = { update: jest.fn() };
+
+    await expect(service.sortCategories(Array.from({ length: 501 }, (_, i) => `category-${i}`)))
+      .rejects.toThrow(BadRequestException);
+    expect(prisma.mallCategory.update).not.toHaveBeenCalled();
+  });
   // ===== 1. 资金终态 / 发货 等禁止通过泛化 mall:edit 接口直写 =====
   const FORBIDDEN = ['pending_pay', 'paid', 'shipped', 'refunding', 'refunded'];
   for (const status of FORBIDDEN) {

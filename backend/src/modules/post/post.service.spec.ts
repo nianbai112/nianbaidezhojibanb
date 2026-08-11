@@ -588,4 +588,8 @@ describe('PostService', () => {
       expect(JSON.stringify(response)).not.toContain('真实姓名');
     });
   });
+
+  it('keeps malformed angle-bracket text inert in generated cover summaries', () => {
+    expect((service as any).compactCoverText('A <broken value> B', 72)).toBe('A ＜broken value＞ B');
+  });
 });

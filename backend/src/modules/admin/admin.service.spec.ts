@@ -1272,6 +1272,13 @@ describe("AdminService", () => {
     });
   });
 
+  describe("region code normalization", () => {
+    it("removes edge separators with bounded operations", () => {
+      expect((service as any).normalizeRegionCode("---Campus North___")).toBe("campus-north");
+      expect((service as any).generateRegionCode("___South Campus---")).toBe("south-campus");
+    });
+  });
+
   describe("refundsFinance", () => {
     it("should return finance refund summary", async () => {
       prisma.paymentRefund.findMany.mockResolvedValue([
