@@ -560,3 +560,60 @@ describe('NotifyService interaction inbox', () => {
     expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 });
+
+describe('NotifyService visible unread buckets', () => {
+  it('returns every non-interaction notification from the system inbox query', async () => {
+    const prisma = createPrismaMock();
+    const service = createService(prisma);
+
+    await service.getCenterList('user-1', {
+      type: 'system',
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        type: {
+          in: [
+            'SYSTEM',
+            'ADMIN_BROADCAST',
+            'ANNOUNCEMENT',
+            'MESSAGE',
+            'CIRCLE',
+            'ORDER',
+            'DELIVERY',
+            'REFUND',
+            'WALLET',
+            'CERTIFICATION',
+            'MERCHANT',
+          ],
+        },
+      }),
+    }));
+  });
+
+  it('makes total unread equal the two visible message-page buckets', async () => {
+    const prisma = createPrismaMock();
+    prisma.notification.findMany.mockResolvedValue([
+      { type: 'ORDER' },
+      { type: 'WALLET' },
+      { type: 'SYSTEM' },
+      { type: 'LIKE' },
+    ]);
+    prisma.conversationMember.findMany.mockResolvedValue([
+      { unreadCount: 3, conversation: { type: 'private' } },
+    ]);
+
+    const result = await createService(prisma).getUnreadSummary('user-1', 'region-1');
+
+    expect(result.unreadCounts).toEqual(expect.objectContaining({
+      systemChat: 6,
+      interaction: 1,
+    }));
+    expect(result.totalUnread).toBe(7);
+    expect(result.totalUnread).toBe(
+      result.unreadCounts.systemChat + result.unreadCounts.interaction,
+    );
+  });
+});

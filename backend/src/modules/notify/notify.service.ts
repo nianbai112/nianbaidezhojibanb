@@ -123,7 +123,19 @@ export class NotifyService {
     if (!type) return undefined;
     const key = String(type).trim().toLowerCase();
     const groups: Record<string, string[]> = {
-      system: ['SYSTEM', 'ADMIN_BROADCAST', 'ANNOUNCEMENT'],
+      system: [
+        'SYSTEM',
+        'ADMIN_BROADCAST',
+        'ANNOUNCEMENT',
+        'MESSAGE',
+        'CIRCLE',
+        'ORDER',
+        'DELIVERY',
+        'REFUND',
+        'WALLET',
+        'CERTIFICATION',
+        'MERCHANT',
+      ],
       comment: ['COMMENT', 'REPLY', 'MENTION'],
       message: ['MESSAGE', 'CIRCLE'],
       interaction: ['COMMENT', 'REPLY', 'MENTION', 'LIKE', 'FOLLOW', 'SQUAT'],
@@ -1052,6 +1064,8 @@ export class NotifyService {
       certification: 0,
       merchant: 0,
       announcement: 0,
+      systemChat: 0,
+      interaction: 0,
     };
 
     for (const n of notifications) {
@@ -1073,7 +1087,13 @@ export class NotifyService {
 
     counts.message += chatUnread;
     const notificationUnread = notifications.length;
-    const total = notificationUnread + chatUnread;
+    counts.interaction = counts.comment
+      + counts.reply
+      + counts.like
+      + counts.follow
+      + counts.squat;
+    counts.systemChat = notificationUnread - counts.interaction + chatUnread;
+    const total = counts.systemChat + counts.interaction;
 
     const result = {
       total,
