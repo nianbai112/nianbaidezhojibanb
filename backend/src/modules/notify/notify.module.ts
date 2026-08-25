@@ -8,12 +8,14 @@ import { NotificationChannelService } from './notification-channel.service';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { PrismaModule } from '../../common/modules/prisma.module';
 import { WechatModule } from '../wechat/wechat.module';
+import { PushModule } from '../push/push.module';
 
 @Module({
   imports: [
     PrismaModule,
     WebsocketModule,
     WechatModule,
+    PushModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

@@ -322,6 +322,8 @@ async function loadStatus() {
   try {
     const data = await getSetupStatus()
     status.initialized = data.initialized
+    status.setupTokenRequired = Boolean(data.setupTokenRequired)
+    status.setupWizardMode = Boolean(data.setupWizardMode)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.message || '读取安装状态失败，请确认后端已启动')
   } finally {

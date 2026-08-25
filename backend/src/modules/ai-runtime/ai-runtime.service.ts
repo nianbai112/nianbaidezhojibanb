@@ -24,6 +24,7 @@ export interface AiRuntimeConfig {
   prompt: string;
   contentSafetyEnabled: boolean;
   reviewBeforePost: boolean;
+  reviewSampleRate: number;
   source: string;
 }
 
@@ -328,6 +329,12 @@ export class AiRuntimeService {
       ),
       contentSafetyEnabled: this.boolValue(ops.contentSafetyEnabled, true),
       reviewBeforePost: this.boolValue(ops.reviewBeforePost, true),
+      // AI 放行内容的随机抽检比例(0-100),支持顶层或 riskControl 内配置
+      reviewSampleRate: Math.max(0, Math.min(100, this.numberValue(
+        ops.reviewSampleRate ?? ops.riskControl?.reviewSampleRate
+          ?? legacyMini.reviewSampleRate ?? legacySystem.reviewSampleRate,
+        0,
+      ))),
       source,
     };
   }
@@ -526,7 +533,7 @@ export class AiRuntimeService {
       select: { word: true, level: true, category: true },
       take: 1000,
     }).catch(() => [] as Array<{ word: string; level: string; category: string }>);
-    return words.find((item) => {
+    return words.find((item: { word: string; level: string; category: string }) => {
       const word = String(item.word || '').trim().toLowerCase();
       return Boolean(word && content.includes(word));
     }) || null;
@@ -578,16 +585,52 @@ export class AiRuntimeService {
     };
   }
 
+  // 随机抽检:AI 放行的内容按 reviewSampleRate(0-100)比例转人工复核,防止 AI 判断漂移无人发现
+  private applySampling(result: AiModerationResult, sampleRate: number): AiModerationResult {
+    const rate = Math.max(0, Math.min(100, Number(sampleRate) || 0));
+    if (rate <= 0 || result.decision !== 'approve') return result;
+    if (Math.random() * 100 >= rate) return result;
+    return {
+      ...result,
+      decision: 'manual',
+      reason: `${String(result.reason || 'AI审核通过')}；命中${rate}%随机抽检，转人工复核`,
+      labels: Array.from(new Set([...(result.labels || []), 'random_sampling'])),
+      fallbackType: 'random_sampling',
+    };
+  }
+
+  private normalizeModerationImageUrls(value: unknown) {
+    const rawUrls = [...new Set(
+      (Array.isArray(value) ? value : [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    )];
+    const publicBaseUrl = this.stringValue(
+      this.configService.get<string>('PUBLIC_BASE_URL'),
+      this.configService.get<string>('PUBLIC_API_URL'),
+      this.configService.get<string>('APP_URL'),
+      this.configService.get<string>('SITE_URL'),
+    ).replace(/\/+$/, '');
+    const usableUrls = rawUrls.map((url) => {
+      if (/^https?:\/\//i.test(url)) return url;
+      if (url.startsWith('/') && publicBaseUrl) return `${publicBaseUrl}${url}`;
+      return '';
+    }).filter(Boolean);
+    return { rawUrls, usableUrls };
+  }
+
   async moderateContent(input: {
     type: 'post' | 'comment';
     title?: string | null;
     content: string;
+    imageUrls?: string[];
     regionId?: string | null;
     approvalType?: string;
     manualFallback?: boolean;
   }): Promise<AiModerationResult> {
     const approvalType = String(input.approvalType || 'manual').toLowerCase();
     const manualFallback = input.manualFallback !== false;
+    const { rawUrls: submittedImageUrls, usableUrls: imageUrls } = this.normalizeModerationImageUrls(input.imageUrls);
     if (!['ai', 'llm', 'model'].includes(approvalType)) {
       if (['none', 'auto', 'pass', 'published', 'approved'].includes(approvalType)) {
         return { decision: 'approve', reason: '无需审核', labels: [], score: 0, skipped: true };
@@ -597,83 +640,117 @@ export class AiRuntimeService {
 
     const config = await this.getRuntimeConfig();
     if (!config.enabled || !config.apiKey) {
-      return this.resolveManualFallback({
+      // 故障安全:AI 未启用/未配置属于"AI 出故障",必须转人工,不受 manualFallback=false 影响
+      return {
         decision: 'manual',
         reason: 'AI未启用或密钥未配置，已转人工审核',
-        labels: ['ai_not_configured'],
+        labels: ['ai_not_configured', ...(submittedImageUrls.length ? ['image_review_failed'] : [])],
         score: 0,
         skipped: true,
         fallbackType: 'ai_not_configured',
-      }, manualFallback);
+      };
     }
 
     const content = String(input.content || '').trim();
-    if (!content && !input.title) {
+    if (!content && !input.title && !submittedImageUrls.length) {
       return { decision: 'reject', reason: '内容为空', labels: ['empty'], score: 1, skipped: true };
+    }
+    if (submittedImageUrls.length > 9) {
+      return {
+        decision: 'manual',
+        reason: `图片数量过多（${submittedImageUrls.length} 张），已转人工审核`,
+        labels: ['image_count_exceeded', 'image_review_failed'],
+        score: 0.5,
+        skipped: true,
+        fallbackType: 'image_count_exceeded',
+      };
+    }
+    if (submittedImageUrls.length !== imageUrls.length) {
+      return {
+        decision: 'manual',
+        reason: '部分图片地址无法提供给 AI 审核，已转人工审核',
+        labels: ['image_unreachable', 'image_review_failed'],
+        score: 0.5,
+        skipped: true,
+        fallbackType: 'image_unreachable',
+      };
     }
     const sensitiveHit = await this.detectSensitiveHit(`${input.title || ''}\n${content}`);
     if (sensitiveHit) {
       const level = String(sensitiveHit.level || 'audit').toLowerCase();
       const decision: AiDecision = level === 'strict' ? 'reject' : 'manual';
-      return this.resolveManualFallback({
+      return this.applySampling(this.resolveManualFallback({
         decision,
         reason: `命中敏感词：${sensitiveHit.word}`,
         labels: ['sensitive_word', sensitiveHit.category || 'other', level],
         score: level === 'strict' ? 1 : 0.75,
         skipped: true,
         fallbackType: 'sensitive_word',
-      }, manualFallback);
+      }, manualFallback), config.reviewSampleRate);
     }
 
     const prompt = [
       '请审核校园本地生活平台用户内容，必须只输出 JSON。',
       'JSON 格式：{"decision":"approve|reject|manual","reason":"一句中文原因","labels":["标签"],"score":0到1}',
-      '审核标准：违法违规、色情低俗、暴力仇恨、诈骗引流、联系方式/二维码引流、广告刷屏、攻击辱骂、隐私泄露应拒绝或转人工；普通校园生活、二手、跑腿、外卖、求助、圈子互动可通过。',
+      '审核标准：违法违规、政治敏感、色情低俗、暴力仇恨、毒品、诈骗引流、联系方式/二维码引流、广告刷屏、攻击辱骂、隐私泄露应拒绝或转人工；普通校园生活、二手、跑腿、外卖、求助、圈子互动可通过。',
+      '如果提供了图片，必须逐张检查图像画面、图中文字、二维码/收款码、广告与隐私信息，并与标题正文联合判断；任意一张图片高风险时不得因正文正常而放行。',
       `内容类型：${input.type === 'post' ? '帖子/笔记' : '评论'}`,
       `标题：${input.title || ''}`,
       `正文：${content.slice(0, 2000)}`,
+      `图片数量：${imageUrls.length}`,
     ].join('\n');
+    const userContent: AiMessageContent = imageUrls.length
+      ? [
+          { type: 'text', text: prompt },
+          ...imageUrls.map((url) => ({ type: 'image_url', image_url: { url } })),
+        ]
+      : prompt;
 
     try {
       const detail = await this.callChatDetailed(
         [
-          { role: 'system', content: '你是严谨的内容安全审核员，只输出 JSON，不要解释。' },
-          { role: 'user', content: prompt },
+          { role: 'system', content: '你是严谨的多模态内容安全审核员，必须同时审核文字和每一张图片，只输出 JSON，不要解释。' },
+          { role: 'user', content: userContent },
         ],
-        { temperature: 0.1, maxTokens: 500, purpose: 'moderation', source: 'content_review', regionId: input.regionId || undefined },
+        { temperature: 0.1, maxTokens: 500, purpose: 'moderation', source: imageUrls.length ? 'content_review_multimodal' : 'content_review', regionId: input.regionId || undefined },
       );
       const raw = detail.content;
       const parsed = this.extractJson(raw);
       if (!parsed) {
-        return this.resolveManualFallback({
+        // 故障安全:结果无法解析属于"AI 出故障",必须转人工,不受 manualFallback=false 影响
+        return {
           decision: 'manual',
           reason: 'AI审核结果无法解析，已转人工审核',
-          labels: ['parse_failed'],
+          labels: ['parse_failed', ...(imageUrls.length ? ['image_review_failed'] : [])],
           score: 0.5,
           raw,
           callLogId: detail.callLogId,
           fallbackType: 'parse_failed',
-        }, manualFallback);
+        };
       }
       const decision = ['approve', 'reject', 'manual'].includes(parsed.decision) ? parsed.decision : 'manual';
-      return this.resolveManualFallback({
+      return this.applySampling(this.resolveManualFallback({
         decision,
         reason: String(parsed.reason || (decision === 'approve' ? 'AI审核通过' : 'AI建议人工复核')),
-        labels: Array.isArray(parsed.labels) ? parsed.labels.map((item: any) => String(item)) : [],
+        labels: Array.from(new Set([
+          ...(Array.isArray(parsed.labels) ? parsed.labels.map((item: any) => String(item)) : []),
+          ...(imageUrls.length ? ['image_reviewed', 'multimodal_review'] : []),
+        ])),
         score: Math.max(0, Math.min(1, Number(parsed.score) || 0)),
         raw,
         callLogId: detail.callLogId,
         fallbackType: 'none',
-      }, manualFallback);
+      }, manualFallback), config.reviewSampleRate);
     } catch (error: any) {
-      return this.resolveManualFallback({
+      // 故障安全:调用失败/超时属于"AI 出故障",必须转人工,不受 manualFallback=false 影响
+      return {
         decision: 'manual',
         reason: error?.message ? `AI审核失败，已转人工：${error.message.slice(0, 120)}` : 'AI审核失败，已转人工',
-        labels: ['ai_error'],
+        labels: ['ai_error', ...(imageUrls.length ? ['image_review_failed'] : [])],
         score: 0.5,
         callLogId: error?.callLogId,
         fallbackType: error?.errorCode || 'provider_error',
-      }, manualFallback);
+      };
     }
   }
 

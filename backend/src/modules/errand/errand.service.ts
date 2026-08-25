@@ -291,12 +291,27 @@ export class ErrandService {
     const remark = this.parseOrderRemark(order)
     const current = this.parseErrandPayableDate(now) || new Date()
     const deliveryTime = this.parseErrandPayableDate(remark.delivery_time || order.deliverTime)
+
+    // 检查配送时间是否已过期
     if (deliveryTime && deliveryTime.getTime() <= current.getTime()) {
       throw new BadRequestException('跑腿订单时间已过期，请重新下单')
     }
+
     const createdAt = this.parseErrandPayableDate(order.createdAt)
-    if (createdAt && createdAt.getTime() + 15 * 60 * 1000 <= current.getTime()) {
-      throw new BadRequestException('跑腿订单时间已过期，请重新下单')
+    if (!createdAt) return
+
+    // 区分即时单和预约单的支付窗口
+    if (deliveryTime && deliveryTime.getTime() > current.getTime()) {
+      // 预约单：支付窗口延长到配送时间前 1 小时
+      const paymentDeadline = deliveryTime.getTime() - 60 * 60 * 1000
+      if (current.getTime() > paymentDeadline) {
+        throw new BadRequestException('预约订单支付时间已过，请重新下单')
+      }
+    } else {
+      // 即时单：15 分钟支付窗口
+      if (createdAt.getTime() + 15 * 60 * 1000 <= current.getTime()) {
+        throw new BadRequestException('跑腿订单时间已过期，请重新下单')
+      }
     }
   }
 
@@ -828,6 +843,7 @@ export class ErrandService {
         time: node.createdAt,
         address: node.address || '',
         remark: node.remark || '',
+        proofImages: Array.isArray(node.proofImages) ? node.proofImages : [],
       })),
     }
   }
@@ -2112,6 +2128,11 @@ export class ErrandService {
     );
   }
 
+  /** 生成 6 位收货码，用于骑手凭码完成收货核销 */
+  private generateReceiptCode(): string {
+    return String(Math.floor(100000 + Math.random() * 900000));
+  }
+
   async acceptOrder(orderId: string, userId: string) {
     return this.runWithLock(
       `errand:order:${orderId}:accept`,
@@ -2133,7 +2154,7 @@ export class ErrandService {
       }
 	      const rider = await tx.regionRider.findUnique({ where: { userId } });
 	      if (rider?.verifyStatus === 'approved') {
-	        if (rider.status !== 'online') throw new BadRequestException('请先切换为在线状态再接单');
+	        if (!['online', 'busy'].includes(rider.status)) throw new BadRequestException('请先切换为在线状态再接单');
 	        if (order.regionId && rider.regionId !== order.regionId) throw new BadRequestException('不能接其他区域的订单');
 	        const policy = await this.getOrderTakingPolicy(order.regionId || rider.regionId)
 	        const fallbackEligibility = assessApprovedRiderFallbackEligibility({
@@ -2145,6 +2166,9 @@ export class ErrandService {
 	          throw new BadRequestException(fallbackEligibility.reason || '该订单暂未进入认证骑手兜底池')
 	        }
 	        const dispatchContext = await this.getRiderDispatchContext(userId, tx);
+	        if (dispatchContext.active_orders_count >= 2) {
+	          throw new BadRequestException('同时配送中的订单已达上限（2 单）');
+	        }
 	        const dispatchAssessment = assessErrandDispatch({
 	          order: this.buildDispatchOrderPayload(order),
 	          rider: dispatchContext,
@@ -2155,7 +2179,7 @@ export class ErrandService {
 	        const deliveryDisplayMode = this.deliveryDisplayModeForRider(rider);
 	        const claimed = await tx.errandOrder.updateMany({
 	          where: { id: orderId, status: 'pending_accept', riderId: null, refundStatus: { notIn: ['refunding', 'refunded'] } },
-	          data: { riderId: userId, status: 'accepted', acceptTime: new Date(), deliveryDisplayMode },
+	          data: { riderId: userId, status: 'accepted', acceptTime: new Date(), deliveryDisplayMode, receiptCode: this.generateReceiptCode() },
 	        });
 	        if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后再接单');
 	        const updated = await tx.errandOrder.findUniqueOrThrow({
@@ -2172,9 +2196,10 @@ export class ErrandService {
 	          riderType: rider.riderType,
 	          displayMode: deliveryDisplayMode,
 	        });
+	        const activeAfter = dispatchContext.active_orders_count + 1;
 	        const riderClaimed = await tx.regionRider.updateMany({
-	          where: { userId, verifyStatus: 'approved', status: 'online' },
-	          data: { status: 'busy' },
+	          where: { userId, verifyStatus: 'approved', status: { in: ['online', 'busy'] } },
+	          data: { status: activeAfter >= 2 ? 'busy' : 'online' },
 	        });
 	        if (riderClaimed.count !== 1) throw new BadRequestException('骑手状态已变化，请刷新后再接单');
 	        return updated;
@@ -2274,9 +2299,13 @@ export class ErrandService {
       const rider = await tx.regionRider.findUnique({ where: { userId } });
       if (!rider) throw new BadRequestException('请先申请成为骑手');
       if (rider.verifyStatus !== 'approved') throw new BadRequestException('骑手账号未通过审核');
-      if (rider.status !== 'online') throw new BadRequestException('请先切换为在线状态再接单');
+      if (!['online', 'busy'].includes(rider.status)) throw new BadRequestException('请先切换为在线状态再接单');
       if (order.merchant?.regionId && rider.regionId !== order.merchant.regionId) {
         throw new BadRequestException('不能接其他区域的订单');
+      }
+      const dispatchContext = await this.getRiderDispatchContext(userId, tx);
+      if (dispatchContext.active_orders_count >= 2) {
+        throw new BadRequestException('同时配送中的订单已达上限（2 单）');
       }
       const deliveryDisplayMode = this.deliveryDisplayModeForRider(rider);
       const acceptedAt = new Date();
@@ -2303,9 +2332,10 @@ export class ErrandService {
         orderId, orderType: 'shop', nodeType: 'accepted', operatorId: userId,
         riderType: rider.riderType, displayMode: deliveryDisplayMode, remark: '骑手已接单，前往商家取餐',
       });
+      const activeAfter = dispatchContext.active_orders_count + 1;
       const riderClaimed = await tx.regionRider.updateMany({
-        where: { userId, verifyStatus: 'approved', status: 'online' },
-        data: { status: 'busy' },
+        where: { userId, verifyStatus: 'approved', status: { in: ['online', 'busy'] } },
+        data: { status: activeAfter >= 2 ? 'busy' : 'online' },
       });
       if (riderClaimed.count !== 1) throw new BadRequestException('骑手状态已变化，请刷新后再接单');
       return accepted;
@@ -2381,6 +2411,35 @@ export class ErrandService {
         })
         const [formatted] = await this.formatMiniOrders([updated])
         return { success: true, message: '确认收货成功', data: formatted }
+      },
+    )
+  }
+
+  /** 骑手凭收货码完成收货核销（仅跑腿单） */
+  async confirmReceiptByCode(orderId: string, userId: string, code: string) {
+    return this.runWithLock(
+      `errand:order:${orderId}:confirm-receipt`,
+      '订单正在确认收货，请稍后再试',
+      async () => {
+        const lifecycle = this.errandLifecycleService || new ErrandLifecycleService(this.prisma)
+        const updated = await lifecycle.confirmReceipt(orderId, userId, 'rider', code)
+        await this.recordErrandLearningSnapshot('order_completed', {
+          orderId: updated.id,
+          orderNo: updated.orderNo,
+          regionId: updated.regionId,
+          serviceType: internalErrandTypeToMini(updated.type),
+          orderStatus: updated.status,
+          riderId: updated.riderId,
+          receiverType: this.displayReceiverTypeFromOrder(updated),
+          risk: this.riskAssessmentFromOrder(updated),
+          outcomeLabel: this.learningOutcomeForErrandStatus('completed', updated),
+          outcomeMeta: {
+            receipt_confirmed_by: 'rider_code',
+            status_updated_at: new Date().toISOString(),
+          },
+        })
+        const [formatted] = await this.formatMiniOrders([updated])
+        return { success: true, message: '收货核销成功', data: formatted }
       },
     )
   }
@@ -2628,6 +2687,7 @@ export class ErrandService {
         region_id: row.regionId || '',
         status: displayStatus,
         raw_status: row.status,
+        receipt_code: row.receiptCode || '',
 	        refund_status: refundStatus,
 	        refund_amount: this.numberValue(row.refundAmount, 0).toFixed(2),
         receipt_confirm_deadline: row.receiptConfirmDeadline || null,
@@ -2956,7 +3016,7 @@ export class ErrandService {
       },
       linkType: 'page',
       linkValue: '/RunErrands?tab=pending_orders',
-      channelMask: { inApp: true, websocket: true },
+      channelMask: { inApp: true, websocket: true, push: true },
     })));
     const failed = results.filter((item) => item.status === 'rejected').length;
     if (failed) this.logger.warn(`跑腿新单通知部分失败 order=${order.id} failed=${failed}`);

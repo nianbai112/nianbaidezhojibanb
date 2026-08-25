@@ -18,10 +18,6 @@ export class JwtGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    if (this.isVerifiedMiniappFileRequest(request)) {
-      return true;
-    }
-
     const token = this.extractTokenFromHeader(request);
 
     if (!token) {
@@ -124,12 +120,4 @@ export class JwtGuard implements CanActivate {
     return undefined;
   }
 
-  private isVerifiedMiniappFileRequest(request: Request): boolean {
-    if (request.method?.toUpperCase() !== 'GET') return false;
-    const requestPath = String(request.path || request.url || '').split('?')[0]
-      .replace(/\/+/g, '/')
-      .replace(/\/$/, '');
-    return requestPath === '/admin/license-runtime/miniapp/file'
-      || requestPath === '/api/admin/license-runtime/miniapp/file';
-  }
 }

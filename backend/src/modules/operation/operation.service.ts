@@ -2515,26 +2515,94 @@ export class OperationService {
 
   // ========== 排行榜 ==========
   async getRankings(query: any) {
-    const { type = 'user', page = 1, limit = 20 } = query;
+    const {
+      type = 'user',
+      sort_by = 'orders',   // orders | earnings
+      order = 'desc',
+      time_range = 'week',  // day | week | month | all
+      page = 1,
+      limit = 20,
+    } = query;
+
+    const take = Math.min(Number(limit) || 20, 100);
+    const skip = (Math.max(Number(page), 1) - 1) * take;
+    const dir = order === 'asc' ? 'asc' : 'desc';
+
+    // 骑手排行榜（sort_by = orders / earnings）
+    if (sort_by === 'orders' || sort_by === 'earnings') {
+      const now = new Date();
+      let since: Date | undefined;
+      if (time_range === 'day') {
+        since = new Date(now);
+        since.setHours(0, 0, 0, 0);
+      } else if (time_range === 'week') {
+        since = new Date(now);
+        since.setDate(since.getDate() - 7);
+      } else if (time_range === 'month') {
+        since = new Date(now);
+        since.setDate(since.getDate() - 30);
+      }
+
+      const whereOrder: any = { status: 'completed' };
+      if (since) whereOrder.completeTime = { gte: since };
+
+      // 聚合骑手完成订单数和总收益
+      const grouped = await this.prisma.errandOrder.groupBy({
+        by: ['riderId'],
+        where: { ...whereOrder, riderId: { not: null } },
+        _count: { id: true },
+        _sum: { payAmount: true },
+        orderBy: sort_by === 'earnings'
+          ? [{ _sum: { payAmount: dir as any } }]
+          : [{ _count: { id: dir as any } }],
+        take: take + skip,
+      });
+
+      const sliced = grouped.slice(skip, skip + take);
+      if (!sliced.length) return { list: [], total: 0 };
+
+      const riderIds = sliced.map(r => r.riderId!);
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: riderIds } },
+        select: { id: true, nickname: true, avatar: true },
+      });
+      const userMap = new Map(users.map(u => [u.id, u]));
+
+      const list = sliced.map((r, i) => ({
+        rank: skip + i + 1,
+        riderId: r.riderId,
+        nickname: userMap.get(r.riderId!)?.nickname || '骑手',
+        avatar: userMap.get(r.riderId!)?.avatar || '',
+        orderCount: r._count.id,
+        totalEarnings: Number(r._sum.payAmount || 0),
+      }));
+
+      return { list, total: grouped.length };
+    }
+
+    // 用户排行（按注册时间）
     if (type === 'user') {
       const users = await this.prisma.user.findMany({
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: Number(limit),
+        skip,
+        take,
         select: { id: true, nickname: true, avatar: true },
       });
       return { list: users, total: await this.prisma.user.count() };
     }
+
+    // 帖子排行（按点赞）
     if (type === 'post') {
       const posts = await this.prisma.post.findMany({
         where: { status: 'PUBLISHED' },
-        orderBy: { likeCount: 'desc' },
-        skip: (page - 1) * limit,
-        take: Number(limit),
+        orderBy: { likeCount: dir },
+        skip,
+        take,
         select: { id: true, title: true, content: true, likeCount: true, userId: true },
       });
       return { list: posts, total: await this.prisma.post.count({ where: { status: 'PUBLISHED' } }) };
     }
+
     return { list: [], total: 0 };
   }
 

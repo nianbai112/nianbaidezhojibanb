@@ -39,6 +39,32 @@ export function taskSessionCount(task = {}) {
   return Number(task?._count?.sessions ?? task?.sessions?.length ?? 0)
 }
 
+export function toCollectorOption(row = {}) {
+  const user = row.User || row.user || {}
+  const phone = String(row.phone || user.phone || '')
+  return {
+    value: String(row.userId || user.id || row.id || ''),
+    label: String(row.realName || user.nickname || row.nickname || phone || '未命名骑手'),
+    phone: /^\d{11}$/.test(phone) ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone,
+    uid: user.uid ?? row.uid ?? '',
+    avatar: String(user.avatar || row.avatar || ''),
+  }
+}
+
+export function buildProfessionalTaskPayload(form = {}) {
+  return {
+    name: String(form.name || '').trim(),
+    instructions: String(form.instructions || '').trim(),
+    status: String(form.status || 'draft'),
+    collectorUserIds: [...new Set((form.collectorUserIds || []).map(String).filter(Boolean))],
+    allowedClients: ['rider_app'],
+    objectTypes: [...new Set((form.objectTypes || []).map(String).filter(Boolean))],
+    priority: Number(form.priority) || 3,
+    dueAt: form.dueAt || null,
+    boundary: form.boundary || null,
+  }
+}
+
 export function formatSessionDuration(session = {}) {
   const startedAt = new Date(session.startedAt).getTime()
   const endedAt = new Date(session.endedAt || Date.now()).getTime()
@@ -46,4 +72,59 @@ export function formatSessionDuration(session = {}) {
   const seconds = Math.floor((endedAt - startedAt) / 1000)
   const minutes = Math.floor(seconds / 60)
   return `${minutes}分${seconds % 60}秒`
+}
+
+export const OBJECT_TYPE_LABELS = {
+  road: '道路', building: '建筑', entrance: '入口', facility: '设施', issue: '异常',
+}
+
+export function objectTypeLabel(objectType) {
+  return OBJECT_TYPE_LABELS[objectType] || objectType || '--'
+}
+
+export const REVIEW_STATUSES = [
+  { value: 'pending', label: '待审核', type: 'warning' },
+  { value: 'approved', label: '已通过', type: 'success' },
+  { value: 'resample', label: '要求重采', type: 'danger' },
+  { value: 'held', label: '已暂缓', type: 'info' },
+  { value: 'void', label: '已作废', type: 'info' },
+]
+
+export function reviewStatusLabel(status) {
+  return REVIEW_STATUSES.find((item) => item.value === status)?.label || status || '--'
+}
+
+export function reviewStatusType(status) {
+  return REVIEW_STATUSES.find((item) => item.value === status)?.type || 'info'
+}
+
+export function geometrySummary(geometry = {}) {
+  const type = String(geometry?.type || '')
+  const coordinates = geometry?.coordinates
+  if (type === 'LineString') {
+    const count = Array.isArray(coordinates) ? coordinates.length : 0
+    return `线 · ${count} 个点`
+  }
+  if (type === 'Polygon') {
+    const ring = Array.isArray(coordinates?.[0]) ? coordinates[0] : []
+    return `面 · ${Math.max(0, ring.length - 1)} 个顶点`
+  }
+  if (type === 'Point') return '点 · 单点定位'
+  return type || '--'
+}
+
+export function objectPropertiesList(properties = {}) {
+  const rows = []
+  const push = (label, value) => {
+    if (value === undefined || value === null || value === '') return
+    rows.push({ label, value })
+  }
+  push('名称', properties.name)
+  push('分类 / 用途', properties.subtype)
+  push('路面', properties.surface)
+  push('开放状态', properties.openStatus)
+  push('严重程度', properties.severity)
+  push('无障碍通行', properties.accessible === undefined ? undefined : (properties.accessible ? '是' : '否'))
+  push('现场说明', properties.note)
+  return rows
 }

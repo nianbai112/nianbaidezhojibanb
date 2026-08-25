@@ -45,15 +45,15 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
 <style scoped>
 .wt {
   width: 100%;
-  height: 44px;
+  height: 56px;
   border-radius: 8px;
   background: #fff;
   border: 1px solid var(--mx-border, #e3e9f2);
-  padding: 6px 8px;
+  padding: 7px 9px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -67,13 +67,13 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
 .w60 { width: 60%; }
 .w40 { width: 40%; }
 .wt-bar {
-  height: 7px;
+  height: 9px;
   border-radius: 3px;
   background: var(--wc);
   opacity: .85;
 }
 .wt-pill {
-  height: 8px;
+  height: 10px;
   border-radius: 999px;
   background: #eef2f7;
   border: 1px solid #e2e8f0;
@@ -85,10 +85,10 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding-bottom: 3px;
+  padding-bottom: 4px;
 }
 .wt-img i {
-  width: 14px;
+  width: 18px;
   height: 3px;
   border-radius: 2px;
   background: rgba(255, 255, 255, .9);
@@ -106,13 +106,13 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
   background: var(--wb);
 }
 .wt-notice {
-  height: 9px;
+  height: 11px;
   border-radius: 4px;
   background: #fff3d6;
   border: 1px solid #f5e3b3;
 }
 .wt-btn {
-  height: 12px;
+  height: 14px;
   border-radius: 999px;
   background: var(--wc);
 }
@@ -124,13 +124,13 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
 .wt-dyn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 1;
 }
 .wt-dyn-icon {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: var(--wb);
   color: var(--wc);
   display: grid;
@@ -140,7 +140,7 @@ defineProps<{ type: string; icon: any; color: string; bg: string }>()
 .wt-dyn-lines {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   flex: 1;
 }
 </style>

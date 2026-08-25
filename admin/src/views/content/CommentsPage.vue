@@ -176,7 +176,6 @@
             <span>点赞差异 {{ detailData.likes?.drift ?? '-' }}</span>
             <span>举报 {{ detailData.reports?.total ?? detailData.reportCount ?? 0 }}</span>
           </div>
-          <div v-if="detailData.lottery" class="detail-row"><span>抽奖：</span>{{ detailData.lottery.title }} / {{ detailData.lottery.status }}</div>
         </div>
 
         <div class="detail-section" v-if="detailData.timeline?.length">

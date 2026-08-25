@@ -3,11 +3,12 @@ import { PrismaModule } from '../../common/modules/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { ErrandModule } from '../errand/errand.module';
 import { SystemConfigModule } from '../system-config/system-config.module';
+import { FinanceModule } from '../finance/finance.module';
 import { RiderAppController } from './rider-app.controller';
 import { RiderAppService } from './rider-app.service';
 
 @Module({
-  imports: [AuthModule, PrismaModule, ErrandModule, SystemConfigModule],
+  imports: [AuthModule, PrismaModule, ErrandModule, SystemConfigModule, FinanceModule],
   controllers: [RiderAppController],
   providers: [RiderAppService],
 })

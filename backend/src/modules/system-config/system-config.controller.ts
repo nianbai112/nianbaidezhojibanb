@@ -7,6 +7,7 @@ import {
   Query,
   Body,
   Param,
+  Header,
   UseGuards,
   Req,
 } from "@nestjs/common";
@@ -19,6 +20,7 @@ import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
 import { RequirePermission } from "../../decorators/require-permission.decorator";
 import { CurrentUser } from "../../decorators/current-user.decorator";
 import { Request } from "express";
+import { SaveAppReviewModeDto } from './dto/app-review-mode.dto';
 
 @ApiTags("系统配置")
 @Controller()
@@ -143,7 +145,56 @@ export class SystemConfigController {
     return this.systemConfigService.resetGroup(dto.group, operatorId, req.ip);
   }
 
-  @Get("admin/config/ai")
+  @Get('admin/config/app-review-mode')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '获取小程序审核模式配置' })
+  getAppReviewMode() {
+    return this.systemConfigService.getAppReviewMode();
+  }
+
+  @Put('admin/config/app-review-mode')
+  @RequirePermission('system:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '保存小程序审核模式配置' })
+  saveAppReviewMode(@Body() dto: SaveAppReviewModeDto, @CurrentUser('sub') operatorId: string, @Req() req: Request) {
+    return this.systemConfigService.saveAppReviewMode(dto, operatorId, req.ip);
+  }
+
+  // ================= 业务抽成费率配置 =================
+
+  @Get('admin/config/biz-fee-configs')
+  @RequirePermission('finance:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '获取所有业务抽成费率配置' })
+  getBizFeeConfigs() {
+    return this.systemConfigService.getBizFeeConfigs();
+  }
+
+  @Put('admin/config/biz-fee-configs/:bizType')
+  @RequirePermission('finance:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '保存单个业务抽成费率配置' })
+  saveBizFeeConfig(
+    @Param('bizType') bizType: string,
+    @Body() dto: { label?: string; rate?: number; fixedFee?: number; enabled?: boolean; remark?: string },
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.systemConfigService.saveBizFeeConfig(bizType, dto, operatorId);
+  }
+
+  @Put('admin/config/biz-fee-configs')
+  @RequirePermission('finance:config')
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: '批量保存业务抽成费率配置' })
+  saveBizFeeConfigsBatch(
+    @Body() dto: { configs: Array<{ bizType: string; rate?: number; fixedFee?: number; enabled?: boolean; label?: string; remark?: string }> },
+    @CurrentUser('sub') operatorId: string,
+  ) {
+    return this.systemConfigService.saveBizFeeConfigsBatch(dto.configs, operatorId);
+  }
+
+  @Get('admin/config/ai')
   @RequirePermission("system:config")
   @UseGuards(AdminPermissionGuard)
   getAiConfig() {
@@ -573,6 +624,13 @@ export class LoginPageConfigPublicController {
   @ApiOperation({ summary: '获取小程序 API 域名配置' })
   getPublicApiConfig() {
     return this.systemConfigService.getPublicApiConfig();
+  }
+
+  @Get('platform/app-review-mode')
+  @Header('Cache-Control', 'no-store, max-age=0')
+  @ApiOperation({ summary: '获取小程序审核模式配置（小程序启动时读取）' })
+  getPublicAppReviewMode() {
+    return this.systemConfigService.getAppReviewMode();
   }
 }
 

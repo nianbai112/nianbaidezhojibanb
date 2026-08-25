@@ -3,6 +3,7 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   'regions',
   'schools',
   'posts',
+  'post-shares',
   'comments',
   'likes',
   'favorites',
@@ -39,6 +40,7 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   'order-appeals',
   'assistant-tickets',
   'delivery-distance',
+  'delivery-orders',
   'upload',
   'auth',
   'city-agent',
@@ -62,9 +64,17 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   'official-assistant',
   'tracking',
   'platform',
+  'current',
+  'riders',
+  'rider',
   'rider-app',
+  'location',
+  'transfer',
+  'region-riders',
+  'return-to-pool',
   'layout',
   'miniapp-static',
+  'rankings',
 ];
 
 const MINI_PROGRAM_ROOT_PREFIXES = new Set(MINI_PROGRAM_ROOT_PREFIX_LIST);

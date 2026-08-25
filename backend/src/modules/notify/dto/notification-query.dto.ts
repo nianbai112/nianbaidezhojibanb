@@ -29,6 +29,8 @@ export class WechatMessageLogQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() platformType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() templateType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() status?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() startDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() endDate?: string;
   @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @IsInt() page?: number = 1;
   @ApiPropertyOptional({ default: 20 }) @IsOptional() @Type(() => Number) @IsInt() pageSize?: number = 20;
 }

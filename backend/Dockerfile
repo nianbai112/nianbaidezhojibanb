@@ -23,6 +23,8 @@ RUN npm run build
 # =============================================================================
 FROM node:22-alpine AS production
 
+RUN apk add --no-cache ffmpeg
+
 # Create unprivileged user/group (non-root best practice)
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
@@ -54,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
 
 # Start the application
-CMD ["node", "dist/main"]
+CMD ["node", "dist/src/main.js"]

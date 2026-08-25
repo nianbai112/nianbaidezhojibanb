@@ -459,7 +459,7 @@ const benefitLandingMap: Record<string, { scope: string; consume: string; status
   post_pin_free_quota: { scope: '帖子置顶', consume: '用户选择会员置顶时扣减', status: '已接入', statusType: 'success', note: '用于内容置顶订单。' },
   content_exposure_boost: { scope: '内容/二手曝光', consume: '发布时加权标记', status: '部分接入', statusType: 'warning', note: '已有轻量加权标记，排序权重仍需继续细化。' },
   comment_member_highlight: { scope: '评论/回复', consume: '会员身份展示', status: '部分接入', statusType: 'warning', note: '当前按会员身份展示，未按单独权益键开关。' },
-  advanced_content_tools: { scope: '帖子投票/评论抽奖', consume: '创建高级组件时校验', status: '已接入', statusType: 'success', note: '用于高级内容能力开关。' },
+  advanced_content_tools: { scope: '帖子投票', consume: '创建高级组件时校验', status: '已接入', statusType: 'success', note: '用于高级内容能力开关。' },
   content_audit_priority: { scope: '内容审核', consume: '审核记录优先标记', status: '部分接入', statusType: 'warning', note: '已有优先标记，队列排序仍可继续增强。' },
   second_hand_refresh_quota: { scope: '二手商品刷新', consume: '每次刷新扣1次', status: '已接入', statusType: 'success', note: '用于二手商品免费刷新。' },
   second_hand_exposure_boost: { scope: '二手商品曝光', consume: '发布/刷新时加权标记', status: '部分接入', statusType: 'warning', note: '已有轻量加权，推荐权重可继续增强。' },

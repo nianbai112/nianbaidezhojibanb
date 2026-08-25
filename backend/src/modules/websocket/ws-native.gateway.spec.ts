@@ -52,6 +52,9 @@ describe('WsNativeGateway account lifecycle', () => {
     expect(prisma.realtimeSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ userId: 'user-1', platform: 'rider_app', online: true }),
     });
+    const messageListenerIndex = ws.on.mock.calls.findIndex(([event]: [string]) => event === 'message');
+    expect(messageListenerIndex).toBeGreaterThanOrEqual(0);
+    expect(ws.on.mock.invocationCallOrder[messageListenerIndex]).toBeLessThan(ws.send.mock.invocationCallOrder[0]);
   });
 
   it('rejects rider_app identity for a non-official account', async () => {
@@ -151,5 +154,179 @@ describe('WsNativeGateway account lifecycle', () => {
     expect(ack).toEqual(expect.objectContaining({
       event: 'message_sent', data: expect.objectContaining({ messageId: 'message-1', duplicated: true }),
     }));
+  });
+
+  it('returns a correlated error instead of silently timing out for a malformed private message', async () => {
+    const gateway = createGateway({});
+    const ws = { readyState: 1, send: jest.fn() };
+
+    await (gateway as any).handlePrivateMessage(
+      { ws, userId: 'user-1', isAdmin: false, socketId: 'socket-1' },
+      { message: '你好', clientMessageId: 'client-bad-1' },
+    );
+
+    expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({
+      event: 'message_error',
+      data: { message: '接收方信息缺失', clientMessageId: 'client-bad-1' },
+    });
+  });
+
+  it('persists an ordinary userType=4 bot message without creating an assistant ticket', async () => {
+    const createdAt = new Date('2026-08-24T10:00:00.000Z');
+    const tx: any = {
+      message: {
+        create: jest.fn().mockResolvedValue({
+          id: 'message-bot-1', conversationId: 'conversation-bot-1', type: 'TEXT', createdAt,
+          sender: { id: 'user-1', nickname: '用户', avatar: '' },
+        }),
+        update: jest.fn(),
+      },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      conversationMember: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      assistantTicket: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+      assistantTicketReply: { findFirst: jest.fn(), create: jest.fn() },
+    };
+    const prisma: any = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'bot-1', userType: 4, systemRole: null, openid: 'bot_campaign_1', settings: null,
+        }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'conversation-bot-1', regionId: 'region-1', isBlocked: false }),
+      },
+      message: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn((handler: any) => handler(tx)),
+    };
+    const gateway = new WsNativeGateway(
+      {} as any,
+      { get: jest.fn().mockReturnValue('true') } as any,
+      prisma,
+      { delPattern: jest.fn().mockResolvedValue(undefined) } as any,
+      { check: jest.fn().mockResolvedValue({ allowed: true }) } as any,
+      {} as any,
+    );
+    jest.spyOn(gateway as any, 'pushUnreadSummary').mockResolvedValue(undefined);
+    const ws = { readyState: 1, send: jest.fn() };
+
+    await (gateway as any).handlePrivateMessage(
+      { ws, userId: 'user-1', isAdmin: false, socketId: 'socket-1', regionId: 'region-1' },
+      { receiverId: 'bot-1', message: '你好机器人', clientMessageId: 'client-bot-1' },
+    );
+
+    expect(tx.message.create).toHaveBeenCalledTimes(1);
+    expect(tx.assistantTicket.findFirst).not.toHaveBeenCalled();
+    expect(tx.assistantTicket.create).not.toHaveBeenCalled();
+    expect(tx.assistantTicketReply.create).not.toHaveBeenCalled();
+    const ack = JSON.parse(ws.send.mock.calls.at(-1)[0]);
+    expect(ack).toEqual(expect.objectContaining({
+      event: 'message_sent',
+      data: expect.objectContaining({ assistantTicketId: null }),
+    }));
+  });
+
+  it('commits an official support Message and ticket before sending the correlated acknowledgement', async () => {
+    const createdAt = new Date('2026-08-24T10:10:00.000Z');
+    const tx: any = {
+      message: {
+        create: jest.fn().mockResolvedValue({
+          id: 'message-official-1', conversationId: 'conversation-official-1', type: 'TEXT', createdAt,
+          sender: { id: 'user-1', nickname: '用户', avatar: '' },
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      conversationMember: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      assistantTicket: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'ticket-ws-1', userId: 'user-1', regionId: 'region-current',
+          conversationId: 'conversation-official-1', status: 'pending',
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      assistantTicketReply: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma: any = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'official-1', userType: 4, systemRole: 'OFFICIAL_ASSISTANT',
+          openid: 'lingmeng_official_message_account', settings: null,
+        }),
+      },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ regionId: 'region-current' }) },
+      conversation: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'conversation-official-1', regionId: 'region-current', isBlocked: false,
+          scopeKey: 'support:region-current:user-1',
+        }),
+      },
+      message: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn((handler: any) => handler(tx)),
+    };
+    const gateway = new WsNativeGateway(
+      {} as any,
+      { get: jest.fn().mockReturnValue('true') } as any,
+      prisma,
+      { delPattern: jest.fn().mockResolvedValue(undefined) } as any,
+      { check: jest.fn().mockResolvedValue({ allowed: true }) } as any,
+      {} as any,
+    );
+    jest.spyOn(gateway as any, 'pushUnreadSummary').mockResolvedValue(undefined);
+    const brokenReceiverWs = { readyState: 1, send: jest.fn(() => { throw new Error('socket already closed'); }) };
+    (gateway as any).clients.set('socket-official', {
+      ws: brokenReceiverWs, userId: 'official-1', isAdmin: false, socketId: 'socket-official', lastPongAt: Date.now(),
+    });
+    (gateway as any).userSockets.set('official-1', new Set(['socket-official']));
+    const removeClient = jest.spyOn(gateway as any, 'removeClient').mockResolvedValue(undefined);
+    const ws = { readyState: 1, send: jest.fn() };
+
+    await (gateway as any).handlePrivateMessage(
+      { ws, userId: 'user-1', isAdmin: false, socketId: 'socket-1' },
+      { receiverId: 'official-1', message: '咨询服务', clientMessageId: 'client-official-ws-1' },
+    );
+
+    expect(tx.assistantTicket.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'user-1', regionId: 'region-current', conversationId: 'conversation-official-1',
+      }),
+    });
+    expect(tx.assistantTicketReply.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ticketId: 'ticket-ws-1', messageId: 'message-official-1', clientMessageId: 'client-official-ws-1',
+      }),
+    });
+    const ack = JSON.parse(ws.send.mock.calls.at(-1)[0]);
+    expect(ack).toEqual(expect.objectContaining({
+      event: 'message_sent',
+      data: expect.objectContaining({
+        messageId: 'message-official-1', clientMessageId: 'client-official-ws-1', assistantTicketId: 'ticket-ws-1',
+      }),
+    }));
+    expect(removeClient).toHaveBeenCalledWith('socket-official');
+  });
+
+  it('returns a correlated error when private-message persistence throws', async () => {
+    const gateway = createGateway({ assertActiveUser: jest.fn().mockResolvedValue(undefined) });
+    const ws = { readyState: 1, send: jest.fn() };
+    (gateway as any).clients.set('socket-1', { ws, userId: 'user-1', isAdmin: false, socketId: 'socket-1' });
+    jest.spyOn(gateway as any, 'touchSession').mockImplementation(() => undefined);
+    jest.spyOn(gateway as any, 'isRedisRateLimited').mockResolvedValue(false);
+    jest.spyOn(gateway as any, 'handlePrivateMessage').mockRejectedValue(new Error('database unavailable'));
+
+    await (gateway as any).handleMessage('socket-1', Buffer.from(JSON.stringify({
+      event: 'message',
+      receiverId: 'official-1',
+      message: '你好',
+      clientMessageId: 'client-failed-1',
+    })));
+
+    expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({
+      event: 'message_error',
+      data: { message: '消息发送失败，请稍后重试', clientMessageId: 'client-failed-1' },
+    });
   });
 });

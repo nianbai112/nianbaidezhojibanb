@@ -33,7 +33,7 @@ const routes: RouteRecordRaw[] = [
 
       // ========== 用户中心 ==========
       { path: 'user/list', component: () => import('@/views/modules/UsersPage.vue'), meta: { title: '用户列表' } },
-      { path: 'user/private-messages', component: () => import('@/views/user/PrivateMessages.vue'), meta: { title: '私信管理' } },
+      { path: 'user/private-messages', component: () => import('@/views/user/PrivateMessages.vue'), meta: { title: '私信审核' } },
       { path: 'user/verification', component: () => import('@/views/modules/VerificationPage.vue'), meta: { title: '学生认证' } },
       { path: 'user/schools', component: () => import('@/views/user/SchoolLibrary.vue'), meta: { title: '学校库管理' } },
       { path: 'user/tags', component: () => import('@/views/user/UserTags.vue'), meta: { title: '用户标签' } },
@@ -47,7 +47,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'content/posts', component: () => import('@/views/content/PostsManage.vue'), meta: { title: '帖子管理' } },
       { path: 'content/text-cover-templates', component: () => import('@/views/content/TextCoverTemplates.vue'), meta: { title: '文字封面模板' } },
       { path: 'content/comments', component: () => import('@/views/content/CommentsPage.vue'), meta: { title: '评论管理' } },
-      { path: 'content/comment-lotteries', component: () => import('@/views/content/CommentLotteryManage.vue'), meta: { title: '评论抽奖' } },
       { path: 'content/stickers', component: () => import('@/views/content/StickersPage.vue'), meta: { title: '表情包管理' } },
       { path: 'content/circles', component: () => import('@/views/content/CirclesPage.vue'), meta: { title: '圈子运营' } },
       { path: 'content/paid-pinning', component: () => import('@/views/content/PaidPinning.vue'), meta: { title: '付费置顶' } },
@@ -113,14 +112,16 @@ const routes: RouteRecordRaw[] = [
 
       // ========== 财务中心 ==========
       { path: 'finance/overview', component: () => import('@/views/finance/FinanceOverview.vue'), meta: { title: '财务总览' } },
-      { path: 'finance/payments', component: () => import('@/views/finance/PaymentOrders.vue'), meta: { title: '支付订单' } },
-      { path: 'finance/refunds', component: () => import('@/views/finance/RefundOrders.vue'), meta: { title: '退款资金记录' } },
-      { path: 'finance/withdrawals', component: () => import('@/views/finance/WithdrawalsPage.vue'), meta: { title: '提现审核' } },
-      { path: 'finance/wallet-logs', component: () => import('@/views/finance/WalletLogs.vue'), meta: { title: '用户流水' } },
+      // 以下路由保留重定向，旧链接/书签不会 404
+      { path: 'finance/commission', redirect: '/finance/overview' },
+      { path: 'finance/payments', redirect: '/finance/overview' },
+      { path: 'finance/refunds', redirect: '/finance/overview' },
+      { path: 'finance/withdrawals', redirect: '/finance/overview' },
+      { path: 'finance/wallet-logs', redirect: '/finance/overview' },
+      { path: 'finance/subsidies', redirect: '/finance/overview' },
+      { path: 'finance/reconciliation', redirect: '/finance/overview' },
       { path: 'finance/merchant-settle', component: () => import('@/views/finance/MerchantSettle.vue'), meta: { title: '商家结算' } },
       { path: 'finance/rider-settle', component: () => import('@/views/finance/RiderSettle.vue'), meta: { title: '骑手结算' } },
-      { path: 'finance/subsidies', component: () => import('@/views/finance/SubsidyLedger.vue'), meta: { title: '平台补贴' } },
-      { path: 'finance/reconciliation', component: () => import('@/views/finance/Reconciliation.vue'), meta: { title: '对账中心' } },
 
       // ========== 营销增长中心 ==========
       { path: 'marketing/campaigns', component: () => import('@/views/marketing/CampaignCenter.vue'), meta: { title: '运营活动中心' } },
@@ -134,9 +135,9 @@ const routes: RouteRecordRaw[] = [
       { path: 'marketing/share-invite', redirect: '/marketing/share' },
       { path: 'marketing/popups', component: () => import('@/views/marketing/PopupList.vue'), meta: { title: '首页权益卡片' } },
       { path: 'growth/ranking', component: () => import('@/views/growth/RankingConfig.vue'), meta: { title: '榜单推荐' } },
-      { path: 'marketing/official-assistant', component: () => import('@/views/marketing/OfficialAssistantMessages.vue'), meta: { title: '官方助手消息' } },
+      { path: 'marketing/official-assistant', component: () => import('@/views/marketing/OfficialAssistantMessages.vue'), meta: { title: '校园内容' } },
       { path: 'order/appeals', component: () => import('@/views/order/OrderAppealsPage.vue'), meta: { title: '订单申诉' } },
-      { path: 'marketing/notifications', component: () => import('@/views/marketing/NotificationList.vue'), meta: { title: '系统通知' } },
+      { path: 'marketing/notifications', component: () => import('@/views/marketing/NotificationList.vue'), meta: { title: '通知投递' } },
       { path: 'growth/ai-ops-config', redirect: '/ai/ops-config' },
 
       // ========== 扩展玩法中心 ==========
@@ -157,15 +158,13 @@ const routes: RouteRecordRaw[] = [
       { path: 'system/rider-app-control', component: () => import('@/views/system/RiderAppControl.vue'), meta: { title: '骑手 App 控制中心' } },
       { path: 'system/agreements', component: () => import('@/views/system/AgreementCenter.vue'), meta: { title: '协议与条款' } },
       { path: 'system/mini-program-paths', component: () => import('@/views/system/MiniProgramPaths.vue'), meta: { title: '小程序路径' } },
-      { path: 'system/mini-program-download', component: () => import('@/views/system/MiniProgramDownload.vue'), meta: { title: '小程序下载' } },
-      { path: 'system/license-runtime', component: () => import('@/views/system/LicenseRuntime.vue'), meta: { title: '授权与更新' } },
-      { path: 'system/notification-center', component: () => import('@/views/system/NotificationCenterSettings.vue'), meta: { title: '通知中心配置' } },
+      { path: 'system/notification-center', component: () => import('@/views/system/NotificationCenterSettings.vue'), meta: { title: '通知配置' } },
       { path: 'system/operation-logs', component: () => import('@/views/system/OperationLogs.vue'), meta: { title: '操作日志' } },
       { path: 'system/login-logs', component: () => import('@/views/system/LoginLogs.vue'), meta: { title: '登录日志' } },
       { path: 'system/monitor', component: () => import('@/views/system/ServiceMonitor.vue'), meta: { title: '服务监控' } },
       { path: 'system/launch-check', component: () => import('@/views/system/LaunchCheck.vue'), meta: { title: '上线检查' } },
       { path: 'system/wechat-logs', component: () => import('@/views/system/WechatLogsPage.vue'), meta: { title: '微信发送日志' } },
-      { path: 'system/realtime-sessions', component: () => import('@/views/system/RealtimeSessionsPage.vue'), meta: { title: '在线连接' } },
+      { path: 'system/realtime-sessions', component: () => import('@/views/system/RealtimeSessionsPage.vue'), meta: { title: '客服工作台' } },
       { path: 'ops/jobs', component: () => import('@/views/ops/ScheduledJobs.vue'), meta: { title: '定时任务' } },
 
       // ========== 页面装修 ==========
@@ -218,8 +217,9 @@ const routes: RouteRecordRaw[] = [
       { path: 'finance/ledger', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '补贴与对账', tabsKey: 'finance-ledger' } },
       { path: 'marketing/center', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '活动中心', tabsKey: 'marketing-center' } },
       { path: 'marketing/perks', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '优惠激励', tabsKey: 'marketing-perks' } },
-      { path: 'marketing/messages', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '消息触达', tabsKey: 'marketing-messages' } },
-      { path: 'content/discussions', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '评论互动', tabsKey: 'content-discussions' } },
+      { path: 'marketing/messages', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '校园内容与通知', tabsKey: 'marketing-messages' } },
+      { path: 'marketing/wechat-notify', component: () => import('@/views/marketing/WechatNotifyCenter.vue'), meta: { title: '服务号通知中心' } },
+      { path: 'content/discussions', component: () => import('@/views/content/CommentsPage.vue'), meta: { title: '评论管理' } },
       { path: 'content/assets', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '内容素材', tabsKey: 'content-assets' } },
       { path: 'user/loyalty', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '成长中心', tabsKey: 'user-loyalty' } },
       { path: 'system/publishing', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '官网与内容', tabsKey: 'system-publishing' } },

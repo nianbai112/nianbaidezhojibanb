@@ -8,7 +8,7 @@ import {
   Optional,
   forwardRef,
 } from "@nestjs/common";
-import { AuditAction, RoleType, UserStatus } from "@prisma/client";
+import { AuditAction, PostStatus, RoleType, UserStatus } from "@prisma/client";
 import { PrismaService } from "../../common/services/prisma.service";
 import { RedisService } from "../../common/services/redis.service";
 import { PaymentService } from "../payment/payment.service";
@@ -294,6 +294,27 @@ export class AdminService {
       post.status === "PUBLISHED" &&
       post.auditStatus === "approved"
     );
+  }
+
+  /** 软删除内容保留审核历史，但不能继续占用待审核队列。 */
+  private pendingPostReviewWhere() {
+    return {
+      auditStatus: "pending",
+      deletedAt: null,
+      status: { not: PostStatus.DELETED },
+    };
+  }
+
+  private pendingCommentReviewWhere() {
+    return {
+      auditStatus: "pending",
+      deletedAt: null,
+      status: { not: "deleted" },
+      post: {
+        deletedAt: null,
+        status: { not: PostStatus.DELETED },
+      },
+    };
   }
 
   private async clearPostFeedCache(regionId?: string | null) {
@@ -685,7 +706,7 @@ export class AdminService {
       this.prisma.post.count({ where: { createdAt: { gte: today } } }),
       this.prisma.comment.count({ where: { deletedAt: null } }),
       this.prisma.comment.count({ where: { createdAt: { gte: today } } }),
-      this.prisma.post.count({ where: { auditStatus: "pending" } }),
+      this.prisma.post.count({ where: this.pendingPostReviewWhere() }),
       this.prisma.merchant.count(),
       this.prisma.merchant.count({ where: { status: "approved" } }),
       this.prisma.merchant.count({ where: { status: "pending" } }),
@@ -2889,6 +2910,23 @@ export class AdminService {
       throw new ConflictException(`区域编码「${code}」已存在，请换一个编码`);
     }
     const managerData = await this.buildRegionManagerData(dto);
+    const requestedHomeNav = dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
+    if (requestedHomeNav !== undefined && !Array.isArray(requestedHomeNav)) {
+      throw new BadRequestException("首页金刚区配置必须是数组");
+    }
+    const requestedHomeNavDisplay = dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
+    if (
+      requestedHomeNavDisplay !== undefined &&
+      (!requestedHomeNavDisplay || typeof requestedHomeNavDisplay !== "object" || Array.isArray(requestedHomeNavDisplay))
+    ) {
+      throw new BadRequestException("首页导航显示配置格式不正确");
+    }
+    const initialSettings = dto.settings && typeof dto.settings === "object" && !Array.isArray(dto.settings)
+      ? { ...dto.settings }
+      : {};
+    if (requestedHomeNavDisplay !== undefined) {
+      initialSettings.homeNavDisplayConfig = requestedHomeNavDisplay;
+    }
     try {
       const region = await this.prisma.region.create({
         data: {
@@ -2908,7 +2946,7 @@ export class AdminService {
                 ? Boolean(dto.status)
                 : true,
           sortOrder: this.toInt(dto.sort, 0),
-          settings: dto.settings ?? undefined,
+          settings: Object.keys(initialSettings).length ? initialSettings : undefined,
           ...managerData,
           // 新增字段
           logo: this.nullableString(dto.logo),
@@ -2966,7 +3004,7 @@ export class AdminService {
           messageIcons: dto.messageIcons ?? undefined,
           messageNavigation: dto.messageNavigation ?? undefined,
           profileLayoutItems: dto.profileLayoutItems ?? undefined,
-          homeNavLayoutConfig: dto.homeNavLayoutConfig ?? undefined,
+          homeNavLayoutConfig: requestedHomeNav,
         },
       });
       await this.syncRegionManagerRole(
@@ -3378,6 +3416,21 @@ export class AdminService {
       data.studentOnly = Boolean(dto.studentOnly);
     if (dto.sort !== undefined) data.sortOrder = this.toInt(dto.sort, 0);
     if (dto.settings !== undefined) data.settings = dto.settings;
+    const requestedHomeNavDisplay = dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
+    if (
+      requestedHomeNavDisplay !== undefined &&
+      (!requestedHomeNavDisplay || typeof requestedHomeNavDisplay !== "object" || Array.isArray(requestedHomeNavDisplay))
+    ) {
+      throw new BadRequestException("首页导航显示配置格式不正确");
+    }
+    if (requestedHomeNavDisplay !== undefined) {
+      const settingsSource = data.settings !== undefined ? data.settings : exists.settings;
+      const settings = settingsSource && typeof settingsSource === "object" && !Array.isArray(settingsSource)
+        ? { ...settingsSource }
+        : {};
+      settings.homeNavDisplayConfig = requestedHomeNavDisplay;
+      data.settings = settings;
+    }
     const managerTouch = await this.applyRegionManagerUpdates(data, dto);
     if (dto.latitude !== undefined)
       data.latitude = this.toFloatOrNull(dto.latitude);
@@ -3504,9 +3557,13 @@ export class AdminService {
     if (
       dto.homeNavLayoutConfig !== undefined ||
       dto.home_nav_layout_config !== undefined
-    )
-      data.homeNavLayoutConfig =
-        dto.homeNavLayoutConfig ?? dto.home_nav_layout_config ?? null;
+    ) {
+      const homeNavLayoutConfig = dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
+      if (!Array.isArray(homeNavLayoutConfig)) {
+        throw new BadRequestException("首页金刚区配置必须是数组");
+      }
+      data.homeNavLayoutConfig = homeNavLayoutConfig;
+    }
 
     const region = await this.prisma.region.update({ where: { id }, data });
     if (managerTouch.accountTouched) {
@@ -3650,7 +3707,9 @@ export class AdminService {
       message_navigation: r.messageNavigation ?? { cards: [] },
       profileLayoutItems: r.profileLayoutItems ?? [],
       profile_layout_items: r.profileLayoutItems ?? [],
-      homeNavLayoutConfig: r.homeNavLayoutConfig ?? {
+      homeNavLayoutConfig: r.homeNavLayoutConfig ?? [],
+      home_nav_layout_config: r.homeNavLayoutConfig ?? [],
+      homeNavDisplayConfig: r.settings?.homeNavDisplayConfig ?? (!Array.isArray(r.homeNavLayoutConfig) ? r.homeNavLayoutConfig : {
         title: {
           show: false,
           text: "",
@@ -3659,8 +3718,8 @@ export class AdminService {
           fontWeight: "bold",
         },
         showLayoutSwitch: false,
-      },
-      home_nav_layout_config: r.homeNavLayoutConfig ?? {
+      }),
+      home_nav_display_config: r.settings?.homeNavDisplayConfig ?? (!Array.isArray(r.homeNavLayoutConfig) ? r.homeNavLayoutConfig : {
         title: {
           show: false,
           text: "",
@@ -3669,7 +3728,7 @@ export class AdminService {
           fontWeight: "bold",
         },
         showLayoutSwitch: false,
-      },
+      }),
     };
   }
 
@@ -4857,7 +4916,7 @@ export class AdminService {
     });
     if (!comment) throw new NotFoundException("评论不存在");
 
-    const [likeCount, reports, lottery] = await Promise.all([
+    const [likeCount, reports] = await Promise.all([
       this.prisma.like
         .count({ where: { targetType: "comment", targetId: id } })
         .catch(
@@ -4874,12 +4933,6 @@ export class AdminService {
           take: 20,
         })
         .catch(() => []),
-      this.prisma.commentLottery
-        .findUnique({
-          where: { postId: comment.postId },
-          include: { prizes: true, winners: true },
-        })
-        .catch(() => null),
     ]);
 
     return {
@@ -4925,16 +4978,6 @@ export class AdminService {
         total: reports.length,
         list: reports,
       },
-      lottery: lottery
-        ? {
-            id: lottery.id,
-            title: lottery.title,
-            status: lottery.status,
-            drawAt: lottery.drawAt,
-            prizeCount: lottery.prizes.length,
-            winnerCount: lottery.winners.length,
-          }
-        : null,
       timeline: [
         { action: "created", title: "创建评论", at: comment.createdAt },
         ...(comment.auditStatus !== "pending"
@@ -4972,9 +5015,7 @@ export class AdminService {
             (e: any) => (console.warn("Stats query failed:", e?.message), 0),
           ),
         this.prisma.comment
-          .count({
-            where: { auditStatus: "pending", status: { not: "deleted" } },
-          })
+          .count({ where: this.pendingCommentReviewWhere() })
           .catch(
             (e: any) => (console.warn("Stats query failed:", e?.message), 0),
           ),
@@ -11475,11 +11516,9 @@ export class AdminService {
         0,
       ),
       s(this.prisma.studentVerify.count({ where: { status: "PENDING" } }), 0),
-      s(this.prisma.post.count({ where: { auditStatus: "pending" } }), 0),
+      s(this.prisma.post.count({ where: this.pendingPostReviewWhere() }), 0),
       s(
-        this.prisma.comment.count({
-          where: { auditStatus: "pending", status: { not: "deleted" } },
-        }),
+        this.prisma.comment.count({ where: this.pendingCommentReviewWhere() }),
         0,
       ),
       s(this.prisma.withdraw.count({ where: { status: "PENDING" } }), 0),
@@ -11716,7 +11755,7 @@ export class AdminService {
         handledReports,
       ] = await Promise.all([
         this.prisma.post
-          .count({ where: { auditStatus: "pending" } })
+          .count({ where: this.pendingPostReviewWhere() })
           .catch((e: any) => {
             hasError = true;
             console.warn("Stats query failed:", e?.message);
@@ -11792,7 +11831,7 @@ export class AdminService {
               (e: any) => (console.warn("Stats query failed:", e?.message), 0),
             ),
           this.prisma.post
-            .count({ where: { auditStatus: "pending" } })
+            .count({ where: this.pendingPostReviewWhere() })
             .catch(
               (e: any) => (console.warn("Stats query failed:", e?.message), 0),
             ),

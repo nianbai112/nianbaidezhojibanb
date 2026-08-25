@@ -9,6 +9,13 @@ import { MessageGateway } from '../websocket/message.gateway';
 import { WsNativeGateway } from '../websocket/ws-native.gateway';
 import { NotificationChannelService } from './notification-channel.service';
 import { WechatSubscribeService } from '../wechat/wechat-subscribe.service';
+import { WechatOfficialService } from '../wechat/wechat-official.service';
+import { PushService } from '../push/push.service';
+import {
+  OFFICIAL_ASSISTANT_OPENID,
+  OFFICIAL_ASSISTANT_SYSTEM_ROLE,
+  officialAssistantConversationScopeKey,
+} from '../../common/utils/official-assistant.util';
 import {
   CreateNotificationDto,
   AdminBroadcastDto,
@@ -80,6 +87,8 @@ export class NotifyService {
     @Optional() @Inject(forwardRef(() => NotificationChannelService))
     private readonly channelService?: NotificationChannelService,
     @Optional() private readonly wechatSubscribe?: WechatSubscribeService,
+    @Optional() private readonly pushService?: PushService,
+    @Optional() private readonly wechatOfficial?: WechatOfficialService,
   ) {}
 
   private toPositiveInt(value: unknown, fallback: number) {
@@ -342,56 +351,94 @@ export class NotifyService {
 
   private async getOfficialUser() {
     return this.prisma.user.upsert({
-      where: { openid: 'lingmeng_official_message_account' },
+      where: { openid: OFFICIAL_ASSISTANT_OPENID },
       create: {
-        openid: 'lingmeng_official_message_account',
+        openid: OFFICIAL_ASSISTANT_OPENID,
         nickname: OFFICIAL_ASSISTANT_NAME,
         avatar: OFFICIAL_ASSISTANT_AVATAR,
         userType: 4,
+        systemRole: OFFICIAL_ASSISTANT_SYSTEM_ROLE,
       },
       update: {
         nickname: OFFICIAL_ASSISTANT_NAME,
         avatar: OFFICIAL_ASSISTANT_AVATAR,
         userType: 4,
+        systemRole: OFFICIAL_ASSISTANT_SYSTEM_ROLE,
       },
-      select: { id: true, nickname: true, avatar: true },
+      select: { id: true, nickname: true, avatar: true, openid: true, systemRole: true },
     });
   }
 
-  private async findOrCreateOfficialConversation(userId: string, officialUserId: string) {
-    const profile = await this.prisma.userProfile.findUnique({ where: { userId }, select: { regionId: true } });
-    const regionId = profile?.regionId || null;
-    let conversation = await this.prisma.conversation.findFirst({
-      where: {
-        type: 'private',
-        AND: [
-          { members: { some: { userId } } },
-          { members: { some: { userId: officialUserId } } },
-        ],
-      },
+  private async findOrCreateOfficialConversation(userId: string, officialUserId: string, requestedRegionId?: string) {
+    const profile = !requestedRegionId
+      ? await this.prisma.userProfile.findUnique({ where: { userId }, select: { regionId: true } })
+      : null;
+    const regionId = requestedRegionId || profile?.regionId || null;
+    if (!regionId) throw new BadRequestException('请选择当前校园后再使用官方助手');
+    const scopeKey = officialAssistantConversationScopeKey(regionId, userId);
+
+    let conversation = await this.prisma.conversation.findUnique({
+      where: { scopeKey },
     });
+    if (!conversation) {
+      conversation = await this.prisma.conversation.findFirst({
+        where: {
+          type: 'private',
+          regionId,
+          OR: [{ scopeKey }, { scopeKey: null }],
+          AND: [
+            { members: { some: { userId } } },
+            { members: { some: { userId: officialUserId } } },
+          ],
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
     if (conversation) {
-      if (!conversation.regionId && regionId) {
-        return this.prisma.conversation.update({ where: { id: conversation.id }, data: { regionId } });
+      if (!conversation.scopeKey) {
+        try {
+          return await this.prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { scopeKey },
+          });
+        } catch (error: any) {
+          if (error?.code !== 'P2002') throw error;
+          const scoped = await this.prisma.conversation.findUnique({ where: { scopeKey } });
+          if (scoped) return scoped;
+          throw error;
+        }
       }
       return conversation;
     }
 
-    conversation = await this.prisma.conversation.create({
-      data: {
-        type: 'private',
-        regionId,
-        title: OFFICIAL_ASSISTANT_NAME,
-        avatar: OFFICIAL_ASSISTANT_AVATAR,
-        members: {
-          create: [
-            { userId },
-            { userId: officialUserId, role: 'admin', nickName: OFFICIAL_ASSISTANT_NAME },
-          ],
+    return this.prisma.conversation.upsert({
+      where: { scopeKey },
+      update: {},
+      create: {
+          type: 'private',
+          scopeKey,
+          regionId,
+          title: OFFICIAL_ASSISTANT_NAME,
+          avatar: OFFICIAL_ASSISTANT_AVATAR,
+          members: {
+            create: [
+              { userId },
+              { userId: officialUserId, role: 'admin', nickName: OFFICIAL_ASSISTANT_NAME },
+            ],
+          },
         },
-      },
     });
-    return conversation;
+  }
+
+  async ensureOfficialConversationForUser(userId: string, regionId?: string) {
+    const official = await this.getOfficialUser();
+    const conversation = await this.findOrCreateOfficialConversation(userId, official.id, regionId);
+    return { official, conversation };
+  }
+
+  async getOfficialAssistantUser() {
+    return this.getOfficialUser();
   }
 
   private normalizeAssistantCategory(value?: string) {
@@ -739,6 +786,36 @@ export class NotifyService {
       report.websocket = { status: 'skipped' };
     }
 
+    if (channelMask.push && this.pushService) {
+      try {
+        const devices = await this.prisma.userPushDevice.findMany({
+          where: { userId: notification.userId },
+          orderBy: { updatedAt: 'desc' },
+          take: 5,
+        });
+        let pushed = 0;
+        for (const device of devices) {
+          const ok = await this.pushService.sendToClient(device.clientId, {
+            title: notification.title || '新通知',
+            content: notification.content || '',
+            data: {
+              id: notification.id,
+              scene: notification.scene,
+              type: this.toClientNotificationType(notification.type),
+              linkType: notification.linkType,
+              linkValue: notification.linkValue,
+            },
+          });
+          if (ok) pushed += 1;
+        }
+        report.push = { status: pushed > 0 ? 'success' : 'skipped' };
+      } catch (error: any) {
+        report.push = { status: 'failed', error: error?.message || 'push error' };
+      }
+    } else {
+      report.push = { status: 'skipped' };
+    }
+
     if (channelMask.email && this.channelService) {
       try {
         const enabled = await this.channelService.isChannelEnabled('email');
@@ -790,9 +867,29 @@ export class NotifyService {
         page: notification.linkValue || undefined,
         data: { ...(notification.data || {}), title: notification.title, content: notification.content },
       });
-      report.wechat = sent.success ? { status: 'success' } : { status: 'skipped', reason: sent.error };
-    } else if (channelMask.wechatSubscribe || channelMask.officialAccount) {
-      report.wechat = { status: 'skipped', reason: 'wechat_service_unavailable' };
+      report.wechatSubscribe = sent.success ? { status: 'success' } : { status: 'skipped', reason: sent.error };
+    } else if (channelMask.wechatSubscribe) {
+      report.wechatSubscribe = { status: 'skipped', reason: 'wechat_subscribe_service_unavailable' };
+    }
+
+    if (this.wechatOfficial) {
+      const sent = await this.wechatOfficial.sendNotificationTemplate({
+        userId: notification.userId,
+        scene: notification.scene,
+        page: notification.linkValue || undefined,
+        data: {
+          ...(notification.data || {}),
+          title: notification.title,
+          content: notification.content,
+        },
+      });
+      if (sent.error !== 'unsupported_scene') {
+        report.officialAccount = sent.success
+          ? { status: 'success', templateType: sent.templateType }
+          : { status: 'skipped', reason: sent.error, templateType: sent.templateType };
+      }
+    } else if (channelMask.officialAccount) {
+      report.officialAccount = { status: 'skipped', reason: 'wechat_official_service_unavailable' };
     }
 
     const statuses = Object.values(report).map((item: any) => item.status);
@@ -824,6 +921,7 @@ export class NotifyService {
     const defaultChannelMask = {
       inApp: true,
       websocket: true,
+      push: true,
       wechatSubscribe: false,
       officialAccount: false,
       ...dto.channelMask,
@@ -1174,6 +1272,9 @@ export class NotifyService {
         throw new ForbiddenException('无权操作该区域通知');
       }
     }
+    if (String(notification.deliveryStatus || '').toLowerCase() === 'retired') {
+      return { success: true, notification, message: '该通知已退役，不再重试投递' };
+    }
     const channelMask = (notification.channelMask || { inApp: true, websocket: true }) as any;
     const previousReport = (notification.deliveryReport || {}) as Record<string, any>;
     const failedChannels = ['websocket', 'email', 'sms'].filter(
@@ -1300,9 +1401,50 @@ export class NotifyService {
   }
 
   async adminBroadcast(adminId: string, dto: AdminBroadcastDto) {
+    const targetUserId = String(dto.userId || '').trim();
+    const targetRegionId = String(dto.regionId || '').trim();
+    const targetType = dto.targetType || (targetUserId ? 'user' : targetRegionId ? 'region' : 'all');
+    if (targetUserId && targetRegionId) throw new BadRequestException('单用户通知不能同时指定区域');
+    if (targetType === 'user' && !targetUserId) throw new BadRequestException('请选择接收用户');
+    if (targetType === 'region' && !targetRegionId) throw new BadRequestException('请选择接收区域');
+    if (targetType === 'all' && (targetUserId || targetRegionId)) throw new BadRequestException('全员通知不能指定用户或区域');
+    if (targetType !== 'user' && targetUserId) throw new BadRequestException('接收目标与 userId 不一致');
+    if (targetType !== 'region' && targetRegionId) throw new BadRequestException('接收目标与 regionId 不一致');
+
+    const accessibleUserIds = await this.getAccessibleUserIds(adminId);
+    if (targetUserId) {
+      if (accessibleUserIds !== null && !accessibleUserIds.includes(targetUserId)) {
+        throw new ForbiddenException('无权向该用户发送通知');
+      }
+      const [user, profile] = await Promise.all([
+        this.prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } }),
+        this.prisma.userProfile.findUnique({ where: { userId: targetUserId }, select: { regionId: true } }),
+      ]);
+      if (!user) throw new NotFoundException('接收用户不存在');
+      const notification = await this.createAndDispatch({
+        userId: targetUserId,
+        regionId: profile?.regionId || undefined,
+        type: 'ADMIN_BROADCAST',
+        scene: 'admin_broadcast',
+        title: dto.title,
+        content: dto.content,
+        data: dto.data || { operatorId: adminId },
+        linkType: dto.linkType,
+        linkValue: dto.linkValue,
+        channelMask: dto.channelMask,
+      });
+      return {
+        success: true,
+        targetType: 'user',
+        createdCount: 1,
+        notificationId: (notification as any).id || null,
+      };
+    }
+
     const defaultChannelMask = {
       inApp: true,
       websocket: true,
+      push: true,
       wechatSubscribe: false,
       officialAccount: false,
       ...dto.channelMask,
@@ -1312,14 +1454,12 @@ export class NotifyService {
       : defaultChannelMask;
 
     let userIds: string[] = [];
-    const accessibleUserIds = await this.getAccessibleUserIds(adminId);
-
-    if (dto.regionId) {
-      await this.adminDataScope.assertRegionAccess(adminId, dto.regionId, '无权向该区域发送通知');
+    if (targetRegionId) {
+      await this.adminDataScope.assertRegionAccess(adminId, targetRegionId, '无权向该区域发送通知');
       // AUD-P1-022: 使用 regionId 精确匹配（此前错误使用 region 名称字段查询）
       const profiles = await this.prisma.userProfile.findMany({
         where: {
-          regionId: dto.regionId,
+          regionId: targetRegionId,
           ...(accessibleUserIds === null ? {} : { userId: { in: accessibleUserIds } }),
         },
         select: { userId: true },
@@ -1340,7 +1480,7 @@ export class NotifyService {
 
     const data = userIds.map((userId) => ({
       userId,
-      regionId: dto.regionId || null,
+      regionId: targetRegionId || null,
       type: 'ADMIN_BROADCAST' as any,
       scene: 'admin_broadcast',
       title: dto.title,
@@ -1439,6 +1579,8 @@ export class NotifyService {
     platformType?: string;
     templateType?: string;
     status?: string;
+    startDate?: string;
+    endDate?: string;
     page?: number;
     pageSize?: number;
   }, operatorId?: string) {
@@ -1449,6 +1591,18 @@ export class NotifyService {
     if (query.platformType) where.platformType = query.platformType;
     if (query.templateType) where.templateType = query.templateType;
     if (query.status) where.status = query.status;
+    if (query.startDate || query.endDate) {
+      where.createdAt = {};
+      if (query.startDate) {
+        const start = new Date(`${query.startDate}T00:00:00.000+08:00`);
+        if (!Number.isNaN(start.getTime())) where.createdAt.gte = start;
+      }
+      if (query.endDate) {
+        const end = new Date(`${query.endDate}T23:59:59.999+08:00`);
+        if (!Number.isNaN(end.getTime())) where.createdAt.lte = end;
+      }
+      if (!Object.keys(where.createdAt).length) delete where.createdAt;
+    }
 
     // 按管理员数据范围裁剪
     if (operatorId) {
@@ -1486,14 +1640,13 @@ export class NotifyService {
     });
     if (!log) throw new NotFoundException('日志不存在');
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
-
-    // 更新状态为 pending
-    await this.prisma.wechatMessageLog.update({
-      where: { id: logId },
-      data: { status: 'pending', errorCode: null, errorMessage: null },
-    });
-
-    return { success: true, message: '已标记为待发送，等待发送服务处理' };
+    if (log.platformType === 'official' && this.wechatOfficial) {
+      return this.wechatOfficial.retryTemplateMessage(logId);
+    }
+    if (['miniprogram', 'miniapp'].includes(log.platformType) && this.wechatSubscribe) {
+      return this.wechatSubscribe.retryMessage(logId);
+    }
+    throw new BadRequestException('对应的微信发送服务不可用');
   }
 
   // ===========================================================================
@@ -1804,15 +1957,24 @@ export class NotifyService {
       this.prisma.conversation.count({ where }),
     ]);
 
-    const userIds = items.flatMap((conversation) => conversation.members.filter((member) => member.userId !== official.id).map((member) => member.userId));
-    const tickets = userIds.length ? await (this.prisma as any).assistantTicket.findMany({ where: { userId: { in: userIds } }, orderBy: { updatedAt: 'desc' } }) : [];
-    const latestTicketByUser = new Map<string, any>();
-    tickets.forEach((ticket: any) => { if (!latestTicketByUser.has(ticket.userId)) latestTicketByUser.set(ticket.userId, ticket); });
+    const conversationIds = items.map((conversation) => conversation.id);
+    const tickets = conversationIds.length
+      ? await (this.prisma as any).assistantTicket.findMany({
+          where: { conversationId: { in: conversationIds } },
+          orderBy: { updatedAt: 'desc' },
+        })
+      : [];
+    const latestTicketByConversation = new Map<string, any>();
+    tickets.forEach((ticket: any) => {
+      if (ticket.conversationId && !latestTicketByConversation.has(ticket.conversationId)) {
+        latestTicketByConversation.set(ticket.conversationId, ticket);
+      }
+    });
     const list = items.map((conversation) => {
       const officialMember = conversation.members.find((member) => member.userId === official.id);
       const otherMember = conversation.members.find((member) => member.userId !== official.id);
       const user = otherMember?.user;
-      const ticket = user ? latestTicketByUser.get(user.id) : null;
+      const ticket = latestTicketByConversation.get(conversation.id) || null;
       return {
         id: conversation.id,
         conversationId: conversation.id,
@@ -1880,6 +2042,10 @@ export class NotifyService {
       const parsed = parseChatMessageContent(message.content, message.type);
       return {
         id: message.id,
+        clientMessageId: message.clientMessageId || '',
+        client_message_id: message.clientMessageId || '',
+        ticketId: message.ticketId || '',
+        ticket_id: message.ticketId || '',
         senderId: message.senderId,
         senderName: message.sender.nickname || (message.senderId === official.id ? OFFICIAL_ASSISTANT_NAME : '用户'),
         senderAvatar: message.sender.avatar || '',
@@ -1895,6 +2061,7 @@ export class NotifyService {
         duration: parsed.duration,
         location: parsed.location || null,
         file: parsed.file || null,
+        note: parsed.note || null,
         order: parsed.order || null,
         createdAt: message.createdAt?.toISOString?.(),
       };
@@ -1917,7 +2084,14 @@ export class NotifyService {
     };
   }
 
-  async replyOfficialConversation(conversationId: string, content: string, handlerId?: string, operatorId?: string) {
+  async replyOfficialConversation(
+    conversationId: string,
+    content: string,
+    handlerId?: string,
+    operatorId?: string,
+    ticketId?: string,
+    ticketStatus?: string,
+  ) {
     const official = await this.getOfficialUser();
     if (operatorId) await this.assertOfficialConversationAccess(conversationId, official.id, operatorId);
     const message = String(content || '').trim();
@@ -1935,36 +2109,74 @@ export class NotifyService {
     const receiver = conversation.members.find((member) => member.userId !== official.id);
     if (!receiver) throw new BadRequestException('会话缺少接收用户');
 
-    const saved = await this.prisma.message.create({
-      data: {
-        conversationId,
-        senderId: official.id,
-        type: 'TEXT',
-        content: message,
-      },
-    });
-    await Promise.all([
-      this.prisma.conversation.update({
-        where: { id: conversationId },
-        data: {
-          lastMessage: message,
-          lastMsgTime: saved.createdAt,
-          ...(handlerId ? { serviceStatus: 'processing', serviceHandlerId: handlerId, serviceHandledAt: null } : {}),
-        },
-      }),
-      this.prisma.conversationMember.updateMany({
-        where: { conversationId, userId: receiver.userId },
-        data: { unreadCount: { increment: 1 } },
-      }),
-    ]);
-    const activeTicket = await (this.prisma as any).assistantTicket.findFirst({
-      where: { userId: receiver.userId, status: { in: ['pending', 'processing', 'waiting_user'] } },
-      orderBy: { updatedAt: 'desc' },
-    });
-    if (activeTicket) {
-      await (this.prisma as any).assistantTicketReply.create({ data: { ticketId: activeTicket.id, senderType: 'admin', senderId: handlerId || official.id, content: message } });
-      await (this.prisma as any).assistantTicket.update({ where: { id: activeTicket.id }, data: { latestReply: message, unreadForUser: true, ...(handlerId ? { status: 'processing', handlerId } : {}) } });
+    const explicitTicketId = String(ticketId || '').trim();
+    const linkedTicket = explicitTicketId
+      ? await (this.prisma as any).assistantTicket.findFirst({
+          where: { id: explicitTicketId, userId: receiver.userId },
+        })
+      : null;
+    if (explicitTicketId && !linkedTicket) {
+      throw new NotFoundException('指定的咨询工单不存在或不属于当前会话用户');
     }
+    if (linkedTicket?.conversationId && linkedTicket.conversationId !== conversationId) {
+      throw new BadRequestException('指定的咨询工单不属于当前官方会话');
+    }
+    if (linkedTicket && linkedTicket.regionId !== conversation.regionId) {
+      throw new BadRequestException('指定的咨询工单不属于当前校园');
+    }
+    const normalizedTicketStatus = String(ticketStatus || '').trim();
+    if (normalizedTicketStatus && !['pending', 'processing', 'waiting_user', 'resolved', 'closed'].includes(normalizedTicketStatus)) {
+      throw new BadRequestException('无效的咨询工单状态');
+    }
+
+    const saved = await this.prisma.$transaction(async (tx: any) => {
+      const persisted = await tx.message.create({
+        data: {
+          conversationId,
+          senderId: official.id,
+          ticketId: linkedTicket?.id || null,
+          type: 'TEXT',
+          content: message,
+        },
+      });
+      await Promise.all([
+        tx.conversation.update({
+          where: { id: conversationId },
+          data: {
+            lastMessage: message,
+            lastMsgTime: persisted.createdAt,
+            ...(handlerId ? { serviceStatus: 'processing', serviceHandlerId: handlerId, serviceHandledAt: null } : {}),
+          },
+        }),
+        tx.conversationMember.updateMany({
+          where: { conversationId, userId: receiver.userId },
+          data: { unreadCount: { increment: 1 } },
+        }),
+      ]);
+      if (linkedTicket) {
+        await tx.assistantTicketReply.create({
+          data: {
+            ticketId: linkedTicket.id,
+            messageId: persisted.id,
+            senderType: 'admin',
+            senderId: handlerId || official.id,
+            content: message,
+          },
+        });
+        await tx.assistantTicket.update({
+          where: { id: linkedTicket.id },
+          data: {
+            ...(linkedTicket.conversationId ? {} : { conversationId }),
+            latestReply: message,
+            unreadForUser: true,
+            ...(normalizedTicketStatus
+              ? { status: normalizedTicketStatus, ...(handlerId ? { handlerId } : {}) }
+              : handlerId ? { status: 'processing', handlerId } : {}),
+          },
+        });
+      }
+      return persisted;
+    });
     await this.clearUnreadCache(receiver.userId);
     const unreadSummary = await this.getUnreadSummary(receiver.userId);
     const unreadPayload = { event: 'unreadSummary', type: 'unreadSummary', data: unreadSummary };
@@ -1986,12 +2198,19 @@ export class NotifyService {
     return {
       success: true,
       messageId: saved.id,
+      assistantTicketId: linkedTicket?.id || null,
       deliveredCount,
       message: deliveredCount > 0 ? '官方回复已发送' : '官方回复已保存，用户当前离线',
     };
   }
 
-  async updateOfficialConversationStatus(conversationId: string, status: string, handlerId: string, content?: string) {
+  async updateOfficialConversationStatus(
+    conversationId: string,
+    status: string,
+    handlerId: string,
+    content?: string,
+    ticketId?: string,
+  ) {
     const normalizedStatus = String(status || '').trim();
     if (!OFFICIAL_CONVERSATION_STATUSES.has(normalizedStatus)) {
       throw new BadRequestException('无效的咨询状态');
@@ -2001,11 +2220,15 @@ export class NotifyService {
     if (['waiting_user', 'resolved', 'rejected'].includes(normalizedStatus) && !resolution) {
       throw new BadRequestException('请填写给用户的处理说明后再更新状态');
     }
+    const explicitTicketId = String(ticketId || '').trim();
+    const ticketStatus = normalizedStatus === 'rejected' ? 'closed' : normalizedStatus;
     await this.replyOfficialConversation(
       conversationId,
       resolution || `你的咨询状态已更新为：${statusText}`,
       handlerId,
       handlerId,
+      ticketId,
+      explicitTicketId ? ticketStatus : undefined,
     );
     const updated = await this.prisma.conversation.update({
       where: { id: conversationId },
@@ -2015,12 +2238,6 @@ export class NotifyService {
         serviceHandledAt: ['resolved', 'rejected'].includes(normalizedStatus) ? new Date() : null,
       },
     });
-    const userMember = await this.prisma.conversationMember.findFirst({ where: { conversationId, userId: { not: (await this.getOfficialUser()).id } } });
-    if (userMember) {
-      const ticketStatus = normalizedStatus === 'rejected' ? 'closed' : normalizedStatus;
-      const ticket = await (this.prisma as any).assistantTicket.findFirst({ where: { userId: userMember.userId, status: { in: ['pending', 'processing', 'waiting_user'] } }, orderBy: { updatedAt: 'desc' } });
-      if (ticket) await (this.prisma as any).assistantTicket.update({ where: { id: ticket.id }, data: { status: ticketStatus, handlerId, unreadForUser: true } });
-    }
     return { success: true, status: normalizedStatus, statusText, conversation: updated };
   }
 

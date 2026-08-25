@@ -14,12 +14,20 @@ import {
   miniProgramApiCompatMiddleware,
 } from "./common/middleware/mini-program-api-compat";
 import { mallAdminApiCompatMiddleware } from "./common/middleware/mall-admin-api-compat";
+import { resolveCorsOrigin, resolveListenHost } from "./config/setup-cors";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     rawBody: true,
   });
+
+  // 微信公众号安全模式使用 XML 回调；Nest 默认只解析 JSON/urlencoded。
+  // 必须在通用 body parser 之前保留 XML 字符串，供 msg_signature 验签和 AES 解密。
+  app.use(
+    ['/api/wechat/official/callback', '/wechat/official/callback'],
+    express.text({ type: ['text/xml', 'application/xml'], limit: '64kb' }),
+  );
 
   // 校园地图清单可包含内联 GeoJSON；只为该管理端路由放宽请求体限制。
   app.use('/admin/campus-map', express.json({ limit: '5mb' }));
@@ -49,39 +57,19 @@ async function bootstrap() {
   // env.validation 已在启动时校验 CORS_ORIGIN 在 production 下不得为 'true' 或 '*'
   // 此处做二次运行时防护：如果 production 下 CORS_ORIGIN 未正确配置，拒绝启动
   const corsOriginEnv = process.env.CORS_ORIGIN;
-  const corsOrigins = corsOriginEnv
-    ?.split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
   const isProduction = process.env.NODE_ENV === "production";
   const isSetupWizard = process.env.SETUP_WIZARD === "true";
-
-  if (isProduction && !isSetupWizard) {
-    if (!corsOriginEnv || corsOriginEnv === "true" || corsOriginEnv === "*") {
-      logger.error(
-        "FATAL: CORS_ORIGIN is required in production and must be a specific origin " +
-          '(e.g. "https://yuntingzhe.cn"), not "true" or "*". ' +
-          "Application will now exit.",
-      );
-      process.exit(1);
-    }
+  let corsOrigin: true | string[];
+  try {
+    corsOrigin = resolveCorsOrigin({
+      nodeEnv: process.env.NODE_ENV,
+      setupWizard: isSetupWizard,
+      corsOrigin: corsOriginEnv,
+    });
+  } catch (error: any) {
+    logger.error(`FATAL: ${error?.message || error}`);
+    process.exit(1);
   }
-
-  // AUD-P0-001: 生产环境绝不允许 CORS 回退到 true（完全放开跨域）。
-  // 非生产环境在未配置 CORS_ORIGIN 时才回退 true，方便本地开发。
-  const corsOrigin: any = isProduction
-    ? corsOrigins?.length
-      ? corsOrigins
-      : (() => {
-          logger.error(
-            'FATAL: CORS_ORIGIN must be set to specific origin(s) in production. ' +
-              'Application will now exit.',
-          );
-          process.exit(1);
-        })()
-    : corsOrigins?.length
-      ? corsOrigins
-      : true;
   app.enableCors({
     origin: corsOrigin,
     credentials: true,
@@ -200,14 +188,15 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
+  const host = resolveListenHost({ nodeEnv: process.env.NODE_ENV, host: process.env.HOST });
+  await app.listen(port, host);
 
   // ---- 原生 WebSocket（给小程序用） ----
   const wsNative = app.get(WsNativeGateway);
   const httpServer = app.getHttpServer();
   wsNative.attach(httpServer);
 
-  logger.log(`Application is running on: http://localhost:${port}`);
+  logger.log(`Application is running on: http://${host}:${port}`);
   logger.log(`Native WebSocket available at: ws://localhost:${port}/ws-native`);
   logger.log(`Environment: ${process.env.NODE_ENV || "development"}`);
 }

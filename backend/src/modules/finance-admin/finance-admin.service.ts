@@ -2169,4 +2169,204 @@ export class FinanceAdminService {
       pageSize: +pageSize,
     };
   }
+
+  // ================= 平台抽成总览 =================
+
+  async getCommissionOverview(query: any = {}) {
+    const { start, end } = this.dateRange(query, 30);
+
+    // ── 1. 外卖板块：来自 MerchantSettlement.platformFee ──
+    const [settlementsByRegion, dailySettlements] = await Promise.all([
+      this.prisma.merchantSettlement.groupBy({
+        by: ['merchantId'],
+        where: { createdAt: { gte: start, lte: end } },
+        _sum: { platformFee: true, amount: true },
+        _count: true,
+      }),
+      this.prisma.merchantSettlement.findMany({
+        where: { createdAt: { gte: start, lte: end } },
+        select: { platformFee: true, amount: true, createdAt: true },
+      }),
+    ]);
+
+    const merchantIds = settlementsByRegion.map(s => s.merchantId);
+    const merchants = merchantIds.length
+      ? await this.prisma.merchant.findMany({
+          where: { id: { in: merchantIds } },
+          select: { id: true, name: true, regionId: true, region: { select: { id: true, name: true, commissionRate: true } } },
+        })
+      : [];
+    const merchantMap = new Map(merchants.map(m => [m.id, m]));
+
+    const regionMap = new Map<string, {
+      regionId: string; regionName: string; commissionRate: number;
+      totalAmount: number; totalPlatformFee: number; orderCount: number;
+    }>();
+    let deliveryTotal = { platformFee: 0, amount: 0, count: 0 };
+    for (const row of settlementsByRegion) {
+      const merchant = merchantMap.get(row.merchantId);
+      const regionId = merchant?.regionId || 'unknown';
+      const regionName = merchant?.region?.name || '未知区域';
+      const commissionRate = this.toNumber(merchant?.region?.commissionRate);
+      const existing = regionMap.get(regionId) || { regionId, regionName, commissionRate, totalAmount: 0, totalPlatformFee: 0, orderCount: 0 };
+      existing.totalAmount += this.toNumber(row._sum.amount);
+      existing.totalPlatformFee += this.toNumber(row._sum.platformFee);
+      existing.orderCount += row._count;
+      regionMap.set(regionId, existing);
+      deliveryTotal.platformFee += this.toNumber(row._sum.platformFee);
+      deliveryTotal.amount += this.toNumber(row._sum.amount);
+      deliveryTotal.count += row._count;
+    }
+
+    // ── 2. 商城板块：MallOrder.platformFee ──
+    const [mallAgg, mallOrders] = await Promise.all([
+      this.prisma.mallOrder.aggregate({
+        where: { status: { in: ['paid', 'shipped', 'received', 'completed'] }, payTime: { gte: start, lte: end } },
+        _sum: { platformFee: true, payAmount: true },
+        _count: true,
+      }),
+      this.prisma.mallOrder.findMany({
+        where: { status: { in: ['paid', 'shipped', 'received', 'completed'] }, payTime: { gte: start, lte: end } },
+        select: { platformFee: true, payAmount: true, payTime: true },
+      }),
+    ]);
+
+    // ── 3. 跑腿板块：ErrandOrder.platformFee ──
+    const [errandAgg, errandOrders] = await Promise.all([
+      this.prisma.errandOrder.aggregate({
+        where: { status: 'completed', completeTime: { gte: start, lte: end } },
+        _sum: { platformFee: true, payAmount: true },
+        _count: true,
+      }),
+      this.prisma.errandOrder.findMany({
+        where: { status: 'completed', completeTime: { gte: start, lte: end } },
+        select: { platformFee: true, payAmount: true, completeTime: true },
+      }),
+    ]);
+
+    // ── 4. 其他业务：PaymentOrder 按 bizType 分组（充值/置顶/活动/拼团/交友/二手/会员） ──
+    const otherBizTypes = ['recharge', 'topup', 'activity_order', 'group_buy_order', 'dating_order', 'second_hand_order', 'membership'];
+    const otherPayments = await this.prisma.paymentOrder.groupBy({
+      by: ['bizType'],
+      where: { status: 'paid', bizType: { in: otherBizTypes }, payTime: { gte: start, lte: end } },
+      _sum: { amount: true },
+      _count: true,
+    });
+
+    // 拿各业务费率配置
+    const feeConfigs = await this.prisma.bizFeeConfig.findMany().catch(() => [] as any[]);
+    const feeMap = new Map(feeConfigs.map((c: any) => [c.bizType, { rate: Number(c.rate || 0), fixedFee: Number(c.fixedFee || 0), enabled: c.enabled }]));
+
+    const bizTypeLabels: Record<string, string> = {
+      order: '外卖订单', errand_order: '跑腿订单', mall_order: '商城订单',
+      recharge: '余额充值', topup: '付费置顶', activity_order: '活动报名',
+      group_buy_order: '拼团订单', dating_order: '交友订单', second_hand_order: '二手订单', membership: '会员购买',
+    };
+
+    const bizBreakdown: Array<{ bizType: string; label: string; rate: number; fixedFee: number; enabled: boolean; totalAmount: number; totalPlatformFee: number; orderCount: number }> = [];
+
+    // 外卖
+    bizBreakdown.push({
+      bizType: 'order', label: '外卖订单',
+      rate: 0, fixedFee: 0, enabled: true, // 外卖按区域费率，这里显示综合实际费率
+      totalAmount: deliveryTotal.amount, totalPlatformFee: deliveryTotal.platformFee, orderCount: deliveryTotal.count,
+    });
+    // 商城
+    const mallFee = feeMap.get('mall_order') || { rate: 0, fixedFee: 0, enabled: false };
+    bizBreakdown.push({
+      bizType: 'mall_order', label: '商城订单', ...mallFee,
+      totalAmount: this.toNumber(mallAgg._sum.payAmount), totalPlatformFee: this.toNumber(mallAgg._sum.platformFee), orderCount: mallAgg._count,
+    });
+    // 跑腿
+    const errandFee = feeMap.get('errand_order') || { rate: 0, fixedFee: 0, enabled: false };
+    bizBreakdown.push({
+      bizType: 'errand_order', label: '跑腿订单', ...errandFee,
+      totalAmount: this.toNumber(errandAgg._sum.payAmount), totalPlatformFee: this.toNumber(errandAgg._sum.platformFee), orderCount: errandAgg._count,
+    });
+    // 其他业务
+    for (const row of otherPayments) {
+      const fee = feeMap.get(row.bizType) || { rate: 0, fixedFee: 0, enabled: false };
+      const totalAmount = this.toNumber(row._sum.amount);
+      const platformFee = fee.enabled ? Math.round((totalAmount * fee.rate + fee.fixedFee * row._count) * 100) / 100 : 0;
+      bizBreakdown.push({
+        bizType: row.bizType, label: bizTypeLabels[row.bizType] || row.bizType, ...fee,
+        totalAmount, totalPlatformFee: platformFee, orderCount: row._count,
+      });
+    }
+
+    // ── 5. 总计 ──
+    const grandTotal = bizBreakdown.reduce(
+      (acc, b) => ({ platformFee: acc.platformFee + b.totalPlatformFee, amount: acc.amount + b.totalAmount, count: acc.count + b.orderCount }),
+      { platformFee: 0, amount: 0, count: 0 },
+    );
+
+    // ── 6. 各区域当前配置 ──
+    const allRegions = await this.prisma.region.findMany({ select: { id: true, name: true, commissionRate: true }, orderBy: { name: 'asc' } });
+    const regionRates = allRegions.map(r => ({
+      regionId: r.id, regionName: r.name, commissionRate: this.toNumber(r.commissionRate),
+      totalPlatformFee: regionMap.get(r.id)?.totalPlatformFee || 0,
+      totalAmount: regionMap.get(r.id)?.totalAmount || 0,
+      orderCount: regionMap.get(r.id)?.orderCount || 0,
+    }));
+
+    // ── 7. 按日趋势（外卖+商城+跑腿合并） ──
+    const dayTrendMap = new Map<string, { date: string; platformFee: number; amount: number }>();
+    const addToTrend = (fee: number, amount: number, date: Date) => {
+      const key = this.dayKey(date);
+      const cur = dayTrendMap.get(key) || { date: key, platformFee: 0, amount: 0 };
+      cur.platformFee += fee;
+      cur.amount += amount;
+      dayTrendMap.set(key, cur);
+    };
+    for (const r of dailySettlements) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.amount), r.createdAt);
+    for (const r of mallOrders) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.payAmount), r.payTime!);
+    for (const r of errandOrders) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.payAmount), r.completeTime!);
+    const dailyTrend = Array.from(dayTrendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+    // ── 8. 各业务费率配置（含默认值） ──
+    const defaultConfigs: Record<string, any> = {
+      order: { label: '外卖订单', rate: 0, fixedFee: 0, enabled: true, remark: '按区域独立配置，在区域配置页修改' },
+      errand_order: { label: '跑腿订单', rate: 0.05, fixedFee: 0, enabled: true, remark: '' },
+      mall_order: { label: '商城订单', rate: 0.03, fixedFee: 0, enabled: true, remark: '' },
+      group_buy_order: { label: '拼团订单', rate: 0.03, fixedFee: 0, enabled: false, remark: '' },
+      recharge: { label: '余额充值', rate: 0, fixedFee: 0, enabled: false, remark: '充值全额归平台，无需抽成配置' },
+      topup: { label: '付费置顶', rate: 1.0, fixedFee: 0, enabled: true, remark: '全额归平台' },
+      second_hand_order: { label: '二手订单', rate: 0.02, fixedFee: 0, enabled: false, remark: '' },
+      dating_order: { label: '交友订单', rate: 0.1, fixedFee: 0, enabled: false, remark: '' },
+      activity_order: { label: '活动报名', rate: 0.05, fixedFee: 0, enabled: false, remark: '' },
+      membership: { label: '会员购买', rate: 1.0, fixedFee: 0, enabled: true, remark: '全额归平台' },
+    };
+    const feeConfigs2 = Object.entries(defaultConfigs).map(([bizType, def]) => {
+      const row = feeMap.get(bizType);
+      return row ? { bizType, ...def, ...row } : { bizType, ...def };
+    });
+
+    return {
+      summary: {
+        totalPlatformFee: grandTotal.platformFee,
+        totalAmount: grandTotal.amount,
+        orderCount: grandTotal.count,
+        effectiveRate: grandTotal.amount > 0 ? Number(((grandTotal.platformFee / grandTotal.amount) * 100).toFixed(2)) : 0,
+        start: start.toISOString(),
+        end: end.toISOString(),
+      },
+      bizBreakdown,
+      regionRates,
+      dailyTrend,
+      feeConfigs: feeConfigs2,
+    };
+  }
+
+  async updateRegionCommissionRate(regionId: string, commissionRate: number, operatorId?: string) {
+    if (commissionRate < 0 || commissionRate > 1) {
+      throw new BadRequestException('抽成比例必须在 0～1 之间（如 0.05 表示 5%）');
+    }
+    const region = await this.prisma.region.findUnique({ where: { id: regionId } });
+    if (!region) throw new NotFoundException('区域不存在');
+    await this.prisma.region.update({
+      where: { id: regionId },
+      data: { commissionRate: commissionRate as any },
+    });
+    return { success: true, regionId, commissionRate };
+  }
 }

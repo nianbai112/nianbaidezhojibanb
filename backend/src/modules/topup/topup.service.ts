@@ -4,6 +4,9 @@ import { RedisService } from '../../common/services/redis.service';
 import { PaymentService } from '../payment/payment.service';
 import { MembershipService } from '../membership/membership.service';
 
+const RECHARGE_MIN_AMOUNT = 0.01;
+const RECHARGE_MAX_AMOUNT = 10000;
+
 type PinPackage = {
   id: string;
   regionId: string;
@@ -42,6 +45,23 @@ export class TopupService {
   private money(value: any) {
     const amount = Number(value || 0);
     return Number.isFinite(amount) ? amount : 0;
+  }
+
+  private normalizeRechargeAmount(value: any) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < RECHARGE_MIN_AMOUNT || amount > RECHARGE_MAX_AMOUNT) {
+      throw new BadRequestException(`充值金额必须在 ${RECHARGE_MIN_AMOUNT} 至 ${RECHARGE_MAX_AMOUNT} 元之间`);
+    }
+    if (Math.abs(Math.round(amount * 100) - amount * 100) > 1e-8) {
+      throw new BadRequestException('充值金额最多保留两位小数');
+    }
+    return amount;
+  }
+
+  private positiveInt(value: any, fallback: number, max = 100) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, max);
   }
 
   private packageDurationMs(pkg: { duration?: number; durationUnit?: string }) {
@@ -132,12 +152,7 @@ export class TopupService {
   async createTopupOrder(userId: string, dto: any) {
     const postId = String(dto.post_id || dto.postId || '');
     const packageId = String(dto.package_id || dto.packageId || '');
-    return this.runWithLock(
-      `topup:create:${userId}:${postId || 'unknown'}:${packageId || 'unknown'}`,
-      '置顶订单正在创建中，请勿重复提交',
-      () => this.createTopupOrderUnlocked(userId, dto),
-      45,
-    );
+    return this.runWithLock(`topup:create:${userId}:${postId || 'unknown'}:${packageId || 'unknown'}`, '置顶订单正在创建中，请勿重复提交', () => this.createTopupOrderUnlocked(userId, dto), 45);
   }
 
   private async createTopupOrderUnlocked(userId: string, dto: any) {
@@ -147,8 +162,20 @@ export class TopupService {
     if (!packageId) throw new BadRequestException('请选择置顶套餐');
 
     const [user, post, pkg] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, openid: true } }),
-      this.prisma.post.findUnique({ where: { id: postId }, select: { id: true, userId: true, regionId: true, status: true, deletedAt: true } }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, openid: true },
+      }),
+      this.prisma.post.findUnique({
+        where: { id: postId },
+        select: {
+          id: true,
+          userId: true,
+          regionId: true,
+          status: true,
+          deletedAt: true,
+        },
+      }),
       this.prisma.topupPackage.findUnique({ where: { id: packageId } }),
     ]);
     if (!user?.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
@@ -171,7 +198,9 @@ export class TopupService {
         postId,
         regionId: post.regionId || pkg.regionId,
         packageId: pkg.id,
-        orderNo: `PIN${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+        orderNo: `PIN${Date.now()}${Math.floor(Math.random() * 1000)
+          .toString()
+          .padStart(3, '0')}`,
         amount,
         packageName: pkg.name,
         packageSnapshot: this.mapPackage(pkg as any),
@@ -193,11 +222,19 @@ export class TopupService {
 
     await this.prisma.topupOrder.update({
       where: { id: order.id },
-      data: { status: 'paying', paymentNo: paymentInfo.paymentNo, payChannel: 'wx_pay' },
+      data: {
+        status: 'paying',
+        paymentNo: paymentInfo.paymentNo,
+        payChannel: 'wx_pay',
+      },
     });
 
     return {
-      ...this.mapOrder({ ...order, status: 'paying', paymentNo: paymentInfo.paymentNo }),
+      ...this.mapOrder({
+        ...order,
+        status: 'paying',
+        paymentNo: paymentInfo.paymentNo,
+      }),
       paymentInfo,
     };
   }
@@ -205,14 +242,22 @@ export class TopupService {
   private async tryUseMemberFreePin(userId: string, postId: string, pkg: any) {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await this.membershipService.consumeBenefitWithDb(userId, 'post_pin_free_quota', {
-          targetType: 'post',
-          targetId: postId,
-          quantity: 1,
-          metadata: { packageId: pkg.id, packageName: pkg.name },
-        }, tx);
+        await this.membershipService.consumeBenefitWithDb(
+          userId,
+          'post_pin_free_quota',
+          {
+            targetType: 'post',
+            targetId: postId,
+            quantity: 1,
+            metadata: { packageId: pkg.id, packageName: pkg.name },
+          },
+          tx,
+        );
         const now = new Date();
-        const post = await tx.post.findUnique({ where: { id: postId }, select: { topExpireAt: true } });
+        const post = await tx.post.findUnique({
+          where: { id: postId },
+          select: { topExpireAt: true },
+        });
         const base = post?.topExpireAt && post.topExpireAt > now ? post.topExpireAt : now;
         const topExpireAt = new Date(base.getTime() + this.packageDurationMs(pkg));
         const order = await tx.topupOrder.create({
@@ -221,7 +266,9 @@ export class TopupService {
             postId,
             regionId: pkg.regionId,
             packageId: pkg.id,
-            orderNo: `PINVIP${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+            orderNo: `PINVIP${Date.now()}${Math.floor(Math.random() * 1000)
+              .toString()
+              .padStart(3, '0')}`,
             amount: 0,
             packageName: `${pkg.name}（会员权益）`,
             packageSnapshot: this.mapPackage(pkg as any),
@@ -233,8 +280,16 @@ export class TopupService {
             topExpireAt,
           },
         });
-        await tx.post.update({ where: { id: postId }, data: { isTop: true, topExpireAt } });
-        return { ...this.mapOrder(order), paymentInfo: { amount: 0, status: "free", method: "membership" }, usedMemberBenefit: true, message: '已使用会员免费置顶权益' };
+        await tx.post.update({
+          where: { id: postId },
+          data: { isTop: true, topExpireAt },
+        });
+        return {
+          ...this.mapOrder(order),
+          paymentInfo: { amount: 0, status: 'free', method: 'membership' },
+          usedMemberBenefit: true,
+          message: '已使用会员免费置顶权益',
+        };
       });
     } catch (error: any) {
       if (error instanceof BadRequestException) {
@@ -246,23 +301,26 @@ export class TopupService {
   }
 
   async getPaymentInfo(orderId: string, userId: string) {
-    return this.runWithLock(
-      `topup:pay:${orderId}`,
-      '置顶支付正在处理中，请稍后再试',
-      () => this.getPaymentInfoUnlocked(orderId, userId),
-      45,
-    );
+    return this.runWithLock(`topup:pay:${orderId}`, '置顶支付正在处理中，请稍后再试', () => this.getPaymentInfoUnlocked(orderId, userId), 45);
   }
 
   private async getPaymentInfoUnlocked(orderId: string, userId: string) {
-    const order = await this.prisma.topupOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.topupOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) throw new NotFoundException('置顶订单不存在');
     if (order.userId !== userId) throw new ForbiddenException('无权查看该订单');
     if (order.status === 'success') {
-      return { ...this.mapOrder(order), paymentInfo: { amount: 0, status: "free", method: "membership" } };
+      return {
+        ...this.mapOrder(order),
+        paymentInfo: { amount: 0, status: 'free', method: 'membership' },
+      };
     }
     if (order.status === 'cancelled') throw new BadRequestException('订单已取消');
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { openid: true } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { openid: true },
+    });
     if (!user?.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
     const paymentInfo = await this.paymentService.wxUnifiedOrder({
       bizType: 'topup',
@@ -275,16 +333,26 @@ export class TopupService {
     });
     await this.prisma.topupOrder.update({
       where: { id: order.id },
-      data: { status: 'paying', paymentNo: paymentInfo.paymentNo, payChannel: 'wx_pay' },
+      data: {
+        status: 'paying',
+        paymentNo: paymentInfo.paymentNo,
+        payChannel: 'wx_pay',
+      },
     });
     return {
-      ...this.mapOrder({ ...order, status: 'paying', paymentNo: paymentInfo.paymentNo }),
+      ...this.mapOrder({
+        ...order,
+        status: 'paying',
+        paymentNo: paymentInfo.paymentNo,
+      }),
       paymentInfo,
     };
   }
 
   async syncOrderPayment(orderId: string, userId: string) {
-    const order = await this.prisma.topupOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.topupOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) throw new NotFoundException('置顶订单不存在');
     if (order.userId !== userId) throw new ForbiddenException('无权同步该订单');
 
@@ -295,7 +363,9 @@ export class TopupService {
 
     const updated = await this.prisma.topupOrder.findUnique({
       where: { id: orderId },
-      include: { User: { select: { id: true, nickname: true, avatar: true } } } as any,
+      include: {
+        User: { select: { id: true, nickname: true, avatar: true } },
+      } as any,
     });
     if (!updated) throw new NotFoundException('置顶订单不存在');
     return this.mapOrder(updated);
@@ -313,15 +383,13 @@ export class TopupService {
   }
 
   async cancelOrder(orderId: string, userId: string) {
-    return this.runWithLock(
-      `topup:order:${orderId}`,
-      '置顶订单正在处理中，请稍后再试',
-      () => this.cancelOrderUnlocked(orderId, userId),
-    );
+    return this.runWithLock(`topup:order:${orderId}`, '置顶订单正在处理中，请稍后再试', () => this.cancelOrderUnlocked(orderId, userId));
   }
 
   private async cancelOrderUnlocked(orderId: string, userId: string) {
-    const order = await this.prisma.topupOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.topupOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) throw new NotFoundException('置顶订单不存在');
     if (order.userId !== userId) throw new ForbiddenException('无权取消该订单');
     if (order.status === 'success') throw new BadRequestException('已支付订单不能取消');
@@ -331,87 +399,116 @@ export class TopupService {
     });
     if (updated.paymentNo) {
       await this.prisma.paymentOrder
-        .updateMany({ where: { paymentNo: updated.paymentNo, status: { not: 'paid' } }, data: { status: 'closed' } })
+        .updateMany({
+          where: { paymentNo: updated.paymentNo, status: { not: 'paid' } },
+          data: { status: 'closed' },
+        })
         .catch(() => {});
     }
     return this.mapOrder(updated);
   }
 
   async getRechargeHistory(userId: string, query: any) {
-    const { page = 1, limit = 20, status } = query;
+    const page = this.positiveInt(query?.page, 1, 100000);
+    const pageSize = this.positiveInt(query?.limit || query?.pageSize, 20, 100);
+    const status = String(query?.status || '').trim();
     const where: any = { userId };
-    if (status) where.status = status;
-    return this.prisma.recharge.findMany({ where, skip: (page - 1) * limit, take: Number(limit), orderBy: { createdAt: 'desc' } });
+    if (status && ['pending', 'success', 'failed'].includes(status)) where.status = status;
+    const [records, total] = await Promise.all([
+      this.prisma.recharge.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.recharge.count({ where }),
+    ]);
+    return {
+      list: records.map((record) => ({
+        id: record.id,
+        order_no: record.orderNo,
+        amount: Number(record.amount),
+        pay_type: record.channel === 'WX_PAY' ? 'wechat' : String(record.channel || '').toLowerCase(),
+        status: record.status,
+        created_at: record.createdAt,
+        paid_at: record.payTime,
+      })),
+      total,
+      page,
+      pageSize,
+      recharge_config: {
+        min_recharge: RECHARGE_MIN_AMOUNT,
+        max_recharge: RECHARGE_MAX_AMOUNT,
+      },
+    };
   }
 
   async createRechargeOrder(userId: string, dto: any) {
+    const amount = this.normalizeRechargeAmount(dto?.amount);
     return this.runWithLock(
-      `finance:recharge:create:${userId}:${dto?.amount || 'unknown'}:${dto?.channel || 'unknown'}`,
+      `finance:recharge:create:${userId}:${amount}`,
       '充值订单正在创建中，请勿重复提交',
       async () => {
+        const user = await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { openid: true },
+        });
+        if (!user?.openid) throw new BadRequestException('未绑定微信，无法充值');
+
         const recharge = await this.prisma.recharge.create({
           data: {
             userId,
-            amount: dto.amount,
-            channel: dto.channel || 'wx_pay',
-            orderNo: `REC${Date.now()}`,
+            amount,
+            channel: 'WX_PAY',
+            orderNo: `REC${Date.now()}${Math.floor(Math.random() * 10000)
+              .toString()
+              .padStart(4, '0')}`,
             status: 'pending',
           },
         });
 
-        // AUD-P1-010: 接入支付中心 — 微信支付生成 paymentInfo 给前端拉起支付
-        if (dto.channel === 'wx_pay' || !dto.channel) {
-          const user = await this.prisma.user.findUnique({
-            where: { id: userId },
-            select: { openid: true },
-          });
-          if (!user?.openid) {
-            throw new BadRequestException('未绑定微信，无法充值');
-          }
+        try {
           const paymentInfo = await this.paymentService.wxUnifiedOrder({
             bizType: 'recharge',
             bizId: recharge.id,
             orderNo: recharge.orderNo,
-            amount: Number(dto.amount),
-            description: `余额充值 ${dto.amount} 元`,
+            amount,
+            description: `余额充值 ${amount} 元`,
             openid: user.openid,
             userId,
           });
 
           return {
-            success: true,
-            data: {
-              rechargeId: recharge.id,
-              orderNo: recharge.orderNo,
-              amount: Number(dto.amount),
-              paymentInfo,
-            },
+            rechargeId: recharge.id,
+            orderNo: recharge.orderNo,
+            amount,
+            paymentNo: paymentInfo.paymentNo,
+            paymentInfo,
           };
+        } catch (error) {
+          await this.prisma.recharge
+            .updateMany({
+              where: { id: recharge.id, status: 'pending' },
+              data: { status: 'failed' },
+            })
+            .catch(() => undefined);
+          throw error;
         }
-
-        return { success: true, data: recharge };
       },
       20,
     );
   }
 
   async checkWechatBinding(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { openid: true } });
-    const [officialBinding, officialConfig] = await Promise.all([
-      this.prisma.wechatOfficialBinding.findUnique({ where: { userId } }),
-      this.prisma.config.findUnique({ where: { key: 'wechat_official' } }),
-    ]);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { openid: true },
+    });
+    const [officialBinding, officialConfig] = await Promise.all([this.prisma.wechatOfficialBinding.findUnique({ where: { userId } }), this.prisma.config.findUnique({ where: { key: 'wechat_official' } })]);
     const official = (officialConfig?.value || {}) as Record<string, any>;
     const miniProgramBound = !!user?.openid;
     const officialAccountBound = !!officialBinding?.officialOpenid && officialBinding.subscribe !== false;
-    const officialConfigured = !!(
-      official.appId ||
-      official.appid ||
-      official.appSecret ||
-      official.secret ||
-      official.qrUrl ||
-      official.bindUrl
-    );
+    const officialConfigured = !!(official.appId || official.appid || official.appSecret || official.secret || official.qrUrl || official.bindUrl);
 
     const bindingStatus = {
       isBound: miniProgramBound,

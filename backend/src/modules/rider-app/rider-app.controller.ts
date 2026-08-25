@@ -92,6 +92,18 @@ export class RiderAppController {
     return this.riderAppService.updateOrderStatus(userId, orderId, dto);
   }
 
+  @Post('rider-app/orders/:orderId/confirm-by-code')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '官方骑手凭收货码确认收货' })
+  confirmOrderByCode(
+    @Param('orderId') orderId: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: any,
+  ) {
+    return this.riderAppService.confirmOrderByCode(userId, orderId, dto?.code);
+  }
+
   @Post('rider-app/orders/:orderId/exceptions')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -142,5 +154,73 @@ export class RiderAppController {
   @ApiOperation({ summary: '获取官方骑手订单统计' })
   getStats(@CurrentUser('sub') userId: string) {
     return this.riderAppService.getStats(userId);
+  }
+
+  @Get('rider-app/income/overview')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取骑手收入总览（余额/冻结/今日/本月/待结算/提现中）' })
+  getIncomeOverview(@CurrentUser('sub') userId: string) {
+    return this.riderAppService.getRiderIncomeOverview(userId);
+  }
+
+  @Get('rider-app/income/transactions')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取骑手钱包流水' })
+  getIncomeTransactions(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.riderAppService.getRiderIncomeTransactions(userId, query);
+  }
+
+  @Get('rider-app/settlements')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取骑手结算记录' })
+  getRiderSettlements(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.riderAppService.getRiderSettlements(userId, query);
+  }
+
+  @Get('rider-app/settlements/:id')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取骑手结算详情' })
+  getRiderSettlement(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.riderAppService.getRiderSettlementDetail(userId, id);
+  }
+
+  @Post('rider-app/settlements/:id/appeal')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '提交结算申诉' })
+  createRiderSettlementAppeal(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @Body() dto: any,
+  ) {
+    return this.riderAppService.createRiderSettlementAppeal(userId, id, dto);
+  }
+
+  @Get('rider-app/withdrawals')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取骑手提现记录' })
+  getRiderWithdrawals(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.riderAppService.getRiderWithdrawals(userId, query);
+  }
+
+  @Post('rider-app/withdrawals')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '骑手申请提现' })
+  createRiderWithdrawal(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.riderAppService.createRiderWithdrawal(userId, dto);
+  }
+
+  @Post('rider-app/push/token')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '上报 uni-push 推送标识' })
+  registerPushToken(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.riderAppService.registerPushToken(userId, dto);
   }
 }

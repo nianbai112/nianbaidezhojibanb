@@ -38,4 +38,27 @@ describe('IpGeoService', () => {
       expect.objectContaining({ params: { ip: '8.8.8.8' }, headers: { Authorization: 'APPCODE test-code' } }),
     );
   });
+
+  it.each([
+    { lat: '', lng: '', label: 'blank coordinates' },
+    { lat: null, lng: null, label: 'null coordinates' },
+    { lat: 0, lng: 0, label: 'zero coordinates' },
+    { lat: 91, lng: 108, label: 'out-of-range coordinates' },
+  ])('does not expose $label from a successful IP lookup', async ({ lat, lng }) => {
+    config.findUnique.mockResolvedValue({ value: { enabled: true, appCode: 'test-code' } });
+    mockedAxios.get.mockResolvedValue({
+      data: {
+        status: 0,
+        result: {
+          location: { lat, lng },
+          ad_info: { nation: '中国', province: '重庆市', city: '重庆市' },
+        },
+      },
+    } as any);
+
+    await expect(service.resolve('8.8.8.8')).resolves.toMatchObject({
+      latitude: null,
+      longitude: null,
+    });
+  });
 });

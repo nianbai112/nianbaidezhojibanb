@@ -5,13 +5,16 @@ describe('MessageService', () => {
     const prisma = {
       user: {
         upsert: jest.fn().mockResolvedValue({
-          id: 'official-user',
-          nickname: '官方推送消息',
-          avatar: '/static/logo.jpg',
-          userType: 4,
+        id: 'official-user',
+        nickname: '官方推送消息',
+        avatar: '/static/logo.jpg',
+        userType: 4,
+        openid: 'lingmeng_official_message_account',
+        systemRole: 'OFFICIAL_ASSISTANT',
         }),
       },
       conversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'official-conversation', scopeKey: 'support:r1:viewer', members: [] }),
         findFirst: jest.fn().mockResolvedValue({ id: 'official-conversation' }),
       },
       conversationMember: {
@@ -24,21 +27,23 @@ describe('MessageService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       userProfile: {
-        findUnique: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockResolvedValue({ regionId: 'r1' }),
       },
       realtimeSession: {
         findMany: jest.fn(),
       },
       ...prismaOverrides,
     };
-    const privateMessagePermission = {};
-    const wsNative = {};
+    const privateMessagePermission = { check: jest.fn().mockResolvedValue({ allowed: true }) };
+    const wsNative = { pushToUser: jest.fn() };
     const redis = { delPattern: jest.fn().mockResolvedValue(undefined) };
 
     return {
       service: new MessageService(prisma as any, privateMessagePermission as any, wsNative as any, redis as any),
       prisma,
       redis,
+      privateMessagePermission,
+      wsNative,
     };
   }
 
@@ -106,6 +111,16 @@ describe('MessageService', () => {
     const visibleChat = result.chatList.find((chat: any) => chat.other_user_id === visibleUser.id);
     const hiddenChat = result.chatList.find((chat: any) => chat.other_user_id === hiddenUser.id);
 
+    expect(result.pagination).toMatchObject({
+      current_page: 1,
+      currentPage: 1,
+      total_pages: 1,
+      totalPages: 1,
+      total: 2,
+      page_size: 20,
+      pageSize: 20,
+    });
+
     expect(prisma.realtimeSession.findMany).toHaveBeenCalledWith({
       where: {
         userId: { in: [visibleUser.id, hiddenUser.id] },
@@ -140,7 +155,7 @@ describe('MessageService', () => {
         title: '官方推送消息',
         avatar: '/static/logo.jpg',
         lastMessage: '你好',
-        members: [{ user: { id: 'official-user', userType: 4, nickname: '官方推送消息', avatar: '/static/logo.jpg' } }],
+        members: [{ user: { id: 'official-user', userType: 4, systemRole: 'OFFICIAL_ASSISTANT', nickname: '官方推送消息', avatar: '/static/logo.jpg' } }],
       },
     });
 
@@ -149,6 +164,29 @@ describe('MessageService', () => {
       nickname: '校园小助手',
       avatar: '/static/logo.png',
       is_official: true,
+    });
+  });
+
+  it('does not label an ordinary userType=4 bot as the official assistant', () => {
+    const { service } = createService({});
+    const chat = (service as any).toClientChat({
+      unreadCount: 0,
+      conversation: {
+        id: 'bot-conversation',
+        type: 'private',
+        title: '',
+        avatar: '',
+        lastMessage: '机器人消息',
+        members: [{ user: { id: 'bot-user', userType: 4, systemRole: null, openid: 'bot_123', nickname: '活动机器人', avatar: '/bot.png' } }],
+      },
+    });
+
+    expect(chat).toMatchObject({
+      name: '活动机器人',
+      avatar: '/bot.png',
+      is_official: false,
+      pinned: false,
+      role: 'user',
     });
   });
 
@@ -195,5 +233,191 @@ describe('MessageService', () => {
 
     expect(prisma.conversationMember.updateMany).toHaveBeenCalled();
     expect(redis.delPattern).toHaveBeenCalledWith('notify:unread:viewer:*');
+  });
+
+  it('sends an in-app post share through the authenticated private-message contract', async () => {
+    const createdAt = new Date();
+    const message = {
+      id: 'message-share-1',
+      conversationId: 'conversation-1',
+      senderId: 'sender-1',
+      type: 'TEXT',
+      content: 'notes:标题|正文|post-1||||0',
+      clientMessageId: 'share-client-1',
+      createdAt,
+      sender: { id: 'sender-1', nickname: '发送者', avatar: '/avatar.png' },
+    };
+    const tx = {
+      message: { create: jest.fn().mockResolvedValue(message) },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      conversationMember: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const { service, wsNative, redis } = createService({
+      user: { findUnique: jest.fn().mockResolvedValue({ id: 'receiver-1', userType: 1, settings: { messagePermission: 0 } }) },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ regionId: 'region-1' }) },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'conversation-1',
+          type: 'private',
+          isBlocked: false,
+          members: [{ userId: 'sender-1', isMuted: false }, { userId: 'receiver-1', isMuted: false }],
+        }),
+      },
+      message: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn((callback: any) => callback(tx)),
+    });
+
+    const result = await service.sendPrivateMessage('sender-1', {
+      receiver_id: 'receiver-1',
+      message: message.content,
+      client_message_id: 'share-client-1',
+      extra: { kind: 'post_share', postId: 'post-1' },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      conversationId: 'conversation-1',
+      message: {
+        clientMessageId: 'share-client-1',
+        client_message_id: 'share-client-1',
+      },
+    });
+    expect(tx.message.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ clientMessageId: 'share-client-1', extra: { kind: 'post_share', postId: 'post-1' } }),
+    }));
+    expect(wsNative.pushToUser).toHaveBeenCalledWith('receiver-1', expect.objectContaining({ event: 'message', messageId: 'message-share-1' }));
+    expect(redis.delPattern).toHaveBeenCalledWith('notify:unread:receiver-1:*');
+  });
+
+  it('reuses an active official ticket only in the current campus and links the message projection', async () => {
+    const createdAt = new Date('2026-08-24T11:00:00.000Z');
+    const tx: any = {
+      message: {
+        create: jest.fn().mockResolvedValue({
+          id: 'message-official-1', conversationId: 'official-conversation', senderId: 'sender-1',
+          type: 'TEXT', content: '咨询当前校园', clientMessageId: 'client-official-1', createdAt,
+          sender: { id: 'sender-1', nickname: '发送者', avatar: '' },
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      assistantTicketReply: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({}),
+      },
+      assistantTicket: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'ticket-current', regionId: 'region-current', conversationId: null, status: 'pending',
+        }),
+        create: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      conversationMember: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const { service } = createService({
+      user: {
+        upsert: jest.fn().mockResolvedValue({
+          id: 'official-user', nickname: '校园小助手', avatar: '/static/logo.png', userType: 4,
+          systemRole: 'OFFICIAL_ASSISTANT', openid: 'lingmeng_official_message_account',
+        }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'official-user', userType: 4, systemRole: 'OFFICIAL_ASSISTANT', openid: 'legacy-openid', settings: null,
+        }),
+      },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ regionId: 'region-current' }) },
+      conversation: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'official-conversation', regionId: 'region-old', isBlocked: false,
+          scopeKey: 'support:region-current:sender-1',
+          members: [{ userId: 'sender-1', isMuted: false }, { userId: 'official-user', isMuted: false }],
+        }),
+        findFirst: jest.fn(),
+      },
+      message: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn((handler: any) => handler(tx)),
+    });
+
+    const result = await service.sendPrivateMessage('sender-1', {
+      receiverId: 'official-user',
+      content: '咨询当前校园',
+      clientMessageId: 'client-official-1',
+    });
+
+    expect(tx.assistantTicket.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        userId: 'sender-1',
+        regionId: 'region-current',
+        OR: [{ conversationId: 'official-conversation' }, { conversationId: null }],
+      }),
+      orderBy: { updatedAt: 'desc' },
+    });
+    expect(tx.assistantTicket.create).not.toHaveBeenCalled();
+    expect(tx.assistantTicketReply.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ticketId: 'ticket-current', messageId: 'message-official-1', clientMessageId: 'client-official-1',
+      }),
+    });
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: 'message-official-1' },
+      data: { ticketId: 'ticket-current' },
+    });
+    expect(tx.conversation.update).toHaveBeenCalledWith({
+      where: { id: 'official-conversation' },
+      data: expect.objectContaining({ regionId: 'region-current' }),
+    });
+    expect(result).toEqual(expect.objectContaining({ assistantTicketId: 'ticket-current' }));
+  });
+
+  it('returns the persisted official message when an HTTP retry loses the clientMessageId race', async () => {
+    const uniqueError: any = new Error('unique');
+    uniqueError.code = 'P2002';
+    const existing = {
+      id: 'message-existing', conversationId: 'official-conversation', senderId: 'sender-1',
+      type: 'TEXT', content: '并发咨询', clientMessageId: 'client-race-1',
+      createdAt: new Date('2026-08-24T12:00:00.000Z'),
+      sender: { id: 'sender-1', nickname: '发送者', avatar: '' },
+    };
+    const messageFindFirst = jest.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    const { service, wsNative } = createService({
+      user: {
+        upsert: jest.fn().mockResolvedValue({
+          id: 'official-user', nickname: '校园小助手', avatar: '/static/logo.png', userType: 4,
+          systemRole: 'OFFICIAL_ASSISTANT', openid: 'lingmeng_official_message_account',
+        }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'official-user', userType: 4, systemRole: 'OFFICIAL_ASSISTANT',
+          openid: 'lingmeng_official_message_account', settings: null,
+        }),
+      },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ regionId: 'region-current' }) },
+      conversation: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'official-conversation', regionId: 'region-current', isBlocked: false,
+          scopeKey: 'support:region-current:sender-1',
+          members: [{ userId: 'sender-1', isMuted: false }, { userId: 'official-user', isMuted: false }],
+        }),
+      },
+      message: { findFirst: messageFindFirst },
+      assistantTicketReply: {
+        findFirst: jest.fn().mockResolvedValue({ ticketId: 'ticket-existing' }),
+      },
+      $transaction: jest.fn().mockRejectedValue(uniqueError),
+    });
+
+    const result = await service.sendPrivateMessage('sender-1', {
+      receiverId: 'official-user', content: '并发咨询', clientMessageId: 'client-race-1',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      duplicated: true,
+      conversationId: 'official-conversation',
+      assistantTicketId: 'ticket-existing',
+      message: expect.objectContaining({ id: 'message-existing', clientMessageId: 'client-race-1' }),
+    }));
+    expect(messageFindFirst).toHaveBeenCalledTimes(2);
+    expect(wsNative.pushToUser).not.toHaveBeenCalled();
   });
 });

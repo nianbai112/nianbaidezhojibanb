@@ -50,14 +50,15 @@ export class IpGeoService {
 
       const adInfo = data?.result?.ad_info || {};
       const point = data?.result?.location || {};
+      const coordinates = this.coordinatesOrNull(point.lat, point.lng);
       return {
         ip: normalizedIp,
         country: this.text(adInfo.nation),
         province: this.text(adInfo.province),
         city: this.text(adInfo.city),
         district: this.text(adInfo.district),
-        latitude: this.numberOrNull(point.lat),
-        longitude: this.numberOrNull(point.lng),
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
         adcode: this.text(adInfo.adcode),
         provider: 'aliyun-market-lundear',
       };
@@ -122,8 +123,14 @@ export class IpGeoService {
     return String(value ?? '').trim();
   }
 
-  private numberOrNull(value: unknown) {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
+  private coordinatesOrNull(latitudeValue: unknown, longitudeValue: unknown) {
+    if (latitudeValue === null || latitudeValue === undefined || String(latitudeValue).trim() === '') return null;
+    if (longitudeValue === null || longitudeValue === undefined || String(longitudeValue).trim() === '') return null;
+    const latitude = Number(latitudeValue);
+    const longitude = Number(longitudeValue);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+    if (latitude === 0 && longitude === 0) return null;
+    return { latitude, longitude };
   }
 }

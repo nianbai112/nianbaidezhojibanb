@@ -1,7 +1,7 @@
 {
   "name": "lingmeng-admin",
   "private": true,
-  "version": "1.0.36",
+  "version": "1.0.46-selfhosted.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -11,11 +11,14 @@
     "lint:check": "eslint . --ext .vue,.ts,.tsx",
     "lint:fix": "eslint . --ext .vue,.ts,.tsx --fix",
     "typecheck": "vue-tsc --noEmit",
+    "test:message-boundaries": "node --test src/views/system/messageBoundaries.test.mjs",
     "sync:canvas": "node scripts/sync-canvas-blocks.mjs"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
+    "@tmagic/core": "1.5.6",
     "@tmagic/editor": "1.5.6",
+    "@tmagic/schema": "1.5.6",
     "axios": "^1.18.1",
     "echarts": "^6.1.0",
     "element-plus": "^2.10.7",
@@ -23,11 +26,9 @@
     "ol": "^10.9.0",
     "pinia": "^2.3.0",
     "qrcode": "^1.5.4",
-    "sass": "^1.90.0",
+    "sass": "^1.102.0",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0",
-    "@tmagic/core": "1.5.6",
-    "@tmagic/schema": "1.5.6"
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

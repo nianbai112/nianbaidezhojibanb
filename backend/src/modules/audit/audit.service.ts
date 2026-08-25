@@ -106,6 +106,30 @@ export class AuditService {
     };
   }
 
+  private normalizeAiReviewImages(value: any): string[] {
+    const urls: string[] = [];
+    const visit = (item: any) => {
+      if (!item) return;
+      if (typeof item === 'string') {
+        urls.push(item);
+        return;
+      }
+      if (Array.isArray(item)) {
+        item.forEach(visit);
+        return;
+      }
+      if (typeof item === 'object') {
+        const direct = item.url || item.src || item.image || item.image_url || item.imageUrl;
+        if (direct) urls.push(String(direct));
+        if (item.list) visit(item.list);
+        if (item.urls) visit(item.urls);
+        if (item.images) visit(item.images);
+      }
+    };
+    visit(value);
+    return [...new Set(urls.map((url) => String(url || '').trim()).filter(Boolean))];
+  }
+
   private async attachAiModeration(items: any[]) {
     const targets = items
       .filter((item) => ['post', 'comment'].includes(item.targetType) && item.id)
@@ -323,18 +347,32 @@ export class AuditService {
     const target = type === 'post'
       ? await this.prisma.post.findUnique({
           where: { id },
-          select: { id: true, userId: true, regionId: true, title: true, content: true, auditStatus: true, status: true },
+          select: {
+            id: true,
+            userId: true,
+            regionId: true,
+            title: true,
+            content: true,
+            auditStatus: true,
+            status: true,
+            media: { where: { type: 'IMAGE' }, select: { url: true } },
+          },
         })
       : await this.prisma.comment.findUnique({
           where: { id },
-          select: { id: true, userId: true, postId: true, content: true, auditStatus: true, status: true, post: { select: { regionId: true, title: true } } },
+          select: { id: true, userId: true, postId: true, content: true, images: true, auditStatus: true, status: true, post: { select: { regionId: true, title: true } } },
         });
     if (!target) throw new NotFoundException(type === 'post' ? '帖子不存在' : '评论不存在');
+
+    const imageUrls = type === 'post'
+      ? this.normalizeAiReviewImages((target as any).media)
+      : this.normalizeAiReviewImages((target as any).images);
 
     const result = await this.aiRuntime.moderateContent({
       type: type as 'post' | 'comment',
       title: type === 'post' ? (target as any).title : (target as any).post?.title,
       content: (target as any).content || '',
+      imageUrls,
       regionId: type === 'post' ? (target as any).regionId : (target as any).post?.regionId,
       approvalType: 'ai',
     });
@@ -385,6 +423,7 @@ export class AuditService {
       id,
       auditStatus,
       auditReason,
+      reviewedImageCount: imageUrls.length,
       aiModeration: this.formatAiRecord(aiRecord),
     };
   }

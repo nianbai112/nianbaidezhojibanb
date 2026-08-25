@@ -1,6 +1,6 @@
 {
   "name": "lingmeng-platform",
-  "version": "1.0.36",
+  "version": "1.0.46-selfhosted.1",
   "private": true,
   "description": "灵萌 / Xiaoyi 后端服务与运营管理后台一体化工作区",
   "workspaces": [

@@ -736,7 +736,8 @@ export class PostService {
       if (level === 'strict') {
         return { status: PostStatus.REJECTED, auditStatus: 'rejected', auditReason: `命中敏感词：${sensitiveHit.word}`, approvalType: 'sensitive_word' };
       }
-      if (level === 'audit') {
+      if (level === 'audit' && aiFailureToManual) {
+        // 仅"失败转人工"开启时才强制转人工;关闭时放行到下方 AI 审核,由策略自动裁决(score 0.75 → 自动拒绝)
         return { status: PostStatus.PENDING, auditStatus: 'pending', auditReason: `命中敏感词：${sensitiveHit.word}（${sensitiveHit.category || '其他'}）`, approvalType: 'sensitive_word' };
       }
       // tip: 继续原有审核流程，但附加命中信息
@@ -751,6 +752,7 @@ export class PostService {
         type: 'post',
         title: data.title,
         content: data.content,
+        imageUrls: media.filter((item) => item.type === MediaType.IMAGE).map((item) => item.url),
         regionId: data.regionId,
         approvalType,
         manualFallback: aiFailureToManual,

@@ -1,6 +1,6 @@
 <template>
   <div class="page-container">
-    <PageHeader title="通知中心配置" />
+    <PageHeader title="通知配置与投递" subtitle="配置通知渠道并投递 notifications；客服私聊请进入客服工作台" />
 
     <!-- 通知总览 -->
     <StatGrid :items="statItems" />
@@ -84,34 +84,45 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="官方消息推送" name="ws-test">
+      <el-tab-pane label="通知投递" name="delivery">
+        <el-alert
+          class="delivery-boundary-alert"
+          type="info"
+          :closable="false"
+          show-icon
+          title="这里只投递站内 Notification"
+          description="区域和全站通知会写入 notifications 并按配置实时推送；不会创建官方客服私聊，也不会追加工单回复。客服沟通请进入“客服工作台”。"
+        />
         <div class="ws-section">
-          <h4>给用户发送官方消息</h4>
+          <h4>单用户通知</h4>
           <div class="ws-row">
-            <el-input v-model="wsTest.userId" placeholder="用户 ID" style="width:240px" />
-            <el-input v-model="wsTest.message" placeholder="消息内容" style="width:300px" />
-            <el-button type="primary" @click="doPushUser" :loading="wsTest.loading">推送</el-button>
+            <el-input v-model="userNotice.userId" placeholder="用户 ID" style="width:240px" />
+            <el-input v-model="userNotice.title" placeholder="通知标题" style="width:200px" />
+            <el-input v-model="userNotice.message" placeholder="通知内容" style="width:300px" />
+            <el-button type="primary" :loading="userNotice.loading" @click="doPushUser">投递通知</el-button>
           </div>
+          <p class="form-tip">只为该用户写入一条 notifications 记录，不创建客服私聊或工单回复。</p>
         </div>
         <el-divider />
         <div class="ws-section">
-          <h4>按区域推送</h4>
+          <h4>区域通知</h4>
           <div class="ws-row">
             <el-input v-model="wsRegion.regionId" placeholder="区域 ID" style="width:240px" />
-            <el-input v-model="wsRegion.title" placeholder="标题（可选）" style="width:200px" />
-            <el-input v-model="wsRegion.message" placeholder="消息内容" style="width:300px" />
-            <el-button type="primary" @click="doPushRegion" :loading="wsRegion.loading">推送</el-button>
+            <el-input v-model="wsRegion.title" placeholder="通知标题" style="width:200px" />
+            <el-input v-model="wsRegion.message" placeholder="通知内容" style="width:300px" />
+            <el-button type="primary" @click="doPushRegion" :loading="wsRegion.loading">投递通知</el-button>
           </div>
+          <p class="form-tip">按区域写入每位用户的 notifications 记录，离线用户重新进入后仍可看到。</p>
         </div>
         <el-divider />
         <div class="ws-section">
-          <h4>全站广播</h4>
+          <h4>全站通知</h4>
           <div class="ws-row">
-            <el-input v-model="wsBroadcast.title" placeholder="标题（可选）" style="width:200px" />
-            <el-input v-model="wsBroadcast.message" placeholder="广播内容" style="width:300px" />
-            <el-button type="warning" @click="doBroadcast" :loading="wsBroadcast.loading">广播</el-button>
+            <el-input v-model="wsBroadcast.title" placeholder="通知标题" style="width:200px" />
+            <el-input v-model="wsBroadcast.message" placeholder="通知内容" style="width:300px" />
+            <el-button type="warning" @click="doBroadcast" :loading="wsBroadcast.loading">投递全站</el-button>
           </div>
-          <p class="form-tip">广播会推送给所有在线 WebSocket 连接，请谨慎使用。</p>
+          <p class="form-tip">会为权限范围内的全部用户写入 notifications，并尝试实时推送，请谨慎使用。</p>
         </div>
       </el-tab-pane>
 
@@ -175,12 +186,13 @@ import { ElMessage } from 'element-plus'
 import NotificationSettingsPanel from './components/NotificationSettingsPanel.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
+import { buildNotificationDeliveryPayload } from './notificationDelivery.mjs'
 import {
   fetchNotifyStats,
   fetchSubscribeConsents,
   fetchOfficialBindings, deleteOfficialBinding,
   fetchWechatMessageLogs, retryWechatMessage,
-  testPushToUser, broadcastToAll, pushToRegion,
+  sendNotification,
 } from '@/api/admin'
 
 const activeTab = ref('config')
@@ -276,30 +288,54 @@ async function handleRetry(row: any) {
   } catch (e: any) { ElMessage.error(e.message || '重试失败') }
 }
 
-// ── 官方消息 / WebSocket 推送 ──
-const wsTest = reactive({ userId: '', message: '您好，这是一条来自平台官方的消息。', loading: false })
-const wsRegion = reactive({ regionId: '', title: '', message: '', loading: false })
-const wsBroadcast = reactive({ title: '', message: '', loading: false })
+// ── Notification 投递（与客服私聊严格分离） ──
+const userNotice = reactive({ userId: '', title: '平台通知', message: '', loading: false })
+const wsRegion = reactive({ regionId: '', title: '区域通知', message: '', loading: false })
+const wsBroadcast = reactive({ title: '全站通知', message: '', loading: false })
+
+function createdCountOf(result: any) {
+  return Number(result?.createdCount ?? result?.count ?? result?.data?.createdCount ?? result?.data?.count ?? 0)
+}
 
 async function doPushUser() {
-  if (!wsTest.userId) { ElMessage.warning('请输入用户 ID'); return }
-  wsTest.loading = true
-  try { await testPushToUser(wsTest.userId, wsTest.message); ElMessage.success('官方消息已发送') }
-  catch (e: any) { ElMessage.error(e.message || '官方消息发送失败') }
-  finally { wsTest.loading = false }
+  userNotice.loading = true
+  try {
+    const result: any = await sendNotification(buildNotificationDeliveryPayload({
+      target: 'user',
+      userId: userNotice.userId,
+      title: userNotice.title,
+      content: userNotice.message,
+    }))
+    ElMessage.success(`单用户通知已投递，写入 ${createdCountOf(result)} 条记录`)
+  }
+  catch (e: any) { ElMessage.error(e.message || '单用户通知投递失败') }
+  finally { userNotice.loading = false }
 }
 async function doPushRegion() {
-  if (!wsRegion.regionId) { ElMessage.warning('请输入区域 ID'); return }
   wsRegion.loading = true
-  try { await pushToRegion(wsRegion.regionId, wsRegion.message, wsRegion.title); ElMessage.success('区域推送成功') }
-  catch (e: any) { ElMessage.error(e.message || '推送失败') }
+  try {
+    const result: any = await sendNotification(buildNotificationDeliveryPayload({
+      target: 'region',
+      regionId: wsRegion.regionId,
+      title: wsRegion.title,
+      content: wsRegion.message,
+    }))
+    ElMessage.success(`区域通知已投递，写入 ${createdCountOf(result)} 条记录`)
+  }
+  catch (e: any) { ElMessage.error(e.message || '区域通知投递失败') }
   finally { wsRegion.loading = false }
 }
 async function doBroadcast() {
-  if (!wsBroadcast.message) { ElMessage.warning('请输入广播内容'); return }
   wsBroadcast.loading = true
-  try { await broadcastToAll(wsBroadcast.message, wsBroadcast.title); ElMessage.success('广播已发送') }
-  catch (e: any) { ElMessage.error(e.message || '广播失败') }
+  try {
+    const result: any = await sendNotification(buildNotificationDeliveryPayload({
+      target: 'all',
+      title: wsBroadcast.title,
+      content: wsBroadcast.message,
+    }))
+    ElMessage.success(`全站通知已投递，写入 ${createdCountOf(result)} 条记录`)
+  }
+  catch (e: any) { ElMessage.error(e.message || '全站通知投递失败') }
   finally { wsBroadcast.loading = false }
 }
 
@@ -311,6 +347,7 @@ onMounted(() => { loadStats(); loadConsents(); loadBindings(); loadLogs() })
 .notify-tabs { border-radius: 14px; overflow: hidden; }
 .tab-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
+.delivery-boundary-alert { margin-bottom: 20px; }
 .ws-section h4 { margin: 0 0 12px; font-size: 14px; font-weight: 800; color: #0f2a5f; }
 .ws-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .form-tip { color: #94a3b8; font-size: 12px; margin-top: 8px; }

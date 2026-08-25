@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { WechatTokenService } from './wechat-token.service';
 import axios from 'axios';
@@ -110,6 +110,57 @@ export class WechatSubscribeService {
         status: 'failed', errorMessage: err.message,
       });
       return { success: false, error: err.message };
+    }
+  }
+
+  async retryMessage(logId: string): Promise<{ success: boolean; message: string; error?: string }> {
+    const log = await this.prisma.wechatMessageLog.findUnique({ where: { id: logId } });
+    if (!log) throw new BadRequestException('日志不存在');
+    if (!['miniprogram', 'miniapp'].includes(log.platformType)) {
+      throw new BadRequestException('不是小程序订阅消息日志');
+    }
+    if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
+    if (!log.openid || !log.templateId || !log.payload || typeof log.payload !== 'object') {
+      throw new BadRequestException('原发送数据不完整，无法重试');
+    }
+
+    try {
+      const accessToken = await this.tokenService.getMiniappAccessToken();
+      const { data: response } = await axios.post(
+        `https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=${accessToken}`,
+        {
+          touser: log.openid,
+          template_id: log.templateId,
+          page: log.page || '',
+          data: log.payload,
+        },
+        { timeout: 10000 },
+      );
+      const success = Number(response?.errcode || 0) === 0;
+      await this.prisma.wechatMessageLog.update({
+        where: { id: logId },
+        data: {
+          status: success ? 'success' : 'failed',
+          errorCode: success ? null : String(response?.errcode ?? 'wechat_error'),
+          errorMessage: success ? null : String(response?.errmsg || '微信订阅消息发送失败'),
+          sentAt: success ? new Date() : null,
+        },
+      });
+      if (success && log.userId) {
+        await this.prisma.wechatSubscribeConsent.updateMany({
+          where: { userId: log.userId, templateType: log.templateType, status: 'accept' },
+          data: { status: 'used' },
+        });
+      }
+      return success
+        ? { success: true, message: '订阅消息已重新发送' }
+        : { success: false, message: '订阅消息重试失败', error: String(response?.errmsg || '微信订阅消息发送失败') };
+    } catch (err: any) {
+      await this.prisma.wechatMessageLog.update({
+        where: { id: logId },
+        data: { status: 'failed', errorCode: 'exception', errorMessage: err.message, sentAt: null },
+      });
+      return { success: false, message: '订阅消息重试失败', error: err.message };
     }
   }
 

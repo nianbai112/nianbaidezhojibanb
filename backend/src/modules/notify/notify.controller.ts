@@ -101,6 +101,9 @@ export class NotifyController {
     });
   }
 
+  // 官方助手消息时间线
+  // 注意：此路由使用完整路径 'official-assistant/messages'，因为 @Controller() 为空
+  // 前端调用：GET /official-assistant/messages
   @Get('official-assistant/messages')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

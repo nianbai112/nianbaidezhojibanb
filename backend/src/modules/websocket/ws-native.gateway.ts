@@ -8,6 +8,11 @@ import { inferChatMessageType } from '../../common/utils/chat-message.util';
 import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
 import { RedisService } from '../../common/services/redis.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
+import {
+  isOfficialAssistantUser,
+  officialAssistantConversationScopeKey,
+} from '../../common/utils/official-assistant.util';
+import { syncOfficialAssistantTicketMessage } from '../../common/utils/official-assistant-ticket.util';
 
 const NATIVE_CONNECT_WINDOW_SEC = 60;
 const NATIVE_CONNECT_MAX_PER_IP = 60;
@@ -194,13 +199,33 @@ export class WsNativeGateway {
             platform,
             online: true,
             ip: this.getClientIp(req),
-            userAgent: req.headers['user-agent'] || '',
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 190),
           },
         });
       } catch (e: any) {
         this.logger.warn(`Failed to create realtime session: ${e.message}`);
       }
       if (!isAdmin && publishOnline) this.publishUserPresence(userId, true).catch(() => undefined);
+
+      // 先挂载消息监听，再向客户端宣告 connected。
+      // 否则客户端收到认证成功后立即发送的第一条消息，可能落在服务端查询未读数的窗口期内而丢失。
+      ws.on('message', (data) => this.handleMessage(socketId, data));
+      ws.on('close', () => this.handleDisconnect(socketId));
+      ws.on('error', (err) => {
+        this.logger.warn(`Native WS error for ${socketId}: ${err.message}`);
+        this.removeClient(socketId);
+      });
+      ws.on('pong', () => {
+        const c = this.clients.get(socketId);
+        if (c) {
+          c.lastPongAt = Date.now();
+          this.touchRedisOnline(c).catch(() => {});
+          this.prisma.realtimeSession.updateMany({
+            where: { socketId, online: true },
+            data: { lastSeenAt: new Date() },
+          }).catch(() => {});
+        }
+      });
 
       // 发送连接成功消息
       this.send(ws, {
@@ -218,25 +243,6 @@ export class WsNativeGateway {
         // ignore
       }
 
-      ws.on('message', (data) => this.handleMessage(socketId, data));
-      ws.on('close', () => this.handleDisconnect(socketId));
-      ws.on('error', (err) => {
-        this.logger.warn(`Native WS error for ${socketId}: ${err.message}`);
-        this.removeClient(socketId);
-      });
-      ws.on('pong', () => {
-        const c = this.clients.get(socketId);
-        if (c) {
-          c.lastPongAt = Date.now();
-          this.touchRedisOnline(c).catch(() => {});
-          // 更新最后活跃时间
-          this.prisma.realtimeSession.updateMany({
-            where: { socketId, online: true },
-            data: { lastSeenAt: new Date() },
-          }).catch(() => {});
-        }
-      });
-
       this.logger.log(`Native WS connected: socket=${socketId} userId=${userId} isAdmin=${isAdmin}`);
     } catch (err: any) {
       this.logger.warn(`Native WS token verification failed: ${err.message}`);
@@ -248,11 +254,20 @@ export class WsNativeGateway {
     const client = this.clients.get(socketId);
     if (!client) return;
 
+    let eventType = 'unknown';
+    let clientMessageId = '';
     try {
       if (!(await this.assertActiveClient(client))) return;
       this.touchSession(socketId);
       const msg = JSON.parse(raw.toString());
-      const eventType = msg.event || msg.type;
+      eventType = String(msg.event || msg.type || 'unknown');
+      clientMessageId = String(msg.clientMessageId || msg.client_message_id || '').trim();
+
+      if (eventType === 'message' || eventType === 'private_message') {
+        this.logger.log(
+          `Native WS private message received: socket=${socketId} clientMessageId=${clientMessageId || '-'} receiverId=${String(msg.receiverId || msg.receiver_id || '-').trim()}`,
+        );
+      }
 
       if (eventType === 'ping') {
         client.lastPongAt = Date.now();
@@ -304,7 +319,15 @@ export class WsNativeGateway {
         await this.handlePrivateMessage(client, msg);
       }
     } catch (err: any) {
-      this.logger.warn(`Native WS message handling failed: ${err.message}`);
+      this.logger.warn(
+        `Native WS message handling failed: socket=${socketId} event=${eventType} clientMessageId=${clientMessageId || '-'} error=${err.message}`,
+      );
+      if (eventType === 'message' || eventType === 'private_message') {
+        this.send(client.ws, {
+          event: 'message_error',
+          data: { message: '消息发送失败，请稍后重试', clientMessageId },
+        });
+      }
     }
   }
 
@@ -320,7 +343,59 @@ export class WsNativeGateway {
     }
   }
 
-  private async findOrCreatePrivateConversation(userId: string, receiverId: string, regionId?: string) {
+  private async findOrCreatePrivateConversation(
+    userId: string,
+    receiverId: string,
+    regionId?: string,
+    supportScopeKey?: string,
+  ) {
+    if (supportScopeKey) {
+      let supportConversation = await this.prisma.conversation.findUnique({
+        where: { scopeKey: supportScopeKey },
+      });
+      if (!supportConversation) {
+        supportConversation = await this.prisma.conversation.findFirst({
+          where: {
+            type: 'private',
+            regionId,
+            OR: [{ scopeKey: supportScopeKey }, { scopeKey: null }],
+            AND: [
+              { members: { some: { userId } } },
+              { members: { some: { userId: receiverId } } },
+            ],
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+      }
+      if (supportConversation) {
+        if (!supportConversation.scopeKey) {
+          try {
+            return await this.prisma.conversation.update({
+              where: { id: supportConversation.id },
+              data: { scopeKey: supportScopeKey },
+            });
+          } catch (error: any) {
+            if (error?.code !== 'P2002') throw error;
+            const scoped = await this.prisma.conversation.findUnique({ where: { scopeKey: supportScopeKey } });
+            if (scoped) return scoped;
+            throw error;
+          }
+        }
+        return supportConversation;
+      }
+      return this.prisma.conversation.upsert({
+        where: { scopeKey: supportScopeKey },
+        update: {},
+        create: {
+          type: 'private',
+          scopeKey: supportScopeKey,
+          regionId: regionId || null,
+          members: { create: [{ userId }, { userId: receiverId }] },
+        },
+      });
+    }
+
+    // 查找现有会话：按创建时间排序，优先使用最早的
     let conversation = await this.prisma.conversation.findFirst({
       where: {
         type: 'private',
@@ -329,22 +404,43 @@ export class WsNativeGateway {
           { members: { some: { userId: receiverId } } },
         ],
       },
+      orderBy: { createdAt: 'asc' }, // 优先使用最早创建的会话
     });
     if (conversation) return conversation;
 
-    conversation = await this.prisma.conversation.create({
-      data: {
-        type: 'private',
-        regionId: regionId || null,  // AUD-P1-023: 写入区域归属
-        members: {
-          create: [
-            { userId },
-            { userId: receiverId },
-          ],
+    // 使用事务创建新会话，防止并发重复
+    try {
+      conversation = await this.prisma.conversation.create({
+        data: {
+          type: 'private',
+          regionId: regionId || null,  // AUD-P1-023: 写入区域归属
+          members: {
+            create: [
+              { userId },
+              { userId: receiverId },
+            ],
+          },
         },
-      },
-    });
-    return conversation;
+      });
+      return conversation;
+    } catch (error: any) {
+      // 如果并发创建冲突，重新查找
+      if (error.code === 'P2002' || error.message?.includes('Unique constraint')) {
+        this.logger.warn(`Concurrent conversation creation detected for users ${userId} and ${receiverId}, retrying find`);
+        conversation = await this.prisma.conversation.findFirst({
+          where: {
+            type: 'private',
+            AND: [
+              { members: { some: { userId } } },
+              { members: { some: { userId: receiverId } } },
+            ],
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (conversation) return conversation;
+      }
+      throw error;
+    }
   }
 
   private async handleConversationRead(client: NativeClient, msg: any) {
@@ -611,9 +707,9 @@ export class WsNativeGateway {
   async publishUserPresence(userId: string, isOnline?: boolean) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { userType: true, settings: { select: { showOnlineStatus: true } } },
+      select: { openid: true, systemRole: true, settings: { select: { showOnlineStatus: true } } },
     });
-    if (!user || user.userType === 4) return;
+    if (!user || isOfficialAssistantUser(user)) return;
     const visible = (isOnline ?? await this.redisUserIsOnline(userId)) && user.settings?.showOnlineStatus !== false;
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId, conversation: { type: { in: ['private', 'group'] } } },
@@ -740,7 +836,13 @@ export class WsNativeGateway {
 
   private async checkPrivateMessagePermission(
     senderId: string,
-    receiver: { id: string; userType?: number | null; settings?: { messagePermission?: number | null; allowMessage?: boolean | null } | null },
+    receiver: {
+      id: string;
+      userType?: number | null;
+      openid?: string | null;
+      systemRole?: string | null;
+      settings?: { messagePermission?: number | null; allowMessage?: boolean | null } | null;
+    },
   ) {
     return this.privateMessagePermission.check(senderId, receiver);
   }
@@ -753,71 +855,21 @@ export class WsNativeGateway {
     });
   }
 
-  private async syncOfficialTicketMessage(tx: any, input: {
-    userId: string;
-    regionId: string;
-    content: string;
-    clientMessageId: string;
-    ticketId?: string;
-    startNew?: boolean;
-    category?: string;
-  }) {
-    if (input.clientMessageId) {
-      const existingReply = await tx.assistantTicketReply.findFirst({
-        where: { senderId: input.userId, clientMessageId: input.clientMessageId },
-        select: { ticketId: true },
-      });
-      if (existingReply) return existingReply.ticketId;
-    }
-    let ticket = input.ticketId
-      ? await tx.assistantTicket.findFirst({ where: { id: input.ticketId, userId: input.userId } })
-      : null;
-    if (!ticket && !input.startNew) {
-      ticket = await tx.assistantTicket.findFirst({
-        where: { userId: input.userId, regionId: input.regionId, status: { in: ['pending', 'processing', 'waiting_user'] } },
-        orderBy: { updatedAt: 'desc' },
-      });
-    }
-    if (!ticket) {
-      ticket = await tx.assistantTicket.create({
-        data: {
-          ticketNo: `CS${Date.now()}${Math.floor(Math.random() * 900 + 100)}`,
-          userId: input.userId,
-          regionId: input.regionId,
-          category: ['order', 'account', 'feedback'].includes(String(input.category)) ? input.category : 'other',
-          content: input.content,
-          latestReply: input.content,
-          status: 'pending',
-          unreadForUser: false,
-        },
-      });
-    }
-    await tx.assistantTicketReply.create({
-      data: {
-        ticketId: ticket.id,
-        senderType: 'user',
-        senderId: input.userId,
-        clientMessageId: input.clientMessageId || null,
-        content: input.content,
-      },
-    });
-    await tx.assistantTicket.update({
-      where: { id: ticket.id },
-      data: {
-        latestReply: input.content,
-        unreadForUser: false,
-        status: ticket.status === 'waiting_user' ? 'processing' : ticket.status,
-      },
-    });
-    return ticket.id;
-  }
-
   private async handlePrivateMessage(client: NativeClient, msg: any) {
     if (client.isAdmin) return;
     const receiverId = String(msg.receiverId || msg.receiver_id || '').trim();
     const content = String(msg.message || msg.content || '').trim();
     const clientMessageId = String(msg.clientMessageId || msg.client_message_id || '').trim();
-    if (!receiverId || !content) return;
+    if (!receiverId || !content) {
+      this.logger.warn(
+        `Native WS private message rejected: socket=${client.socketId} clientMessageId=${clientMessageId || '-'} missingReceiver=${!receiverId} missingContent=${!content}`,
+      );
+      this.send(client.ws, {
+        event: 'message_error',
+        data: { message: !receiverId ? '接收方信息缺失' : '消息内容不能为空', clientMessageId },
+      });
+      return;
+    }
     if (content.length > NATIVE_MAX_MESSAGE_LENGTH) {
       this.send(client.ws, {
         event: 'message_error',
@@ -831,6 +883,8 @@ export class WsNativeGateway {
       select: {
         id: true,
         userType: true,
+        openid: true,
+        systemRole: true,
         settings: { select: { messagePermission: true, allowMessage: true } },
       },
     });
@@ -850,7 +904,26 @@ export class WsNativeGateway {
       return;
     }
 
-    const conversation = await this.findOrCreatePrivateConversation(client.userId, receiverId, client.regionId);
+    const isOfficialReceiver = isOfficialAssistantUser(receiver);
+    const currentRegionId = isOfficialReceiver
+      ? String((await this.prisma.userProfile.findUnique({
+          where: { userId: client.userId },
+          select: { regionId: true },
+        }))?.regionId || '').trim()
+      : '';
+    if (isOfficialReceiver && !currentRegionId) {
+      this.send(client.ws, { event: 'message_error', data: { message: '请选择当前校园后再咨询', clientMessageId } });
+      return;
+    }
+
+    const conversation = await this.findOrCreatePrivateConversation(
+      client.userId,
+      receiverId,
+      isOfficialReceiver ? currentRegionId : client.regionId,
+      isOfficialReceiver
+        ? officialAssistantConversationScopeKey(currentRegionId, client.userId)
+        : undefined,
+    );
     if (conversation.isBlocked) {
       this.send(client.ws, {
         event: 'message_error',
@@ -861,7 +934,7 @@ export class WsNativeGateway {
 
     const existing = await this.findExistingClientMessage(client.userId, clientMessageId);
     if (existing) {
-      const ticketReply = receiver.userType === 4 && clientMessageId
+      const ticketReply = isOfficialReceiver && clientMessageId
         ? await (this.prisma as any).assistantTicketReply.findFirst({
             where: { senderId: client.userId, clientMessageId },
             select: { ticketId: true },
@@ -883,13 +956,6 @@ export class WsNativeGateway {
       return;
     }
 
-    const officialRegionId = receiver.userType === 4 && !conversation.regionId
-      ? (await this.prisma.userProfile.findUnique({ where: { userId: client.userId }, select: { regionId: true } }))?.regionId
-      : conversation.regionId;
-    if (receiver.userType === 4 && !officialRegionId) {
-      this.send(client.ws, { event: 'message_error', data: { message: '请选择当前校园后再咨询', clientMessageId } });
-      return;
-    }
     let result: any;
     try {
       result = await this.prisma.$transaction(async (tx) => {
@@ -904,10 +970,12 @@ export class WsNativeGateway {
         },
         include: { sender: { select: { id: true, nickname: true, avatar: true } } },
       });
-      const assistantTicketId = receiver.userType === 4
-        ? await this.syncOfficialTicketMessage(tx, {
+      const assistantTicketId = isOfficialReceiver
+        ? await syncOfficialAssistantTicketMessage(tx, {
             userId: client.userId,
-            regionId: String(officialRegionId),
+            regionId: currentRegionId,
+            conversationId: conversation.id,
+            messageId: saved.id,
             content,
             clientMessageId,
             ticketId: String(msg.assistantTicketId || msg.assistant_ticket_id || '').trim() || undefined,
@@ -917,7 +985,11 @@ export class WsNativeGateway {
         : null;
       await tx.conversation.update({
         where: { id: conversation.id },
-        data: { lastMessage: content, lastMsgTime: saved.createdAt, ...(officialRegionId && !conversation.regionId ? { regionId: officialRegionId } : {}) },
+        data: {
+          lastMessage: content,
+          lastMsgTime: saved.createdAt,
+          ...(isOfficialReceiver ? { regionId: currentRegionId } : {}),
+        },
       });
       await tx.conversationMember.updateMany({
         where: { conversationId: conversation.id, userId: receiverId },
@@ -929,7 +1001,7 @@ export class WsNativeGateway {
       if (clientMessageId && error?.code === 'P2002') {
         const duplicate = await this.findExistingClientMessage(client.userId, clientMessageId);
         if (duplicate) {
-          const ticketReply = receiver.userType === 4
+          const ticketReply = isOfficialReceiver
             ? await (this.prisma as any).assistantTicketReply.findFirst({
                 where: { senderId: client.userId, clientMessageId }, select: { ticketId: true },
               }).catch(() => null)
@@ -979,6 +1051,9 @@ export class WsNativeGateway {
         timestamp: saved.createdAt.toISOString(),
       },
     });
+    this.logger.log(
+      `Native WS private message persisted: socket=${client.socketId} clientMessageId=${clientMessageId || '-'} messageId=${saved.id} conversationId=${conversation.id} official=${isOfficialReceiver}`,
+    );
   }
 
   private handlePrivateTyping(client: NativeClient, msg: any) {
@@ -1266,8 +1341,13 @@ export class WsNativeGateway {
     for (const sid of socketIds) {
       const client = this.clients.get(sid);
       if (client && client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(data);
-        sent++;
+        try {
+          client.ws.send(data);
+          sent++;
+        } catch (error: any) {
+          this.logger.warn(`Native WS push failed: socket=${sid} error=${error?.message || error}`);
+          this.removeClient(sid).catch(() => undefined);
+        }
       }
     }
     return sent;

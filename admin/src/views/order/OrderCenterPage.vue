@@ -49,8 +49,8 @@
       </el-table-column>
       <el-table-column prop="status" label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="getStatusType(row.status)" size="small">
-            {{ row.status }}
+          <el-tag :type="getStatusType(row)" size="small">
+            {{ getStatusLabel(row) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -85,7 +85,7 @@
           <el-descriptions-item label="订单号">{{ selectedOrder.orderNo }}</el-descriptions-item>
           <el-descriptions-item label="订单类型">{{ selectedOrder.orderType }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="getStatusType(selectedOrder.status)">{{ selectedOrder.status }}</el-tag>
+            <el-tag :type="getStatusType(selectedOrder)">{{ getStatusLabel(selectedOrder) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="金额">¥{{ orderAmount.toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="用户">{{ selectedOrder.user?.nickname || '-' }}</el-descriptions-item>
@@ -153,11 +153,62 @@ const deliveryNodeLabel = (value?: string) => ({
   in_progress: '骑手已取货', arrived: '骑手已送达', completed: '订单已完成', cancelled: '订单已取消',
 }[value || ''] || value || '配送状态更新')
 
-const getStatusType = (status: string) => {
-  if (status?.includes('pay') || status?.includes('pending')) return 'warning'
-  if (status?.includes('complete') || status?.includes('success')) return 'success'
-  if (status?.includes('cancel') || status?.includes('refund')) return 'danger'
-  return 'info'
+const isShopOrder = (row: any) => row?.orderType === '外卖订单' || row?.orderType === '宿舍小店订单'
+
+const refundStatusLabel: Record<string, string> = { refunding: '退款中', refunded: '已退款', partial: '部分退款' }
+
+const statusLabelMap: Record<string, string> = {
+  pending_pay: '待付款',
+  pending_accept: '待接单',
+  pending: '待处理',
+  unpaid: '待付款',
+  paid: '已付款',
+  accepted: '已接单',
+  shipped: '已发货',
+  in_progress: '配送中',
+  arrived: '已送达',
+  delivered: '已送达',
+  received: '已收货',
+  completed: '已完成',
+  cancelled: '已取消',
+  refunding: '退款中',
+  refunded: '已退款',
+}
+
+const statusTypeMap: Record<string, string> = {
+  pending_pay: 'warning',
+  pending_accept: 'warning',
+  pending: 'warning',
+  unpaid: 'warning',
+  paid: 'primary',
+  accepted: 'primary',
+  shipped: 'primary',
+  in_progress: 'primary',
+  arrived: 'success',
+  delivered: 'success',
+  received: 'success',
+  completed: 'success',
+  cancelled: 'info',
+  refunding: 'danger',
+  refunded: 'info',
+}
+
+const normalizedStatus = (row: any) => String(row?.status || row?.orderStatus || '').toLowerCase()
+
+const getStatusLabel = (row: any) => {
+  const refund = String(row?.refundStatus || 'none')
+  if (refundStatusLabel[refund]) return refundStatusLabel[refund]
+  const status = normalizedStatus(row)
+  if (status === 'shipped' && isShopOrder(row)) return '配送中'
+  if (status === 'paid' && isShopOrder(row)) return '已支付待接单'
+  return statusLabelMap[status] || row?.status || row?.orderStatus || '-'
+}
+
+const getStatusType = (row: any) => {
+  const refund = String(row?.refundStatus || 'none')
+  if (refund === 'refunding') return 'danger'
+  if (refundStatusLabel[refund]) return 'info'
+  return statusTypeMap[normalizedStatus(row)] || 'info'
 }
 
 const handleDateChange = (val: any) => {

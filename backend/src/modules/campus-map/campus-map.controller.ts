@@ -26,6 +26,12 @@ export class CampusMapController {
     return this.service.getActiveMap(regionId || camelRegionId);
   }
 
+  @Get('campus-map/site')
+  @ApiOperation({ summary: '获取官网校园地图（公开匿名，根路径豁免）' })
+  getPublicSiteMap(@Query('region_id') regionId?: string, @Query('regionId') camelRegionId?: string) {
+    return this.service.getActiveMap(regionId || camelRegionId);
+  }
+
   @Get('admin/campus-map/project-catalog')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('region:view')

@@ -21,13 +21,6 @@ export class CommentController {
     return this.commentService.getMyComments(userId, query);
   }
 
-  @Post('comments/lottery')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createLottery(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.commentService.createLottery(userId, dto);
-  }
-
   @Post('comments/report/:commentId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -70,22 +63,4 @@ export class CommentController {
     return this.commentService.pinComment(commentId, userId, dto);
   }
 
-  @Get('comments/lottery/:postId')
-  getLotteryDetail(@Param('postId') postId: string) {
-    return this.commentService.getLotteryDetail(postId);
-  }
-
-  @Post('comments/lottery/:lotteryId/cancel')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  cancelLottery(@Param('lotteryId') lotteryId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.commentService.cancelLottery(lotteryId, userId, dto);
-  }
-
-  @Post('comments/lottery/:lotteryId/draw')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  drawLottery(@Param('lotteryId') lotteryId: string, @CurrentUser('sub') userId: string) {
-    return this.commentService.drawLottery(lotteryId, userId);
-  }
 }

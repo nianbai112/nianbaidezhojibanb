@@ -257,6 +257,7 @@ model User {
   phone                   String?
   status                  UserStatus @default(ACTIVE)
   userType                Int        @default(1) // 1=normal user, 4=bot
+  systemRole              String?    @unique // OFFICIAL_ASSISTANT 等平台唯一系统身份；普通机器人保持为空
   muteEndAt               DateTime?
   muteReason              String?
   lastLoginAt             DateTime?
@@ -460,21 +461,21 @@ model MembershipBenefitGrant {
 }
 
 model MembershipBenefitUsage {
-  id          String                  @id @default(cuid())
-  userId      String
-  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  grantId     String?
-  grant       MembershipBenefitGrant? @relation(fields: [grantId], references: [id], onDelete: SetNull)
-  benefitKey  String
-  benefitName String
-  category    String
-  targetType  String?
-  targetId    String?
-  amount      Decimal?                @db.Decimal(10, 2)
-  quantity    Int                     @default(1)
-  idempotencyKey String?              @unique
-  metadata    Json?
-  createdAt   DateTime                @default(now())
+  id             String                  @id @default(cuid())
+  userId         String
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grantId        String?
+  grant          MembershipBenefitGrant? @relation(fields: [grantId], references: [id], onDelete: SetNull)
+  benefitKey     String
+  benefitName    String
+  category       String
+  targetType     String?
+  targetId       String?
+  amount         Decimal?                @db.Decimal(10, 2)
+  quantity       Int                     @default(1)
+  idempotencyKey String?                 @unique
+  metadata       Json?
+  createdAt      DateTime                @default(now())
 
   @@index([userId, benefitKey, createdAt])
   @@index([targetType, targetId])
@@ -1540,49 +1541,49 @@ model Cart {
 }
 
 model Order {
-  id                    String          @id @default(cuid())
-  orderNo               String          @unique
-  userId                String
-  user                  User            @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
-  merchantId            String
-  merchant              Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  businessType          String          @default("takeaway") @map("business_type") // takeaway, dorm_shop
-  deliveryMode          String          @default("platform_rider") @map("delivery_mode") // platform_rider, self_delivery, rider_delivery
-  deliveryDisplayMode   String          @default("status_nodes")
-  riderId               String?         @map("rider_id")
-  status                OrderStatus     @default(PENDING_PAY)
-  totalAmount           Decimal         @db.Decimal(10, 2)
-  discountAmount        Decimal         @default(0) @db.Decimal(10, 2)
-  freightAmount         Decimal         @default(0) @db.Decimal(10, 2)
-  originalFreightAmount Decimal         @default(0) @db.Decimal(10, 2)
-  deliveryDistanceMeters Int?           @map("delivery_distance_meters")
-  packagingAmount       Decimal         @default(0) @map("packaging_amount") @db.Decimal(10, 2)
-  subsidyAmount         Decimal         @default(0) @db.Decimal(10, 2)
-  payAmount             Decimal         @db.Decimal(10, 2)
-  payChannel            PaymentChannel?
-  payTime               DateTime?
-  scheduledDeliveryTime DateTime?       @map("scheduled_delivery_time")
-  fulfillmentStartTime  DateTime?       @map("fulfillment_start_time")
-  stockReserved         Boolean         @default(false) @map("stock_reserved")
-  merchantAcceptTime    DateTime?       @map("merchant_accept_time")
-  readyTime             DateTime?       @map("ready_time")
-  acceptTime            DateTime?       @map("accept_time")
-  pickupTime            DateTime?       @map("pickup_time")
-  deliverTime           DateTime?
-  receiveTime           DateTime?
-  completeTime          DateTime?
-  cancelTime            DateTime?
-  cancelReason          String?
-  remark                String?
-  receiverName          String
-  receiverPhone         String
-  receiverAddress       String
-  trackingNo            String?
-  trackingCompany       String?
-  refundStatus          String          @default("none") // none, refunding, refunded
-  refundAmount          Decimal?        @db.Decimal(10, 2)
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  id                     String          @id @default(cuid())
+  orderNo                String          @unique
+  userId                 String
+  user                   User            @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
+  merchantId             String
+  merchant               Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  businessType           String          @default("takeaway") @map("business_type") // takeaway, dorm_shop
+  deliveryMode           String          @default("platform_rider") @map("delivery_mode") // platform_rider, self_delivery, rider_delivery
+  deliveryDisplayMode    String          @default("status_nodes")
+  riderId                String?         @map("rider_id")
+  status                 OrderStatus     @default(PENDING_PAY)
+  totalAmount            Decimal         @db.Decimal(10, 2)
+  discountAmount         Decimal         @default(0) @db.Decimal(10, 2)
+  freightAmount          Decimal         @default(0) @db.Decimal(10, 2)
+  originalFreightAmount  Decimal         @default(0) @db.Decimal(10, 2)
+  deliveryDistanceMeters Int?            @map("delivery_distance_meters")
+  packagingAmount        Decimal         @default(0) @map("packaging_amount") @db.Decimal(10, 2)
+  subsidyAmount          Decimal         @default(0) @db.Decimal(10, 2)
+  payAmount              Decimal         @db.Decimal(10, 2)
+  payChannel             PaymentChannel?
+  payTime                DateTime?
+  scheduledDeliveryTime  DateTime?       @map("scheduled_delivery_time")
+  fulfillmentStartTime   DateTime?       @map("fulfillment_start_time")
+  stockReserved          Boolean         @default(false) @map("stock_reserved")
+  merchantAcceptTime     DateTime?       @map("merchant_accept_time")
+  readyTime              DateTime?       @map("ready_time")
+  acceptTime             DateTime?       @map("accept_time")
+  pickupTime             DateTime?       @map("pickup_time")
+  deliverTime            DateTime?
+  receiveTime            DateTime?
+  completeTime           DateTime?
+  cancelTime             DateTime?
+  cancelReason           String?
+  remark                 String?
+  receiverName           String
+  receiverPhone          String
+  receiverAddress        String
+  trackingNo             String?
+  trackingCompany        String?
+  refundStatus           String          @default("none") // none, refunding, refunded
+  refundAmount           Decimal?        @db.Decimal(10, 2)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
 
   items     OrderItem[]
   refunds   Refund[]
@@ -1679,22 +1680,26 @@ model OrderAppealEvent {
 }
 
 model AssistantTicket {
-  id            String                 @id @default(cuid())
-  ticketNo      String                 @unique
-  userId        String
-  regionId      String
-  category      String                 @default("other")
-  content       String                 @db.Text
-  status        String                 @default("pending")
-  handlerId     String?
-  latestReply   String?                @db.Text
-  unreadForUser Boolean                @default(false)
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
-  replies       AssistantTicketReply[]
+  id             String                 @id @default(cuid())
+  ticketNo       String                 @unique
+  userId         String
+  regionId       String
+  conversationId String?
+  conversation   Conversation?          @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  category       String                 @default("other")
+  content        String                 @db.Text
+  status         String                 @default("pending")
+  handlerId      String?
+  latestReply    String?                @db.Text
+  unreadForUser  Boolean                @default(false)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  replies        AssistantTicketReply[]
+  messages       Message[]
 
   @@index([userId, regionId, updatedAt])
   @@index([regionId, status, updatedAt])
+  @@index([conversationId, status, updatedAt])
   @@map("assistant_tickets")
 }
 
@@ -1705,6 +1710,8 @@ model AssistantTicketReply {
   senderType      String
   senderId        String?
   clientMessageId String?
+  messageId       String?         @unique
+  message         Message?        @relation(fields: [messageId], references: [id], onDelete: SetNull)
   content         String          @db.Text
   createdAt       DateTime        @default(now())
 
@@ -1977,6 +1984,7 @@ model RegionBalanceLog {
 model Conversation {
   id               String    @id @default(cuid())
   type             String    @default("private") // private, group, circle
+  scopeKey         String?   @unique // private/support 会话的稳定业务唯一键
   title            String?
   avatar           String?
   regionId         String? // 会话区域归属
@@ -1990,8 +1998,9 @@ model Conversation {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  members  ConversationMember[]
-  messages Message[]
+  members          ConversationMember[]
+  messages         Message[]
+  assistantTickets AssistantTicket[]
 
   @@index([regionId])
   @@index([serviceStatus, lastMsgTime])
@@ -2016,22 +2025,26 @@ model ConversationMember {
 }
 
 model Message {
-  id              String       @id @default(cuid())
+  id              String                @id @default(cuid())
   conversationId  String
-  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation    Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   senderId        String
-  sender          User         @relation("SenderMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  sender          User                  @relation("SenderMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  ticketId        String?
+  ticket          AssistantTicket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  ticketReply     AssistantTicketReply?
   type            MessageType
-  content         String
+  content         String                @db.Text
   clientMessageId String?
   extra           Json? // 额外数据，如图片URL、位置等
-  isRecalled      Boolean      @default(false)
+  isRecalled      Boolean               @default(false)
   recalledAt      DateTime?
-  readCount       Int          @default(0)
-  createdAt       DateTime     @default(now())
+  readCount       Int                   @default(0)
+  createdAt       DateTime              @default(now())
 
   @@unique([senderId, clientMessageId])
   @@index([conversationId, createdAt])
+  @@index([ticketId, createdAt])
   @@index([senderId])
   @@map("messages")
 }
@@ -2040,6 +2053,7 @@ model Notification {
   id               String           @id @default(cuid())
   userId           String
   user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventKey         String? // 业务事件幂等键；同一用户内唯一
   regionId         String?
   type             NotificationType
   scene            String?
@@ -2059,6 +2073,7 @@ model Notification {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
+  @@unique([userId, eventKey])
   @@index([userId, isRead, createdAt])
   @@index([userId, hiddenAt, createdAt])
   @@index([regionId, type, createdAt])
@@ -2545,17 +2560,16 @@ model LayoutVersion {
   @@map("layout_versions")
 }
 
-
 model CampusMap {
-  id              String             @id @default(cuid())
-  regionId        String             @unique
-  enabled         Boolean            @default(false)
-  activeVersionId String?            @unique
-  versionCounter  Int                @default(0)
+  id              String   @id @default(cuid())
+  regionId        String   @unique
+  enabled         Boolean  @default(false)
+  activeVersionId String?  @unique
+  versionCounter  Int      @default(0)
   createdBy       String?
   updatedBy       String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   draft         CampusMapDraft?
   versions      CampusMapVersion[] @relation("CampusMapVersions")
@@ -2585,12 +2599,12 @@ model CampusMapDraft {
 }
 
 model CampusMapVersion {
-  id           String   @id @default(cuid())
+  id           String             @id @default(cuid())
   mapId        String
-  map          CampusMap @relation("CampusMapVersions", fields: [mapId], references: [id], onDelete: Cascade)
+  map          CampusMap          @relation("CampusMapVersions", fields: [mapId], references: [id], onDelete: Cascade)
   version      Int
   manifest     Json
-  checksum     String   @db.VarChar(64)
+  checksum     String             @db.VarChar(64)
   byteSize     Int
   featureCount Int
   layerCount   Int
@@ -2598,7 +2612,7 @@ model CampusMapVersion {
   rollbackOf   CampusMapVersion?  @relation("CampusMapRollback", fields: [rollbackOfId], references: [id], onDelete: SetNull)
   rollbacks    CampusMapVersion[] @relation("CampusMapRollback")
   publishedBy  String?
-  publishedAt  DateTime @default(now())
+  publishedAt  DateTime           @default(now())
 
   activeFor  CampusMap?       @relation("CampusMapActiveVersion")
   draftBases CampusMapDraft[] @relation("CampusMapDraftBaseVersion")
@@ -2611,23 +2625,23 @@ model CampusMapVersion {
 }
 
 model CampusMapAsset {
-  id              String            @id @default(cuid())
-  mapId           String
-  map             CampusMap         @relation(fields: [mapId], references: [id], onDelete: Cascade)
-  draftId         String?
-  draft           CampusMapDraft?   @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  versionId       String?
-  version         CampusMapVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
-  kind            String
-  provider        String
-  storageKey      String?           @db.Text
-  url             String            @db.Text
-  mimeType        String?
-  byteSize        Int               @default(0)
-  checksum        String?           @db.VarChar(64)
-  metadata        Json?
-  createdBy       String?
-  createdAt       DateTime          @default(now())
+  id         String            @id @default(cuid())
+  mapId      String
+  map        CampusMap         @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  draftId    String?
+  draft      CampusMapDraft?   @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  versionId  String?
+  version    CampusMapVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  kind       String
+  provider   String
+  storageKey String?           @db.Text
+  url        String            @db.Text
+  mimeType   String?
+  byteSize   Int               @default(0)
+  checksum   String?           @db.VarChar(64)
+  metadata   Json?
+  createdBy  String?
+  createdAt  DateTime          @default(now())
 
   @@index([mapId, kind])
   @@index([draftId])
@@ -2642,6 +2656,11 @@ model CampusMapCollectionTask {
   name                String
   instructions        String?   @db.Text
   status              String    @default("draft")
+  allowedClients      Json
+  objectTypes         Json
+  boundary            Json?
+  priority            Int       @default(3)
+  dueAt               DateTime?
   accessCodeHash      String?   @db.VarChar(64)
   accessCodeExpiresAt DateTime?
   createdBy           String
@@ -2703,12 +2722,14 @@ model CampusMapCollectionSession {
   collectorUserId String
   clientSessionId String                  @unique
   coordinateType  String                  @default("gcj02")
+  sourceClient    String                  @default("miniapp")
   device          Json
   status          String                  @default("recording")
   startedAt       DateTime
   endedAt         DateTime?
   pointCount      Int                     @default(0)
   markerCount     Int                     @default(0)
+  objectCount     Int                     @default(0)
   lastBatchNo     Int                     @default(-1)
   uploadComplete  Boolean                 @default(false)
   quality         Json?
@@ -2717,11 +2738,41 @@ model CampusMapCollectionSession {
 
   points      CampusMapCollectionPoint[]
   markers     CampusMapCollectionMarker[]
+  objects     CampusMapCollectionObject[]
   attachments CampusMapCollectionAttachment[]
 
   @@index([taskId, status, startedAt])
   @@index([collectorUserId, startedAt])
   @@map("campus_map_collection_sessions")
+}
+
+model CampusMapCollectionObject {
+  id             String                     @id @default(cuid())
+  sessionId      String
+  session        CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  clientObjectId String
+  objectType     String
+  geometry       Json
+  properties     Json
+  longitude      Float?
+  latitude       Float?
+  accuracy       Float?
+  recordedAt     DateTime
+  bindings       Json
+  quality        Json?
+  reviewStatus   String                     @default("pending")
+  reviewNote     String?                    @db.Text
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  attachments CampusMapCollectionAttachment[]
+
+  @@unique([sessionId, clientObjectId])
+  @@index([sessionId, objectType, recordedAt])
+  @@index([reviewStatus, updatedAt])
+  @@map("campus_map_collection_objects")
 }
 
 model CampusMapCollectionPoint {
@@ -2797,6 +2848,8 @@ model CampusMapCollectionAttachment {
   session    CampusMapCollectionSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   markerId   String?
   marker     CampusMapCollectionMarker?  @relation(fields: [markerId], references: [id], onDelete: Restrict)
+  objectId   String?
+  object     CampusMapCollectionObject?  @relation(fields: [objectId], references: [id], onDelete: Restrict)
   kind       String                      @default("photo")
   url        String                      @db.Text
   storageKey String?                     @db.Text
@@ -2808,6 +2861,7 @@ model CampusMapCollectionAttachment {
 
   @@index([sessionId, uploadedAt])
   @@index([markerId, uploadedAt])
+  @@index([objectId, uploadedAt])
   @@index([checksum])
   @@map("campus_map_collection_attachments")
 }
@@ -2894,58 +2948,7 @@ model Address {
   @@map("addresses")
 }
 
-// ==================== 评论抽奖 ====================
-
-model CommentLottery {
-  id                    String    @id @default(cuid())
-  postId                String    @unique
-  title                 String
-  drawAt                DateTime
-  allowDuplicate        Boolean   @default(false)
-  status                String    @default("active") // active, processing, drawn, cancelled
-  cancelledReason       String?
-  drawnAt               DateTime? @map("drawn_at")
-  participantCount      Int       @default(0) @map("participant_count")
-  candidateCommentCount Int       @default(0) @map("candidate_comment_count")
-  winnerCount           Int       @default(0) @map("winner_count")
-  drawSeed              String?   @map("draw_seed")
-  createdAt             DateTime  @default(now())
-
-  prizes  CommentLotteryPrize[]
-  winners CommentLotteryWinner[]
-
-  @@index([status, drawAt])
-  @@map("comment_lotteries")
-}
-
-model CommentLotteryPrize {
-  id                String         @id @default(cuid())
-  lotteryId         String
-  lottery           CommentLottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
-  name              String
-  rewardText        String?        @map("reward_text")
-  count             Int            @default(1)
-  probabilityWeight Int            @default(100) @map("probability_weight")
-  sortOrder         Int            @default(0) @map("sort_order")
-  createdAt         DateTime       @default(now())
-
-  @@index([lotteryId, sortOrder])
-  @@map("comment_lottery_prizes")
-}
-
-model CommentLotteryWinner {
-  id        String         @id @default(cuid())
-  lotteryId String
-  lottery   CommentLottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
-  userId    String
-  prizeId   String
-  commentId String?        @map("comment_id")
-  createdAt DateTime       @default(now())
-
-  @@index([commentId])
-  @@index([lotteryId, prizeId])
-  @@map("comment_lottery_winners")
-}
+// 评论抽奖已退役；旧物理表仅保留为只读历史归档，不再映射到 Prisma Client。
 
 // ==================== 帖子投票 (PostVote) ====================
 
@@ -3008,54 +3011,56 @@ model ErrandConfig {
 }
 
 model ErrandOrder {
-  id                  String            @id @default(cuid())
-  orderNo             String            @unique
-  userId              String
-  riderId             String?
-  deliveryDisplayMode String            @default("status_nodes")
-  regionId            String?
-  type                String            @default("universal") // pickup, deliver, meal, universal
-  status              String            @default("pending_pay") // pending_pay, pending_accept, accepted, in_progress, arrived, completed, cancelled, refunding, refunded
-  title               String
-  description         String?
-  pickupAddress       String
-  pickupContact       String?
-  pickupPhone         String?
-  pickupLat           Float?
-  pickupLng           Float?
-  deliverAddress      String
-  deliverContact      String?
-  deliverPhone        String?
-  deliverLat          Float?
-  deliverLng          Float?
-  weight              Float?
-  distance            Float?
-  price               Decimal           @db.Decimal(10, 2)
-  tip                 Decimal           @default(0) @db.Decimal(10, 2)
-  couponDiscount      Decimal           @default(0) @db.Decimal(10, 2)
-  payAmount           Decimal           @db.Decimal(10, 2)
-  payChannel          String?
-  payTime             DateTime?
-  acceptTime          DateTime?
-  pickupTime          DateTime?
-  deliverTime         DateTime?
-  completeTime        DateTime?
-  cancelTime          DateTime?
-  cancelReason        String?
-  refundStatus        String            @default("none")
-  refundAmount        Decimal?          @db.Decimal(10, 2)
+  id                     String            @id @default(cuid())
+  orderNo                String            @unique
+  userId                 String
+  riderId                String?
+  receiptCode            String?           @map("receipt_code") // 收货码：接单时生成，骑手凭码完成收货核销
+  deliveryDisplayMode    String            @default("status_nodes")
+  regionId               String?
+  type                   String            @default("universal") // pickup, deliver, meal, universal
+  status                 String            @default("pending_pay") // pending_pay, pending_accept, accepted, in_progress, arrived, completed, cancelled, refunding, refunded
+  title                  String
+  description            String?
+  pickupAddress          String
+  pickupContact          String?
+  pickupPhone            String?
+  pickupLat              Float?
+  pickupLng              Float?
+  deliverAddress         String
+  deliverContact         String?
+  deliverPhone           String?
+  deliverLat             Float?
+  deliverLng             Float?
+  weight                 Float?
+  distance               Float?
+  price                  Decimal           @db.Decimal(10, 2)
+  tip                    Decimal           @default(0) @db.Decimal(10, 2)
+  couponDiscount         Decimal           @default(0) @db.Decimal(10, 2)
+  payAmount              Decimal           @db.Decimal(10, 2)
+  platformFee            Decimal           @default(0) @db.Decimal(12, 2) // 平台抽成金额，订单完成时按 BizFeeConfig.errand_order 费率写入
+  payChannel             String?
+  payTime                DateTime?
+  acceptTime             DateTime?
+  pickupTime             DateTime?
+  deliverTime            DateTime?
+  completeTime           DateTime?
+  cancelTime             DateTime?
+  cancelReason           String?
+  refundStatus           String            @default("none")
+  refundAmount           Decimal?          @db.Decimal(10, 2)
   receiptConfirmDeadline DateTime?
   receiptConfirmedAt     DateTime?
   receiptConfirmedBy     String?
   settlementEligibleAt   DateTime?
   pricingSnapshot        Json?
-  images              Json?
-  remark              String?           @db.Text
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
-  User                User              @relation(fields: [userId], references: [id])
-  RegionRider         RegionRider?      @relation(fields: [riderId], references: [userId])
-  tasks               ErrandOrderTask[]
+  images                 Json?
+  remark                 String?           @db.Text
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  User                   User              @relation(fields: [userId], references: [id])
+  RegionRider            RegionRider?      @relation(fields: [riderId], references: [userId])
+  tasks                  ErrandOrderTask[]
 
   @@index([userId, createdAt])
   @@index([riderId, status])
@@ -3719,8 +3724,8 @@ model ShareSettings {
   regionId                    String         @unique
   isEnabled                   Boolean        @default(true)
   activityTitle               String?
-  activityImage               String?
-  activityRules               String?
+  activityImage               String?        @db.Text
+  activityRules               String?        @db.Text
   inviterReward               Decimal        @default(0) @db.Decimal(10, 2)
   inviteeReward               Decimal        @default(0) @db.Decimal(10, 2)
   userLimit                   ShareUserLimit @default(ALL_USERS)
@@ -4247,6 +4252,7 @@ model MallOrder {
   discountAmount  Decimal   @default(0) @db.Decimal(10, 2)
   freightAmount   Decimal   @default(0) @db.Decimal(10, 2)
   payAmount       Decimal   @db.Decimal(10, 2)
+  platformFee     Decimal   @default(0) @db.Decimal(12, 2) // 平台抽成金额，支付成功时按 BizFeeConfig.mall_order 费率写入
   payChannel      String?
   payTime         DateTime?
   deliverTime     DateTime?
@@ -4531,21 +4537,21 @@ model PrinterConfig {
 
 // 飞鹅云打印任务。保留订单快照，避免订单后续修改影响补打内容。
 model PrintJob {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   orderId       String?
   printerId     String
-  provider      String   @default("feie")
-  event         String   // auto, manual, test
-  dedupeKey     String   @unique
-  status        String   @default("queued") // queued, submitted, printed, failed, uncertain
+  provider      String    @default("feie")
+  event         String // auto, manual, test
+  dedupeKey     String    @unique
+  status        String    @default("queued") // queued, submitted, printed, failed, uncertain
   content       String
   providerJobId String?
-  attempts      Int      @default(0)
+  attempts      Int       @default(0)
   errorMessage  String?
   sentAt        DateTime?
   printedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([orderId, createdAt])
@@ -4834,6 +4840,23 @@ model RiderLocationTrack {
   @@index([riderId, recordedAt])
   @@index([orderId, orderType, recordedAt])
   @@map("rider_location_tracks")
+}
+
+// ==================== 推送设备 ====================
+
+model UserPushDevice {
+  id         String   @id @default(cuid())
+  userId     String
+  clientId   String   @unique // uni-push 客户端推送标识
+  platform   String? // android / ios
+  os         String?
+  appVersion String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+  @@map("user_push_devices")
 }
 
 // ==================== 配送节点 ====================
@@ -6510,4 +6533,23 @@ model RealtimeSession {
   @@index([adminId, online])
   @@index([platform, online])
   @@map("realtime_sessions")
+}
+
+// ==================== 平台各业务抽成费率配置 ====================
+// bizType 对应支付系统里的 bizType: order / errand_order / mall_order / group_buy_order /
+//   recharge / topup / second_hand_order / dating_order / activity_order
+// rate: 小数，如 0.05 表示 5%；fixedFee: 每单固定抽成（元），两者可叠加
+model BizFeeConfig {
+  id        String   @id @default(cuid())
+  bizType   String   @unique // 业务类型标识
+  label     String // 展示名称，如 "外卖订单"
+  rate      Decimal  @default(0) @db.Decimal(8, 6) // 比例费率（0~1）
+  fixedFee  Decimal  @default(0) @db.Decimal(10, 2) // 每单固定费用（元）
+  enabled   Boolean  @default(true) // 关闭则不抽成、不写入 platformFee
+  remark    String? // 备注说明
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("biz_fee_configs")
 }

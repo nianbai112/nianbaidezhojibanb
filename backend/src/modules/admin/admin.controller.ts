@@ -14,7 +14,6 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { Request } from "express";
 import { AdminService } from "./admin.service";
-import { CommentService } from "../comment/comment.service";
 import { JwtGuard } from "../../guards/jwt.guard";
 import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
 import { RequirePermission, RequirePermissionAny } from "../../decorators/require-permission.decorator";
@@ -25,10 +24,7 @@ import { CurrentUser } from "../../decorators/current-user.decorator";
 @UseGuards(JwtGuard, AdminGuard)
 @ApiBearerAuth()
 export class AdminController {
-  constructor(
-    private readonly adminService: AdminService,
-    private readonly commentService: CommentService,
-  ) {}
+  constructor(private readonly adminService: AdminService) {}
 
   // ============ 仪表盘 ============
   @Get("admin/dashboard")
@@ -554,30 +550,6 @@ export class AdminController {
   @UseGuards(AdminPermissionGuard)
   comments(@Query() query: any) {
     return this.adminService.comments(query);
-  }
-
-  @Get("admin/comments/lotteries")
-  @RequirePermission("lottery:list")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "评论抽奖列表" })
-  commentLotteries(@Query() query: any) {
-    return this.commentService.getAdminLotteryList(query);
-  }
-
-  @Post("admin/comments/lotteries/:id/draw")
-  @RequirePermission("lottery:draw")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "后台手动评论抽奖开奖" })
-  drawCommentLottery(@Param("id") id: string) {
-    return this.commentService.adminDrawLottery(id);
-  }
-
-  @Post("admin/comments/lotteries/:id/cancel")
-  @RequirePermission("lottery:cancel")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "后台取消评论抽奖" })
-  cancelCommentLottery(@Param("id") id: string, @Body() dto: any) {
-    return this.commentService.adminCancelLottery(id, dto);
   }
 
   @Get("admin/comments/:id")

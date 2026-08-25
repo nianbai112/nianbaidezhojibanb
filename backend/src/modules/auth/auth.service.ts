@@ -672,6 +672,7 @@ export class AuthService {
     dto: { phone?: string; mobile?: string; code?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
     ip?: string,
     ua?: string,
+    options: { preferApprovedOfficialRider?: boolean } = {},
   ) {
     const phone = this.normalizePhone(dto.phone || dto.mobile);
     const code = String(dto.code || '').trim();
@@ -679,7 +680,10 @@ export class AuthService {
     await this.verifyPhoneLoginCode(phone, code);
 
     const loginMeta = await this.buildLoginMeta({ ip, ua, device: dto.loginDevice, method: '手机号验证码登录' });
-    let user: any = await this.prisma.user.findFirst({ where: { phone, status: { not: 'DELETED' as any } } });
+    let user: any = await this.findPhoneLoginUser(
+      phone,
+      options.preferApprovedOfficialRider === true,
+    );
     if (!user) {
       user = await (this.prisma.user as any).create({
         data: {
@@ -705,6 +709,32 @@ export class AuthService {
     await this.clearUserProfileCache(user.id);
     const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id } });
     return this.formatLoginResponse(user, tokens, studentVerify);
+  }
+
+  private async findPhoneLoginUser(phone: string, preferApprovedOfficialRider: boolean) {
+    if (preferApprovedOfficialRider) {
+      const riders = await this.prisma.regionRider.findMany({
+        where: {
+          phone,
+          verifyStatus: 'approved',
+          riderType: 'official',
+          User: { status: { not: 'DELETED' as any } },
+        },
+        select: { userId: true },
+        take: 2,
+      });
+      if (riders.length > 1) {
+        throw new BadRequestException('该手机号关联了多个官方骑手账号，请联系管理员处理');
+      }
+      if (riders.length === 1) {
+        return this.prisma.user.findFirst({
+          where: { id: riders[0].userId, status: { not: 'DELETED' as any } },
+        });
+      }
+    }
+    return this.prisma.user.findFirst({
+      where: { phone, status: { not: 'DELETED' as any } },
+    });
   }
 
   async refreshToken(refreshToken: string) {

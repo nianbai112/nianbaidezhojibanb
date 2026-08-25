@@ -43,8 +43,15 @@ export class WechatTokenService {
     const cached = await this.redis.get(cacheKey);
     if (cached) return cached;
 
-    const { data } = await axios.get(
-      `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${appid}&secret=${secret}`,
+    const { data } = await axios.post(
+      'https://api.weixin.qq.com/cgi-bin/stable_token',
+      {
+        grant_type: 'client_credential',
+        appid,
+        secret,
+        force_refresh: false,
+      },
+      { timeout: 10000 },
     );
 
     if (data.access_token) {

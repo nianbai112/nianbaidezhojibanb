@@ -2,19 +2,28 @@
   <div class="assistant-page">
     <div class="assistant-header">
       <div>
-        <p class="eyebrow">营销增长 / 消息助手</p>
-        <h2>官方助手消息</h2>
-        <p>统一管理小程序里的校园通知、系统通知和官方客服卡片。</p>
+        <p class="eyebrow">运营与系统 / 校园内容</p>
+        <h2>校园内容</h2>
+        <p>管理小程序助手页的静态内容卡片；不会发送 Notification，也不是客服回复记录。</p>
       </div>
-      <el-button v-if="hasEditPermission" type="primary" @click="openCreate">新增消息</el-button>
+      <el-button v-if="hasEditPermission" type="primary" @click="openCreate">新增内容卡片</el-button>
     </div>
+
+    <el-alert
+      class="content-boundary-alert"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="这是校园内容，不是通知投递或客服私聊"
+      description="当前小程序主要展示标题、正文和时间；摘要、主图、图标、标签及动作按钮需小程序补齐渲染后才会完整呈现。"
+    />
 
     <div class="filter-card">
       <el-input v-model="filters.keyword" clearable placeholder="搜索标题或内容" @keyup.enter="loadMessages" />
       <el-select v-model="filters.category" clearable placeholder="消息分类">
-        <el-option label="校园通知" value="campus" />
-        <el-option label="系统通知" value="system" />
-        <el-option label="官方客服" value="service" />
+        <el-option label="校园内容" value="campus" />
+        <el-option label="系统内容卡片" value="system" />
+        <el-option label="客服入口卡片" value="service" />
       </el-select>
       <el-select v-model="filters.status" clearable placeholder="状态">
         <el-option label="已发布" value="published" />
@@ -28,7 +37,7 @@
     </div>
 
     <div class="data-card">
-      <el-table :data="messages" v-loading="loading" empty-text="暂无官方助手消息">
+      <el-table :data="messages" v-loading="loading" empty-text="暂无校园内容卡片">
         <el-table-column label="消息" min-width="300">
           <template #default="{ row }">
             <div class="message-cell">
@@ -74,7 +83,7 @@
       </div>
     </div>
 
-    <el-drawer v-model="drawerVisible" :title="editingId ? '编辑官方助手消息' : '新增官方助手消息'" size="560px">
+    <el-drawer v-model="drawerVisible" :title="editingId ? '编辑校园内容卡片' : '新增校园内容卡片'" size="560px">
       <el-form :model="form" label-width="96px">
         <el-form-item label="分类" required>
           <el-segmented v-model="form.category" :options="categoryOptions" />
@@ -149,9 +158,9 @@ const auth = useAuthStore()
 const hasEditPermission = ref(auth.permissions.includes('marketing:view') || auth.permissions.includes('system:config'))
 
 const categoryOptions = [
-  { label: '校园通知', value: 'campus' },
-  { label: '系统通知', value: 'system' },
-  { label: '官方客服', value: 'service' }
+  { label: '校园内容', value: 'campus' },
+  { label: '系统内容卡片', value: 'system' },
+  { label: '客服入口卡片', value: 'service' }
 ]
 
 const loading = ref(false)
@@ -257,7 +266,7 @@ async function loadMessages() {
     messages.value = listOf(res)
     pagination.total = totalOf(res)
   } catch (error: any) {
-    ElMessage.error(error?.message || '加载官方助手消息失败')
+    ElMessage.error(error?.message || '加载校园内容失败')
   } finally {
     loading.value = false
   }
@@ -333,7 +342,7 @@ async function saveMessage() {
 
 async function removeMessage(row: any) {
   try {
-    await ElMessageBox.confirm(`确定删除「${row.title}」吗？`, '删除官方助手消息', {
+    await ElMessageBox.confirm(`确定删除「${row.title}」吗？`, '删除校园内容卡片', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消'
@@ -358,6 +367,7 @@ onMounted(() => {
 .assistant-header h2 { margin: 4px 0; font-size: 28px; color: #0f172a; }
 .assistant-header p { margin: 0; color: #64748b; font-weight: 700; }
 .eyebrow { color: #4daa32 !important; font-size: 13px; }
+.content-boundary-alert { margin-bottom: 16px; }
 .filter-card { display: grid; grid-template-columns: 1.5fr 150px 150px 180px auto; gap: 12px; margin-bottom: 16px; padding: 16px; background: #fff; border: 1px solid #dbe7d4; border-radius: 14px; }
 .data-card { background: rgba(255,255,255,0.9); border: 1px solid #dbe7d4; border-radius: 14px; box-shadow: 0 14px 36px rgba(77,170,50,.08); padding: 18px; }
 .message-cell { display: flex; align-items: center; gap: 12px; }

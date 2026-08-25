@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell realtime-page">
-    <GlassPageHeader title="在线用户与官方消息" subtitle="查看真实在线连接，向小程序用户发送官方消息并沉淀为可继续沟通的会话">
+    <GlassPageHeader title="客服工作台" subtitle="处理用户发起的官方客服会话；在线连接只用于排障，通知投递请走 notifications">
       <template #actions>
         <el-switch v-model="autoRefresh" active-text="自动刷新" />
         <el-button :icon="RefreshRight" :loading="loading" @click="loadSessions(true)">刷新</el-button>
@@ -57,6 +57,14 @@
         <span>{{ realtimeStatus.limits?.operation || '操作限流待检测' }}</span>
       </div>
     </div>
+
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="客服回复与通知投递已经分开"
+      description="在线连接列表不再提供主动推送。只有下方客服会话队列可以回复用户；业务通知、区域通知和全站通知请前往“通知投递”。"
+    />
 
     <div class="glass-card filter-card">
       <el-select v-model="filters.platform" placeholder="平台" clearable @change="reloadFirstPage">
@@ -120,13 +128,6 @@
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column prop="userAgent" label="设备/UserAgent" min-width="220" show-overflow-tooltip />
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" :disabled="!row.liveSocketCount" @click="handleTestPush(row)">
-              发官方消息
-            </el-button>
-          </template>
-        </el-table-column>
       </el-table>
 
       <div class="pagination-wrap">
@@ -145,8 +146,8 @@
     <div ref="officialCardRef" class="glass-card official-card">
       <div class="card-toolbar">
         <div>
-          <h3>官方消息会话</h3>
-          <p>用户回复官方后会进入这里，运营可以继续跟进。</p>
+          <h3>客服会话队列</h3>
+          <p>只处理用户主动发起的客服私聊。工单按 conversationId 明确关联，回复前请核对 ticketId。</p>
         </div>
         <div class="official-actions">
           <el-input
@@ -165,7 +166,7 @@
           <el-button :loading="officialLoading" @click="loadOfficialConversations()">刷新会话</el-button>
         </div>
       </div>
-      <div class="official-status-shortcuts" aria-label="官方会话处理状态筛选">
+      <div class="official-status-shortcuts" aria-label="客服会话处理状态筛选">
         <el-button
           v-for="item in officialStatusFilters"
           :key="item.value || 'all'"
@@ -189,13 +190,17 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="咨询记录" min-width="230">
+        <el-table-column label="工单上下文" min-width="290">
           <template #default="{ row }">
-            <div v-if="row.ticket">
-              <div class="actor-name">{{ row.ticket.title }}</div>
+            <div v-if="row.ticket" class="ticket-cell">
+              <div class="ticket-cell-head">
+                <span class="actor-name">{{ row.ticket.title }}</span>
+                <el-tag type="success" size="small" effect="plain">已关联</el-tag>
+              </div>
               <div class="actor-subtitle">{{ row.ticket.ticketNo }} · {{ officialStatusText(row.ticket.status) }}</div>
+              <code>ticketId: {{ row.ticket.id }}</code>
             </div>
-            <span v-else>-</span>
+            <span v-else class="ticket-empty">未关联工单</span>
           </template>
         </el-table-column>
         <el-table-column label="最后消息" min-width="320" show-overflow-tooltip>
@@ -216,7 +221,7 @@
         </el-table-column>
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="openOfficialConversation(row)">查看回复</el-button>
+            <el-button type="primary" link size="small" @click="openOfficialConversation(row)">进入处理</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -224,6 +229,18 @@
 
     <el-drawer v-model="officialDrawerVisible" :title="officialDrawerTitle" size="520px" destroy-on-close>
       <div class="official-chat-drawer" v-loading="messagesLoading">
+        <div class="ticket-context" :class="{ missing: !activeTicketId }">
+          <div class="ticket-context-head">
+            <strong>{{ activeTicketId ? '已关联工单上下文' : '当前会话未关联工单' }}</strong>
+            <el-tag v-if="activeTicketId" type="success" size="small" effect="plain">conversationId 强绑定</el-tag>
+          </div>
+          <template v-if="activeTicketId">
+            <span>{{ selectedOfficialConversation?.ticket?.ticketNo }} · {{ selectedOfficialConversation?.ticket?.title }}</span>
+            <code>ticketId: {{ activeTicketId }}</code>
+            <p>回复请求会携带此 ticketId，后端只向该工单写入回复或更新状态。</p>
+          </template>
+          <p v-else>未关联 ticketId 时只写客服会话消息，不会隐式追加到用户的其他工单。</p>
+        </div>
         <div v-if="officialMessages.length" class="message-list">
           <div
             v-for="message in officialMessages"
@@ -271,6 +288,23 @@
                   <strong>{{ message.file?.name || '文件消息' }}</strong>
                   <span v-if="message.file?.size">{{ formatFileSize(message.file.size) }}</span>
                 </a>
+                <router-link
+                  v-else-if="message.renderType === 'note' && message.note"
+                  class="note-card"
+                  :to="{ path: '/content/posts', query: { id: message.note.noteId } }"
+                  target="_blank"
+                  @click.stop
+                >
+                  <img v-if="message.note.coverImage" class="note-cover" :src="message.note.coverImage" alt="" />
+                  <div class="note-body">
+                    <strong>{{ message.note.title || '无标题' }}</strong>
+                    <span v-if="message.note.content">{{ message.note.content }}</span>
+                    <div class="note-meta">
+                      <span>{{ message.note.authorName || '未知用户' }}</span>
+                      <em>查看笔记 ›</em>
+                    </div>
+                  </div>
+                </router-link>
                 <div v-else-if="message.renderType === 'order'" class="order-card">
                   <div class="order-card-head">
                     <strong>{{ orderTypeText(message.order?.orderType) }}</strong>
@@ -295,6 +329,7 @@
         <div class="reply-box">
           <div class="status-actions">
             <span>处理状态：<el-tag :type="officialStatusType(selectedOfficialConversation?.serviceStatus)" effect="plain">{{ officialStatusText(selectedOfficialConversation?.serviceStatus) }}</el-tag></span>
+            <span class="status-ticket-id">ticketId: {{ activeTicketId || '未关联' }}</span>
             <el-button size="small" :loading="updatingStatus" @click="updateConversationStatus('processing')">受理</el-button>
             <el-button size="small" type="warning" plain :loading="updatingStatus" @click="updateConversationStatus('waiting_user')">待补充</el-button>
             <el-button size="small" type="success" plain :loading="updatingStatus" @click="updateConversationStatus('resolved')">解决</el-button>
@@ -324,7 +359,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { RefreshRight } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -335,7 +370,6 @@ import {
   fetchRealtimeStatus,
   fetchRealtimeWsTestToken,
   replyOfficialConversation,
-  testPushToUser,
   updateOfficialConversationStatus,
   uploadAdminFile,
 } from '@/api/admin'
@@ -405,8 +439,9 @@ const statItems = computed(() => [
   { label: '当前列表', value: total.value, tone: 'green' as const, icon: 'List' },
 ])
 const officialDrawerTitle = computed(() => selectedOfficialConversation.value?.user?.name
-  ? `官方会话：${selectedOfficialConversation.value.user.name}`
-  : '官方会话')
+  ? `客服会话：${selectedOfficialConversation.value.user.name}`
+  : '客服会话')
+const activeTicketId = computed(() => String(selectedOfficialConversation.value?.ticket?.id || '').trim())
 const officialResolutionHint = computed(() => '输入给用户的处理说明；待补充、解决、驳回时必填')
 
 function formatTime(t: string) {
@@ -586,28 +621,6 @@ function resetFilters() {
   loadSessions()
 }
 
-async function handleTestPush(row: any) {
-  const targetId = row.userId || row.adminId
-  if (!targetId) {
-    ElMessage.warning('这条连接没有可推送的用户ID')
-    return
-  }
-  const { value } = await ElMessageBox.prompt('输入官方消息内容', '发送官方推送消息', {
-    inputValue: '您好，这是一条来自平台官方的消息。',
-    confirmButtonText: '发送',
-    cancelButtonText: '取消',
-  })
-  try {
-    const res: any = await testPushToUser(targetId, value || '您好，这是一条来自平台官方的消息。')
-    ElMessage.success(res?.message || `官方消息已发送到 ${res?.deliveredCount || 0} 个连接`)
-    await loadSessions()
-    await loadOfficialConversations()
-    refreshHeaderStats()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '推送失败')
-  }
-}
-
 async function loadOfficialConversations() {
   officialLoading.value = true
   try {
@@ -660,7 +673,7 @@ async function sendOfficialReply() {
   }
   replying.value = true
   try {
-    const res: any = await replyOfficialConversation(conversationId, replyContent.value.trim())
+    const res: any = await replyOfficialConversation(conversationId, replyContent.value.trim(), activeTicketId.value || undefined)
     ElMessage.success(res?.message || '官方回复已发送')
     replyContent.value = ''
     await loadOfficialMessages(conversationId)
@@ -680,7 +693,7 @@ async function sendOfficialImage(option: any) {
     const uploaded: any = await uploadAdminFile(option.file, 'official_chat')
     const url = uploaded?.url || uploaded?.data?.url
     if (!url) throw new Error('图片上传失败')
-    const res: any = await replyOfficialConversation(conversationId, `img:${url}`)
+    const res: any = await replyOfficialConversation(conversationId, `img:${url}`, activeTicketId.value || undefined)
     option.onSuccess?.(res)
     ElMessage.success(res?.message || '官方图片已发送')
     await loadOfficialMessages(conversationId)
@@ -702,7 +715,7 @@ async function updateConversationStatus(status: string) {
   }
   updatingStatus.value = true
   try {
-    const res: any = await updateOfficialConversationStatus(conversationId, status, content || undefined)
+    const res: any = await updateOfficialConversationStatus(conversationId, status, content || undefined, activeTicketId.value || undefined)
     selectedOfficialConversation.value = { ...selectedOfficialConversation.value, serviceStatus: res?.status || status }
     if (content) replyContent.value = ''
     ElMessage.success(`已更新为${officialStatusText(res?.status || status)}`)
@@ -921,6 +934,33 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ticket-cell {
+  display: grid;
+  gap: 4px;
+}
+.ticket-cell-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ticket-cell-head .actor-name {
+  min-width: 0;
+  flex: 1;
+}
+.ticket-cell code,
+.ticket-context code,
+.status-ticket-id {
+  color: var(--el-color-primary-dark-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  word-break: break-all;
+}
+.ticket-empty {
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-weight: 750;
+}
 .pagination-wrap {
   display: flex;
   justify-content: flex-end;
@@ -928,6 +968,32 @@ onBeforeUnmount(() => {
 }
 .official-chat-drawer {
   min-height: 360px;
+}
+.ticket-context {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+  border: 1px solid var(--el-color-success-light-5);
+  border-radius: 8px;
+  background: var(--el-color-success-light-9);
+  padding: 12px;
+}
+.ticket-context.missing {
+  border-color: var(--mx-border);
+  background: var(--mx-soft);
+}
+.ticket-context-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ticket-context span,
+.ticket-context p {
+  margin: 0;
+  color: var(--mx-sub);
+  font-size: 12px;
+  line-height: 1.55;
 }
 .status-actions {
   display: flex;
@@ -1014,6 +1080,7 @@ onBeforeUnmount(() => {
 }
 .location-card,
 .file-card,
+.note-card,
 .order-card {
   display: grid;
   gap: 6px;
@@ -1024,6 +1091,44 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   color: var(--el-color-primary-dark-2);
   text-decoration: none;
+}
+.note-card {
+  overflow: hidden;
+  padding: 0;
+  background: var(--mx-card);
+}
+.note-cover {
+  display: block;
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  background: var(--mx-soft);
+}
+.note-body {
+  display: grid;
+  gap: 6px;
+  padding: 11px 12px;
+}
+.note-body > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--mx-sub);
+  font-size: 12px;
+  font-weight: 500;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.note-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--mx-sub);
+  font-size: 12px;
+}
+.note-meta em {
+  color: var(--el-color-primary);
+  font-style: normal;
+  font-weight: 800;
 }
 .location-card span,
 .file-card span,

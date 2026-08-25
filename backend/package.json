@@ -1,6 +1,6 @@
 {
   "name": "lingmeng-backend",
-  "version": "1.0.36",
+  "version": "1.0.46-selfhosted.1",
   "description": "灵萌/xiaoyi 小程序后端服务 - 区域/校园生活服务平台",
   "author": "",
   "private": true,
@@ -34,7 +34,10 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:seed": "ts-node prisma/seed.ts"
+    "db:seed": "ts-node prisma/seed.ts",
+    "audit:official-assistant": "node scripts/audit-official-assistant-data.cjs",
+    "backfill:official-assistant": "node scripts/backfill-official-support-links.cjs",
+    "smoke:official-assistant-schema": "node scripts/smoke-official-support-schema.cjs"
   },
   "dependencies": {
     "@alicloud/dysmsapi20170525": "^4.5.1",

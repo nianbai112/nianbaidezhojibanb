@@ -18,6 +18,15 @@ export interface AdminChatMessageView {
     url?: string
     size?: number | string
   } | null
+  note?: {
+    title?: string
+    content?: string
+    noteId?: string
+    authorName?: string
+    authorAvatar?: string
+    coverImage?: string
+    type?: number
+  } | null
   order?: {
     orderId?: string
     orderNo?: string
@@ -111,7 +120,19 @@ export function parseChatContent(rawValue: any, declaredType?: string): AdminCha
   }
 
   if (rawContent.startsWith('notes:')) {
-    return { renderType: 'note', typeLabel: '笔记消息', previewText: '[笔记]', displayContent: '[笔记]', rawContent }
+    const parts = rawContent.slice(6).split('|')
+    const noteBody = parts[1] || ''
+    const note = {
+      title: parts[0] || noteBody.split(/\r?\n/)[0].slice(0, 60) || '无标题',
+      content: noteBody,
+      noteId: parts[2] || '',
+      authorName: parts[3] || '未知用户',
+      authorAvatar: parts[4] || '',
+      coverImage: parts[5] || '',
+      type: Number(parts[6]) || 1,
+    }
+    const previewText = `[笔记] ${note.title}`
+    return { renderType: 'note', typeLabel: '笔记消息', previewText, displayContent: previewText, rawContent, note }
   }
 
   if (rawContent.startsWith('order:')) {
@@ -141,6 +162,7 @@ export function normalizeChatMessage<T extends Record<string, any>>(message: T):
     duration: message.duration || media.duration,
     location: message.location || parsed.location || null,
     file: message.file || parsed.file || null,
+    note: message.note || parsed.note || null,
     order: message.order || parsed.order || null,
   }
 }

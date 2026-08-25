@@ -2,11 +2,11 @@
   <div class="marketing-page">
     <div class="marketing-header">
       <div>
-        <p class="eyebrow">营销增长 / 通知</p>
-        <h2>系统通知群发</h2>
-        <p>通知入库并可实时推送，列表读取真实 notifications 数据。</p>
+        <p class="eyebrow">运营与系统 / 通知投递</p>
+        <h2>通知投递</h2>
+        <p>面向用户投递业务与系统通知；写入 notifications，不创建客服私聊或工单回复。</p>
       </div>
-      <el-button v-if="hasSendPermission" type="primary" @click="showSendDialog = true">发送通知</el-button>
+      <el-button v-if="hasSendPermission" type="primary" @click="showSendDialog = true">新建通知</el-button>
     </div>
 
     <StatGrid :items="statItems" />
@@ -92,7 +92,7 @@
       </div>
     </div>
 
-    <el-dialog v-model="showSendDialog" title="发送通知" width="660px">
+    <el-dialog v-model="showSendDialog" title="投递通知" width="660px">
       <el-form :model="form" label-width="100px">
         <el-form-item label="发送目标">
           <el-select v-model="form.targetType" style="width: 100%">
@@ -133,7 +133,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showSendDialog = false">取消</el-button>
-        <el-button type="primary" @click="sendNotification" :loading="sending">发送</el-button>
+        <el-button type="primary" @click="sendNotification" :loading="sending">确认投递</el-button>
       </template>
     </el-dialog>
   </div>
@@ -149,6 +149,7 @@ import { errorMessage, formatTime, unwrapPage } from './utils'
 import { useAuthStore } from '@/stores/auth'
 import StatGrid from '@/components/glass/StatGrid.vue'
 import type { StatItem } from '@/types/admin'
+import { buildNotificationDeliveryPayload } from '@/views/system/notificationDelivery.mjs'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -262,22 +263,18 @@ async function sendNotification() {
   }
   sending.value = true
   try {
-    const result: any = await apiSendNotification({
-      targetType: form.targetType,
-      title: form.title.trim(),
-      content: form.content.trim(),
-      regionId: form.targetType === 'region' ? form.regionId : undefined,
+    const result: any = await apiSendNotification(buildNotificationDeliveryPayload({
+      target: form.targetType,
+      title: form.title,
+      content: form.content,
+      regionId: form.regionId,
       linkType: form.linkType || undefined,
       linkValue: form.linkValue || undefined,
-      channelMask: {
-        inApp: form.channelInApp,
-        websocket: form.channelWebSocket,
-        wechatSubscribe: form.channelWechat,
-        officialAccount: false,
-      },
-    })
+      websocket: form.channelWebSocket,
+      wechatSubscribe: form.channelWechat,
+    }))
     const createdCount = result?.createdCount ?? result?.count ?? result?.data?.createdCount ?? 0
-    ElMessage.success(`通知已发送${createdCount ? `，覆盖 ${createdCount} 人` : ''}`)
+    ElMessage.success(`通知已投递${createdCount ? `，写入 ${createdCount} 条记录` : ''}`)
     showSendDialog.value = false
     form.title = ''
     form.content = ''

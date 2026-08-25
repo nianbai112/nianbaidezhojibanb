@@ -48,7 +48,7 @@ export class WechatController {
     @Res() res: Response,
   ) {
     const result = await this.officialService.handleCallback('', query);
-    res.send(result);
+    res.status(200).send(result);
   }
 
   @Post('official/callback')
@@ -70,6 +70,6 @@ export class WechatController {
       xmlBody,
       query,
     );
-    res.send(result);
+    res.status(200).send(result);
   }
 }

@@ -275,6 +275,28 @@ describe("UploadService", () => {
     expect(result.url).toMatch(/^https:\/\//);
   });
 
+  it("should upload a video and its extracted first-frame thumbnail", async () => {
+    (service as any).extractVideoThumbnail = jest.fn().mockResolvedValue({
+      buffer: Buffer.from("fake-jpeg-cover-data"),
+      width: 960,
+      height: 540,
+    });
+    const video = makeFile({
+      originalname: "campus.mp4",
+      mimetype: "video/mp4",
+      buffer: Buffer.from("mock-mp4-video-data"),
+      size: 2048,
+    });
+
+    const result = await service.uploadVideoWithThumbnail(video, "users/u1");
+
+    expect(result.video.type).toBe("video");
+    expect(result.thumbnail.type).toBe("image");
+    expect(result.thumbnail.key).toContain("users/u1/thumbnails/");
+    expect(result.width).toBe(960);
+    expect(result.height).toBe(540);
+  });
+
   // ============ 小程序码生成 ============
 
   describe("generateQrcode", () => {
@@ -358,6 +380,85 @@ describe("UploadService", () => {
         6900,
       );
       expect(result.url).toContain("https://");
+    });
+
+    it("should use mini-program credentials saved in admin settings", async () => {
+      const prisma = makePrisma();
+      (prisma.config.findUnique as jest.Mock).mockImplementation(({ where }: any) => {
+        if (where.key === "miniapp") {
+          return Promise.resolve({
+            value: { appId: "wx-admin-appid", appSecret: "wx-admin-secret" },
+          });
+        }
+        return Promise.resolve({ value: makeStorageConfig() });
+      });
+      const adminModule = await Test.createTestingModule({
+        providers: [
+          UploadService,
+          {
+            provide: ConfigService,
+            useValue: makeConfig({ WX_MINI_APPID: undefined, WX_MINI_SECRET: undefined }),
+          },
+          { provide: RedisService, useValue: makeRedis() },
+          { provide: PrismaService, useValue: prisma },
+        ],
+      }).compile();
+      const adminService = adminModule.get<UploadService>(UploadService);
+      mockAxios.get.mockResolvedValueOnce({
+        data: { access_token: "admin_token", expires_in: 7200 },
+      });
+
+      await adminService.generateQrcode({ scene: "admin-settings" });
+
+      expect(mockAxios.get).toHaveBeenCalledWith(
+        expect.stringContaining("cgi-bin/token"),
+        expect.objectContaining({
+          params: expect.objectContaining({
+            appid: "wx-admin-appid",
+            secret: "wx-admin-secret",
+          }),
+        }),
+      );
+    });
+
+    it("should trim historical whitespace around COS credentials", async () => {
+      const prisma = makePrisma();
+      (prisma.config.findUnique as jest.Mock).mockImplementation(({ where }: any) => {
+        if (where.key === "miniapp") {
+          return Promise.resolve({
+            value: { appId: "wx-admin-appid", appSecret: "wx-admin-secret" },
+          });
+        }
+        return Promise.resolve({
+          value: makeStorageConfig({
+            cos: {
+              secretId: "  test-id  ",
+              secretKey: "  test-key  ",
+              bucket: "  test-bucket  ",
+              region: "ap-guangzhou",
+            },
+          }),
+        });
+      });
+      const trimModule = await Test.createTestingModule({
+        providers: [
+          UploadService,
+          { provide: ConfigService, useValue: makeConfig() },
+          { provide: RedisService, useValue: makeRedis() },
+          { provide: PrismaService, useValue: prisma },
+        ],
+      }).compile();
+      const trimService = trimModule.get<UploadService>(UploadService);
+      mockAxios.get.mockResolvedValueOnce({
+        data: { access_token: "trim_token", expires_in: 7200 },
+      });
+
+      await trimService.generateQrcode({ scene: "trim-storage" });
+
+      expect(mockCOS).toHaveBeenLastCalledWith({
+        SecretId: "test-id",
+        SecretKey: "test-key",
+      });
     });
 
     it("should handle WeChat API error", async () => {

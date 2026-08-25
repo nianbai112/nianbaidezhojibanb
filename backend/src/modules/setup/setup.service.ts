@@ -1436,12 +1436,6 @@ export class SetupService {
       { code: "club:delete", name: "删除社团", module: "club", action: "delete" },
       { code: "club:member:list", name: "查看社团成员", module: "club", action: "member:list" },
       { code: "club:member:delete", name: "移除社团成员", module: "club", action: "member:delete" },
-      // 评论抽奖
-      { code: "lottery:list", name: "查看抽奖列表", module: "lottery", action: "list" },
-      { code: "lottery:detail", name: "查看抽奖详情", module: "lottery", action: "detail" },
-      { code: "lottery:delete", name: "删除抽奖", module: "lottery", action: "delete" },
-      { code: "lottery:draw", name: "开奖", module: "lottery", action: "draw" },
-      { code: "lottery:cancel", name: "取消抽奖", module: "lottery", action: "cancel" },
       // 会员 — AUD-P1-072: fresh setup 中缺失的 membership:* 权限
       { code: "membership:list", name: "查看会员列表", module: "membership", action: "list" },
       { code: "membership:plan:list", name: "查看会员套餐", module: "membership", action: "plan:list" },
@@ -1452,7 +1446,6 @@ export class SetupService {
       { code: "membership:user:list", name: "查看会员用户", module: "membership", action: "user:list" },
       { code: "membership:usage:list", name: "查看权益使用记录", module: "membership", action: "usage:list" },
       { code: "membership:grant", name: "发放/调整会员", module: "membership", action: "grant" },
-      { code: "lottery:record:list", name: "查看中奖记录", module: "lottery", action: "record:list" },
       // 排行榜
       { code: "ranking:list", name: "查看排行榜", module: "ranking", action: "list" },
       { code: "ranking:create", name: "创建排行榜", module: "ranking", action: "create" },

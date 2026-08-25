@@ -328,7 +328,7 @@ export class ErrandAdminService {
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
-        include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
+        include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } } },
       }),
       this.prisma.regionRider.count({ where }),
     ])

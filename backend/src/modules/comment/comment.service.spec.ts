@@ -32,14 +32,6 @@ const createPrismaMock = () => {
       create: jest.fn(),
       update: jest.fn(),
     },
-    commentLottery: {
-      findUnique: jest.fn(),
-      create: jest.fn(),
-      update: jest.fn(),
-    },
-    commentLotteryWinner: {
-      createMany: jest.fn(),
-    },
     anonymousIdentity: {
       count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -62,15 +54,17 @@ describe('CommentService', () => {
   let prisma: ReturnType<typeof createPrismaMock>;
   let redis: ReturnType<typeof createRedisMock>;
   let service: CommentService;
+  let aiRuntime: any;
 
   beforeEach(() => {
     prisma = createPrismaMock();
     redis = createRedisMock();
+    aiRuntime = { moderateContent: jest.fn().mockResolvedValue({ decision: 'approve', reason: '通过', labels: [], score: 0 }), detectSensitiveHit: jest.fn().mockResolvedValue(null) };
     service = new CommentService(
       prisma as any,
       redis as any,
       { createAndDispatch: jest.fn().mockResolvedValue({}) } as any,
-      { moderateContent: jest.fn(), detectSensitiveHit: jest.fn().mockResolvedValue(null) } as any,
+      aiRuntime as any,
       { reviewImages: jest.fn().mockResolvedValue(null) } as any,
       {
         assertStudentProtectedAction: jest.fn().mockResolvedValue(undefined),
@@ -79,8 +73,26 @@ describe('CommentService', () => {
         assertNoBlockBetween: jest.fn().mockResolvedValue(undefined),
       } as any,
       { assertAllowed: jest.fn().mockResolvedValue({ allowed: true }) } as any,
-      { hasBenefit: jest.fn().mockResolvedValue(true) } as any,
     );
+  });
+
+  it('评论 AI 审核会同时提交图片', async () => {
+    prisma.config.findUnique.mockResolvedValue({
+      value: { comment_approval_type: 'ai', ai_review_failure_to_manual: 1 },
+    });
+
+    await (service as any).resolveCommentReview(
+      '你好',
+      'region-1',
+      ['https://cdn.example.com/comment-risk.jpg'],
+      'user-1',
+    );
+
+    expect(aiRuntime.moderateContent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'comment',
+      content: '你好',
+      imageUrls: ['https://cdn.example.com/comment-risk.jpg'],
+    }));
   });
 
   it('only lists visible approved comments and counts top-level total separately', async () => {
@@ -204,126 +216,6 @@ describe('CommentService', () => {
     });
 
     await expect(service.pinComment('c1', 'author', { pin_status: 1 })).rejects.toThrow(BadRequestException);
-  });
-
-  it('persists lottery prize reward text, weight, and display order', async () => {
-    const drawAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    prisma.post.findUnique.mockResolvedValue({
-      id: 'p1',
-      userId: 'author',
-      region: { managerUserId: 'manager' },
-    });
-    prisma.commentLottery.findUnique.mockResolvedValue(null);
-    prisma.commentLottery.create.mockResolvedValue({
-      id: 'lottery-1',
-      postId: 'p1',
-      title: '评论抽奖',
-      drawAt: new Date(drawAt),
-      allowDuplicate: false,
-      status: 'active',
-      prizes: [{
-        id: 'prize-1',
-        name: '一等奖',
-        count: 1,
-        rewardText: '奶茶券',
-        probabilityWeight: 30,
-        sortOrder: 0,
-      }],
-      winners: [],
-    });
-
-    await service.createLottery('author', {
-      post_id: 'p1',
-      title: '评论抽奖',
-      draw_at: drawAt,
-      prizes: [{
-        name: '一等奖',
-        reward_text: '奶茶券',
-        winner_count: 1,
-        probability_weight: 30,
-        sort_order: 0,
-      }],
-    });
-
-    expect(prisma.commentLottery.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        prizes: {
-          create: [expect.objectContaining({
-            name: '一等奖',
-            count: 1,
-            rewardText: '奶茶券',
-            probabilityWeight: 30,
-            sortOrder: 0,
-          })],
-        },
-      }),
-    }));
-  });
-
-  it('stores winner comment ids and draw audit metadata when drawing', async () => {
-    const drawAt = new Date(Date.now() + 60 * 60 * 1000);
-    const lottery = {
-      id: 'lottery-1',
-      postId: 'p1',
-      title: '评论抽奖',
-      drawAt,
-      allowDuplicate: false,
-      status: 'active',
-      prizes: [{ id: 'prize-1', name: '一等奖', count: 1, sortOrder: 0 }],
-      winners: [],
-    };
-    const comments = [
-      { id: 'c1', postId: 'p1', userId: 'u1', content: '参加', user: { id: 'u1', nickname: '用户1', avatar: '' } },
-      { id: 'c2', postId: 'p1', userId: 'u2', content: '报名', user: { id: 'u2', nickname: '用户2', avatar: '' } },
-    ];
-    prisma.post.findUnique.mockResolvedValue({
-      id: 'p1',
-      userId: 'author',
-      region: { managerUserId: 'manager' },
-    });
-    prisma.commentLottery.findUnique
-      .mockResolvedValueOnce(lottery)
-      .mockResolvedValueOnce({
-        ...lottery,
-        status: 'drawn',
-        participantCount: 2,
-        candidateCommentCount: 2,
-        winnerCount: 1,
-        drawSeed: 'seed-value',
-        drawnAt: new Date(),
-        winners: [{
-          id: 'winner-1',
-          lotteryId: 'lottery-1',
-          userId: 'u1',
-          prizeId: 'prize-1',
-          commentId: 'c1',
-          createdAt: new Date(),
-        }],
-      });
-    prisma.comment.findMany.mockResolvedValue(comments);
-    prisma.commentLotteryWinner.createMany.mockResolvedValue({ count: 1 });
-    prisma.commentLottery.update.mockResolvedValue({ ...lottery, status: 'drawn' });
-
-    await service.drawLottery('lottery-1', 'author');
-
-    expect(prisma.commentLotteryWinner.createMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({
-        lotteryId: 'lottery-1',
-        prizeId: 'prize-1',
-        commentId: expect.stringMatching(/^c[12]$/),
-      })],
-    });
-    expect(prisma.commentLottery.update).toHaveBeenCalledWith({
-      where: { id: 'lottery-1' },
-      data: expect.objectContaining({
-        status: 'drawn',
-        participantCount: 2,
-        candidateCommentCount: 2,
-        winnerCount: 1,
-        drawSeed: expect.any(String),
-        drawnAt: expect.any(Date),
-      }),
-    });
   });
 
   it('does not let a comment borrow an anonymous identity from another region', async () => {

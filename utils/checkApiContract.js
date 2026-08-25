@@ -208,6 +208,10 @@ function routeMatches(frontend, backend) {
 function compatibleFrontendPaths(route) {
   const normalized = normalizeRoute(route);
   const paths = new Set([normalized]);
+  const segments = routeSegments(normalized);
+  if (segments[0] === "api" && extractMiniProgramRootPrefixes().has(segments[1])) {
+    paths.add(normalizeRoute(normalized.slice(4)));
+  }
 
   if (normalized.startsWith("/api/mall/admin/products/")) {
     paths.add(normalized.replace("/api/mall/admin/products/", "/mall/products/admin/"));
@@ -321,4 +325,5 @@ module.exports = {
   extractMiniProgramRootPrefixes,
   findMissingRootCompatibility,
   findMethodNear,
+  compatibleFrontendPaths,
 };

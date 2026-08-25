@@ -1792,27 +1792,6 @@ export class NewUiCompatController {
     return { data: config?.value || {} };
   }
 
-  @Get("note/lottery")
-  @RequirePermission("lottery:list")
-  @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: "抽奖管理（新后台兼容）" })
-  async noteLottery(@Query() query: any) {
-    const { page = 1, pageSize = 20 } = query;
-    const where: any = {};
-    if (query.status) where.status = query.status;
-    const [list, total] = await Promise.all([
-      this.prisma.commentLottery.findMany({
-        where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
-        orderBy: { createdAt: "desc" },
-        include: { prizes: true },
-      }),
-      this.prisma.commentLottery.count({ where }),
-    ]);
-    return { list, total, page: +page, pageSize: +pageSize };
-  }
-
   @Get("note/xiaohongshu")
   @RequirePermission("post:audit")
   @UseGuards(AdminPermissionGuard)

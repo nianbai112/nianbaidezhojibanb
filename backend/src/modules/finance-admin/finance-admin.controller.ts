@@ -75,8 +75,7 @@ export class FinanceAdminController {
 
   // ================= 财务总览 =================
 
-  @Get('finance/overview')
-  @Get('finance/stats')
+  @Get(['finance/overview', 'finance/stats'])
   @ApiOperation({ summary: '财务总览真实统计' })
   @RequirePermission('finance:view')
   getFinanceOverview(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
@@ -99,8 +98,7 @@ export class FinanceAdminController {
 
   // ================= 支付订单查询 =================
 
-  @Get('payment-orders')
-  @Get('finance/payment-orders')
+  @Get(['payment-orders', 'finance/payment-orders'])
   @ApiOperation({ summary: '支付订单列表' })
   @RequirePermission('finance:view')
   getPaymentOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
@@ -109,8 +107,7 @@ export class FinanceAdminController {
 
   // ================= 退款订单查询 =================
 
-  @Get('refund-orders')
-  @Get('finance/refund-orders')
+  @Get(['refund-orders', 'finance/refund-orders'])
   @ApiOperation({ summary: '退款订单列表' })
   @RequirePermission('finance:view')
   getRefundOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
@@ -119,8 +116,7 @@ export class FinanceAdminController {
 
   // ================= 用户余额流水 =================
 
-  @Get('user-wallet-logs')
-  @Get('finance/user-wallet-logs')
+  @Get(['user-wallet-logs', 'finance/user-wallet-logs'])
   @ApiOperation({ summary: '用户余额流水' })
   @RequirePermission('finance:view')
   getUserWalletLogs(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
@@ -129,8 +125,7 @@ export class FinanceAdminController {
 
   // ================= 提现管理 =================
 
-  @Get('withdrawals')
-  @Get('finance/withdrawals')
+  @Get(['withdrawals', 'finance/withdrawals'])
   @ApiOperation({ summary: '提现申请列表' })
   @RequirePermission('finance:view')
   getWithdrawals(@Query() q: any, @CurrentUser('sub') operatorId?: string) {
@@ -287,18 +282,36 @@ export class FinanceAdminController {
 
   // ================= 对账中心 =================
 
-  @Get('reconciliation')
-  @Get('finance/reconciliation')
+  @Get(['reconciliation', 'finance/reconciliation'])
   @ApiOperation({ summary: '对账数据' })
   @RequirePermission('finance:view')
   getReconciliation(@Query() q: any) {
     return this.financeAdminService.getReconciliation(q);
   }
 
+  // ================= 平台抽成总览 =================
+
+  @Get('finance/commission-overview')
+  @ApiOperation({ summary: '平台抽成总览（按区域汇总、趋势、费率配置）' })
+  @RequirePermission('finance:view')
+  getCommissionOverview(@Query() q: any) {
+    return this.financeAdminService.getCommissionOverview(q);
+  }
+
+  @Put('finance/commission-rate/:regionId')
+  @ApiOperation({ summary: '修改区域外卖抽成比例' })
+  @RequirePermission('finance:config')
+  updateRegionCommissionRate(
+    @Param('regionId') regionId: string,
+    @Body() dto: { commissionRate: number },
+    @CurrentUser('sub') operatorId?: string,
+  ) {
+    return this.financeAdminService.updateRegionCommissionRate(regionId, dto.commissionRate, operatorId);
+  }
+
   // ================= 异常资金单 =================
 
-  @Get('abnormal-orders')
-  @Get('finance/abnormal-orders')
+  @Get(['abnormal-orders', 'finance/abnormal-orders'])
   @ApiOperation({ summary: '异常资金单' })
   @RequirePermission('finance:view')
   getAbnormalOrders(@Query() q: any, @CurrentUser('sub') operatorId?: string) {

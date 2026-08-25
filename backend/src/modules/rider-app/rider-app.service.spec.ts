@@ -44,6 +44,30 @@ describe('RiderAppService', () => {
         create: jest.fn().mockResolvedValue({ id: 'risk-1', eventType: 'cannot_contact' }),
       },
       deliveryOrderNode: { create: jest.fn().mockResolvedValue({ id: 'node-1' }) },
+      wallet: { findUnique: jest.fn().mockResolvedValue({ userId: 'user-1', balance: 10, freeze: 2 }) },
+      riderSettlement: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { payableAmount: 0 } }),
+      },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
+      withdraw: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
+      },
+      orderAppeal: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'appeal-1', status: 'pending' }),
+        update: jest.fn().mockResolvedValue({ id: 'appeal-1', status: 'pending' }),
+      },
+      orderAppealEvent: { create: jest.fn().mockResolvedValue({ id: 'event-1' }) },
+      subsidyLedger: {
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
     };
     const auth = {
       sendPhoneLoginCode: jest.fn().mockResolvedValue({ success: true, expiresIn: 300 }),
@@ -61,16 +85,27 @@ describe('RiderAppService', () => {
       getRiderInfo: jest.fn().mockResolvedValue({ id: 'rider-1' }),
       updateRiderInfo: jest.fn().mockResolvedValue({ id: 'rider-1' }),
       getOrderStats: jest.fn().mockResolvedValue({ today: 1 }),
+      confirmReceiptByCode: jest.fn().mockResolvedValue({ success: true, data: { id: 'order-1', status: 'completed' } }),
     };
     const systemConfig = {
       getRiderAppControlConfig: jest.fn().mockResolvedValue({
         data: { runtime: { locationMaxAgeHours: 24 } },
       }),
     };
+    const finance = {
+      transactions: jest.fn().mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 20 }),
+      withdraw: jest.fn().mockResolvedValue({ id: 'withdraw-1', status: 'PENDING' }),
+    };
     (prisma as any).$transaction = jest.fn(async (callback: any) => callback(prisma));
     return {
-      service: new RiderAppService(prisma as any, auth as any, errand as any, systemConfig as any),
-      prisma, auth, errand, systemConfig,
+      service: new RiderAppService(
+        prisma as any,
+        auth as any,
+        errand as any,
+        systemConfig as any,
+        finance as any,
+      ),
+      prisma, auth, errand, systemConfig, finance,
     };
   }
 
@@ -108,7 +143,9 @@ describe('RiderAppService', () => {
       refreshToken: 'refresh',
       allowed: true,
     });
-    expect(auth.phoneLogin).toHaveBeenCalledWith(dto, '127.0.0.1', 'rider-app');
+    expect(auth.phoneLogin).toHaveBeenCalledWith(dto, '127.0.0.1', 'rider-app', {
+      preferApprovedOfficialRider: true,
+    });
   });
 
   it('delegates SMS code sending to the existing throttled auth service', async () => {
@@ -276,5 +313,116 @@ describe('RiderAppService', () => {
     await expect(service.reportException('user-1', 'order-1', {
       type: 'address_issue', description: '地址与订单信息不一致',
     })).rejects.toThrow('当前骑手');
+  });
+
+  it('exposes a rider income overview backed by wallet and completed-order earnings', async () => {
+    const { service, prisma } = createService();
+    prisma.errandOrder.findMany.mockResolvedValue([
+      { id: 'e1', orderNo: 'E1', title: '跑腿', price: 10, tip: 2, completeTime: new Date() },
+    ]);
+    prisma.order.findMany.mockResolvedValue([]);
+    prisma.riderSettlementItem.findMany.mockResolvedValue([]);
+    prisma.wallet.findUnique.mockResolvedValue({ userId: 'user-1', balance: 50, freeze: 5 });
+    prisma.riderSettlement.aggregate.mockResolvedValue({ _sum: { payableAmount: 30 } });
+    prisma.withdraw.aggregate.mockResolvedValue({ _sum: { amount: 8 } });
+
+    await expect(service.getRiderIncomeOverview('user-1')).resolves.toMatchObject({
+      balance: 50,
+      freeze: 5,
+      today_income: 12,
+      month_income: 12,
+      pending_settlement: 42, // 12 未结算 + 30 已结算未打款
+      withdrawing: 8,
+    });
+  });
+
+  it('lists only the rider own settlements with appeal status', async () => {
+    const { service, prisma } = createService();
+    prisma.riderSettlement.findMany.mockResolvedValue([
+      {
+        id: 's1', settlementNo: 'ST1', periodStart: new Date(), periodEnd: new Date(),
+        orderCount: 3, deliveryFeeTotal: 60, rewardAmount: 5, penaltyAmount: 0,
+        payableAmount: 65, paidAmount: 0, status: 'PENDING',
+      },
+    ]);
+    prisma.riderSettlement.count.mockResolvedValue(1);
+    prisma.orderAppeal.findMany.mockResolvedValue([{ orderId: 's1', status: 'pending' }]);
+
+    await expect(service.getRiderSettlements('user-1', { page: 1, pageSize: 20 })).resolves.toMatchObject({
+      list: [{ id: 's1', deliveryFeeTotal: 60, payableAmount: 65, appealStatus: 'pending' }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+    expect(prisma.riderSettlement.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { riderId: 'user-1' },
+    }));
+  });
+
+  it('returns settlement detail with order rows and appeal reply', async () => {
+    const { service, prisma } = createService();
+    prisma.riderSettlement.findFirst.mockResolvedValue({
+      id: 's1', settlementNo: 'ST1', periodStart: new Date(), periodEnd: new Date(),
+      orderCount: 1, deliveryFeeTotal: 8, rewardAmount: 2, penaltyAmount: 0,
+      payableAmount: 10, paidAmount: 0, status: 'PENDING',
+    });
+    prisma.riderSettlementItem.findMany.mockResolvedValue([
+      {
+        id: 'i1', orderType: 'errand', orderId: 'e1',
+        deliveryFeeAmount: 8, tipAmount: 2, rewardAmount: 0, penaltyAmount: 0,
+        payableAmount: 10, status: 'included', reversalAmount: 0,
+      },
+    ]);
+    prisma.errandOrder.findMany.mockResolvedValue([{ id: 'e1', orderNo: 'E-100' }]);
+    prisma.orderAppeal.findFirst.mockResolvedValue({
+      status: 'processing', description: '金额不对', latestReply: '已核实',
+    });
+
+    const result = await service.getRiderSettlementDetail('user-1', 's1');
+    expect(result).toMatchObject({
+      id: 's1',
+      appealStatus: 'processing',
+      appealReason: '金额不对',
+      appealReply: '已核实',
+      itemNetAmount: 10,
+      orders: [{ orderNo: 'E-100', originalAmount: 10, netAmount: 10 }],
+    });
+  });
+
+  it('creates a settlement appeal once and blocks duplicate pending appeals', async () => {
+    const { service, prisma } = createService();
+    prisma.riderSettlement.findFirst.mockResolvedValue({ id: 's1', settlementNo: 'ST1', regionId: 'region-1' });
+
+    await expect(service.createRiderSettlementAppeal('user-1', 's1', {
+      reason: '结算金额与我核算不一致，请重新核对', images: [],
+    })).resolves.toMatchObject({ status: 'pending' });
+    expect(prisma.orderAppeal.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderType: 'rider_settlement', orderId: 's1',
+        description: '结算金额与我核算不一致，请重新核对',
+      }),
+    });
+
+    prisma.orderAppeal.findUnique.mockResolvedValue({ id: 'appeal-1', status: 'pending' });
+    await expect(service.createRiderSettlementAppeal('user-1', 's1', {
+      reason: '再次提交申诉说明',
+    })).rejects.toThrow('已提交申诉');
+  });
+
+  it('rejects settlement appeals with too-short reasons', async () => {
+    const { service } = createService();
+
+    await expect(service.createRiderSettlementAppeal('user-1', 's1', { reason: '短' }))
+      .rejects.toThrow('5-500');
+  });
+
+  it('delegates rider wallet transactions and withdrawals to the finance service', async () => {
+    const { service, finance } = createService();
+
+    await service.getRiderIncomeTransactions('user-1', { page: 1 });
+    expect(finance.transactions).toHaveBeenCalledWith('user-1', { page: 1 });
+
+    await service.createRiderWithdrawal('user-1', { amount: 10, channel: 'WX_PAY', account: 'wx-1' });
+    expect(finance.withdraw).toHaveBeenCalledWith('user-1', { amount: 10, channel: 'WX_PAY', account: 'wx-1' });
   });
 });

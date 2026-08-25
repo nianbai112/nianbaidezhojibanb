@@ -680,6 +680,7 @@ import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import { Check, Delete, Top, Bottom, HomeFilled, ChatDotRound, User, Position, Menu } from '@element-plus/icons-vue'
 import { fetchRegions, fetchRegionDetail, createRegion, fetchRegionTabbar, saveRegionTabbar, fetchRegionShareSetting, saveRegionShareSetting } from '@/api/admin'
+import { normalizeHomeNavDisplayConfig } from '@/views/miniapp/editor/homeKingkongLinks.mjs'
 
 // 导入子组件
 import RegionHeroPanel from './components/RegionHeroPanel.vue'
@@ -1194,10 +1195,13 @@ function fillForm(row: any) {
   form.profilePageLayout = row.profilePageLayout || 'default'
 
   // JSON 字段
-  if (row.homeNavLayoutConfig) {
-    Object.assign(navConfig, row.homeNavLayoutConfig)
-    if (!navConfig.title) navConfig.title = { show: true, text: '灵萌圈友', color: '#222222', fontSize: 15, fontWeight: '600' }
-  }
+  const homeNavDisplayConfig =
+    row.homeNavDisplayConfig ||
+    row.home_nav_display_config ||
+    row.settings?.homeNavDisplayConfig ||
+    row.settings?.home_nav_display_config ||
+    (!Array.isArray(row.homeNavLayoutConfig) ? row.homeNavLayoutConfig : null)
+  Object.assign(navConfig, normalizeHomeNavDisplayConfig(homeNavDisplayConfig, navConfig))
   if (row.homeLeaderboard) {
     Object.assign(leaderboard, row.homeLeaderboard)
     if (!leaderboard.items) leaderboard.items = []
@@ -1350,7 +1354,7 @@ async function saveRegion() {
       homeNavLayout: form.homeNavLayout,
       messagePageLayout: form.messagePageLayout,
       profilePageLayout: form.profilePageLayout,
-      homeNavLayoutConfig: cleanJson({ ...navConfig, title: { ...navConfig.title } }),
+      homeNavDisplayConfig: cleanJson({ ...navConfig, title: { ...navConfig.title } }),
       homeLeaderboard: cleanJson(leaderboard),
       messageIcons: cleanJson(sanitizeMessageCategories(msgIcons)),
       messageNavigation: cleanJson({ cards: msgNavCards.value }),

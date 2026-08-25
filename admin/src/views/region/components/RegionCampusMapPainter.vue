@@ -178,6 +178,8 @@
           :calibration-points="calibrationPoints"
           :format-lng-lat="formatLngLat"
           @clear-selection="selectedId = ''"
+          @before-edit="recordMapHistory"
+          @pick-location="openCalibrationPicker"
           @sync-semantic="syncSelectedSemantic"
           @sync-availability="syncSelectedAvailability"
           @assign-project="handleAssignProject"
@@ -267,11 +269,18 @@
         </template>
       </el-form>
     </el-drawer>
+
+    <AmapLocationPicker
+      v-model:visible="calibrationPickerVisible"
+      :default-center="amapDefaults.center"
+      :default-city="amapDefaults.city"
+      @confirm="handleCalibrationLocationPicked"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Aim,
@@ -296,6 +305,7 @@ import {
 } from '@element-plus/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
+import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
 import CampusMapActionBar from './campus-map/CampusMapActionBar.vue'
 import CampusMapAssistantDrawer from './campus-map/CampusMapAssistantDrawer.vue'
 import CampusMapCollectionDrawer from './campus-map/CampusMapCollectionDrawer.vue'
@@ -571,6 +581,7 @@ let importPollingTimer: ReturnType<typeof setTimeout> | null = null
 let amapSearchSeq = 0
 let amapOverlays: any[] = []
 let activeAmapEditor: any = null
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const form = reactive({
   enabled: true,
@@ -908,6 +919,9 @@ onBeforeUnmount(() => {
   amapInitSeq += 1
   if (amapSearchTimer) clearTimeout(amapSearchTimer)
   if (importPollingTimer) clearTimeout(importPollingTimer)
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  window.removeEventListener('keydown', handleMapKeydown)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   clearAmapOverlays()
   if (amapMap) {
     amapMap.destroy?.()
@@ -915,6 +929,88 @@ onBeforeUnmount(() => {
     amapReady.value = false
   }
 })
+
+onMounted(() => {
+  window.addEventListener('keydown', handleMapKeydown)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+/* ---------- 自动保存草稿（30s 防抖） ---------- */
+watch(hasUnsavedChanges, (dirty) => {
+  if (!dirty) return
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => {
+    if (hasUnsavedChanges.value && currentRegionId()) {
+      saveDraft({ silent: true })
+    }
+  }, 30000)
+})
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+/* ---------- 键盘快捷键：Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y / Esc / Enter / Backspace ---------- */
+function handleMapKeydown(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null
+  const tag = target?.tagName?.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return
+  const key = event.key.toLowerCase()
+
+  if ((event.ctrlKey || event.metaKey) && key === 'z') {
+    event.preventDefault()
+    if (event.shiftKey) redoMapEdit()
+    else undoMapEdit()
+    return
+  }
+  if ((event.ctrlKey || event.metaKey) && key === 'y') {
+    event.preventDefault()
+    redoMapEdit()
+    return
+  }
+  if (key === 'escape') {
+    if (draftAreaPoints.value.length) clearDraftArea()
+    if (draftRoutePoints.value.length) clearDraftRoute()
+    selectedId.value = ''
+    return
+  }
+  if (key === 'enter') {
+    if (toolMode.value === 'area' && draftAreaPoints.value.length) finishArea()
+    else if (toolMode.value === 'route' && draftRoutePoints.value.length) finishRoute()
+    return
+  }
+  if (key === 'backspace') {
+    if (toolMode.value === 'area' && draftAreaPoints.value.length) {
+      event.preventDefault()
+      draftAreaPoints.value.pop()
+      if (editorMode.value === 'amap') refreshAmapOverlays()
+    } else if (toolMode.value === 'route' && draftRoutePoints.value.length) {
+      event.preventDefault()
+      draftRoutePoints.value.pop()
+      if (editorMode.value === 'amap') refreshAmapOverlays()
+    }
+  }
+}
+
+/* ---------- 校准点：从高德地图拾取坐标 ---------- */
+const calibrationPickerVisible = ref(false)
+
+function openCalibrationPicker() {
+  if (!selectedEditableItem.value || selectedEditableItem.value.kind !== 'calibration') return
+  calibrationPickerVisible.value = true
+}
+
+function handleCalibrationLocationPicked(location: any) {
+  const selected = selectedEditableItem.value
+  if (!selected || selected.kind !== 'calibration') return
+  recordMapHistory()
+  selected.item.longitude = roundLngLat(Number(location.longitude))
+  selected.item.latitude = roundLngLat(Number(location.latitude))
+  if (editorMode.value === 'amap') refreshAmapOverlays()
+  ElMessage.success('校准点坐标已更新')
+}
 
 function currentRegionId() {
   return props.regionId ? String(props.regionId) : ''
@@ -1497,14 +1593,12 @@ function handleAmapClick(event: any) {
     return
   }
   if (toolMode.value === 'area') {
-    recordMapHistory()
     draftAreaPoints.value.push(toAmapPoint(point.lng, point.lat))
     sideTab.value = 'area'
     refreshAmapOverlays()
     return
   }
   if (toolMode.value === 'route') {
-    recordMapHistory()
     draftRoutePoints.value.push(toAmapPoint(point.lng, point.lat))
     sideTab.value = 'route'
     refreshAmapOverlays()
@@ -1823,13 +1917,11 @@ function handleCanvasPointClick(point: RatioPoint) {
     return
   }
   if (toolMode.value === 'area') {
-    recordMapHistory()
     draftAreaPoints.value.push(point)
     sideTab.value = 'area'
     return
   }
   if (toolMode.value === 'route') {
-    recordMapHistory()
     draftRoutePoints.value.push(point)
     sideTab.value = 'route'
     return

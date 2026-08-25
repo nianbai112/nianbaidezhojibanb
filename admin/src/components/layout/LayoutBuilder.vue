@@ -38,7 +38,6 @@
         </el-dropdown>
         <el-button :icon="RefreshLeft" circle :disabled="!past.length" title="撤销 (Ctrl+Z)" @click="undo" />
         <el-button :icon="RefreshRight" circle :disabled="!future.length" title="重做 (Ctrl+Shift+Z)" @click="redo" />
-        <el-button :icon="MagicStick" type="warning" plain @click="aiVisible = true">AI 生成</el-button>
         <el-button :icon="View" @click="previewVisible = true">预览</el-button>
         <el-button :icon="Document" :loading="saving" @click="saveDraft">保存草稿{{ dirtyCount ? ` (${dirtyCount})` : '' }}</el-button>
         <el-button type="primary" :icon="Promotion" :disabled="!layout.components.length" @click="publishLayout">发布</el-button>
@@ -131,8 +130,10 @@
             <div class="wb-templates-title">从模板开始，或从左侧拖入组件</div>
             <div class="wb-templates-grid">
               <button v-for="t in templates" :key="t.name" class="tpl-card" @click="applyTemplate(t)">
-                <span class="tpl-emoji">{{ t.emoji }}</span>
-                <span class="tpl-name">{{ t.name }}</span>
+                <div class="tpl-card-top">
+                  <span class="tpl-emoji">{{ t.emoji }}</span>
+                  <span class="tpl-name">{{ t.name }}</span>
+                </div>
                 <span class="tpl-desc">{{ t.desc }}</span>
               </button>
             </div>
@@ -248,37 +249,6 @@
       </div>
     </el-dialog>
 
-    <!-- ===== AI 生成布局 ===== -->
-    <el-drawer v-model="aiVisible" title="AI 生成页面布局" size="440px">
-      <div class="ai-panel">
-        <p class="ai-tip">用自然语言描述想要的页面，AI 生成布局后可人工微调。应用会<b>覆盖当前画布</b>，重要页面请先从「更多 → 导出布局 JSON」备份。</p>
-        <el-input
-          v-model="aiPrompt"
-          type="textarea"
-          :rows="4"
-          maxlength="500"
-          show-word-limit
-          placeholder="例如：校园首页 + 轮播 + 4 列金刚区 + 热门话题 + 笔记瀑布流"
-        />
-        <el-button type="warning" style="width: 100%; margin-top: 12px" :loading="aiLoading" @click="aiGenerate">
-          {{ aiLoading ? 'AI 生成中…' : '生成布局' }}
-        </el-button>
-
-        <template v-if="aiResult.length">
-          <div class="ai-result-title">生成结果（{{ aiResult.length }} 个组件）</div>
-          <div class="ai-result-list">
-            <div v-for="(c, i) in aiResult" :key="i" class="ai-result-item">
-              <span class="ai-result-order">{{ i + 1 }}</span>
-              <b>{{ nameOf(c.type) }}</b>
-              <span class="ai-result-type">{{ c.type }}</span>
-            </div>
-          </div>
-          <el-button type="primary" style="width: 100%; margin-top: 12px" @click="aiApply">应用到画布</el-button>
-          <el-button text style="width: 100%; margin-top: 4px" @click="aiResult = []">舍弃</el-button>
-        </template>
-      </div>
-    </el-drawer>
-
     <!-- ===== 导入 ===== -->
     <el-dialog v-model="importVisible" title="导入布局 JSON" width="520px">
       <el-input v-model="importText" type="textarea" :rows="10" placeholder='粘贴导出的布局 JSON（需包含 components 数组）' />
@@ -294,7 +264,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Top, Bottom, Delete, Plus, Minus, View, Document, Promotion, MoreFilled, MagicStick,
+  Top, Bottom, Delete, Plus, Minus, View, Document, Promotion, MoreFilled,
   Search, Grid, Pointer, Box, RefreshLeft, RefreshRight, WarningFilled,
 } from '@element-plus/icons-vue'
 import * as Icons from '@element-plus/icons-vue'
@@ -824,43 +794,6 @@ const copyPath = async () => {
   }
 }
 
-// ============ AI 生成布局 ============
-const aiVisible = ref(false)
-const aiPrompt = ref('')
-const aiLoading = ref(false)
-const aiResult = ref<any[]>([])
-
-const aiGenerate = async () => {
-  if (!aiPrompt.value.trim()) {
-    ElMessage.warning('先描述一下想要的页面')
-    return
-  }
-  aiLoading.value = true
-  aiResult.value = []
-  try {
-    const res: any = await request.post(`/admin/layout/ai-generate/${currentPage.value}/${regionIdOf()}`, {
-      prompt: aiPrompt.value.trim(),
-    })
-    aiResult.value = res.data?.components || []
-    if (!aiResult.value.length) ElMessage.warning('AI 没有产出可用组件，换个描述试试')
-  } catch (e: any) {
-    ElMessage.error(e?.message || 'AI 生成失败，请检查 AI 中台配置')
-  } finally {
-    aiLoading.value = false
-  }
-}
-
-const aiApply = async () => {
-  try {
-    await ElMessageBox.confirm('应用将覆盖当前画布全部组件，确定吗？', '应用 AI 布局', { type: 'warning' })
-    layout.components = aiResult.value.map((c: any, i: number) => ({ ...c, order: i, style: c.style || {} }))
-    selectedComponent.value = null
-    aiResult.value = []
-    aiVisible.value = false
-    ElMessage.success('已应用，记得保存草稿或发布')
-  } catch { /* 取消 */ }
-}
-
 // ============ 数据交互 ============
 const regionIdOf = () => selectedRegion.value || 'global'
 
@@ -1306,6 +1239,11 @@ $hover-fill: rgba(255, 255, 255, 0.07);
   flex-direction: column;
   align-items: center;
   position: relative;
+  /* 点阵背景：让运营者感知到这是设计画布，而非普通表单 */
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: 0 0;
+  border-radius: 12px;
 }
 
 /* 设备外壳：深色 bezel + 听筒 + 大屏投影 */
@@ -1431,7 +1369,7 @@ $hover-fill: rgba(255, 255, 255, 0.07);
 
 /* 空态模板：落在浅色手机屏内，用浅色友好卡片 */
 .wb-templates {
-  padding: 60px 24px;
+  padding: 40px 16px;
   text-align: center;
 }
 .wb-templates-title {
@@ -1441,33 +1379,40 @@ $hover-fill: rgba(255, 255, 255, 0.07);
 }
 .wb-templates-grid {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 .tpl-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
-  padding: 18px 14px;
+  padding: 14px 16px;
   border: 1px solid #e4e9e0;
   border-radius: 12px;
   background: #fff;
-  box-shadow: 0 2px 10px rgba(38, 58, 32, 0.05);
+  box-shadow: 0 2px 8px rgba(38, 58, 32, 0.04);
   cursor: pointer;
+  text-align: left;
+  width: 100%;
   transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
 }
 .tpl-card:hover {
   border-color: #34d17b;
   transform: translateY(-2px);
-  box-shadow: 0 10px 24px rgba(52, 209, 123, 0.16);
+  box-shadow: 0 8px 20px rgba(52, 209, 123, 0.14);
 }
-.tpl-emoji { font-size: 24px; }
-.tpl-name { font-size: 14px; font-weight: 700; color: #1d271f; }
-.tpl-desc { font-size: 12px; color: #8a9384; }
+.tpl-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tpl-emoji { font-size: 20px; }
+.tpl-name { font-size: 13px; font-weight: 700; color: #1d271f; }
+.tpl-desc { font-size: 11.5px; color: #8a9384; margin-top: 2px; line-height: 1.4; }
 
 /* ===== 右侧属性悬浮岛 ===== */
 .wb-props {
-  width: 280px;
+  width: 296px;
   flex: 0 0 auto;
   overflow-y: auto;
   background: $panel-bg;

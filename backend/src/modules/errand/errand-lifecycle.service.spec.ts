@@ -19,8 +19,14 @@ describe('ErrandLifecycleService', () => {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'risk-1' }),
     },
-    regionRider: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    regionRider: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUnique: jest.fn().mockResolvedValue({ realName: '测试骑手' }),
+    },
     $transaction: jest.fn((callback: any) => callback(tx)),
+  };
+  const notifyService: any = {
+    createAndDispatch: jest.fn().mockResolvedValue({ id: 'notification-1' }),
   };
 
   let service: ErrandLifecycleService;
@@ -32,6 +38,7 @@ describe('ErrandLifecycleService', () => {
     prisma.orderAppeal.findFirst.mockResolvedValue(null);
     prisma.deliveryRiskEvent.findFirst.mockResolvedValue(null);
     tx.errandOrder.updateMany.mockResolvedValue({ count: 1 });
+    notifyService.createAndDispatch.mockResolvedValue({ id: 'notification-1' });
     service = new ErrandLifecycleService(prisma);
   });
 
@@ -133,5 +140,86 @@ describe('ErrandLifecycleService', () => {
       orderId: 'order-1', orderType: 'errand', riderId: 'rider-1',
       eventType: 'delivery_evidence_rejected', eventLevel: 'error',
     }) });
+  });
+
+  it('dispatches the configured picked template event after pickup is committed', async () => {
+    service = new ErrandLifecycleService(prisma, undefined, notifyService);
+    prisma.errandOrder.findUnique.mockResolvedValue({
+      id: 'order-1',
+      orderNo: 'ERRAND-001',
+      userId: 'user-1',
+      riderId: 'rider-1',
+      regionId: 'region-1',
+      status: 'accepted',
+      refundStatus: 'none',
+      deliveryDisplayMode: 'status_nodes',
+      pickupAddress: '一号取件点',
+      deliverAddress: '二号宿舍',
+    });
+    tx.errandOrder.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-1',
+      orderNo: 'ERRAND-001',
+      userId: 'user-1',
+      riderId: 'rider-1',
+      regionId: 'region-1',
+      status: 'in_progress',
+      pickupTime: new Date('2026-08-25T00:00:00.000Z'),
+      pickupAddress: '一号取件点',
+      deliverAddress: '二号宿舍',
+    });
+
+    await service.markInProgress('order-1', 'rider-1');
+
+    expect(notifyService.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      scene: 'errand_picked',
+      data: expect.objectContaining({
+        orderNo: 'ERRAND-001',
+        riderName: '测试骑手',
+        pickupAddress: '一号取件点',
+      }),
+      channelMask: expect.objectContaining({ officialAccount: true }),
+    }));
+  });
+
+  it('dispatches the configured completed template event after receipt is committed', async () => {
+    service = new ErrandLifecycleService(prisma, undefined, notifyService);
+    prisma.errandOrder.findUnique.mockResolvedValue({
+      id: 'order-1',
+      orderNo: 'ERRAND-001',
+      userId: 'user-1',
+      riderId: 'rider-1',
+      regionId: 'region-1',
+      status: 'arrived',
+      refundStatus: 'none',
+      payAmount: 8,
+      deliveryDisplayMode: 'status_nodes',
+      pickupAddress: '一号取件点',
+      deliverAddress: '二号宿舍',
+    });
+    tx.errandOrder.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-1',
+      orderNo: 'ERRAND-001',
+      userId: 'user-1',
+      riderId: 'rider-1',
+      regionId: 'region-1',
+      status: 'completed',
+      completeTime: new Date('2026-08-25T00:10:00.000Z'),
+      pickupAddress: '一号取件点',
+      deliverAddress: '二号宿舍',
+    });
+
+    await service.confirmReceipt('order-1', 'user-1', 'user');
+
+    expect(notifyService.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      scene: 'errand_delivered',
+      data: expect.objectContaining({
+        orderNo: 'ERRAND-001',
+        deliveryAddress: '二号宿舍',
+        finishedAt: expect.any(String),
+      }),
+      channelMask: expect.objectContaining({ officialAccount: true }),
+    }));
   });
 });

@@ -9,11 +9,10 @@ import { PaymentModule } from '../payment/payment.module';
 import { FinanceAdminModule } from '../finance-admin/finance-admin.module';
 import { MembershipModule } from '../membership/membership.module';
 import { WebsocketModule } from '../websocket/websocket.module';
-import { CommentModule } from '../comment/comment.module';
 import { NotifyModule } from '../notify/notify.module';
 
 @Module({
-  imports: [PaymentModule, FinanceAdminModule, MembershipModule, WebsocketModule, CommentModule, NotifyModule],
+  imports: [PaymentModule, FinanceAdminModule, MembershipModule, WebsocketModule, NotifyModule],
   controllers: [PublicConfigCompatController, AdminController, SupplementController, NewUiCompatController, ApiCompatController],
   providers: [AdminService],
   exports: [AdminService],

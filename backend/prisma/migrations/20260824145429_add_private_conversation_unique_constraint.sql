@@ -1,0 +1,12 @@
+-- 已停用：禁止执行或恢复原先的“先删除重复会话，再创建表达式索引”方案。
+-- 原方案会触发 Conversation -> Message/ConversationMember 的级联删除，造成历史聊天丢失，
+-- 并且使用了不兼容当前 MySQL 发布链的 PostgreSQL 表达式索引语法。
+--
+-- 安全替代方案：
+-- 1. 运行 npm run audit:official-assistant 做只读审计；
+-- 2. 应用 additive-migrations/*/202608240002_official_support_single_ledger.sql；
+-- 3. 运行 npm run backfill:official-assistant（默认 dry-run）；
+-- 4. 人工确认歧义记录后再使用 --apply；
+-- 5. 迁移消息、成员和未读游标并核对数量后，才能处理普通私聊的重复会话。
+--
+-- 本文件故意保持为无操作迁移，防止被误执行时删除任何数据。

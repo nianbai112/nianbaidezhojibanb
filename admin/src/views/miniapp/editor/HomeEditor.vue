@@ -26,6 +26,7 @@
         <el-tooltip content="版本历史" placement="bottom">
           <el-button class="rte-history" :icon="Clock" circle @click="versionPanelVisible = true" />
         </el-tooltip>
+        <el-button :icon="MagicStick" plain @click="genDefaultLayout">生成默认布局</el-button>
         <el-button class="rte-publish" type="primary" :icon="Promotion" :disabled="!dirty.size" :loading="saving" @click="saveAll">
           保存并发布
         </el-button>
@@ -136,14 +137,6 @@
                 >{{ b.config.title }}</span>
                 <span v-if="b.config.showMore && b.config.align !== 'center'" class="d-mtitle-more">{{ b.config.moreText || '更多' }} ›</span>
               </div>
-            </div>
-          </section>
-
-          <!-- 自定义版块空态入口：没有版块时也能从这里添加第一个 -->
-          <section v-else class="blk" :class="{ sel: editing === 'decor' }" @click="startEdit('decor')">
-            <span class="blk-tag decor">自定义版块</span>
-            <div class="rte-slot-wrap">
-              <EmptySlot icon="megaphone" text="还没有自定义版块（活动页/轮播/按钮等，显示在首页最顶部）" action-text="+ 添加版块" @action="startEdit('decor')" />
             </div>
           </section>
 
@@ -309,15 +302,42 @@
                   <div class="pp-link">
                     <el-select v-model="m.linkType" size="small" style="width: 96px" @change="markDirty('kingkong')">
                       <el-option label="内部页" value="internal" />
-                      <el-option label="网页" value="web" />
-                      <el-option label="小程序" value="miniapp" />
+                      <el-option label="网页" value="webview" />
+                      <el-option label="其他小程序" value="miniapp" />
+                      <el-option label="半屏小程序" value="miniapp_half" />
+                      <el-option label="图片预览" value="image" />
+                      <el-option label="拨打电话" value="tel" />
+                      <el-option label="无跳转" value="none" />
                     </el-select>
-                    <el-input v-model="m.path" placeholder="路径 / 链接" size="small" @input="markDirty('kingkong')" />
+                    <el-input
+                      v-if="m.linkType === 'miniapp' || m.linkType === 'miniapp_half'"
+                      v-model="m.appId"
+                      placeholder="小程序 AppID（wx...）"
+                      size="small"
+                      @input="markDirty('kingkong')"
+                    />
                   </div>
+                  <ImageUploadBox
+                    v-if="m.linkType === 'image'"
+                    v-model="m.path"
+                    scene="home-kingkong-preview"
+                    shape="wide"
+                    placeholder="上传点击入口后要预览的图片"
+                    tip="支持点击或拖拽上传，最大 5MB"
+                    :max-size="5"
+                    @update:model-value="markDirty('kingkong')"
+                  />
+                  <el-input
+                    v-else-if="m.linkType !== 'none'"
+                    v-model="m.path"
+                    :placeholder="m.linkType === 'internal' ? '页面路径，如 campusMap/index/index' : m.linkType === 'webview' ? 'https://...' : m.linkType === 'tel' ? '电话号码' : '目标小程序页面路径'"
+                    size="small"
+                    @input="markDirty('kingkong')"
+                  />
                   <el-switch v-model="m.enabled" size="small" inline-prompt active-text="启用" inactive-text="停用" @change="markDirty('kingkong')" />
                 </div>
               </div>
-              <el-button size="small" style="width: 100%" @click="kingkong.push({ name: '', icon: '', linkType: 'internal', path: '', enabled: true }); markDirty('kingkong')">+ 添加入口</el-button>
+              <el-button size="small" style="width: 100%" @click="kingkong.push({ name: '', icon: '', linkType: 'internal', appId: '', path: '', query: '', enabled: true }); markDirty('kingkong')">+ 添加入口</el-button>
             </template>
 
             <template v-else-if="editing === 'carousel'">
@@ -552,7 +572,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Bottom, Clock, Collection, Delete, Hide, Iphone, Promotion, Refresh, RefreshLeft, RefreshRight, Top, View } from '@element-plus/icons-vue'
+import { Bottom, Clock, Collection, Delete, Hide, Iphone, MagicStick, Promotion, Refresh, RefreshLeft, RefreshRight, Top, View } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import DecorVersionPanel from '@/components/miniapp/DecorVersionPanel.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
@@ -566,6 +586,8 @@ import MenuFallbackIcon from '@/views/miniapp/editor/MenuFallbackIcon.vue'
 import RealHeroBlock from '@/views/miniapp/editor/generated/RealHeroBlock.vue'
 import RealKingkongBlock from '@/views/miniapp/editor/generated/RealKingkongBlock.vue'
 import { pageSchemas } from '@/views/layout/layoutSchemas'
+import { regionPresetToLayout } from '@/views/layout/regionPresetToLayout'
+import { buildKingkongPayload, normalizeKingkongCollection, normalizeKingkongEntry, validateKingkongEntries } from '@/views/miniapp/editor/homeKingkongLinks.mjs'
 import type { WidgetDef, WidgetField } from '@/views/layout/layoutSchemas'
 
 // ============ 状态 ============
@@ -906,7 +928,7 @@ const OL_ICONS = {
 }
 const outlineItems = computed(() => {
   const items: { key: string; name: string; icon: string; on?: boolean; toggle?: () => void }[] = []
-  if (decorBlocks.value.length) items.push({ key: 'decor', name: '自定义版块', icon: OL_ICONS.decor })
+  items.push({ key: 'decor', name: '自定义版块', icon: OL_ICONS.decor })
   items.push({
     key: 'hero', name: 'Hero 区', icon: OL_ICONS.hero, on: hero.value.enabled,
     toggle: () => { hero.value.enabled = !hero.value.enabled; markDirty('hero') },
@@ -945,6 +967,17 @@ const decorName = (type: string) => homeWidgets.find((w) => w.type === type)?.na
 const decorDef = (type: string): WidgetDef | undefined => homeWidgets.find((w) => w.type === type)
 const decorFields = (type: string): WidgetField[] => decorDef(type)?.fields || []
 const decorFirstImage = (b: any) => (b.config.images || [])[0]?.image || ''
+
+/** 从当前校区装修(carousel/金刚区/tabs/热榜)生成默认布局,填充到自定义版块,发布后写入代码包 */
+const genDefaultLayout = () => {
+  if (!region.value) { ElMessage.warning('校区数据未加载，请稍后再试'); return }
+  const layout = regionPresetToLayout(region.value, 'home')
+  if (!layout.components.length) { ElMessage.info('当前装修暂无内容可生成'); return }
+  decorBlocks.value = layout.components
+  decorSelected.value = -1
+  markDirty('decor')
+  ElMessage.success(`已生成 ${layout.components.length} 个模块，确认后点「保存并发布」即可同步到代码包`)
+}
 
 const addDecor = (type: string) => {
   const def = decorDef(type)
@@ -1111,8 +1144,8 @@ async function loadAll() {
       .map((i: any) => ({ id: i.id, title: i.title || '', subtitle: i.subtitle || '', image: i.image || '', linkType: i.linkType || 'internal', path: i.path || '', enabled: i.enabled !== false, sortOrder: i.sortOrder ?? 0 }))
 
     const navCfg = region.value?.homeNavLayoutConfig || region.value?.home_nav_layout_config || []
-    kingkong.value = (Array.isArray(navCfg) ? navCfg : [])
-      .map((i: any) => ({ id: i.id, name: i.name || '', subtitle: i.subtitle || '', icon: i.icon || i.image || '', linkType: i.linkType || 'internal', path: i.path || i.page || '', enabled: i.enabled !== false, sortOrder: i.sortOrder ?? 0 }))
+    kingkong.value = normalizeKingkongCollection(navCfg)
+      .map((i: any) => normalizeKingkongEntry(i))
       .sort((a: any, b: any) => a.sortOrder - b.sortOrder)
 
     const tabs = region.value?.regionTabs || region.value?.region_tabs || []
@@ -1186,11 +1219,7 @@ const buildDecorSnapshot = () => {
   return {
     regionPayload: {
       carousel_images: carouselItems,
-      home_nav_layout_config: kingkong.value.map((m, i) => ({
-        id: m.id || `nav_${i}`, name: m.name, subtitle: m.subtitle || '', icon: m.icon,
-        linkType: m.linkType, path: m.path, page: m.path, appId: '', query: '',
-        enabled: m.enabled, sortOrder: i, type: 'page',
-      })),
+      home_nav_layout_config: buildKingkongPayload(kingkong.value),
       region_tabs: regionTabs.value.map((t, i) => ({ ...t, sortOrder: i })),
       show_carousel: switches.value.show_carousel,
       show_announcement: switches.value.show_announcement,
@@ -1220,6 +1249,13 @@ async function snapshotDecorVersion(note: string) {
 /** 统一保存逻辑：auto=true 为自动保存（失败只告警不打扰），false 为手动「保存并发布」 */
 async function doSave(auto: boolean) {
   if (!dirty.value.size || saving.value) return
+  if (dirty.value.has('kingkong')) {
+    const validationError = validateKingkongEntries(kingkong.value)
+    if (validationError) {
+      if (!auto) ElMessage.error(validationError)
+      return
+    }
+  }
   saving.value = true
   if (auto) autoSaving.value = true
   // 记录本次要落库的 dirty key，成功后只清掉这些（保存期间新增的修改保留，等待下一轮）
@@ -1241,11 +1277,7 @@ async function doSave(auto: boolean) {
       payload.carousel_images = items
     }
     if (savingKeys.has('kingkong')) {
-      payload.home_nav_layout_config = kingkong.value.map((m, i) => ({
-        id: m.id || `nav_${i}`, name: m.name, subtitle: m.subtitle || '', icon: m.icon,
-        linkType: m.linkType, path: m.path, page: m.path, appId: '', query: '',
-        enabled: m.enabled, sortOrder: i, type: 'page',
-      }))
+      payload.home_nav_layout_config = buildKingkongPayload(kingkong.value)
     }
     if (savingKeys.has('tabs')) {
       payload.region_tabs = regionTabs.value.map((t, i) => ({ ...t, sortOrder: i }))
@@ -1305,6 +1337,13 @@ async function doSave(auto: boolean) {
 }
 const saveAll = async () => {
   if (!dirty.value.size) return
+  if (dirty.value.has('kingkong')) {
+    const validationError = validateKingkongEntries(kingkong.value)
+    if (validationError) {
+      ElMessage.error(validationError)
+      return
+    }
+  }
   const names = [...dirty.value].map((k) => DIRTY_LABELS[k] || k).join('、')
   const regionName = region.value?.name || '当前校区'
   try {

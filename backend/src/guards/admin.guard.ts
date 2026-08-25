@@ -16,10 +16,6 @@ export class AdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    if (this.isVerifiedMiniappFileRequest(request)) {
-      return true;
-    }
-
     const { user } = request;
 
     if (!user?.sub || !user?.isAdmin) {
@@ -46,15 +42,6 @@ export class AdminGuard implements CanActivate {
     }
 
     return true;
-  }
-
-  private isVerifiedMiniappFileRequest(request: { method?: string; path?: string; url?: string }): boolean {
-    if (request.method?.toUpperCase() !== 'GET') return false;
-    const requestPath = String(request.path || request.url || '').split('?')[0]
-      .replace(/\/+/g, '/')
-      .replace(/\/$/, '');
-    return requestPath === '/admin/license-runtime/miniapp/file'
-      || requestPath === '/api/admin/license-runtime/miniapp/file';
   }
 
   /**
@@ -192,8 +179,6 @@ export class SuperAdminGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    if (this.isVerifiedMiniappFileRequest(request)) return true;
-
     const user = request?.user;
     if (!user?.sub || !user?.isAdmin) {
       throw new UnauthorizedException('需要管理员权限');
@@ -206,12 +191,4 @@ export class SuperAdminGuard implements CanActivate {
     return true;
   }
 
-  private isVerifiedMiniappFileRequest(request: { method?: string; path?: string; url?: string }): boolean {
-    if (request?.method?.toUpperCase() !== 'GET') return false;
-    const requestPath = String(request.path || request.url || '').split('?')[0]
-      .replace(/\/+/g, '/')
-      .replace(/\/$/, '');
-    return requestPath === '/admin/license-runtime/miniapp/file'
-      || requestPath === '/api/admin/license-runtime/miniapp/file';
-  }
 }

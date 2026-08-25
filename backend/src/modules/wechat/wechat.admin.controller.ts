@@ -36,6 +36,8 @@ export class WechatAdminController {
   @ApiOperation({ summary: '测试公众号 AccessToken' })
   async testOfficialToken() {
     try {
+      // 配置可能刚刚保存；先清理旧 token，确保测试的是当前 AppSecret。
+      await this.tokenService.clearOfficialTokenCache();
       const token = await this.tokenService.getOfficialAccessToken();
       return { success: true, tokenPreview: token.substring(0, 10) + '...' };
     } catch (err: any) {

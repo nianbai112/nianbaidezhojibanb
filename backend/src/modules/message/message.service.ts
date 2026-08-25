@@ -4,6 +4,14 @@ import { parseChatMessageContent } from '../../common/utils/chat-message.util';
 import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
 import { WsNativeGateway } from '../websocket/ws-native.gateway';
 import { RedisService } from '../../common/services/redis.service';
+import {
+  OFFICIAL_ASSISTANT_OPENID,
+  OFFICIAL_ASSISTANT_SYSTEM_ROLE,
+  isOfficialAssistantUser,
+  officialAssistantConversationScopeKey,
+  officialAssistantUserWhere,
+} from '../../common/utils/official-assistant.util';
+import { syncOfficialAssistantTicketMessage } from '../../common/utils/official-assistant-ticket.util';
 
 const OFFICIAL_ASSISTANT_NAME = '校园小助手';
 const OFFICIAL_ASSISTANT_AVATAR = '/static/logo.png';
@@ -19,7 +27,6 @@ export class MessageService {
     private readonly redis: RedisService,
   ) {}
 
-  private readonly officialOpenid = 'lingmeng_official_message_account';
   private readonly adminSearchMessageTypes = new Set(['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE', 'LOCATION', 'SYSTEM']);
 
   private dateText(value: any) {
@@ -111,6 +118,7 @@ export class MessageService {
       duration: parsed.duration,
       location: parsed.location || null,
       file: parsed.file || null,
+      note: parsed.note || null,
       order: parsed.order || null,
       extra: message.extra,
       isRecalled: !!message.isRecalled,
@@ -124,7 +132,7 @@ export class MessageService {
     return {
       type: 'private',
       AND: [
-        { members: { none: { user: { userType: 4 } } } },
+        { members: { none: { user: officialAssistantUserWhere() } } },
         ...(extra.AND || []),
       ],
       ...Object.fromEntries(Object.entries(extra).filter(([key]) => key !== 'AND')),
@@ -133,19 +141,21 @@ export class MessageService {
 
   private async getOfficialUser() {
     return this.prisma.user.upsert({
-      where: { openid: this.officialOpenid },
+      where: { openid: OFFICIAL_ASSISTANT_OPENID },
       create: {
-        openid: this.officialOpenid,
+        openid: OFFICIAL_ASSISTANT_OPENID,
         nickname: OFFICIAL_ASSISTANT_NAME,
         avatar: OFFICIAL_ASSISTANT_AVATAR,
         userType: 4,
+        systemRole: OFFICIAL_ASSISTANT_SYSTEM_ROLE,
       },
       update: {
         nickname: OFFICIAL_ASSISTANT_NAME,
         avatar: OFFICIAL_ASSISTANT_AVATAR,
         userType: 4,
+        systemRole: OFFICIAL_ASSISTANT_SYSTEM_ROLE,
       },
-      select: { id: true, nickname: true, avatar: true, userType: true },
+      select: { id: true, nickname: true, avatar: true, userType: true, openid: true, systemRole: true },
     });
   }
 
@@ -381,7 +391,7 @@ export class MessageService {
         conversation: {
           include: {
             members: {
-              include: { user: { select: { userType: true } } },
+              include: { user: { select: { openid: true, systemRole: true } } },
             },
           },
         },
@@ -390,7 +400,7 @@ export class MessageService {
     if (!message || message.conversation.type !== 'private') {
       throw new NotFoundException('私信消息不存在');
     }
-    if (message.conversation.members.some((member) => member.user?.userType === 4)) {
+    if (message.conversation.members.some((member) => isOfficialAssistantUser(member.user))) {
       throw new BadRequestException('该接口只处理用户与用户之间的私信');
     }
 
@@ -440,17 +450,54 @@ export class MessageService {
       ? await this.prisma.userProfile.findUnique({ where: { userId }, select: { regionId: true } })
       : null;
     const resolvedRegionId = regionId || profile?.regionId || null;
-    let conversation = await this.findPrivateConversation(userId, official.id);
+    // 消息列表允许尚未选校园的用户进入；实际发送路径会在调用前拒绝无校园咨询。
+    if (!resolvedRegionId) return { official, conversation: null };
+    const scopeKey = officialAssistantConversationScopeKey(resolvedRegionId, userId);
+    let conversation = await this.prisma.conversation.findUnique({
+      where: { scopeKey },
+      include: { members: true },
+    });
+    if (!conversation) {
+      conversation = await this.prisma.conversation.findFirst({
+        where: {
+          type: 'private',
+          regionId: resolvedRegionId,
+          OR: [{ scopeKey }, { scopeKey: null }],
+          AND: [
+            { members: { some: { userId } } },
+            { members: { some: { userId: official.id } } },
+          ],
+        },
+        include: { members: true },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
     if (conversation) {
-      if (!conversation.regionId && resolvedRegionId) {
-        conversation = await this.prisma.conversation.update({ where: { id: conversation.id }, data: { regionId: resolvedRegionId } });
+      if (!conversation.scopeKey) {
+        try {
+          conversation = await this.prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { scopeKey },
+            include: { members: true },
+          });
+        } catch (error: any) {
+          if (error?.code !== 'P2002') throw error;
+          conversation = await this.prisma.conversation.findUnique({
+            where: { scopeKey },
+            include: { members: true },
+          });
+          if (!conversation) throw error;
+        }
       }
       return { official, conversation };
     }
 
-    conversation = await this.prisma.conversation.create({
-      data: {
+    conversation = await this.prisma.conversation.upsert({
+      where: { scopeKey },
+      update: {},
+      create: {
         type: 'private',
+        scopeKey,
         regionId: resolvedRegionId,
         title: OFFICIAL_ASSISTANT_NAME,
         avatar: official.avatar || OFFICIAL_ASSISTANT_AVATAR,
@@ -462,6 +509,7 @@ export class MessageService {
           ],
         },
       },
+      include: { members: true },
     });
     return { official, conversation };
   }
@@ -493,7 +541,7 @@ export class MessageService {
       };
     }
     const other = conversation.members?.[0]?.user;
-    const isOfficial = other?.userType === 4;
+    const isOfficial = isOfficialAssistantUser(other);
     const showOnlineStatus = other?.showOnlineStatus !== undefined
       ? other.showOnlineStatus !== false
       : other?.settings?.showOnlineStatus !== false;
@@ -546,6 +594,8 @@ export class MessageService {
     return {
       id: message.id,
       message_id: message.id,
+      client_message_id: message.clientMessageId || '',
+      clientMessageId: message.clientMessageId || '',
       sender_id: message.senderId,
       receiver_id: message.receiverId,
       conversation_id: message.conversationId,
@@ -565,6 +615,195 @@ export class MessageService {
       isRead: !!isRead,
       read_count: message.readCount || 0,
       readCount: message.readCount || 0,
+    };
+  }
+
+  async sendPrivateMessage(userId: string, dto: any) {
+    const receiverId = String(dto?.receiver_id || dto?.receiverId || '').trim();
+    const content = String(dto?.message || dto?.content || '').trim();
+    const clientMessageId = String(dto?.client_message_id || dto?.clientMessageId || '').trim();
+    if (!receiverId) throw new BadRequestException('缺少接收方用户ID');
+    if (!content) throw new BadRequestException('消息不能为空');
+    if (receiverId === userId) throw new BadRequestException('不能给自己发送消息');
+    if (content.length > 5000) throw new BadRequestException('消息长度不能超过 5000 字符');
+
+    const receiver = await this.prisma.user.findUnique({
+      where: { id: receiverId },
+      select: {
+        id: true,
+        userType: true,
+        openid: true,
+        systemRole: true,
+        settings: { select: { messagePermission: true, allowMessage: true } },
+      },
+    });
+    if (!receiver) throw new NotFoundException('接收方不存在');
+
+    const permission: any = await this.privateMessagePermission.check(userId, receiver);
+    if (!permission.allowed) {
+      throw new BadRequestException({
+        message: permission.message || permission.reason || '对方当前不允许接收你的私信',
+        code: permission.code || permission.error_code,
+        error_code: permission.error_code || permission.code,
+        student_verification_status: permission.student_verification_status,
+      });
+    }
+
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { regionId: true },
+    });
+    const isOfficialReceiver = isOfficialAssistantUser(receiver);
+    const currentRegionId = String(profile?.regionId || '').trim();
+    if (isOfficialReceiver && !currentRegionId) {
+      throw new BadRequestException('请选择当前校园后再咨询');
+    }
+    const resolvedRegionId = isOfficialReceiver
+      ? currentRegionId
+      : String(dto?.region_id || dto?.regionId || profile?.regionId || '').trim();
+    let conversation: any;
+    if (isOfficialReceiver) {
+      const scoped = await this.findOrCreateOfficialConversation(userId, currentRegionId);
+      if (scoped.official.id !== receiverId) {
+        throw new BadRequestException('官方助手身份不一致，请刷新会话后重试');
+      }
+      conversation = scoped.conversation;
+    } else {
+      conversation = await this.prisma.conversation.findFirst({
+        where: {
+          type: 'private',
+          AND: [
+            { members: { some: { userId } } },
+            { members: { some: { userId: receiverId } } },
+          ],
+        },
+        include: { members: true },
+      });
+      if (!conversation) {
+        conversation = await this.prisma.conversation.create({
+          data: {
+            type: 'private',
+            regionId: resolvedRegionId || null,
+            members: { create: [{ userId }, { userId: receiverId }] },
+          },
+          include: { members: true },
+        });
+      }
+    }
+    if (conversation.isBlocked) throw new BadRequestException('该私信会话已被后台屏蔽，暂时不能继续发送消息');
+    const senderMember = conversation.members.find((member: any) => member.userId === userId);
+    if (senderMember?.isMuted) throw new BadRequestException('您已被禁言，无法发送消息');
+
+    if (clientMessageId) {
+      const existing = await this.prisma.message.findFirst({
+        where: { senderId: userId, clientMessageId },
+        include: { sender: { select: { id: true, nickname: true, avatar: true } } },
+      });
+      if (existing) {
+        const ticketReply = isOfficialReceiver
+          ? await (this.prisma as any).assistantTicketReply.findFirst({
+              where: { senderId: userId, clientMessageId },
+              select: { ticketId: true },
+            })
+          : null;
+        return {
+          success: true,
+          duplicated: true,
+          conversationId: existing.conversationId,
+          assistantTicketId: ticketReply?.ticketId || null,
+          message: this.toClientMessage(existing),
+        };
+      }
+    }
+
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx: any) => {
+        const message = await tx.message.create({
+          data: {
+            conversationId: conversation.id,
+            senderId: userId,
+            type: 'TEXT',
+            content,
+            clientMessageId: clientMessageId || undefined,
+            extra: dto?.extra && typeof dto.extra === 'object' ? dto.extra : undefined,
+          },
+          include: { sender: { select: { id: true, nickname: true, avatar: true } } },
+        });
+        const assistantTicketId = isOfficialReceiver
+          ? await syncOfficialAssistantTicketMessage(tx, {
+              userId,
+              regionId: currentRegionId,
+              conversationId: conversation.id,
+              messageId: message.id,
+              content,
+              clientMessageId,
+              ticketId: String(dto?.assistantTicketId || dto?.assistant_ticket_id || '').trim() || undefined,
+              startNew: dto?.startNewAssistantTicket === true || dto?.start_new_assistant_ticket === true,
+              category: dto?.assistantCategory || dto?.assistant_category,
+            })
+          : null;
+        await tx.conversation.update({
+          where: { id: conversation.id },
+          data: {
+            lastMessage: content.slice(0, 100),
+            lastMsgTime: message.createdAt,
+            ...(isOfficialReceiver ? { regionId: currentRegionId } : {}),
+          },
+        });
+        await tx.conversationMember.updateMany({
+          where: { conversationId: conversation.id, userId: receiverId },
+          data: { unreadCount: { increment: 1 } },
+        });
+        return { message, assistantTicketId };
+      });
+    } catch (error: any) {
+      if (clientMessageId && error?.code === 'P2002') {
+        const duplicate = await this.prisma.message.findFirst({
+          where: { senderId: userId, clientMessageId },
+          include: { sender: { select: { id: true, nickname: true, avatar: true } } },
+        });
+        if (duplicate) {
+          const ticketReply = isOfficialReceiver
+            ? await (this.prisma as any).assistantTicketReply.findFirst({
+                where: { senderId: userId, clientMessageId },
+                select: { ticketId: true },
+              }).catch(() => null)
+            : null;
+          return {
+            success: true,
+            duplicated: true,
+            conversationId: duplicate.conversationId,
+            assistantTicketId: ticketReply?.ticketId || null,
+            message: this.toClientMessage(duplicate),
+          };
+        }
+      }
+      throw error;
+    }
+    const { message: saved, assistantTicketId } = result;
+
+    const payload = {
+      event: 'message',
+      type: 'message',
+      conversationId: conversation.id,
+      messageId: saved.id,
+      clientMessageId,
+      senderId: userId,
+      receiverId,
+      message: content,
+      messageType: 'text',
+      sender_avatar: saved.sender?.avatar || '',
+      sender_nickname: saved.sender?.nickname || '',
+      timestamp: saved.createdAt.toISOString(),
+    };
+    this.wsNative.pushToUser(receiverId, payload);
+    await this.clearUnreadSummaryCache(receiverId);
+    return {
+      success: true,
+      conversationId: conversation.id,
+      assistantTicketId,
+      message: this.toClientMessage(saved),
     };
   }
 
@@ -643,6 +882,8 @@ export class MessageService {
                       nickname: true,
                       avatar: true,
                       userType: true,
+                      openid: true,
+                      systemRole: true,
                       settings: { select: { showOnlineStatus: true } },
                     },
                   },
@@ -739,6 +980,8 @@ export class MessageService {
                       nickname: true,
                       avatar: true,
                       userType: true,
+                      openid: true,
+                      systemRole: true,
                       settings: { select: { showOnlineStatus: true } },
                     },
                   },
@@ -772,20 +1015,48 @@ export class MessageService {
       total,
       page: pageNum,
       limit: take,
+      pagination: {
+        current_page: pageNum,
+        currentPage: pageNum,
+        total_pages: Math.ceil(total / take),
+        totalPages: Math.ceil(total / take),
+        total,
+        page_size: take,
+        pageSize: take,
+      },
     };
   }
 
   async getChatHistory(userId: string, query: any) {
-    const { user_id, other_user_id, page = 1, limit = 20 } = query;
+    const { user_id, other_user_id, page = 1, limit = 20, region_id, regionId } = query;
     const targetId = other_user_id || user_id;
     if (!targetId) return { messages: [], list: [], total: 0 };
-    const [conversation, otherUser] = await Promise.all([
-      this.findPrivateConversation(userId, targetId),
-      this.prisma.user.findUnique({
-        where: { id: targetId },
-        select: { id: true, nickname: true, avatar: true, userType: true },
-      }),
-    ]);
+    const otherUser = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, nickname: true, avatar: true, userType: true, openid: true, systemRole: true },
+    });
+    const isOfficialTarget = isOfficialAssistantUser(otherUser);
+    const currentRegionId = isOfficialTarget
+      ? String(region_id || regionId || (await this.prisma.userProfile.findUnique({
+          where: { userId },
+          select: { regionId: true },
+        }))?.regionId || '').trim()
+      : '';
+    const conversation = isOfficialTarget && currentRegionId
+      ? await this.prisma.conversation.findUnique({
+          where: { scopeKey: officialAssistantConversationScopeKey(currentRegionId, userId) },
+        })
+      : await this.findPrivateConversation(userId, targetId);
+    const publicOtherUser = otherUser
+      ? {
+          id: otherUser.id,
+          nickname: otherUser.nickname,
+          avatar: otherUser.avatar,
+          userType: otherUser.userType,
+          is_official: isOfficialTarget,
+          isOfficial: isOfficialTarget,
+        }
+      : otherUser;
     if (!conversation) {
       return {
         messages: [],
@@ -793,7 +1064,7 @@ export class MessageService {
         total: 0,
         page: Number(page),
         limit: Number(limit),
-        other_user: otherUser,
+        other_user: publicOtherUser,
       };
     }
 
@@ -834,13 +1105,13 @@ export class MessageService {
       page: Number(page),
       limit: Number(limit),
       conversation_id: conversation.id,
-      other_user: otherUser ? {
-        ...otherUser,
-        is_member: memberIds.has(otherUser.id),
-        isMember: memberIds.has(otherUser.id),
-        member_badge: memberIds.has(otherUser.id) ? '会员' : '',
-        memberBadge: memberIds.has(otherUser.id) ? '会员' : '',
-      } : otherUser,
+      other_user: publicOtherUser ? {
+        ...publicOtherUser,
+        is_member: memberIds.has(publicOtherUser.id),
+        isMember: memberIds.has(publicOtherUser.id),
+        member_badge: memberIds.has(publicOtherUser.id) ? '会员' : '',
+        memberBadge: memberIds.has(publicOtherUser.id) ? '会员' : '',
+      } : publicOtherUser,
     };
   }
 

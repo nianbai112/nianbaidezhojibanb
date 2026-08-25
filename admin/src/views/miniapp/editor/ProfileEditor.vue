@@ -14,6 +14,7 @@
         <el-tooltip content="版本历史" placement="bottom">
           <el-button :icon="Clock" circle @click="versionPanelVisible = true" />
         </el-tooltip>
+        <el-button :icon="MagicStick" plain :loading="exporting" @click="exportToPackage">导出当前装修到代码包</el-button>
         <el-button type="primary" :icon="Promotion" :disabled="!dirty.size" :loading="saving" @click="saveAll">
           保存并发布
         </el-button>
@@ -365,7 +366,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Bottom, Clock, Delete, Pointer, Promotion, Refresh, Top } from '@element-plus/icons-vue'
+import { Bottom, Clock, Delete, MagicStick, Pointer, Promotion, Refresh, Top } from '@element-plus/icons-vue'
+import { regionPresetToLayout } from '@/views/layout/regionPresetToLayout'
 import { request } from '@/api/request'
 import DecorVersionPanel from '@/components/miniapp/DecorVersionPanel.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
@@ -656,6 +658,22 @@ async function snapshotDecorVersion(note: string) {
   }
 }
 
+const exporting = ref(false)
+/** 把当前我的页装修(入口/用户卡)转成布局协议写入代码包,渲染器离线也生效 */
+async function exportToPackage() {
+  if (!region.value) { ElMessage.warning('校区数据未加载，请稍后再试'); return }
+  exporting.value = true
+  try {
+    const layout = regionPresetToLayout(region.value, 'profile')
+    await request.put('/admin/miniapp/code/pages/profile/layout', { layout })
+    ElMessage.success(`已写入代码包 ${layout.components.length} 个模块，下载代码包重新上传后小程序生效`)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 async function saveAll() {
   if (!dirty.value.size) return
   saving.value = true
@@ -685,6 +703,8 @@ async function saveAll() {
     if (Object.keys(payload).length) {
       await request.put(`/admin/regions/${rid}`, payload)
     }
+    // 双写：同步进代码包(config/layout/profile.json + bundled.js)，离线也生效
+    await request.put('/admin/miniapp/code/pages/profile/layout', { layout: regionPresetToLayout(region.value, 'profile') }).catch(() => {})
     if (dirty.value.has('tabbar')) {
       await request.put('/admin/regions/tabbar', { regionId: rid, config: tabbarConfig.value })
     }

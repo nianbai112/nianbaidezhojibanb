@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { ref, computed, shallowRef } from 'vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
-import { Setting, Lock, Bell, Warning, Upload, Connection, PictureFilled } from '@element-plus/icons-vue'
+import { Setting, Lock, Bell, Warning, Upload, Connection, PictureFilled, DocumentChecked } from '@element-plus/icons-vue'
 import BasicSettingsPanel from './components/BasicSettingsPanel.vue'
 import PermissionSettingsPanel from './components/PermissionSettingsPanel.vue'
 import NotificationSettingsPanel from './components/NotificationSettingsPanel.vue'
@@ -28,6 +28,7 @@ import SecuritySettingsPanel from './components/SecuritySettingsPanel.vue'
 import StorageUploadPanel from './components/StorageUploadPanel.vue'
 import ThirdPartySettingsPanel from './components/ThirdPartySettingsPanel.vue'
 import LoginPageVisualPanel from './components/LoginPageVisualPanel.vue'
+import ReviewModePanel from './components/ReviewModePanel.vue'
 
 const tabs = [
   { key: 'basic', label: '基础设置', icon: Setting },
@@ -36,7 +37,8 @@ const tabs = [
   { key: 'security', label: '安全策略', icon: Warning },
   { key: 'storage', label: '存储上传', icon: Upload },
   { key: 'loginPage', label: '登录页视觉', icon: PictureFilled },
-  { key: 'thirdParty', label: '第三方配置', icon: Connection }
+  { key: 'thirdParty', label: '第三方配置', icon: Connection },
+  { key: 'reviewMode', label: '审核模式', icon: DocumentChecked },
 ]
 
 const active = ref('basic')
@@ -48,7 +50,8 @@ const panelMap: Record<string, any> = {
   security: SecuritySettingsPanel,
   storage: StorageUploadPanel,
   thirdParty: ThirdPartySettingsPanel,
-  loginPage: LoginPageVisualPanel
+  loginPage: LoginPageVisualPanel,
+  reviewMode: ReviewModePanel,
 }
 
 const currentPanel = computed(() => panelMap[active.value] || BasicSettingsPanel)

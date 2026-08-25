@@ -32,6 +32,7 @@ import { DatingAdminModule } from './modules/dating-admin/dating-admin.module';
 import { ErrandAdminModule } from './modules/errand-admin/errand-admin.module';
 import { MessageModule } from './modules/message/message.module';
 import { NotifyModule } from './modules/notify/notify.module';
+import { PushModule } from './modules/push/push.module';
 import { WechatModule } from './modules/wechat/wechat.module';
 import { OperationModule } from './modules/operation/operation.module';
 import { AdminModule } from './modules/admin/admin.module';
@@ -73,7 +74,6 @@ import { RecommendModule } from './modules/recommend/recommend.module';
 import { ABTestModule } from './modules/ab-test/ab-test.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SchoolModule } from './modules/school/school.module';
-import { LicenseRuntimeModule } from './modules/license-runtime/license-runtime.module';
 import { MembershipModule } from './modules/membership/membership.module';
 import { SearchModule } from './modules/search/search.module';
 import { CampusMapModule } from './modules/campus-map/campus-map.module';
@@ -188,6 +188,7 @@ const envFilePath = getEnvFilePaths();
     PaymentModule,
     MessageModule,
     NotifyModule,
+    PushModule,
     WechatModule,
     OperationModule,
     AdminModule,
@@ -228,7 +229,6 @@ const envFilePath = getEnvFilePaths();
     ABTestModule,
     SchedulerModule,
     SchoolModule,
-    LicenseRuntimeModule,
     MembershipModule,
     SearchModule,
     CampusMapModule,

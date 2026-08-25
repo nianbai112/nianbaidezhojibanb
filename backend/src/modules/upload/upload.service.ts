@@ -6,7 +6,11 @@ import { Request } from 'express';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import axios from 'axios';
+import sharp from 'sharp';
 
 // cos-nodejs-sdk-v5 是 CommonJS 模块，导出为构造函数，需用 require 方式导入
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -36,6 +40,15 @@ export interface UploadResult {
   mimeType: string;
   type: UploadFileKind;
 }
+
+export interface VideoUploadResult {
+  video: UploadResult;
+  thumbnail: UploadResult;
+  width: number;
+  height: number;
+}
+
+const execFileAsync = promisify(execFile);
 
 /** 小程序码生成参数 */
 export interface QrcodeOptions {
@@ -289,9 +302,9 @@ export class UploadService {
       throw new BadRequestException('当前存储方式不是腾讯云 COS');
     }
 
-    const secretId = String(storage.secretId || '');
-    const secretKey = String(storage.secretKey || '');
-    const bucket = String(storage.bucket || '');
+    const secretId = String(storage.secretId || '').trim();
+    const secretKey = String(storage.secretKey || '').trim();
+    const bucket = String(storage.bucket || '').trim();
     const region = this.normalizeCosRegion(storage.region || '');
     const domain = String(storage.domain || '').trim() || this.buildCosDefaultDomain(bucket, region);
 
@@ -356,6 +369,61 @@ export class UploadService {
 
       default:
         throw new BadRequestException(`不支持的存储方式: ${provider}`);
+    }
+  }
+
+  /**
+   * 上传视频并从开头提取封面。0.1 秒可避免部分视频第 0 帧为黑帧。
+   * ffmpeg 为服务器运行时依赖，安装包和 Docker 镜像均会显式校验/安装。
+   */
+  async uploadVideoWithThumbnail(file: Express.Multer.File, folder: string): Promise<VideoUploadResult> {
+    this.validateFileExists(file);
+    this.validateFileSecurity(file, 'video', 'post');
+    const cover = await this.extractVideoThumbnail(file);
+    const thumbnailFile = {
+      fieldname: 'file',
+      originalname: 'video-cover.jpg',
+      encoding: '7bit',
+      mimetype: 'image/jpeg',
+      buffer: cover.buffer,
+      size: cover.buffer.length,
+    } as Express.Multer.File;
+    const [video, thumbnail] = await Promise.all([
+      this.upload(file, { type: 'video', folder, scene: 'post' }),
+      this.upload(thumbnailFile, { type: 'image', folder: `${folder}/thumbnails`, scene: 'post' }),
+    ]);
+    return { video, thumbnail, width: cover.width, height: cover.height };
+  }
+
+  private async extractVideoThumbnail(file: Express.Multer.File): Promise<{ buffer: Buffer; width: number; height: number }> {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lingmeng-video-'));
+    const inputPath = path.join(tempDir, `input.${this.inferSafeExt(file.mimetype)}`);
+    const outputPath = path.join(tempDir, 'cover.jpg');
+    try {
+      fs.writeFileSync(inputPath, file.buffer);
+      await execFileAsync('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-ss', '0.1',
+        '-i', inputPath,
+        '-frames:v', '1',
+        '-vf', "scale='min(1280,iw)':-2",
+        '-q:v', '3',
+        '-y', outputPath,
+      ], { timeout: 30000, maxBuffer: 1024 * 1024 });
+      if (!fs.existsSync(outputPath)) throw new Error('未生成封面文件');
+      const buffer = fs.readFileSync(outputPath);
+      const metadata = await sharp(buffer).metadata();
+      if (!metadata.width || !metadata.height) throw new Error('无法读取封面尺寸');
+      return { buffer, width: metadata.width, height: metadata.height };
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        throw new InternalServerErrorException('视频封面服务未安装 ffmpeg，请联系管理员');
+      }
+      this.logger.warn(`视频首帧提取失败: ${error?.message || error}`);
+      throw new BadRequestException('无法读取该视频的首帧，请更换 MP4 视频或重试');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -452,12 +520,27 @@ export class UploadService {
   }
 
   private async getWxAccessToken(): Promise<string> {
-    const appid = this.config.get('WX_MINI_APPID');
-    const secret = this.config.get('WX_MINI_SECRET');
+    let appid = '';
+    let secret = '';
+
+    try {
+      const saved = await (this.prisma as any).config.findUnique({
+        where: { key: 'miniapp' },
+        select: { value: true },
+      });
+      const value = saved?.value && typeof saved.value === 'object' ? saved.value : {};
+      appid = String(value.appId || value.appid || '').trim();
+      secret = String(value.appSecret || value.secret || '').trim();
+    } catch (error: any) {
+      this.logger.warn(`读取后台小程序配置失败，将回退环境变量: ${error?.message || '未知错误'}`);
+    }
+
+    appid = appid || String(this.config.get('WX_MINI_APPID') || '').trim();
+    secret = secret || String(this.config.get('WX_MINI_SECRET') || '').trim();
 
     if (!appid || !secret) {
       throw new BadRequestException(
-        '微信小程序配置缺失: WX_MINI_APPID 或 WX_MINI_SECRET 未配置，请检查环境变量',
+        '微信小程序配置缺失，请在后台第三方设置中配置 AppID 和 AppSecret',
       );
     }
 

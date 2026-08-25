@@ -1,6 +1,4 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Interval } from '@nestjs/schedule';
-import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { NotifyService } from '../notify/notify.service';
@@ -8,7 +6,6 @@ import { AiRuntimeService, type AiModerationResult } from '../ai-runtime/ai-runt
 import { QrcodeModerationService } from '../ai-runtime/qrcode-moderation.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
 import { InteractionPermissionService } from '../../common/services/interaction-permission.service';
-import { MembershipService } from '../membership/membership.service';
 
 @Injectable()
 export class CommentService {
@@ -22,7 +19,6 @@ export class CommentService {
     private readonly qrcodeModeration: QrcodeModerationService,
     private readonly userAccess: UserAccessPolicyService,
     private readonly interactionPermission: InteractionPermissionService,
-    private readonly membershipService: MembershipService,
   ) {}
 
   private async getRawNoteSettings(regionId?: string | null): Promise<Record<string, any>> {
@@ -312,23 +308,6 @@ export class CommentService {
     return post;
   }
 
-  private async assertPostLotteryManager(postId: string, userId: string) {
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
-      select: {
-        id: true,
-        userId: true,
-        regionId: true,
-        commentCount: true,
-        region: { select: { managerUserId: true } },
-      },
-    });
-    if (!post) throw new NotFoundException('帖子不存在');
-    if (post.userId === userId) return post;
-    if (post.region?.managerUserId === userId) return post;
-    throw new ForbiddenException('只有作者或区域管理员可以执行该操作');
-  }
-
   private async resolveCommentReview(
     content: string,
     regionId?: string | null,
@@ -363,7 +342,8 @@ export class CommentService {
       if (level === 'strict') {
         return { status: 'hidden', auditStatus: 'rejected', auditReason: `命中敏感词：${sensitiveHit.word}`, approvalType: 'sensitive_word' };
       }
-      if (level === 'audit') {
+      if (level === 'audit' && aiFailureToManual) {
+        // 仅"失败转人工"开启时才强制转人工;关闭时放行到下方 AI 审核,由策略自动裁决(score 0.75 → 自动拒绝)
         return { status: 'hidden', auditStatus: 'pending', auditReason: `命中敏感词：${sensitiveHit.word}（${sensitiveHit.category || '其他'}）`, approvalType: 'sensitive_word' };
       }
     }
@@ -375,6 +355,7 @@ export class CommentService {
       const result = await this.aiRuntime.moderateContent({
         type: 'comment',
         content,
+        imageUrls,
         regionId,
         approvalType,
         manualFallback: aiFailureToManual,
@@ -978,346 +959,4 @@ export class CommentService {
     return updated;
   }
 
-  private lotteryStatus(status: string, drawAt: Date) {
-    if (status === 'cancelled') return 'cancelled';
-    if (status === 'drawn' || status === 'finished') return 'finished';
-    if (status === 'processing') return 'processing';
-    return drawAt.getTime() <= Date.now() ? 'scheduled' : 'scheduled';
-  }
-
-  private async dispatchLotteryWinnerNotifications(detail: any) {
-    const lottery = detail?.lottery;
-    const winners = Array.isArray(detail?.winners) ? detail.winners : [];
-    if (!lottery?.postId || winners.length === 0) return;
-    const sent = new Set<string>();
-    for (const winner of winners) {
-      const userId = String(winner.user_id || winner.userId || '').trim();
-      if (!userId || sent.has(userId)) continue;
-      sent.add(userId);
-      await this.notifyService.createAndDispatch({
-        userId,
-        type: 'SYSTEM',
-        scene: 'comment_lottery_winner',
-        title: '你中奖了',
-        content: `你在「${lottery.title || '评论抽奖'}」中中奖，请查看详情`,
-        data: {
-          postId: lottery.postId,
-          lotteryId: lottery.id,
-          prizeId: winner.prize_id || winner.prizeId,
-          prizeName: winner.prize_name || winner.prize?.name || '',
-        },
-        linkType: 'post',
-        linkValue: lottery.postId,
-        channelMask: { inApp: true, websocket: true },
-      }).catch(() => undefined);
-    }
-  }
-
-  private normalizeLotteryPrizes(prizes: any[]) {
-    return (Array.isArray(prizes) ? prizes : [])
-      .map((item, index) => {
-        const probabilityWeight = Math.max(1, Math.min(10000, Number(item.probability_weight ?? item.probabilityWeight ?? 100) || 100));
-        return {
-          name: String(item.name || `奖项 ${index + 1}`).trim(),
-          rewardText: String(item.reward_text ?? item.rewardText ?? '').trim() || null,
-          count: Math.max(1, Number(item.winner_count ?? item.count ?? 1) || 1),
-          probabilityWeight,
-          sortOrder: Number(item.sort_order ?? item.sortOrder ?? index) || 0,
-        };
-      })
-      .filter((item) => item.name);
-  }
-
-  private createLotteryDrawSeed(lotteryId: string) {
-    return createHash('sha256')
-      .update(`${lotteryId}:${Date.now()}:${randomBytes(16).toString('hex')}`)
-      .digest('hex');
-  }
-
-  private drawIndex(seed: string, counter: number, length: number) {
-    if (length <= 1) return 0;
-    const digest = createHash('sha256').update(`${seed}:${counter}`).digest();
-    return digest.readUInt32BE(0) % length;
-  }
-
-  private async formatLotteryDetail(lottery: any) {
-    if (!lottery) return null;
-    const prizes = (lottery.prizes || []).map((prize: any) => ({
-      ...prize,
-      winner_count: prize.count,
-      prize_name: prize.name,
-      reward_text: prize.rewardText || prize.reward_text || '',
-      probability_weight: prize.probabilityWeight ?? prize.probability_weight ?? 100,
-      sort_order: prize.sortOrder ?? prize.sort_order ?? 0,
-    }));
-    const prizeMap = new Map<string, any>(prizes.map((prize: any) => [String(prize.id), prize]));
-    const commentIds = Array.from(
-      new Set<string>((lottery.winners || []).map((winner: any) => String(winner.commentId || winner.comment_id || '')).filter(Boolean)),
-    );
-    const userIds = Array.from(
-      new Set<string>((lottery.winners || []).map((winner: any) => String(winner.userId || '')).filter(Boolean)),
-    );
-    const comments = commentIds.length
-      ? await this.prisma.comment.findMany({
-          where: this.visibleCommentWhere({ postId: lottery.postId, id: { in: commentIds } }),
-          include: { user: this.miniCommentAuthorSelect() },
-          orderBy: { createdAt: 'desc' },
-        })
-      : userIds.length
-        ? await this.prisma.comment.findMany({
-            where: this.visibleCommentWhere({ postId: lottery.postId, userId: { in: userIds } }),
-            include: { user: this.miniCommentAuthorSelect() },
-            orderBy: { createdAt: 'desc' },
-          })
-      : [];
-    const commentMap = new Map<string, any>();
-    const userCommentMap = new Map<string, any>();
-    for (const comment of comments) {
-      if (!commentMap.has(comment.id)) commentMap.set(comment.id, comment);
-      if (!userCommentMap.has(comment.userId)) userCommentMap.set(comment.userId, comment);
-    }
-    const winners = (lottery.winners || []).map((winner: any) => {
-      const comment = commentMap.get(winner.commentId || winner.comment_id) || userCommentMap.get(winner.userId);
-      const prize = prizeMap.get(String(winner.prizeId));
-      return {
-        id: winner.id,
-        user_id: winner.userId,
-        userId: winner.userId,
-        comment_id: winner.commentId || winner.comment_id || '',
-        commentId: winner.commentId || winner.comment_id || '',
-        prize_id: winner.prizeId,
-        prizeId: winner.prizeId,
-        prize_name: prize?.name || '',
-        prize,
-        user: comment?.user || null,
-        user_nickname: comment?.user?.nickname || '用户',
-        user_avatar: comment?.user?.avatar || '',
-        comment,
-        comment_content: comment?.content || '',
-        content: comment?.content || '',
-        created_at: winner.createdAt,
-        createdAt: winner.createdAt,
-      };
-    });
-    const payloadLottery = {
-      ...lottery,
-      post_id: lottery.postId,
-      draw_at: lottery.drawAt,
-      drawn_at: lottery.drawnAt || lottery.drawn_at || null,
-      allow_duplicate: lottery.allowDuplicate ? 1 : 0,
-      participant_count: lottery.participantCount ?? lottery.participant_count ?? 0,
-      candidate_comment_count: lottery.candidateCommentCount ?? lottery.candidate_comment_count ?? 0,
-      winner_count: lottery.winnerCount ?? lottery.winner_count ?? (lottery.winners || []).length,
-      draw_seed: lottery.drawSeed || lottery.draw_seed || '',
-      raw_status: lottery.status,
-      status: this.lotteryStatus(lottery.status, lottery.drawAt),
-    };
-    return {
-      lottery: payloadLottery,
-      post: lottery.post || null,
-      prizes,
-      winners,
-    };
-  }
-
-  async createLottery(userId: string, dto: any) {
-    const canUseAdvancedTools = await this.membershipService.hasBenefit(userId, 'advanced_content_tools').catch(() => false);
-    if (!canUseAdvancedTools) throw new BadRequestException('抽奖属于会员高级配置，请先开通会员');
-    const postId = String(dto.post_id || dto.postId || '').trim();
-    const title = String(dto.title || '').trim();
-    const drawAt = new Date(dto.draw_at || dto.drawAt);
-    const prizes = this.normalizeLotteryPrizes(dto.prizes);
-    if (!postId) throw new BadRequestException('缺少帖子ID');
-    if (!title) throw new BadRequestException('请输入抽奖标题');
-    if (Number.isNaN(drawAt.getTime())) throw new BadRequestException('开奖时间不正确');
-    if (drawAt.getTime() <= Date.now()) throw new BadRequestException('开奖时间必须晚于当前时间');
-    if (!prizes.length) throw new BadRequestException('请至少配置一个奖项');
-
-    await this.assertPostLotteryManager(postId, userId);
-    const existing = await this.prisma.commentLottery.findUnique({ where: { postId }, select: { id: true } });
-    if (existing) throw new BadRequestException('该帖子已创建评论抽奖');
-
-    const lottery = await this.prisma.commentLottery.create({
-      data: {
-        postId,
-        title,
-        drawAt,
-        allowDuplicate: !!dto.allow_duplicate || !!dto.allowDuplicate,
-        prizes: { create: prizes },
-      },
-      include: { prizes: true, winners: true },
-    });
-    return this.formatLotteryDetail(lottery);
-  }
-
-  async getLotteryDetail(postId: string) {
-    const lottery = await this.prisma.commentLottery.findUnique({
-      where: { postId: String(postId) },
-      include: { prizes: true, winners: true },
-    });
-    return this.formatLotteryDetail(lottery);
-  }
-
-  async cancelLottery(lotteryId: string, userId: string, dto: any) {
-    const existing = await this.prisma.commentLottery.findUnique({
-      where: { id: lotteryId },
-      select: { postId: true },
-    });
-    if (!existing) throw new NotFoundException('抽奖不存在');
-    await this.assertPostLotteryManager(existing.postId, userId);
-    const lottery = await this.prisma.commentLottery.update({
-      where: { id: lotteryId },
-      data: { status: 'cancelled', cancelledReason: dto.reason || '' },
-      include: { prizes: true, winners: true },
-    });
-    return this.formatLotteryDetail(lottery);
-  }
-
-  async drawLottery(lotteryId: string, userId: string) {
-    return this.drawLotteryById(lotteryId, userId);
-  }
-
-  private async drawLotteryById(lotteryId: string, userId?: string) {
-    const lottery = await this.prisma.commentLottery.findUnique({
-      where: { id: lotteryId },
-      include: { prizes: true, winners: true },
-    });
-    if (!lottery) throw new NotFoundException('抽奖不存在');
-    if (userId) await this.assertPostLotteryManager(lottery.postId, userId);
-    if (lottery.status === 'cancelled') throw new BadRequestException('抽奖已取消');
-    if (lottery.winners.length) return this.formatLotteryDetail(lottery);
-
-    const comments = await this.prisma.comment.findMany({
-      where: {
-        postId: lottery.postId,
-        ...this.visibleCommentWhere(),
-      },
-      include: { user: this.miniCommentAuthorSelect() },
-      orderBy: { createdAt: 'asc' },
-    });
-    const pool = lottery.allowDuplicate
-      ? [...comments]
-      : Array.from(new Map(comments.map((comment) => [comment.userId, comment])).values());
-
-    const participantCount = new Set(comments.map((comment: any) => String(comment.userId || '')).filter(Boolean)).size;
-    const drawSeed = this.createLotteryDrawSeed(lottery.id);
-    let drawCounter = 0;
-    const winners: Array<{ lotteryId: string; userId: string; prizeId: string; commentId: string }> = [];
-    const prizes = [...lottery.prizes].sort((a: any, b: any) => {
-      const sortA = Number(a.sortOrder ?? a.sort_order ?? 0) || 0;
-      const sortB = Number(b.sortOrder ?? b.sort_order ?? 0) || 0;
-      return sortA - sortB;
-    });
-    for (const prize of prizes) {
-      for (let i = 0; i < prize.count && pool.length; i += 1) {
-        const index = this.drawIndex(drawSeed, drawCounter, pool.length);
-        drawCounter += 1;
-        const selected = pool[index];
-        winners.push({ lotteryId: lottery.id, userId: selected.userId, prizeId: prize.id, commentId: selected.id });
-        if (!lottery.allowDuplicate) pool.splice(index, 1);
-      }
-    }
-
-    const drawnAt = new Date();
-    await this.prisma.$transaction([
-      ...(winners.length ? [this.prisma.commentLotteryWinner.createMany({ data: winners })] : []),
-      this.prisma.commentLottery.update({
-        where: { id: lottery.id },
-        data: {
-          status: 'drawn',
-          participantCount,
-          candidateCommentCount: comments.length,
-          winnerCount: winners.length,
-          drawSeed,
-          drawnAt,
-        },
-      }),
-    ]);
-    const updated = await this.prisma.commentLottery.findUnique({
-      where: { id: lottery.id },
-      include: { prizes: true, winners: true },
-    });
-    const detail = await this.formatLotteryDetail(updated);
-    await this.dispatchLotteryWinnerNotifications(detail);
-    return detail;
-  }
-
-  @Interval(60 * 1000)
-  async autoDrawDueLotteries() {
-    const due = await this.prisma.commentLottery.findMany({
-      where: {
-        status: { in: ['active', 'scheduled', 'processing'] },
-        drawAt: { lte: new Date() },
-        winners: { none: {} },
-      },
-      select: { id: true },
-      take: 20,
-      orderBy: { drawAt: 'asc' },
-    }).catch(() => []);
-    for (const lottery of due) {
-      await this.drawLotteryById(lottery.id).catch(() => undefined);
-    }
-  }
-
-  async getAdminLotteryList(query: any) {
-    const page = Math.max(1, Number(query.page || 1) || 1);
-    const pageSize = Math.min(Math.max(1, Number(query.pageSize || query.limit || 20) || 20), 100);
-    const keyword = String(query.keyword || '').trim();
-    const status = String(query.status || '').trim();
-    const where: any = {};
-    if (status) where.status = status;
-    if (keyword) {
-      where.OR = [
-        { title: { contains: keyword } },
-        { postId: { contains: keyword } },
-      ];
-    }
-    const [list, total] = await Promise.all([
-      this.prisma.commentLottery.findMany({
-        where,
-        include: { prizes: true, winners: true },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.commentLottery.count({ where }),
-    ]);
-    const postIds = [...new Set(list.map((item) => item.postId).filter(Boolean))];
-    const posts = postIds.length
-      ? await this.prisma.post.findMany({
-          where: { id: { in: postIds } },
-          select: {
-            id: true,
-            title: true,
-            content: true,
-            userId: true,
-            regionId: true,
-            user: { select: { id: true, nickname: true, avatar: true } },
-            region: { select: { id: true, name: true } },
-          },
-        })
-      : [];
-    const postMap = new Map(posts.map((post) => [post.id, post]));
-    const data = await Promise.all(list.map((item) => this.formatLotteryDetail({ ...item, post: postMap.get(item.postId) || null })));
-    return { list: data, data, total, page, pageSize };
-  }
-
-  async adminCancelLottery(lotteryId: string, dto: any = {}) {
-    const existing = await this.prisma.commentLottery.findUnique({
-      where: { id: lotteryId },
-      select: { id: true, status: true },
-    });
-    if (!existing) throw new NotFoundException('抽奖不存在');
-    if (existing.status === 'drawn' || existing.status === 'finished') throw new BadRequestException('已开奖的抽奖不能取消');
-    const lottery = await this.prisma.commentLottery.update({
-      where: { id: lotteryId },
-      data: { status: 'cancelled', cancelledReason: dto.reason || '后台取消' },
-      include: { prizes: true, winners: true },
-    });
-    return this.formatLotteryDetail(lottery);
-  }
-
-  async adminDrawLottery(lotteryId: string) {
-    return this.drawLotteryById(lotteryId);
-  }
 }

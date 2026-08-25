@@ -31,6 +31,49 @@ export class RegionService {
     if (value !== undefined) target[key] = value;
   }
 
+  private isStackFlowColor(value: string) {
+    const hex = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+    const channel = '[-+]?(?:\\d+|\\d*\\.\\d+)%?';
+    const functional = new RegExp(`^(?:rgb|rgba|hsl|hsla)\\(\\s*${channel}(?:\\s*,\\s*${channel}){2,3}\\s*\\)$`, 'i');
+    return hex.test(value) || functional.test(value);
+  }
+
+  private normalizeStackFlowStyle(source: any, base: any = {}) {
+    const result: Record<string, any> = {};
+    const fields: Array<[string, string]> = [
+      ['cardBg', 'card_bg'],
+      ['paperBg', 'paper_bg'],
+      ['spineColor', 'spine_color'],
+      ['quoteColor', 'quote_color'],
+      ['mastheadColor', 'masthead_color'],
+      ['accentColor', 'accent_color'],
+      ['textColor', 'text_color'],
+      ['subTextColor', 'sub_text_color'],
+      ['sheetBorderColor', 'sheet_border_color'],
+      ['badgeBg', 'badge_bg'],
+    ];
+    const apply = (value: any, rejectUnsafe: boolean) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+      if (Object.prototype.hasOwnProperty.call(value, 'enabled')) {
+        const enabled = this.toOptionalBool(value.enabled);
+        if (enabled !== undefined) result.enabled = enabled;
+      }
+      fields.forEach(([camelKey, snakeKey]) => {
+        const raw = value[camelKey] !== undefined ? value[camelKey] : value[snakeKey];
+        if (raw === undefined || raw === null || raw === '') return;
+        const color = String(raw).trim();
+        if (!this.isStackFlowColor(color)) {
+          if (rejectUnsafe) throw new BadRequestException(`叠纸流颜色格式无效: ${camelKey}`);
+          return;
+        }
+        result[camelKey] = color;
+      });
+    };
+    apply(base, false);
+    apply(source, true);
+    return result;
+  }
+
   private isSwitchSupported(region: any) {
     return this.toBool(region?.regionSwitchSupported, true);
   }
@@ -38,7 +81,7 @@ export class RegionService {
   private normalizeMiniPath(path?: string) {
     const raw = String(path || '').trim();
     if (!raw || raw === 'custom') return '';
-    if (raw.startsWith('internal:') || raw.startsWith('miniapp:') || raw.startsWith('miniapp_half:') || raw.startsWith('img:') || raw.startsWith('http')) {
+    if (raw.startsWith('internal:') || raw.startsWith('miniapp:') || raw.startsWith('miniapp_half:') || raw.startsWith('img:') || raw.startsWith('tel:') || raw.startsWith('http')) {
       return raw;
     }
     const clean = raw.replace(/^\/+/, '');
@@ -62,7 +105,7 @@ export class RegionService {
   private toMiniLink(path?: string) {
     const clean = this.normalizeMiniPath(path);
     if (!clean) return '';
-    if (clean.startsWith('internal:') || clean.startsWith('miniapp:') || clean.startsWith('miniapp_half:') || clean.startsWith('img:') || clean.startsWith('http')) {
+    if (clean.startsWith('internal:') || clean.startsWith('miniapp:') || clean.startsWith('miniapp_half:') || clean.startsWith('img:') || clean.startsWith('tel:') || clean.startsWith('http')) {
       return clean;
     }
     return `internal:${clean}`;
@@ -75,15 +118,23 @@ export class RegionService {
       if (!query) return value;
       return value.includes('?') ? `${value}&${query}` : `${value}?${query}`;
     };
-    const path = appendQuery(String(item?.path || item?.page || item?.link || fallback || '').trim());
+    const path = String(item?.path || item?.page || item?.link || fallback || '').trim();
+    const pathWithQuery = appendQuery(path);
     if (linkType === 'none') return '';
     if (linkType === 'image') return `img:${path || item?.image || item?.imageUrl || item?.url || ''}`;
-    if (linkType === 'webview') return String(path || '').trim();
+    if (linkType === 'web' || linkType === 'webview') {
+      return path.replace(/^https?:\/\//i, (scheme) => scheme.toLowerCase());
+    }
     if (linkType === 'miniProgram' || linkType === 'miniapp') {
       const appId = item?.appId || item?.appid || '';
-      return appId ? `miniapp:${appId}|${this.normalizeMiniPath(path)}` : '';
+      return appId ? `miniapp:${appId}|${this.normalizeMiniPath(pathWithQuery)}` : '';
     }
-    return this.toMiniLink(path);
+    if (linkType === 'miniProgramHalf' || linkType === 'miniapp_half') {
+      const appId = item?.appId || item?.appid || '';
+      return appId ? `miniapp_half:${appId}|${this.normalizeMiniPath(pathWithQuery)}` : '';
+    }
+    if (linkType === 'tel') return path ? `tel:${path}` : '';
+    return this.toMiniLink(pathWithQuery);
   }
 
   private getHomeTabId(tab: any, index = 0) {
@@ -148,6 +199,17 @@ export class RegionService {
       { name: '二手', subtitle: '', icon: '/static/yhq.png', page: 'pages/tabbar/index/index?tab=secondhand', path: 'pages/tabbar/index/index?tab=secondhand', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 2 },
       { name: '活动', subtitle: '', icon: '/static/tj.png', page: 'pagesA/selection/list/list?tabIndex=0', path: 'pagesA/selection/list/list?tabIndex=0', linkType: 'internal', appId: '', query: '', remark: '', enabled: true, sortOrder: 3 },
     ];
+  }
+
+  private normalizeHomeNavLayoutConfig(value: any) {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object') return [];
+    if (Array.isArray(value.items)) return value.items;
+    return Object.keys(value)
+      .filter((key) => /^\d+$/.test(key))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((key) => value[key])
+      .filter((item) => item && typeof item === 'object');
   }
 
   private normalizeNavigationPermission(permission: any) {
@@ -375,7 +437,7 @@ export class RegionService {
     }
 
     if (this.toBool(region.showKingkong, true)) {
-      const navConfig = Array.isArray(region.homeNavLayoutConfig) ? region.homeNavLayoutConfig : [];
+      const navConfig = this.normalizeHomeNavLayoutConfig(region.homeNavLayoutConfig);
       navConfig
         .filter((nav: any) => nav?.enabled !== false)
         .forEach((nav: any, index: number) => {
@@ -411,6 +473,7 @@ export class RegionService {
     const settings = (raw.settings || {}) as Record<string, any>;
     const noteConfig = (settings.noteConfig || {}) as Record<string, any>;
     const circleConfig = (settings.circleConfig || {}) as Record<string, any>;
+    const stackFlowStyle = this.normalizeStackFlowStyle(settings.stack_flow_style || settings.stackFlowStyle || {});
     const managerUser = raw.managerUser || null;
     const managerId =
       raw.managerUserId ||
@@ -487,10 +550,12 @@ export class RegionService {
       message_icons: raw.messageIcons ?? {},
       message_navigation: raw.messageNavigation ?? { cards: [] },
       profile_layout_items: this.normalizeProfileLayoutItems(raw.profileLayoutItems),
-      home_nav_layout_config: Array.isArray(raw.homeNavLayoutConfig) && raw.homeNavLayoutConfig.length ? raw.homeNavLayoutConfig : this.defaultHomeNavLayoutConfig(),
+      home_nav_layout_config: this.normalizeHomeNavLayoutConfig(raw.homeNavLayoutConfig).length ? this.normalizeHomeNavLayoutConfig(raw.homeNavLayoutConfig) : this.defaultHomeNavLayoutConfig(),
       note_list_style: noteConfig.note_list_style || null,
       note_config: noteConfig,
       circle_config: circleConfig,
+      stack_flow_style: stackFlowStyle,
+      stackFlowStyle,
       // 页面装修配置
       show_carousel: raw.showCarousel ?? true,
       show_announcement: raw.showAnnouncement ?? true,
@@ -507,6 +572,7 @@ export class RegionService {
         noteConfig,
         circleConfig,
         ...settings,
+        stack_flow_style: stackFlowStyle,
         operator: {
           ...(settings.operator || {}),
           managerName: raw.managerName || settings.operator?.managerName || '',
@@ -644,6 +710,19 @@ export class RegionService {
     this.setIfDefined(data, 'isHot', this.toOptionalBool(dto.is_hot ?? dto.isHot));
     this.setIfDefined(data, 'latitude', this.toOptionalNumber(dto.latitude));
     this.setIfDefined(data, 'longitude', this.toOptionalNumber(dto.longitude));
+    const stackFlowInput = dto.stack_flow_style ?? dto.stackFlowStyle;
+    if (stackFlowInput !== undefined) {
+      const settings = region.settings && typeof region.settings === 'object' && !Array.isArray(region.settings)
+        ? region.settings as Record<string, any>
+        : {};
+      data.settings = {
+        ...settings,
+        stack_flow_style: this.normalizeStackFlowStyle(
+          stackFlowInput,
+          settings.stack_flow_style || settings.stackFlowStyle || {},
+        ),
+      };
+    }
 
     const updated = await this.prisma.region.update({
       where: { id },

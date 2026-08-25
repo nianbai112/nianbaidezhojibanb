@@ -57,6 +57,13 @@ export class MessageController {
     return this.messageService.getChatHistory(userId, query);
   }
 
+  @Post('messages/send')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  sendPrivateMessage(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.messageService.sendPrivateMessage(userId, dto);
+  }
+
   @Get('messages/private-permission')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

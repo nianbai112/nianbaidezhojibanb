@@ -2,7 +2,7 @@
   <div class="admin-shell" :class="{ 'is-collapsed': railCollapsed, 'is-mobile-open': mobileNavOpen }">
     <div v-if="mobileNavOpen" class="nav-overlay" @click="mobileNavOpen = false"></div>
 
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'theme-light': sidebarTheme === 'light' }">
       <div class="brand">
         <div class="brand-mark">
           <img v-if="brand.logo" :src="brand.logo" alt="" />
@@ -14,27 +14,65 @@
         </div>
       </div>
 
+      <!-- 菜单过滤器（仅展开态）：输入即过滤，命中分组自动展开，Esc 清除 -->
+      <div v-if="!railCollapsed" class="nav-filter">
+        <el-icon class="nav-filter-icon"><Search /></el-icon>
+        <input
+          v-model="navQuery"
+          type="text"
+          class="nav-filter-input"
+          placeholder="筛选菜单…"
+          aria-label="筛选菜单"
+          @keydown.esc="navQuery = ''"
+        />
+        <button
+          v-if="navQuery"
+          type="button"
+          class="nav-filter-clear"
+          title="清除筛选"
+          aria-label="清除筛选"
+          @click="navQuery = ''"
+        >
+          <el-icon><Close /></el-icon>
+        </button>
+      </div>
+
       <el-scrollbar class="nav-scroll scroll-dark">
         <!-- 展开态：分组手风琴 -->
         <nav v-if="!railCollapsed" class="nav">
-          <div v-if="favoriteItems.length" class="fav-block">
-            <div class="nav-section-label fav-title">
+          <div v-if="favoriteItems.length && !navQuery" class="fav-block">
+            <div class="nav-section-label nav-block-title fav-title">
               <el-icon class="fav-title-icon"><StarFilled /></el-icon>
               <span>我的常用</span>
+              <span class="fav-hint">拖拽排序</span>
             </div>
             <router-link
-              v-for="item in favoriteItems"
+              v-for="(item, favIndex) in favoriteItems"
               :key="'fav-' + item.path"
               :to="item.path"
-              class="nav-item"
+              class="nav-item fav-item"
+              :class="{
+                dragging: favDragIndex === favIndex,
+                'drag-over': favDragOverIndex === favIndex && favDragIndex !== null && favDragIndex !== favIndex
+              }"
+              draggable="true"
+              @dragstart="onFavDragStart(favIndex)"
+              @dragover.prevent="onFavDragOver(favIndex)"
+              @drop.prevent="onFavDrop"
+              @dragend="onFavDragEnd"
             >
               <el-icon class="nav-icon"><component :is="item.icon || 'Menu'" /></el-icon>
               <span class="nav-label">{{ item.title }}</span>
-              <span v-if="badgeFor(item.badge)" class="nav-badge">{{ formatBadge(badgeFor(item.badge)) }}</span>
+              <span
+                v-if="badgeFor(item.badge)"
+                class="nav-badge"
+                :aria-label="`${badgeFor(item.badge)} 条待办`"
+              >{{ formatBadge(badgeFor(item.badge)) }}</span>
               <button
                 type="button"
                 class="fav-star active"
                 title="取消收藏"
+                :aria-label="`取消收藏 ${item.title}`"
                 @click.prevent.stop="toggleFavorite(item.path)"
               >
                 <el-icon><StarFilled /></el-icon>
@@ -42,30 +80,61 @@
             </router-link>
           </div>
 
-          <template v-for="group in visibleMenuGroups" :key="group.title">
+          <div v-if="recentItems.length && !navQuery" class="recent-block">
+            <div class="nav-section-label nav-block-title recent-title">
+              <el-icon class="fav-title-icon"><Clock /></el-icon>
+              <span>最近使用</span>
+            </div>
+            <router-link
+              v-for="item in recentItems"
+              :key="'recent-' + item.path"
+              :to="item.path"
+              class="nav-item"
+            >
+              <el-icon class="nav-icon"><component :is="item.icon || 'Menu'" /></el-icon>
+              <span class="nav-label">{{ item.title }}</span>
+              <span
+                v-if="badgeFor(item.badge)"
+                class="nav-badge"
+                :aria-label="`${badgeFor(item.badge)} 条待办`"
+              >{{ formatBadge(badgeFor(item.badge)) }}</span>
+            </router-link>
+          </div>
+
+          <template v-for="group in displayGroups" :key="group.title">
             <button
               type="button"
               class="nav-group-header"
-              :class="{ open: expandedGroups.has(group.title) }"
+              :class="{ open: isGroupOpen(group.title), 'is-filtering': !!navQuery }"
+              :aria-expanded="isGroupOpen(group.title)"
               @click="toggleGroup(group.title)"
             >
               <el-icon class="group-icon"><component :is="group.icon || 'Folder'" /></el-icon>
               <span class="group-name">{{ group.title }}</span>
-              <span v-if="groupBadgeCount(group)" class="group-badge">{{ formatBadge(groupBadgeCount(group)) }}</span>
+              <span
+                v-if="groupBadgeCount(group)"
+                class="group-badge"
+                :aria-label="`${groupBadgeCount(group)} 条待办`"
+              >{{ formatBadge(groupBadgeCount(group)) }}</span>
               <el-icon class="group-chevron"><ArrowDown /></el-icon>
             </button>
-            <div v-show="expandedGroups.has(group.title)" class="nav-group-children">
+            <div v-show="isGroupOpen(group.title)" class="nav-group-children">
               <template v-for="item in group.children" :key="item.path">
                 <div v-if="item.section" class="nav-section-label">{{ item.section }}</div>
                 <router-link :to="item.path" class="nav-item">
                   <el-icon class="nav-icon"><component :is="item.icon || 'Menu'" /></el-icon>
                   <span class="nav-label">{{ item.title }}</span>
-                  <span v-if="badgeFor(item.badge)" class="nav-badge">{{ formatBadge(badgeFor(item.badge)) }}</span>
+                  <span
+                    v-if="badgeFor(item.badge)"
+                    class="nav-badge"
+                    :aria-label="`${badgeFor(item.badge)} 条待办`"
+                  >{{ formatBadge(badgeFor(item.badge)) }}</span>
                   <button
                     type="button"
                     class="fav-star"
                     :class="{ active: isFavorite(item.path) }"
                     :title="isFavorite(item.path) ? '取消收藏' : '设为常用'"
+                    :aria-label="isFavorite(item.path) ? `取消收藏 ${item.title}` : `收藏 ${item.title}`"
                     @click.prevent.stop="toggleFavorite(item.path)"
                   >
                     <el-icon><StarFilled v-if="isFavorite(item.path)" /><Star v-else /></el-icon>
@@ -74,6 +143,10 @@
               </template>
             </div>
           </template>
+
+          <div v-if="navQuery && !displayGroups.length" class="nav-empty">
+            没有匹配「{{ navQuery }}」的菜单
+          </div>
         </nav>
 
         <!-- 折叠态：分组图标 rail + flyout 子菜单 -->
@@ -84,6 +157,7 @@
             class="rail-item rail-fav"
             :class="{ active: flyout?.key === '__fav' }"
             title="我的常用"
+            aria-label="我的常用"
             @click="toggleFlyout('__fav', '我的常用', favoriteItems, $event)"
           >
             <el-icon><StarFilled /></el-icon>
@@ -95,10 +169,11 @@
             class="rail-item"
             :class="{ active: flyout?.key === group.title || (!flyout && activeGroupTitle === group.title) }"
             :title="group.title"
+            :aria-label="groupBadgeCount(group) ? `${group.title}，${groupBadgeCount(group)} 条待办` : group.title"
             @click="toggleFlyout(group.title, group.title, group.children, $event)"
           >
             <el-icon><component :is="group.icon || 'Folder'" /></el-icon>
-            <span v-if="groupBadgeCount(group)" class="rail-badge-dot"></span>
+            <span v-if="groupBadgeCount(group)" class="rail-badge">{{ formatBadge(groupBadgeCount(group)) }}</span>
           </button>
         </nav>
       </el-scrollbar>
@@ -112,7 +187,21 @@
           <router-link :to="item.path" class="nav-item" @click="closeFlyout">
             <el-icon class="nav-icon"><component :is="item.icon || 'Menu'" /></el-icon>
             <span class="nav-label">{{ item.title }}</span>
-            <span v-if="badgeFor(item.badge)" class="nav-badge">{{ formatBadge(badgeFor(item.badge)) }}</span>
+            <span
+              v-if="badgeFor(item.badge)"
+              class="nav-badge"
+              :aria-label="`${badgeFor(item.badge)} 条待办`"
+            >{{ formatBadge(badgeFor(item.badge)) }}</span>
+            <button
+              type="button"
+              class="fav-star"
+              :class="{ active: isFavorite(item.path) }"
+              :title="isFavorite(item.path) ? '取消收藏' : '设为常用'"
+              :aria-label="isFavorite(item.path) ? `取消收藏 ${item.title}` : `收藏 ${item.title}`"
+              @click.prevent.stop="toggleFavorite(item.path)"
+            >
+              <el-icon><StarFilled v-if="isFavorite(item.path)" /><Star v-else /></el-icon>
+            </button>
           </router-link>
         </template>
       </div>
@@ -130,8 +219,6 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="profile">个人中心</el-dropdown-item>
-                <el-dropdown-item command="license">授权与更新</el-dropdown-item>
-                <el-dropdown-item command="miniapp">小程序下载</el-dropdown-item>
                 <el-dropdown-item command="logs">操作日志</el-dropdown-item>
                 <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
               </el-dropdown-menu>
@@ -141,7 +228,17 @@
         <button
           type="button"
           class="collapse-btn"
+          :title="sidebarTheme === 'dark' ? '切换为浅色侧栏' : '切换为深色侧栏'"
+          :aria-label="sidebarTheme === 'dark' ? '切换为浅色侧栏' : '切换为深色侧栏'"
+          @click="toggleSidebarTheme"
+        >
+          <el-icon><Sunny v-if="sidebarTheme === 'dark'" /><Moon v-else /></el-icon>
+        </button>
+        <button
+          type="button"
+          class="collapse-btn"
           :title="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
+          :aria-label="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
           @click="sidebarCollapsed = !sidebarCollapsed"
         >
           <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
@@ -193,8 +290,6 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="profile">个人中心</el-dropdown-item>
-              <el-dropdown-item command="license">授权与更新</el-dropdown-item>
-              <el-dropdown-item command="miniapp">小程序下载</el-dropdown-item>
               <el-dropdown-item command="logs">操作日志</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
             </el-dropdown-menu>
@@ -231,7 +326,6 @@ const isDesignerFullBleed = computed(
 )
 const auth = useAuthStore()
 const unreadMessages = ref(0)
-const sidebarCollapsed = ref(false)
 const mobileNavOpen = ref(false)
 const isMobile = ref(false)
 const paletteRef = ref<{ open: () => void } | null>(null)
@@ -241,6 +335,64 @@ let headerStatsTimer: number | undefined
 const progressTimers: number[] = []
 
 const visibleMenuGroups = computed(() => filterMenuGroups(menuGroups, auth.accessContext))
+
+// ── localStorage 读取工具（存储不可用时安全退回默认）──
+function loadStringList(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function loadGroupSet(key: string): Set<string> {
+  return new Set(loadStringList(key))
+}
+
+// ── 侧栏折叠（localStorage 记忆，刷新不丢）──
+const COLLAPSE_KEY = 'km-sidebar-collapsed'
+
+function loadCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const sidebarCollapsed = ref(loadCollapsed())
+
+watch(sidebarCollapsed, (value) => {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, value ? '1' : '0')
+  } catch {
+    // 存储不可用时折叠记忆失效，不影响导航
+  }
+})
+
+// ── 侧栏浅色/深色主题（localStorage 记忆，默认深色）──
+const SIDEBAR_THEME_KEY = 'km-sidebar-theme'
+
+function loadSidebarTheme(): 'dark' | 'light' {
+  try {
+    return localStorage.getItem(SIDEBAR_THEME_KEY) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+const sidebarTheme = ref<'dark' | 'light'>(loadSidebarTheme())
+
+function toggleSidebarTheme() {
+  sidebarTheme.value = sidebarTheme.value === 'dark' ? 'light' : 'dark'
+  try {
+    localStorage.setItem(SIDEBAR_THEME_KEY, sidebarTheme.value)
+  } catch {
+    // 存储不可用时主题仅本次会话有效
+  }
+}
 
 // ── 队列徽章（审核/提现/异常等待办数，60s 轮询）──
 const { badgeFor } = useNavBadges()
@@ -253,20 +405,18 @@ function groupBadgeCount(group: MenuGroup) {
   return group.children.reduce((sum, item) => sum + badgeFor(item.badge), 0)
 }
 
-// ── 我的常用（localStorage 收藏，km-nav-favs）──
+// ── 我的常用（localStorage 收藏，km-nav-favs，支持拖拽排序）──
 const FAV_KEY = 'km-nav-favs'
 
-function loadFavorites(): string[] {
+const favoritePaths = ref<string[]>(loadStringList(FAV_KEY))
+
+function saveFavorites() {
   try {
-    const raw = localStorage.getItem(FAV_KEY)
-    const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : []
+    localStorage.setItem(FAV_KEY, JSON.stringify(favoritePaths.value))
   } catch {
-    return []
+    // 存储不可用时收藏仅本次会话有效
   }
 }
-
-const favoritePaths = ref<string[]>(loadFavorites())
 
 const favoriteItems = computed<MenuItem[]>(() => {
   const all = visibleMenuGroups.value.flatMap((group) => group.children)
@@ -283,11 +433,90 @@ function toggleFavorite(path: string) {
   favoritePaths.value = isFavorite(path)
     ? favoritePaths.value.filter((p) => p !== path)
     : [...favoritePaths.value, path]
-  try {
-    localStorage.setItem(FAV_KEY, JSON.stringify(favoritePaths.value))
-  } catch {
-    // 存储不可用时收藏仅本次会话有效
+  saveFavorites()
+}
+
+// 收藏拖拽排序（HTML5 drag & drop，顺序即 favoritePaths 顺序）
+const favDragIndex = ref<number | null>(null)
+const favDragOverIndex = ref<number | null>(null)
+
+function onFavDragStart(index: number) {
+  favDragIndex.value = index
+}
+
+function onFavDragOver(index: number) {
+  favDragOverIndex.value = index
+}
+
+function onFavDrop() {
+  const from = favDragIndex.value
+  const to = favDragOverIndex.value
+  onFavDragEnd()
+  if (from === null || to === null || from === to) return
+  const next = [...favoritePaths.value]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  favoritePaths.value = next
+  saveFavorites()
+}
+
+function onFavDragEnd() {
+  favDragIndex.value = null
+  favDragOverIndex.value = null
+}
+
+// ── 最近使用（localStorage 记录最近 6 条菜单路由，展示 5 条且不含当前页）──
+const RECENT_KEY = 'km-nav-recent'
+
+const recentPaths = ref<string[]>(loadStringList(RECENT_KEY))
+
+function findMenuItemByPath(path: string): MenuItem | null {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  for (const group of visibleMenuGroups.value) {
+    for (const item of group.children) {
+      if (cleanPath === item.path || cleanPath.startsWith(item.path + '/')) return item
+    }
   }
+  return null
+}
+
+function recordRecent(path: string) {
+  const item = findMenuItemByPath(path)
+  if (!item || recentPaths.value[0] === item.path) return
+  recentPaths.value = [item.path, ...recentPaths.value.filter((p) => p !== item.path)].slice(0, 6)
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(recentPaths.value))
+  } catch {
+    // 存储不可用时最近使用仅本次会话有效
+  }
+}
+
+const recentItems = computed<MenuItem[]>(() => {
+  const all = visibleMenuGroups.value.flatMap((group) => group.children)
+  return recentPaths.value
+    .map((path) => all.find((item) => item.path === path))
+    .filter((item): item is MenuItem => Boolean(item))
+    .filter((item) => item.path !== route.path)
+    .slice(0, 5)
+})
+
+// ── 菜单过滤（展开态顶部输入框，命中标题即保留，空分组隐藏）──
+const navQuery = ref('')
+
+const displayGroups = computed<MenuGroup[]>(() => {
+  const query = navQuery.value.trim().toLowerCase()
+  if (!query) return visibleMenuGroups.value
+  return visibleMenuGroups.value
+    .map((group) => ({
+      ...group,
+      children: group.children.filter((item) => item.title.toLowerCase().includes(query)),
+    }))
+    .filter((group) => group.children.length > 0)
+})
+
+function isGroupOpen(title: string) {
+  // 过滤态下命中分组全部展开
+  return navQuery.value ? true : expandedGroups.has(title)
 }
 
 // ── 折叠态 flyout 子菜单 ──
@@ -399,37 +628,31 @@ function handleHeaderStatsRefresh() {
   fetchHeaderStats()
 }
 
-// ── 分组折叠（localStorage 记忆展开态）──
+// ── 分组折叠（localStorage 记忆展开态；手动展开的分组跨路由保留，自动展开的随路由收起）──
 const NAV_GROUPS_KEY = 'km-nav-groups'
+const NAV_GROUPS_MANUAL_KEY = 'km-nav-groups-manual'
 
-function loadExpandedGroups(): Set<string> {
-  try {
-    const raw = localStorage.getItem(NAV_GROUPS_KEY)
-    const parsed = raw ? JSON.parse(raw) : null
-    if (Array.isArray(parsed)) {
-      return new Set(parsed.filter((item): item is string => typeof item === 'string'))
-    }
-  } catch {
-    // 存储不可用时退回默认（仅展开当前组）
-  }
-  return new Set()
-}
-
-const expandedGroups = reactive(loadExpandedGroups())
+const expandedGroups = reactive(loadGroupSet(NAV_GROUPS_KEY))
+// 用户手动点开/收起过的分组：路由切换时不会被自动收起
+const manualExpanded = reactive(loadGroupSet(NAV_GROUPS_MANUAL_KEY))
 
 function saveExpandedGroups() {
   try {
     localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify([...expandedGroups]))
+    localStorage.setItem(NAV_GROUPS_MANUAL_KEY, JSON.stringify([...manualExpanded]))
   } catch {
     // 存储不可用时折叠记忆失效，不影响导航
   }
 }
 
 function toggleGroup(title: string) {
+  if (navQuery.value) return // 过滤态下手风琴只读
   if (expandedGroups.has(title)) {
     expandedGroups.delete(title)
+    manualExpanded.delete(title)
   } else {
     expandedGroups.add(title)
+    manualExpanded.add(title)
   }
   saveExpandedGroups()
 }
@@ -446,15 +669,27 @@ function findGroupByPath(path: string): string | null {
   return null
 }
 
-function expandGroupForPath(path: string) {
+/**
+ * 展开当前路由所在分组。
+ * prune=true（路由切换）时，同时收起既不是手动展开、也不是当前组的"自动展开"分组，
+ * 避免手风琴只开不关、越用越长。
+ */
+function expandGroupForPath(path: string, prune = false) {
   const groupTitle = findGroupByPath(path)
+  if (prune) {
+    for (const title of [...expandedGroups]) {
+      if (title !== groupTitle && !manualExpanded.has(title)) {
+        expandedGroups.delete(title)
+      }
+    }
+  }
   if (groupTitle && !expandedGroups.has(groupTitle)) {
     expandedGroups.add(groupTitle)
-    saveExpandedGroups()
   }
+  saveExpandedGroups()
 }
 
-// 初始展开当前路由所在分组
+// 初始展开当前路由所在分组（不清空用户上次留下的展开态）
 expandGroupForPath(route.path)
 
 // ── 面包屑（route.path 在 visibleMenuGroups 中反查）──
@@ -500,6 +735,16 @@ function handleMediaChange(e: MediaQueryListEvent) {
   if (!e.matches) mobileNavOpen.value = false
 }
 
+// Esc：优先关 flyout，其次关移动端抽屉
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (flyout.value) {
+    flyout.value = null
+  } else if (mobileNavOpen.value) {
+    mobileNavOpen.value = false
+  }
+}
+
 // ── 命令面板 ──
 function openPalette() {
   paletteRef.value?.open()
@@ -522,9 +767,10 @@ function startProgress() {
   progressTimers.push(window.setTimeout(() => { progress.value = 0 }, 1000))
 }
 
-// 监听路由变化：自动展开分组、收起移动端抽屉、关闭 flyout、推进进度条
+// 监听路由变化：自动展开当前分组（并收起自动展开的旧分组）、记录最近使用、收起抽屉、关闭 flyout、推进进度条
 watch(() => route.path, (newPath) => {
-  expandGroupForPath(newPath)
+  expandGroupForPath(newPath, true)
+  recordRecent(newPath)
   mobileNavOpen.value = false
   flyout.value = null
   startProgress()
@@ -550,14 +796,6 @@ async function handleUserCommand(command: string) {
     router.push('/system/operation-logs')
     return
   }
-  if (command === 'license') {
-    router.push('/system/license-runtime')
-    return
-  }
-  if (command === 'miniapp') {
-    router.push('/system/mini-program-download')
-    return
-  }
   if (command === 'profile') {
     router.push('/system/settings')
     return
@@ -570,6 +808,7 @@ onMounted(() => {
   isMobile.value = mediaQuery.matches
   mediaQuery.addEventListener('change', handleMediaChange)
   window.addEventListener('admin-header-stats-refresh', handleHeaderStatsRefresh)
+  window.addEventListener('keydown', handleGlobalKeydown)
   loadWebsiteInfo()
   fetchHeaderStats()
   headerStatsTimer = window.setInterval(fetchHeaderStats, 30000)
@@ -578,6 +817,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (mediaQuery) mediaQuery.removeEventListener('change', handleMediaChange)
   window.removeEventListener('admin-header-stats-refresh', handleHeaderStatsRefresh)
+  window.removeEventListener('keydown', handleGlobalKeydown)
   window.clearInterval(headerStatsTimer)
   progressTimers.forEach((timer) => window.clearTimeout(timer))
 })
@@ -590,16 +830,75 @@ onBeforeUnmount(() => {
   background: var(--mx-bg);
 }
 
-/* ── 侧边栏（232px 深色）── */
+/* ── 侧边栏（232px，深/浅双主题：所有颜色走 --sb-* 语义变量）── */
 .sidebar {
+  /* 深色（默认） */
+  --sb-bg: var(--mx-ink);
+  --sb-bg-2: var(--mx-ink-2);
+  --sb-border: var(--mx-ink-3);
+  --sb-text: var(--mx-ink-text);
+  --sb-text-strong: var(--mx-ink-text-strong);
+  --sb-on-strong: #ffffff;
+  --sb-group: #d7deeb;
+  --sb-child: #b9c7f5;
+  --sb-child-icon: #7dd3fc;
+  --sb-child-panel: rgba(59, 130, 246, .055);
+  --sb-child-hover: rgba(59, 130, 246, .14);
+  --sb-section: #94a3b8;
+  --sb-recent: #5eead4;
+  --sb-hover: rgba(255, 255, 255, .05);
+  --sb-hover-2: rgba(255, 255, 255, .07);
+  --sb-active: rgba(255, 255, 255, .10);
+  --sb-rail-active: rgba(255, 255, 255, .08);
+  --sb-guide: rgba(255, 255, 255, .06);
+  --sb-scrollbar: rgba(255, 255, 255, .16);
+  --sb-group-badge-bg: rgba(239, 68, 68, .18);
+  --sb-group-badge-text: #fca5a5;
+  --sb-fav: #fbbf24;
+  --sb-filter-bg: rgba(255, 255, 255, .06);
+  --sb-flyout-shadow: 0 18px 44px rgba(4, 10, 24, .5);
+
   width: 232px;
   flex: 0 0 auto;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--mx-ink);
-  border-right: 1px solid var(--mx-ink-3);
-  transition: width .22s ease, transform .24s ease;
+  background: var(--sb-bg);
+  border-right: 1px solid var(--sb-border);
+  transition: width .22s ease, transform .24s ease, background-color .2s ease;
+}
+
+/* 浅色侧栏：与白色顶栏 / 浅灰内容区同一色温 */
+.sidebar.theme-light {
+  --sb-bg: #ffffff;
+  --sb-bg-2: #ffffff;
+  --sb-border: var(--mx-border);
+  --sb-text: var(--mx-sub);
+  --sb-text-strong: var(--mx-text);
+  --sb-on-strong: var(--mx-text);
+  --sb-group: #334155;
+  --sb-child: #365f8d;
+  --sb-child-icon: #2563eb;
+  --sb-child-panel: rgba(37, 99, 235, .05);
+  --sb-child-hover: rgba(37, 99, 235, .10);
+  --sb-section: #64748b;
+  --sb-recent: #0f766e;
+  --sb-hover: rgba(15, 23, 42, .045);
+  --sb-hover-2: rgba(15, 23, 42, .06);
+  --sb-active: rgba(37, 99, 235, .08);
+  --sb-rail-active: rgba(15, 23, 42, .06);
+  --sb-guide: rgba(15, 23, 42, .07);
+  --sb-scrollbar: rgba(15, 23, 42, .18);
+  --sb-group-badge-bg: rgba(239, 68, 68, .10);
+  --sb-group-badge-text: #dc2626;
+  --sb-fav: #d97706;
+  --sb-filter-bg: rgba(15, 23, 42, .05);
+  --sb-flyout-shadow: 0 18px 44px rgba(15, 23, 42, .16);
+}
+
+/* 浅色主题下激活项用主色文字，和 3px 主色竖条呼应 */
+.sidebar.theme-light .nav-item.router-link-active {
+  color: var(--mx-primary);
 }
 
 .admin-shell.is-collapsed .sidebar {
@@ -614,7 +913,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--mx-ink-3);
+  border-bottom: 1px solid var(--sb-border);
 }
 
 .brand-mark {
@@ -646,7 +945,7 @@ onBeforeUnmount(() => {
   font-size: 14px;
   font-weight: 600;
   line-height: 1.3;
-  color: #fff;
+  color: var(--sb-on-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -656,7 +955,7 @@ onBeforeUnmount(() => {
   margin-top: 1px;
   font-size: 11.5px;
   line-height: 1.3;
-  color: var(--mx-ink-text);
+  color: var(--sb-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -671,42 +970,128 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+/* 菜单过滤器 */
+.nav-filter {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin: 8px 8px 2px;
+  padding: 0 6px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--sb-filter-bg);
+  transition: border-color .15s ease;
+}
+
+.nav-filter:focus-within {
+  border-color: var(--mx-primary);
+}
+
+.nav-filter-icon {
+  font-size: 13px;
+  color: var(--sb-text);
+  flex: 0 0 auto;
+}
+
+.nav-filter-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  outline: none;
+  font-size: 12.5px;
+  line-height: 32px;
+  color: var(--sb-on-strong);
+}
+
+.nav-filter-input::placeholder {
+  color: var(--sb-text);
+}
+
+.nav-filter-clear {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: 11px;
+  color: var(--sb-text);
+  cursor: pointer;
+  transition: color .15s ease, background-color .15s ease;
+}
+
+.nav-filter-clear:hover {
+  color: var(--sb-on-strong);
+  background: var(--sb-hover-2);
+}
+
 /* 菜单区 */
 .nav-scroll {
   flex: 1;
   min-height: 0;
 }
 
+/* 滚动条平时隐藏，悬停/键盘聚焦菜单区时显现 */
+.nav-scroll :deep(.el-scrollbar__bar) {
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+
+.nav-scroll:hover :deep(.el-scrollbar__bar),
+.nav-scroll:focus-within :deep(.el-scrollbar__bar) {
+  opacity: 1;
+}
+
 .nav-scroll :deep(.el-scrollbar__thumb) {
-  background: rgba(255, 255, 255, .14);
+  background: var(--sb-scrollbar);
 }
 
 .nav {
   padding: 2px 0 10px;
 }
 
+/* 一级分组：大字号、高对比，让它成为清晰的导航锚点 */
 .nav-group-header {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   width: calc(100% - 16px);
-  margin: 2px 8px 0;
+  margin: 7px 8px 0;
   padding: 9px 12px;
   border: 0;
   border-radius: 6px;
   background: none;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: .01em;
-  color: var(--mx-ink-text-strong);
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 20px;
+  letter-spacing: .015em;
+  color: var(--sb-group);
   user-select: none;
   transition: background-color .15s ease, color .15s ease;
 }
 
 .nav-group-header:hover {
-  background: rgba(255, 255, 255, .05);
-  color: #fff;
+  background: var(--sb-hover);
+  color: var(--sb-on-strong);
+}
+
+.nav-group-header.open {
+  background: var(--sb-hover-2);
+  color: var(--sb-on-strong);
+}
+
+.nav-group-header.is-filtering,
+.nav-group-header.is-filtering:hover {
+  background: none;
+  color: var(--sb-group);
+  cursor: default;
 }
 
 .group-name {
@@ -719,35 +1104,52 @@ onBeforeUnmount(() => {
 }
 
 .group-icon {
-  font-size: 15px;
+  font-size: 16px;
   flex: 0 0 auto;
 }
 
-/* 分组子项区：左侧引导线把"组 → 项"的归属关系画出来 */
+/* 二级页面区：蓝色系文字 + 轻底色，与一级分组明确分层 */
 .nav-group-children {
   position: relative;
-  padding: 2px 0 8px;
+  margin: 2px 8px 8px;
+  padding: 4px 0 6px;
+  border-radius: 8px;
+  background: var(--sb-child-panel);
 }
 
 .nav-group-children::before {
   content: "";
   position: absolute;
-  left: 19px;
-  top: 2px;
-  bottom: 10px;
+  left: 11px;
+  top: 4px;
+  bottom: 8px;
   width: 1px;
-  background: rgba(255, 255, 255, .06);
+  background: var(--sb-guide);
 }
 
 /* 组内二级小标：弱化成小字注释，缩进到菜单项文字列，明显区别于可点项 */
 .nav-section-label {
   margin-top: 4px;
-  padding: 6px 12px 2px 46px;
-  font-size: 10.5px;
-  letter-spacing: .08em;
-  color: var(--mx-ink-text);
-  opacity: .45;
+  padding: 7px 12px 3px 38px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: .04em;
+  color: var(--sb-section);
+  opacity: .82;
   user-select: none;
+}
+
+/* 块级小标（我的常用 / 最近使用）：与小字注释同族但顶格、不半透明 */
+.nav-block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 5px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  opacity: 1;
 }
 
 /* 队列徽章（待办数） */
@@ -772,8 +1174,8 @@ onBeforeUnmount(() => {
   height: 17px;
   padding: 0 5px;
   border-radius: 10px;
-  background: rgba(239, 68, 68, .18);
-  color: #fca5a5;
+  background: var(--sb-group-badge-bg);
+  color: var(--sb-group-badge-text);
   font-size: 11px;
   font-weight: 600;
   line-height: 17px;
@@ -781,27 +1183,34 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 我的常用 */
-.fav-block {
+/* 我的常用 / 最近使用 */
+.fav-block,
+.recent-block {
   margin-bottom: 4px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--mx-ink-3);
+  border-bottom: 1px solid var(--sb-border);
 }
 
 .fav-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 20px;
-  opacity: 1;
-  color: #fbbf24;
+  color: var(--sb-fav);
+}
+
+.recent-title {
+  color: var(--sb-recent);
 }
 
 .fav-title-icon {
   font-size: 12px;
 }
 
-/* 收藏星标（hover 显现，已收藏常显金色） */
+.fav-hint {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: .04em;
+  opacity: .5;
+}
+
+/* 收藏星标（hover/聚焦显现，触屏常显，已收藏常显主题色） */
 .fav-star {
   flex: 0 0 auto;
   display: grid;
@@ -811,27 +1220,47 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--mx-ink-text);
+  color: var(--sb-text);
   cursor: pointer;
   opacity: 0;
   transition: opacity .15s ease, color .15s ease;
 }
 
-.nav-item:hover .fav-star {
+.nav-item:hover .fav-star,
+.nav-item:focus-within .fav-star {
   opacity: 1;
 }
 
+@media (hover: none) {
+  .fav-star {
+    opacity: 1;
+  }
+}
+
 .fav-star:hover {
-  color: #fbbf24;
+  color: var(--sb-fav);
 }
 
 .fav-star.active {
   opacity: 1;
-  color: #fbbf24;
+  color: var(--sb-fav);
+}
+
+/* 收藏拖拽排序反馈 */
+.fav-item {
+  cursor: grab;
+}
+
+.fav-item.dragging {
+  opacity: .35;
+}
+
+.fav-item.drag-over {
+  box-shadow: inset 0 -2px 0 var(--mx-primary);
 }
 
 .group-chevron {
-  font-size: 12px;
+  font-size: 10px;
   flex: 0 0 auto;
   transform: rotate(-90deg);
   transition: transform .18s ease;
@@ -846,19 +1275,39 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
+  padding: 8px 12px;
   margin: 1px 8px;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
-  color: var(--mx-ink-text);
+  line-height: 22px;
+  color: var(--sb-text);
   text-decoration: none;
   transition: background-color .15s ease, color .15s ease;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, .05);
-  color: var(--mx-ink-text-strong);
+  background: var(--sb-hover);
+  color: var(--sb-text-strong);
+}
+
+.nav-group-children .nav-item {
+  margin-right: 4px;
+  margin-left: 4px;
+  color: var(--sb-child);
+}
+
+.nav-group-children .nav-item:hover {
+  background: var(--sb-child-hover);
+  color: var(--sb-on-strong);
+}
+
+.nav-group-children .nav-icon {
+  color: var(--sb-child-icon);
+}
+
+.nav-group-children .nav-item.router-link-active .nav-icon {
+  color: currentColor;
 }
 
 .nav-icon {
@@ -875,21 +1324,48 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
+/* 激活态：更实的底色 + 3px 通高主色竖条，视线落点明确 */
 .nav-item.router-link-active {
-  background: rgba(255, 255, 255, .07);
-  color: #fff;
+  background: var(--sb-active);
+  color: var(--sb-on-strong);
+}
+
+.nav-group-children .nav-item.router-link-active {
+  background: var(--sb-active);
+  color: var(--sb-on-strong);
 }
 
 .nav-item.router-link-active::before {
   content: "";
   position: absolute;
   left: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2px;
-  height: 16px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
   border-radius: 6px;
   background: var(--mx-primary);
+}
+
+.nav-group-children .nav-item.router-link-active::before {
+  left: -4px;
+}
+
+.nav-empty {
+  padding: 14px 20px;
+  font-size: 12.5px;
+  color: var(--sb-text);
+}
+
+/* 键盘可达性：所有可聚焦控件统一的焦点环 */
+.nav-item:focus-visible,
+.nav-group-header:focus-visible,
+.rail-item:focus-visible,
+.fav-star:focus-visible,
+.collapse-btn:focus-visible,
+.user-card:focus-visible,
+.nav-filter-clear:focus-visible {
+  outline: 2px solid var(--mx-primary);
+  outline-offset: -2px;
 }
 
 /* 折叠态 rail：只显示分组图标，点击弹出 flyout */
@@ -907,34 +1383,43 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 10px;
   background: none;
-  color: var(--mx-ink-text);
+  color: var(--sb-text);
   font-size: 17px;
   cursor: pointer;
   transition: background-color .15s ease, color .15s ease;
 }
 
 .rail-item:hover {
-  background: rgba(255, 255, 255, .06);
-  color: #fff;
+  background: var(--sb-hover);
+  color: var(--sb-on-strong);
 }
 
 .rail-item.active {
-  background: rgba(255, 255, 255, .08);
-  color: #fff;
+  background: var(--sb-rail-active);
+  color: var(--sb-on-strong);
 }
 
 .rail-item.rail-fav {
-  color: #fbbf24;
+  color: var(--sb-fav);
 }
 
-.rail-badge-dot {
+/* rail 数字徽标：折叠态不丢失待办数量信息 */
+.rail-badge {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
   background: var(--mx-red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 /* flyout 子菜单面板 */
@@ -952,19 +1437,19 @@ onBeforeUnmount(() => {
   width: 218px;
   max-height: 70vh;
   overflow-y: auto;
-  background: var(--mx-ink-2);
-  border: 1px solid var(--mx-ink-3);
+  background: var(--sb-bg-2);
+  border: 1px solid var(--sb-border);
   border-radius: 10px;
-  box-shadow: 0 18px 44px rgba(4, 10, 24, .5);
+  box-shadow: var(--sb-flyout-shadow);
   padding: 6px;
 }
 
 .flyout-title {
   padding: 8px 12px 6px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
   letter-spacing: .02em;
-  color: #fff;
+  color: var(--sb-on-strong);
 }
 
 /* 底部用户卡 */
@@ -974,7 +1459,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 12px;
-  border-top: 1px solid var(--mx-ink-3);
+  border-top: 1px solid var(--sb-border);
 }
 
 .user-dropdown-wrap {
@@ -1002,7 +1487,7 @@ onBeforeUnmount(() => {
 }
 
 .user-card:hover {
-  background: rgba(255, 255, 255, .05);
+  background: var(--sb-hover);
 }
 
 .user-avatar {
@@ -1028,7 +1513,7 @@ onBeforeUnmount(() => {
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.35;
-  color: var(--mx-ink-text-strong);
+  color: var(--sb-text-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1037,7 +1522,7 @@ onBeforeUnmount(() => {
 .user-role {
   font-size: 11.5px;
   line-height: 1.35;
-  color: var(--mx-ink-text);
+  color: var(--sb-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1070,14 +1555,14 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--mx-ink-text);
+  color: var(--sb-text);
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
 
 .collapse-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, .07);
+  color: var(--sb-on-strong);
+  background: var(--sb-hover-2);
 }
 
 /* ── 主区域 ── */

@@ -548,7 +548,130 @@ export class SystemConfigService {
     if (key === 'ai_ops_config') {
       return this.getDefaultAiOpsConfig();
     }
+    if (key === 'app_review_mode') {
+      return this.getDefaultAppReviewMode();
+    }
     return null;
+  }
+
+  getDefaultAppReviewMode() {
+    return {
+      enabled: false,
+      hideDelivery: true,
+      hideMall: false,
+      hideErrand: true,
+      hideWallet: true,
+      hideTopup: true,
+      hideVirtualGoods: true,
+      hideShareInvite: false,
+      hideDating: true,
+      placeholderText: '该功能即将上线',
+    };
+  }
+
+  private normalizeAppReviewMode(value: unknown) {
+    const defaults = this.getDefaultAppReviewMode();
+    const source = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+    const normalized = { ...defaults };
+    for (const key of Object.keys(defaults) as Array<keyof typeof defaults>) {
+      if (key === 'placeholderText') continue;
+      if (typeof source[key] === 'boolean') normalized[key] = source[key] as never;
+    }
+    normalized.placeholderText = typeof source.placeholderText === 'string'
+      ? source.placeholderText.trim().slice(0, 30)
+      : defaults.placeholderText;
+    return normalized;
+  }
+
+  async getAppReviewMode() {
+    const config = await this.prisma.config.findUnique({ where: { key: 'app_review_mode' } });
+    return { success: true, data: this.normalizeAppReviewMode(config?.value) };
+  }
+
+  async saveAppReviewMode(dto: any, operatorId?: string, ip?: string) {
+    const existing = await this.prisma.config.findUnique({ where: { key: 'app_review_mode' } });
+    const before = this.normalizeAppReviewMode(existing?.value);
+    const value = this.normalizeAppReviewMode(dto);
+    await this.prisma.config.upsert({
+      where: { key: 'app_review_mode' },
+      update: { value, group: 'app_review', desc: '小程序审核模式配置', updatedBy: operatorId },
+      create: { key: 'app_review_mode', value, group: 'app_review', desc: '小程序审核模式配置', createdBy: operatorId, updatedBy: operatorId },
+    });
+    await this.logConfigChange(operatorId, 'UPDATE_APP_REVIEW_MODE', 'config', 'app_review_mode', 'config', {
+      before, after: value,
+    }, ip).catch(() => undefined);
+    return { success: true, data: value };
+  }
+
+  // ================= 业务抽成费率配置 BizFeeConfig =================
+
+  /** 内置默认费率，首次加载或 reset 时使用 */
+  getDefaultBizFeeConfigs(): Array<{ bizType: string; label: string; rate: number; fixedFee: number; enabled: boolean; remark: string }> {
+    return [
+      { bizType: 'order',              label: '外卖订单',     rate: 0,    fixedFee: 0, enabled: true,  remark: '外卖订单抽成，实际由区域 commissionRate 控制，此处为统一展示' },
+      { bizType: 'errand_order',       label: '跑腿订单',     rate: 0.05, fixedFee: 0, enabled: true,  remark: '跑腿订单完成时抽取 5%' },
+      { bizType: 'mall_order',         label: '商城订单',     rate: 0.03, fixedFee: 0, enabled: true,  remark: '商城订单支付时抽取 3%' },
+      { bizType: 'group_buy_order',    label: '拼团订单',     rate: 0.03, fixedFee: 0, enabled: false, remark: '拼团业务暂未开启抽成' },
+      { bizType: 'recharge',           label: '余额充值',     rate: 0,    fixedFee: 0, enabled: false, remark: '充值为平台直收，无抽成' },
+      { bizType: 'topup',              label: '付费置顶',     rate: 1.0,  fixedFee: 0, enabled: true,  remark: '置顶费用全额归平台' },
+      { bizType: 'second_hand_order',  label: '二手订单',     rate: 0.02, fixedFee: 0, enabled: false, remark: '二手抽成默认关闭，开启后生效' },
+      { bizType: 'dating_order',       label: '交友订单',     rate: 0.1,  fixedFee: 0, enabled: false, remark: '交友服务抽成' },
+      { bizType: 'activity_order',     label: '活动报名',     rate: 0.05, fixedFee: 0, enabled: false, remark: '活动报名费抽成' },
+      { bizType: 'membership',         label: '会员购买',     rate: 1.0,  fixedFee: 0, enabled: true,  remark: '会员购买全额归平台' },
+    ];
+  }
+
+  async getBizFeeConfigs() {
+    const rows = await this.prisma.bizFeeConfig.findMany({ orderBy: { createdAt: 'asc' } });
+    const defaults = this.getDefaultBizFeeConfigs();
+    // 合并：数据库已有的用数据库值，未入库的用默认值补全
+    const rowMap = new Map(rows.map(r => [r.bizType, r]));
+    const merged = defaults.map(d => {
+      const row = rowMap.get(d.bizType);
+      return row ? { ...d, ...row, rate: Number(row.rate), fixedFee: Number(row.fixedFee) } : { ...d, id: null };
+    });
+    return { success: true, data: merged };
+  }
+
+  async saveBizFeeConfig(bizType: string, dto: { label?: string; rate?: number; fixedFee?: number; enabled?: boolean; remark?: string }, operatorId?: string) {
+    if (dto.rate !== undefined && (dto.rate < 0 || dto.rate > 1)) {
+      throw new Error('费率 rate 必须在 0~1 之间（如 0.05 表示 5%）');
+    }
+    const data: any = { updatedBy: operatorId };
+    if (dto.label !== undefined) data.label = dto.label;
+    if (dto.rate !== undefined) data.rate = dto.rate;
+    if (dto.fixedFee !== undefined) data.fixedFee = dto.fixedFee;
+    if (dto.enabled !== undefined) data.enabled = dto.enabled;
+    if (dto.remark !== undefined) data.remark = dto.remark;
+
+    const result = await this.prisma.bizFeeConfig.upsert({
+      where: { bizType },
+      update: data,
+      create: { bizType, label: dto.label || bizType, rate: dto.rate ?? 0, fixedFee: dto.fixedFee ?? 0, enabled: dto.enabled ?? true, remark: dto.remark, updatedBy: operatorId },
+    });
+    return { success: true, data: { ...result, rate: Number(result.rate), fixedFee: Number(result.fixedFee) } };
+  }
+
+  async saveBizFeeConfigsBatch(configs: Array<{ bizType: string; rate?: number; fixedFee?: number; enabled?: boolean; label?: string; remark?: string }>, operatorId?: string) {
+    const results = await Promise.all(configs.map(c => this.saveBizFeeConfig(c.bizType, c, operatorId)));
+    return { success: true, data: results.map(r => r.data) };
+  }
+
+  /** 供支付/结算服务读取单个业务费率，内部调用，返回 { rate, fixedFee, enabled } */
+  async getBizFeeRate(bizType: string): Promise<{ rate: number; fixedFee: number; enabled: boolean }> {
+    const row = await this.prisma.bizFeeConfig.findUnique({ where: { bizType } }).catch(() => null);
+    if (row) return { rate: Number(row.rate), fixedFee: Number(row.fixedFee), enabled: row.enabled };
+    const def = this.getDefaultBizFeeConfigs().find(d => d.bizType === bizType);
+    return def ? { rate: def.rate, fixedFee: def.fixedFee, enabled: def.enabled } : { rate: 0, fixedFee: 0, enabled: false };
+  }
+
+  /** 计算 platformFee，供支付回调调用 */
+  calcPlatformFee(amount: number, feeConfig: { rate: number; fixedFee: number; enabled: boolean }): number {
+    if (!feeConfig.enabled) return 0;
+    const fee = Math.round((amount * feeConfig.rate + feeConfig.fixedFee) * 100) / 100;
+    return Math.max(0, Math.min(fee, amount));
   }
 
   getDefaultAiOpsConfig() {

@@ -106,7 +106,7 @@
       <section class="config-card">
         <div class="card-head">
           <h3>AI风控频率</h3>
-          <span>控制机器人动作、模型调用、成本和单用户调用上限。</span>
+          <span>控制机器人动作、模型调用、成本和单用户调用上限；抽检比例会将 AI 放行的内容按百分比随机转人工复核（0 = 不抽检）。</span>
         </div>
         <div class="form-grid compact">
           <el-form-item label="每日最大发帖">
@@ -138,6 +138,9 @@
           </el-form-item>
           <el-form-item label="单用户AI日调用">
             <el-input-number v-model="config.riskControl.maxMiniProgramCallsPerUserDay" :min="0" :max="1000" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="AI放行抽检比例（%）">
+            <el-input-number v-model="config.reviewSampleRate" :min="0" :max="100" style="width:100%" />
           </el-form-item>
         </div>
       </section>
@@ -222,6 +225,7 @@ const defaultConfig = () => ({
   coldStartEnabled: true,
   reviewBeforePost: true,
   contentSafetyEnabled: true,
+  reviewSampleRate: 0,
   quietHoursEnabled: true,
   quietStart: '23:00',
   quietEnd: '07:00',

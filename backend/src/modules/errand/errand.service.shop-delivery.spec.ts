@@ -261,7 +261,8 @@ describe('ErrandService shop delivery bridge', () => {
   it('enables live tracking only when an official rider takes a takeaway order', async () => {
     const order = { id: 'shop-1', riderId: null, status: 'PAID', readyTime: new Date(), refundStatus: 'partial', deliveryMode: 'platform_rider', merchant: {}, user: {}, items: [] };
     const tx: any = {
-      order: { findUnique: jest.fn().mockResolvedValue(order), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, riderId: 'rider-1', status: 'SHIPPED' }) },
+      errandOrder: { count: jest.fn().mockResolvedValue(0) },
+      order: { findUnique: jest.fn().mockResolvedValue(order), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, riderId: 'rider-1', status: 'SHIPPED' }) },
       regionRider: { findUnique: jest.fn().mockResolvedValue({ userId: 'rider-1', riderType: 'official', verifyStatus: 'approved', status: 'online', regionId: null }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       orderLog: { create: jest.fn() }, deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -286,7 +287,8 @@ describe('ErrandService shop delivery bridge', () => {
   it('rejects a second concurrent shop-order claim when the rider is no longer online', async () => {
     const order = { id: 'shop-1', riderId: null, status: 'PAID', readyTime: new Date(), refundStatus: 'none', deliveryMode: 'platform_rider', merchant: {}, user: {}, items: [] };
     const tx: any = {
-      order: { findUnique: jest.fn().mockResolvedValue(order), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, riderId: 'rider-1', status: 'SHIPPED' }) },
+      errandOrder: { count: jest.fn().mockResolvedValue(0) },
+      order: { findUnique: jest.fn().mockResolvedValue(order), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, riderId: 'rider-1', status: 'SHIPPED' }) },
       regionRider: {
         findUnique: jest.fn().mockResolvedValue({ userId: 'rider-1', riderType: 'official', verifyStatus: 'approved', status: 'online', regionId: null }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -298,7 +300,7 @@ describe('ErrandService shop delivery bridge', () => {
 
     await expect((service as any).acceptShopOrder('shop-1', 'rider-1')).rejects.toThrow('骑手状态已变化，请刷新后再接单');
     expect(tx.regionRider.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'rider-1', verifyStatus: 'approved', status: 'online' }, data: { status: 'busy' },
+      where: { userId: 'rider-1', verifyStatus: 'approved', status: { in: ['online', 'busy'] } }, data: { status: 'online' },
     });
   });
 
@@ -322,7 +324,7 @@ describe('ErrandService shop delivery bridge', () => {
     };
     const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     jest.spyOn(service as any, 'getOrderTakingPolicy').mockResolvedValue({});
-    jest.spyOn(service as any, 'getRiderDispatchContext').mockResolvedValue({ activeOrdersCount: 0 });
+    jest.spyOn(service as any, 'getRiderDispatchContext').mockResolvedValue({ active_orders_count: 0, activeOrdersCount: 0 });
     jest.spyOn(service as any, 'recordDeliveryNode').mockResolvedValue(undefined);
 
     await expect((service as any).acceptOrderUnlocked('errand-1', 'rider-1')).rejects.toThrow('骑手状态已变化，请刷新后再接单');
@@ -330,7 +332,7 @@ describe('ErrandService shop delivery bridge', () => {
       where: expect.objectContaining({ refundStatus: { notIn: ['refunding', 'refunded'] } }),
     }));
     expect(tx.regionRider.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'rider-1', verifyStatus: 'approved', status: 'online' }, data: { status: 'busy' },
+      where: { userId: 'rider-1', verifyStatus: 'approved', status: { in: ['online', 'busy'] } }, data: { status: 'online' },
     });
   });
 

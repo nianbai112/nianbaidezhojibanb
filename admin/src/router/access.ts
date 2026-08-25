@@ -33,7 +33,6 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/user', any: ['user:view'] },
 
   { prefix: '/content/comments', any: ['comment:view', 'comment:audit'] },
-  { prefix: '/content/comment-lotteries', any: ['lottery:list', 'lottery:detail', 'lottery:record:list'] },
   { prefix: '/content/audit', any: ['audit:view', 'report:handle', 'post:audit', 'comment:audit'] },
   { prefix: '/content/sensitive', any: ['content:view', 'system:config'] },
   { prefix: '/content/settings', any: ['content:view', 'system:config'] },
@@ -76,6 +75,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/marketing/group-buys', any: ['groupbuy:view', 'marketing:view'] },
   { prefix: '/marketing/share', any: ['share:view', 'marketing:view'] },
   { prefix: '/marketing/notifications', any: ['notification:view', 'notification:send', 'marketing:view'] },
+  { prefix: '/marketing/wechat-notify', any: ['system:config'] },
   { prefix: '/marketing', any: ['marketing:view', 'activity:view'] },
   { prefix: '/growth/ranking', any: ['ranking:list', 'marketing:view'] },
 
@@ -123,7 +123,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/marketing/center', any: ['marketing:view', 'activity:view', 'groupbuy:view'] },
   { prefix: '/marketing/perks', any: ['coupon:view', 'share:view', 'marketing:view'] },
   { prefix: '/marketing/messages', any: ['notification:view', 'marketing:view'] },
-  { prefix: '/content/discussions', any: ['comment:view', 'comment:audit', 'lottery:list'] },
+  { prefix: '/content/discussions', any: ['comment:view', 'comment:audit'] },
   { prefix: '/content/assets', any: ['content:view', 'post:audit', 'system:config'] },
   { prefix: '/user/loyalty', any: ['user:view'] },
   { prefix: '/system/publishing', any: ['system:config', 'config:view', 'notification:view'] },
@@ -174,7 +174,7 @@ const LEGACY_MENU_ALIASES: Record<string, string[]> = {
   '/marketing/center': ['/marketing/campaigns', '/marketing/activities', '/marketing/group-buys'],
   '/marketing/perks': ['/marketing/coupons', '/marketing/sign', '/marketing/share'],
   '/marketing/messages': ['/marketing/official-assistant', '/marketing/notifications'],
-  '/content/discussions': ['/content/comments', '/content/comment-lotteries'],
+  '/content/discussions': ['/content/comments'],
   '/content/assets': ['/content/stickers', '/content/text-cover-templates', '/content/sensitive'],
   '/user/loyalty': ['/user/growth', '/user/badges', '/user/tags'],
   '/system/publishing': ['/system/website', '/system/agreements', '/system/notification-center', '/system/mini-program-paths'],

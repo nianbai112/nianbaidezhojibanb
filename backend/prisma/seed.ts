@@ -330,14 +330,6 @@ async function main() {
     { code: 'club:member:list', name: '查看社团成员', module: 'club', action: 'member:list' },
     { code: 'club:member:delete', name: '移除社团成员', module: 'club', action: 'member:delete' },
 
-    // 评论抽奖
-    { code: 'lottery:list', name: '查看抽奖列表', module: 'lottery', action: 'list' },
-    { code: 'lottery:detail', name: '查看抽奖详情', module: 'lottery', action: 'detail' },
-    { code: 'lottery:draw', name: '执行评论抽奖开奖', module: 'lottery', action: 'draw' },
-    { code: 'lottery:cancel', name: '取消评论抽奖', module: 'lottery', action: 'cancel' },
-    { code: 'lottery:delete', name: '删除抽奖', module: 'lottery', action: 'delete' },
-    { code: 'lottery:record:list', name: '查看中奖记录', module: 'lottery', action: 'record:list' },
-
     // 排行榜
     { code: 'ranking:list', name: '查看排行榜', module: 'ranking', action: 'list' },
     { code: 'ranking:create', name: '创建排行榜', module: 'ranking', action: 'create' },
@@ -491,7 +483,6 @@ async function main() {
     'dating:view', 'dating:audit', 'dating:config',
     'topup:package:list', 'topup:order:list',
     'club:list', 'club:detail', 'club:create', 'club:update', 'club:audit', 'club:delete', 'club:member:list', 'club:member:delete',
-    'lottery:list', 'lottery:detail', 'lottery:draw', 'lottery:cancel', 'lottery:record:list',
     'ranking:list', 'ranking:create', 'ranking:update',
     'userGuidance:list', 'userGuidance:create', 'userGuidance:update',
     'contacts:category:list', 'contacts:category:create', 'contacts:category:update', 'contacts:list', 'contacts:create', 'contacts:update',
@@ -727,8 +718,6 @@ async function main() {
     { name: '区域配置', path: '/community/config', parentPath: '/community', sortOrder: 2 },
     { name: '社团管理', path: '/club', icon: 'TeamOutlined', sortOrder: 18 },
     { name: '社团列表', path: '/club/list', parentPath: '/club', sortOrder: 0 },
-    { name: '评论抽奖', path: '/lottery', icon: 'GiftOutlined', sortOrder: 19 },
-    { name: '抽奖列表', path: '/lottery/list', parentPath: '/lottery', sortOrder: 0 },
     { name: '商家点评', path: '/dianping', icon: 'CommentOutlined', sortOrder: 20 },
     { name: '点评列表', path: '/dianping/reviews', parentPath: '/dianping', sortOrder: 0 },
     { name: '排行榜', path: '/ranking', icon: 'TrophyOutlined', sortOrder: 21 },
@@ -828,7 +817,6 @@ async function main() {
     '/topup', '/topup/packages', '/topup/orders',
     '/community', '/community/circles', '/community/payments', '/community/config',
     '/club', '/club/list',
-    '/lottery', '/lottery/list',
     '/dianping', '/dianping/reviews',
     '/ranking', '/ranking/list',
     '/user-guidance', '/user-guidance/pages',

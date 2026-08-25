@@ -269,11 +269,23 @@ export class ErrandLifecycleService {
     return updated;
   }
 
-  async confirmReceipt(orderId: string, userId: string, source: 'user' | 'system' = 'user') {
+  async confirmReceipt(
+    orderId: string,
+    userId: string,
+    source: 'user' | 'system' | 'rider' = 'user',
+    receiptCode?: string,
+  ) {
     const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('订单不存在');
     if (source === 'user' && order.userId !== userId) {
       throw new BadRequestException('无权确认该订单');
+    }
+    if (source === 'rider') {
+      if (order.riderId !== userId) throw new BadRequestException('无权确认该订单');
+      if (!order.receiptCode) throw new BadRequestException('该订单未生成收货码');
+      if (String(receiptCode || '').trim() !== order.receiptCode) {
+        throw new BadRequestException('收货码不正确');
+      }
     }
     if (order.status === 'completed' && order.receiptConfirmedAt) return order;
     if (order.status !== 'arrived') throw new BadRequestException('订单尚未送达，不能确认收货');
@@ -304,7 +316,7 @@ export class ErrandLifecycleService {
     if (riskEvent) throw new BadRequestException('订单存在未处理风险事件，暂不能确认收货');
 
     const now = new Date();
-    return this.prisma.$transaction(async tx => {
+    const updated = await this.prisma.$transaction(async tx => {
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
@@ -323,21 +335,45 @@ export class ErrandLifecycleService {
       if (claimed.count !== 1) {
         throw new BadRequestException('订单状态已变化，请刷新后重试');
       }
+
+      // 写入平台抽成金额
+      try {
+        const feeConfig = await tx.bizFeeConfig.findUnique({ where: { bizType: 'errand_order' } }).catch(() => null);
+        const rate = feeConfig?.enabled ? Number(feeConfig.rate || 0) : 0;
+        const fixedFee = feeConfig?.enabled ? Number(feeConfig.fixedFee || 0) : 0;
+        if (rate > 0 || fixedFee > 0) {
+          const payAmount = Number(order.payAmount || 0);
+          const platformFee = Math.max(0, Math.min(
+            Math.round((payAmount * rate + fixedFee) * 100) / 100,
+            payAmount,
+          ));
+          if (platformFee > 0) {
+            await tx.errandOrder.update({
+              where: { id: orderId },
+              data: { platformFee },
+            });
+          }
+        }
+      } catch (e: any) {
+        this.logger && this.logger.warn(`跑腿订单写入 platformFee 失败: ${e.message}`);
+      }
       await tx.deliveryOrderNode.create({
         data: {
           orderId,
           orderType: 'errand',
           nodeType: 'completed',
-          nodeLabel: source === 'system' ? '超时自动确认收货' : '用户已确认收货',
-          operatorId: source === 'user' ? userId : null,
+          nodeLabel: source === 'system' ? '超时自动确认收货' : (source === 'rider' ? '骑手凭收货码确认收货' : '用户已确认收货'),
+          operatorId: source === 'system' ? null : userId,
           operatorType: source,
           riderType: 'part_time',
           displayMode: order.deliveryDisplayMode || 'status_nodes',
-          remark: source === 'system' ? '送达24小时后系统自动确认' : '用户主动确认收货',
+          remark: source === 'system' ? '送达24小时后系统自动确认' : (source === 'rider' ? '骑手凭收货码完成核销' : '用户主动确认收货'),
         },
       });
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
     });
+    await this.dispatchLifecycleNotification(updated, 'errand_delivered');
+    return updated;
   }
 
   private async transitionRiderOrder(
@@ -351,7 +387,7 @@ export class ErrandLifecycleService {
   ) {
     const order = existingOrder || await this.requireRiderOrder(orderId, riderId, fromStatus);
     const proofImages = this.proofImages(evidence);
-    return this.prisma.$transaction(async tx => {
+    const updated = await this.prisma.$transaction(async tx => {
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
@@ -382,6 +418,72 @@ export class ErrandLifecycleService {
         },
       });
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
+    });
+    if (toStatus === 'in_progress') {
+      await this.dispatchLifecycleNotification(updated, 'errand_picked');
+    }
+    return updated;
+  }
+
+  private async dispatchLifecycleNotification(
+    order: any,
+    scene: 'errand_picked' | 'errand_delivered',
+  ) {
+    if (!this.notifyService || !order?.userId) return;
+
+    const rider = order.riderId
+      ? await this.prisma.regionRider.findUnique({
+          where: { userId: order.riderId },
+          select: { realName: true },
+        }).catch(() => null)
+      : null;
+    const isPicked = scene === 'errand_picked';
+    const occurredAt = isPicked
+      ? order.pickupTime || new Date()
+      : order.completeTime || new Date();
+
+    try {
+      await this.notifyService.createAndDispatch({
+        userId: order.userId,
+        regionId: order.regionId || undefined,
+        type: 'delivery',
+        scene,
+        title: isPicked ? '骑手已取件' : '订单已完成',
+        content: isPicked
+          ? `您的跑腿订单 ${order.orderNo || ''} 已由骑手取件，正在配送中。`
+          : `您的跑腿订单 ${order.orderNo || ''} 已完成，感谢您的使用。`,
+        data: {
+          orderId: order.id,
+          orderNo: order.orderNo || '',
+          riderName: rider?.realName || '骑手',
+          pickupAddress: order.pickupAddress || '',
+          deliveryAddress: order.deliverAddress || '',
+          estimatedTime: this.formatWechatTime(occurredAt),
+          finishedAt: this.formatWechatTime(occurredAt),
+        },
+        linkType: 'page',
+        linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
+        channelMask: {
+          inApp: true,
+          websocket: true,
+          push: false,
+          wechatSubscribe: false,
+          officialAccount: true,
+        },
+      });
+    } catch (error: any) {
+      this.logger.warn(
+        `跑腿服务号通知失败 order=${order.id} scene=${scene}: ${error?.message || error}`,
+      );
+    }
+  }
+
+  private formatWechatTime(value: Date | string) {
+    const date = value instanceof Date ? value : new Date(value);
+    const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+    return safeDate.toLocaleString('zh-CN', {
+      hour12: false,
+      timeZone: 'Asia/Shanghai',
     });
   }
 

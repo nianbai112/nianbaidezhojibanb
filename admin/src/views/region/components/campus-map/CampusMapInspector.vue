@@ -8,7 +8,7 @@
       <el-button v-if="selectedEditableItem" text @click="$emit('clearSelection')">取消选择</el-button>
     </div>
 
-    <div v-if="selectedEditableItem" class="inspector-editor">
+    <div v-if="selectedEditableItem" class="inspector-editor" @focusin="$emit('beforeEdit')" @pointerdown="$emit('beforeEdit')">
       <el-form label-position="top">
         <el-form-item label="名称">
           <el-input v-model="selectedEditableItem.item.title" maxlength="30" />
@@ -118,6 +118,11 @@
         </el-form-item>
 
         <template v-if="selectedEditableItem.kind === 'calibration'">
+          <el-form-item label="坐标拾取">
+            <el-button :icon="Aim" style="width: 100%" @click="$emit('pickLocation')">
+              从高德地图拾取坐标
+            </el-button>
+          </el-form-item>
           <div class="calibration-grid">
             <el-form-item label="经度">
               <el-input-number v-model="selectedEditableItem.item.longitude" :precision="6" :step="0.000001" />
@@ -225,7 +230,7 @@
 </template>
 
 <script setup lang="ts">
-import { Delete, EditPen } from '@element-plus/icons-vue'
+import { Aim, Delete, EditPen } from '@element-plus/icons-vue'
 
 defineProps<{
   selectedEditableItem: any | null
@@ -241,6 +246,8 @@ defineProps<{
 
 defineEmits<{
   clearSelection: []
+  beforeEdit: []
+  pickLocation: []
   syncSemantic: []
   syncAvailability: [status: 'open' | 'unopened']
   assignProject: [officialNumber: number]

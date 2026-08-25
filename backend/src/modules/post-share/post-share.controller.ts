@@ -6,7 +6,7 @@ import { JwtGuard } from '../../guards/jwt.guard';
 import { PostShareService } from './post-share.service';
 
 @ApiTags('笔记分享')
-@Controller('api/post-shares')
+@Controller('post-shares')
 export class PostShareController {
   constructor(private readonly postShareService: PostShareService) {}
 

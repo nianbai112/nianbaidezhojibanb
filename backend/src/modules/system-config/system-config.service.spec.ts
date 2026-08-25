@@ -4,6 +4,40 @@ jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
 
 describe('SystemConfigService storage config', () => {
+  it('normalizes and persists app review mode with the real previous value in the audit log', async () => {
+    const prisma = {
+      config: {
+        findUnique: jest.fn().mockResolvedValue({ value: { enabled: false, hideDelivery: false, unknown: true } }),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+      adminOperationLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new SystemConfigService(prisma as any, {} as any);
+
+    await expect(service.saveAppReviewMode({
+      enabled: true,
+      hideDelivery: true,
+      hideMall: true,
+      hideErrand: true,
+      hideWallet: true,
+      hideTopup: true,
+      hideVirtualGoods: true,
+      hideShareInvite: true,
+      hideDating: true,
+      placeholderText: '  审核期间暂不开放  ',
+      unknown: 'discard-me',
+    }, 'admin-1', '127.0.0.1')).resolves.toMatchObject({
+      success: true,
+      data: { enabled: true, placeholderText: '审核期间暂不开放' },
+    });
+
+    const saved = prisma.config.upsert.mock.calls[0][0].update.value;
+    expect(saved).not.toHaveProperty('unknown');
+    expect(prisma.adminOperationLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: 'UPDATE_APP_REVIEW_MODE' }),
+    }));
+  });
+
   it('preserves existing COS secrets when masked fields are omitted by the admin UI', async () => {
     const prisma = {
       config: {

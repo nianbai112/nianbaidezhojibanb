@@ -399,6 +399,13 @@ describe("AdminService", () => {
       expect(result).toHaveProperty("pendingRefunds");
       expect(result).toHaveProperty("pendingCerts");
       expect(result).toHaveProperty("systemErrorCount");
+      expect(prisma.post.count).toHaveBeenCalledWith({
+        where: {
+          auditStatus: "pending",
+          deletedAt: null,
+          status: { not: "DELETED" },
+        },
+      });
     });
   });
 
@@ -411,6 +418,24 @@ describe("AdminService", () => {
       });
       expect(prisma.orderAppeal.count).toHaveBeenCalledWith({
         where: { status: "pending" },
+      });
+      expect(prisma.post.count).toHaveBeenCalledWith({
+        where: {
+          auditStatus: "pending",
+          deletedAt: null,
+          status: { not: "DELETED" },
+        },
+      });
+      expect(prisma.comment.count).toHaveBeenCalledWith({
+        where: {
+          auditStatus: "pending",
+          deletedAt: null,
+          status: { not: "deleted" },
+          post: {
+            deletedAt: null,
+            status: { not: "DELETED" },
+          },
+        },
       });
       const fulfillmentAlert = prisma.order.count.mock.calls
         .map(([args]: any[]) => args.where)
@@ -838,6 +863,49 @@ describe("AdminService", () => {
       await expect(service.regionDetail("x")).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it("stores home navigation display metadata without replacing kingkong entries", async () => {
+      const existing = {
+        id: "region-1",
+        name: "测试区域",
+        code: "region-1",
+        settings: { noteConfig: { enabled: true } },
+        homeNavLayoutConfig: [{ id: "run", name: "跑腿" }],
+      };
+      prisma.region.findUnique.mockResolvedValue(existing);
+      prisma.region.update.mockImplementation(async ({ data }: any) => ({ ...existing, ...data }));
+
+      await service.updateRegion("region-1", {
+        homeNavDisplayConfig: {
+          title: { show: true, text: "校园首页" },
+          showLayoutSwitch: false,
+        },
+      });
+
+      expect(prisma.region.update).toHaveBeenCalledWith({
+        where: { id: "region-1" },
+        data: {
+          settings: {
+            noteConfig: { enabled: true },
+            homeNavDisplayConfig: {
+              title: { show: true, text: "校园首页" },
+              showLayoutSwitch: false,
+            },
+          },
+        },
+      });
+    });
+
+    it("rejects a non-array kingkong payload before it can overwrite the region", async () => {
+      prisma.region.findUnique.mockResolvedValue({ id: "region-1", settings: {} });
+
+      await expect(
+        service.updateRegion("region-1", {
+          homeNavLayoutConfig: { 0: { id: "run", name: "跑腿" } },
+        }),
+      ).rejects.toThrow("首页金刚区配置必须是数组");
+      expect(prisma.region.update).not.toHaveBeenCalled();
     });
   });
 

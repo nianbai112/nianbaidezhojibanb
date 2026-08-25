@@ -51,9 +51,9 @@
               <el-input v-model="official.qrUrl" placeholder="请输入公众号二维码图片 URL" />
               <div class="form-tip">小程序“绑定微信公众号”弹窗会展示此二维码。</div>
             </el-form-item>
-            <el-form-item label="身份绑定链接">
-              <el-input v-model="official.bindUrl" placeholder="请输入公众号身份绑定页面 URL，可选" />
-              <div class="form-tip">填写后，小程序弹窗会显示“绑定身份”入口。</div>
+            <el-form-item label="身份绑定链接（兼容旧版）">
+              <el-input v-model="official.bindUrl" placeholder="新版专属二维码绑定无需填写" />
+              <div class="form-tip">新版小程序会由服务器生成用户专属公众号二维码；仅使用自建 H5 绑定页时填写。</div>
             </el-form-item>
             <el-form-item label="Token">
               <el-input v-model="official.token" placeholder="用于公众号服务器配置校验" />

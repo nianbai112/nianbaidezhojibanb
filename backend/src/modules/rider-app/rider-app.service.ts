@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/services/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { ErrandService } from '../errand/errand.service';
 import { SystemConfigService } from '../system-config/system-config.service';
+import { FinanceService } from '../finance/finance.service';
 
 @Injectable()
 export class RiderAppService {
@@ -11,6 +12,7 @@ export class RiderAppService {
     private readonly authService: AuthService,
     private readonly errandService: ErrandService,
     private readonly systemConfigService: SystemConfigService,
+    private readonly financeService: FinanceService,
   ) {}
 
   async sendPhoneCode(dto: { phone?: string; mobile?: string }, ip?: string) {
@@ -22,7 +24,9 @@ export class RiderAppService {
     ip?: string,
     ua?: string,
   ) {
-    const login = await this.authService.phoneLogin(dto, ip, ua);
+    const login = await this.authService.phoneLogin(dto, ip, ua, {
+      preferApprovedOfficialRider: true,
+    });
     return {
       ...login,
       ...(await this.buildSession(login.id)),
@@ -55,6 +59,13 @@ export class RiderAppService {
   async updateOrderStatus(userId: string, orderId: string, dto: any) {
     await this.requireOfficialRider(userId);
     return this.errandService.updateRiderStatus(orderId, userId, dto);
+  }
+
+  async confirmOrderByCode(userId: string, orderId: string, code: string) {
+    await this.requireOfficialRider(userId);
+    const receiptCode = String(code || '').trim();
+    if (!receiptCode) throw new BadRequestException('请输入收货码');
+    return this.errandService.confirmReceiptByCode(orderId, userId, receiptCode);
   }
 
   async updateLocation(userId: string, dto: any) {
@@ -247,6 +258,408 @@ export class RiderAppService {
       return created;
     });
     return { success: true, message: '异常已上报，平台将尽快处理', data: risk };
+  }
+
+  // ===========================================================================
+  // 骑手收入 / 结算 / 提现
+  // ===========================================================================
+
+  private toNumber(value: any): number {
+    if (value === null || value === undefined) return 0;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  }
+
+  private round2(value: number): number {
+    return Math.round((Number(value) || 0) * 100) / 100;
+  }
+
+  private dayStart(date: Date): Date {
+    const value = new Date(date);
+    value.setHours(0, 0, 0, 0);
+    return value;
+  }
+
+  /**
+   * 骑手已完成订单的收入（与 finance-admin 的 getCompletedRiderEarnings 口径一致）：
+   * - 跑腿单: price + tip
+   * - 外卖/商城配送单: max(originalFreight, paidFreight + subsidy, paidFreight)
+   * excludeCovered 为 true 时剔除已被结算单覆盖的订单（用于"待结算"口径）。
+   */
+  private async computeRiderEarnings(
+    userId: string,
+    start: Date,
+    end: Date,
+    excludeCovered: boolean,
+  ) {
+    const [errandOrders, deliveryOrders, coveredItems] = await Promise.all([
+      this.prisma.errandOrder.findMany({
+        where: {
+          riderId: userId,
+          status: 'completed',
+          refundStatus: { notIn: ['refunding', 'refunded'] },
+          receiptConfirmedAt: { not: null },
+          settlementEligibleAt: { gte: start, lte: end },
+        },
+        select: { id: true, orderNo: true, title: true, price: true, tip: true, completeTime: true },
+      }),
+      this.prisma.order.findMany({
+        where: {
+          riderId: userId,
+          status: { in: ['DELIVERED', 'RECEIVED', 'COMPLETED'] },
+          refundStatus: { notIn: ['refunding', 'refunded'] },
+          OR: [
+            { deliverTime: { gte: start, lte: end } },
+            { deliverTime: null, completeTime: { gte: start, lte: end } },
+          ],
+          deliveryMode: { in: ['platform_rider', 'rider_delivery'] },
+          businessType: { not: 'dorm_shop' },
+        },
+        select: {
+          id: true,
+          orderNo: true,
+          freightAmount: true,
+          originalFreightAmount: true,
+          deliverTime: true,
+          completeTime: true,
+        },
+      }),
+      excludeCovered
+        ? this.prisma.riderSettlementItem.findMany({
+            where: { riderId: userId },
+            select: { orderType: true, orderId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const covered = new Set(
+      coveredItems.map((item) => `${String(item.orderType)}:${String(item.orderId)}`),
+    );
+
+    const deliveryOrderIds = deliveryOrders.map((order) => order.id).filter(Boolean);
+    const subsidyMap = new Map<string, number>();
+    if (deliveryOrderIds.length) {
+      const groups = await (this.prisma as any).subsidyLedger
+        .groupBy({
+          by: ['orderId'],
+          where: {
+            orderType: 'order',
+            orderId: { in: deliveryOrderIds },
+            receiverType: 'rider',
+            status: { not: 'cancelled' },
+          },
+          _sum: { amount: true },
+        })
+        .catch(() => []);
+      for (const item of groups) subsidyMap.set(item.orderId, this.toNumber(item._sum?.amount));
+    }
+
+    const earnings: Array<{
+      orderId: string;
+      orderType: string;
+      orderNo: string;
+      title: string;
+      amount: number;
+      completeTime: Date;
+    }> = [];
+
+    for (const order of errandOrders) {
+      if (covered.has(`errand:${order.id}`)) continue;
+      const amount = this.toNumber(order.price) + this.toNumber(order.tip);
+      if (amount <= 0) continue;
+      earnings.push({
+        orderId: order.id,
+        orderType: 'errand',
+        orderNo: order.orderNo || order.id,
+        title: order.title || '跑腿订单',
+        amount,
+        completeTime: order.completeTime || new Date(),
+      });
+    }
+
+    for (const order of deliveryOrders) {
+      if (covered.has(`delivery_order:${order.id}`)) continue;
+      const paidFreight = this.toNumber(order.freightAmount);
+      const subsidy = subsidyMap.get(order.id) || 0;
+      const originalFreight = this.toNumber((order as any).originalFreightAmount);
+      const amount = Math.max(originalFreight, paidFreight + subsidy, paidFreight);
+      if (amount <= 0) continue;
+      earnings.push({
+        orderId: order.id,
+        orderType: 'delivery_order',
+        orderNo: order.orderNo || order.id,
+        title: '配送订单',
+        amount,
+        completeTime: order.deliverTime || order.completeTime || new Date(),
+      });
+    }
+
+    return earnings;
+  }
+
+  private toRiderSettlement(settlement: any) {
+    return {
+      id: settlement.id,
+      settlementNo: settlement.settlementNo,
+      regionId: settlement.regionId,
+      periodStart: settlement.periodStart,
+      periodEnd: settlement.periodEnd,
+      orderCount: settlement.orderCount,
+      deliveryFeeTotal: this.toNumber(settlement.deliveryFeeTotal),
+      rewardAmount: this.toNumber(settlement.rewardAmount),
+      penaltyAmount: this.toNumber(settlement.penaltyAmount),
+      payableAmount: this.toNumber(settlement.payableAmount),
+      paidAmount: this.toNumber(settlement.paidAmount),
+      status: settlement.status,
+      remark: settlement.remark,
+      createdAt: settlement.createdAt,
+      updatedAt: settlement.updatedAt,
+    };
+  }
+
+  async getRiderIncomeOverview(userId: string) {
+    await this.requireOfficialRider(userId);
+    const now = new Date();
+    const todayStart = this.dayStart(now);
+    const tomorrow = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [wallet, todayEarnings, monthEarnings, unsettledEarnings, pendingSettlements, pendingWithdrawals] = await Promise.all([
+      this.prisma.wallet.findUnique({ where: { userId } }),
+      this.computeRiderEarnings(userId, todayStart, tomorrow, false),
+      this.computeRiderEarnings(userId, monthStart, tomorrow, false),
+      this.computeRiderEarnings(userId, new Date(0), tomorrow, true),
+      this.prisma.riderSettlement.aggregate({
+        where: { riderId: userId, status: { in: ['PENDING', 'CONFIRMED'] } },
+        _sum: { payableAmount: true },
+      }),
+      this.prisma.withdraw.aggregate({
+        where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const sum = (items: Array<{ amount: number }>) => items.reduce((total, item) => total + item.amount, 0);
+    return {
+      balance: this.round2(this.toNumber(wallet?.balance)),
+      freeze: this.round2(this.toNumber(wallet?.freeze)),
+      today_income: this.round2(sum(todayEarnings)),
+      month_income: this.round2(sum(monthEarnings)),
+      pending_settlement: this.round2(
+        sum(unsettledEarnings)
+        + this.toNumber((pendingSettlements as any)._sum?.payableAmount),
+      ),
+      withdrawing: this.round2(this.toNumber((pendingWithdrawals as any)._sum?.amount)),
+    };
+  }
+
+  async getRiderIncomeTransactions(userId: string, query: any = {}) {
+    await this.requireOfficialRider(userId);
+    return this.financeService.transactions(userId, query);
+  }
+
+  async getRiderSettlements(userId: string, query: any = {}) {
+    await this.requireOfficialRider(userId);
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 20));
+    const where = { riderId: userId };
+    const [items, total] = await Promise.all([
+      this.prisma.riderSettlement.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.riderSettlement.count({ where }),
+    ]);
+    const appeals = items.length
+      ? await this.prisma.orderAppeal.findMany({
+          where: { orderType: 'rider_settlement', orderId: { in: items.map((item) => item.id) } },
+          select: { orderId: true, status: true },
+        })
+      : [];
+    const appealMap = new Map(appeals.map((item) => [item.orderId, item.status]));
+    return {
+      list: items.map((item) => ({
+        ...this.toRiderSettlement(item),
+        appealStatus: appealMap.get(item.id) || '',
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  async getRiderSettlementDetail(userId: string, id: string) {
+    await this.requireOfficialRider(userId);
+    const settlement = await this.prisma.riderSettlement.findFirst({ where: { id, riderId: userId } });
+    if (!settlement) throw new NotFoundException('结算记录不存在');
+
+    const [items, appeal] = await Promise.all([
+      this.prisma.riderSettlementItem.findMany({
+        where: { settlementId: id },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.orderAppeal.findFirst({
+        where: { orderType: 'rider_settlement', orderId: id },
+      }),
+    ]);
+
+    const errandIds = items.filter((item) => item.orderType === 'errand').map((item) => item.orderId);
+    const deliveryIds = items.filter((item) => item.orderType === 'delivery_order').map((item) => item.orderId);
+    const [errandRows, deliveryRows] = await Promise.all([
+      errandIds.length
+        ? this.prisma.errandOrder.findMany({ where: { id: { in: errandIds } }, select: { id: true, orderNo: true } })
+        : (Promise.resolve([]) as Promise<{ id: string; orderNo: string }[]>),
+      deliveryIds.length
+        ? this.prisma.order.findMany({ where: { id: { in: deliveryIds } }, select: { id: true, orderNo: true } })
+        : (Promise.resolve([]) as Promise<{ id: string; orderNo: string }[]>),
+    ]);
+    const orderNoMap = new Map<string, string>();
+    errandRows.forEach((row) => orderNoMap.set(row.id, row.orderNo));
+    deliveryRows.forEach((row) => orderNoMap.set(row.id, row.orderNo));
+
+    const orders = items.map((item) => {
+      const originalAmount = this.toNumber(item.deliveryFeeAmount) + this.toNumber(item.tipAmount);
+      const reversalAmount = this.toNumber(item.reversalAmount);
+      const netAmount = this.toNumber(item.payableAmount) - reversalAmount;
+      return {
+        id: item.id,
+        orderNo: orderNoMap.get(item.orderId) || item.orderId,
+        source: item.orderType === 'delivery_order' ? '配送订单' : '跑腿订单',
+        orderType: item.orderType,
+        amount: this.toNumber(item.payableAmount),
+        originalAmount,
+        netAmount,
+        reversalAmount,
+        reversalStatus: reversalAmount > 0 ? '已冲正' : '',
+        reverseReason: item.reverseReason || '',
+        status: item.status,
+      };
+    });
+
+    return {
+      ...this.toRiderSettlement(settlement),
+      itemOriginalAmount: this.round2(orders.reduce((sum, item) => sum + item.originalAmount, 0)),
+      itemReversalAmount: this.round2(orders.reduce((sum, item) => sum + item.reversalAmount, 0)),
+      itemNetAmount: this.round2(orders.reduce((sum, item) => sum + item.netAmount, 0)),
+      orders,
+      appealStatus: appeal?.status || '',
+      appealReason: appeal?.description || '',
+      appealReply: appeal?.latestReply || '',
+    };
+  }
+
+  async createRiderSettlementAppeal(userId: string, id: string, dto: any) {
+    await this.requireOfficialRider(userId);
+    const reason = String(dto?.reason || '').trim();
+    if (reason.length < 5 || reason.length > 500) {
+      throw new BadRequestException('申诉说明需填写 5-500 个字');
+    }
+    const images = Array.isArray(dto?.images)
+      ? dto.images.filter(Boolean).map(String).slice(0, 3)
+      : [];
+
+    const settlement = await this.prisma.riderSettlement.findFirst({ where: { id, riderId: userId } });
+    if (!settlement) throw new NotFoundException('结算记录不存在');
+
+    const existing = await this.prisma.orderAppeal.findUnique({
+      where: { orderType_orderId: { orderType: 'rider_settlement', orderId: id } },
+    });
+    if (existing) {
+      if (['pending', 'processing'].includes(String(existing.status))) {
+        throw new BadRequestException('该结算已提交申诉，请等待平台处理');
+      }
+      return this.prisma.orderAppeal.update({
+        where: { id: existing.id },
+        data: {
+          description: reason,
+          evidenceImages: images.length ? images : undefined,
+          status: 'pending',
+          latestReply: null,
+        },
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const appeal = await tx.orderAppeal.create({
+        data: {
+          appealNo: `SA${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+          orderType: 'rider_settlement',
+          orderId: id,
+          orderNo: settlement.settlementNo || id,
+          userId,
+          regionId: settlement.regionId || undefined,
+          appealType: 'settlement',
+          description: reason,
+          evidenceImages: images.length ? images : undefined,
+          status: 'pending',
+        },
+      });
+      await tx.orderAppealEvent.create({
+        data: {
+          appealId: appeal.id,
+          action: 'submit',
+          actorType: 'rider',
+          actorId: userId,
+          status: 'pending',
+          content: reason,
+        },
+      });
+      return appeal;
+    });
+  }
+
+  async getRiderWithdrawals(userId: string, query: any = {}) {
+    await this.requireOfficialRider(userId);
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 20));
+    const where = { userId };
+    const [items, total] = await Promise.all([
+      this.prisma.withdraw.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.withdraw.count({ where }),
+    ]);
+    return {
+      list: items.map((item) => ({
+        id: item.id,
+        amount: this.toNumber(item.amount),
+        channel: item.channel,
+        account: item.account,
+        realName: item.realName,
+        real_name: item.realName,
+        status: item.status,
+        failReason: item.failReason,
+        createdAt: item.createdAt,
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  async createRiderWithdrawal(userId: string, dto: any) {
+    await this.requireOfficialRider(userId);
+    return this.financeService.withdraw(userId, dto);
+  }
+
+  async registerPushToken(userId: string, dto: any) {
+    await this.requireOfficialRider(userId);
+    const clientId = String(dto?.clientId || dto?.client_id || '').trim();
+    if (!clientId || clientId.length > 200) throw new BadRequestException('推送标识无效');
+    const platform = String(dto?.platform || '').trim().slice(0, 20) || undefined;
+    const os = String(dto?.os || '').trim().slice(0, 50) || undefined;
+    const appVersion = String(dto?.appVersion || dto?.app_version || '').trim().slice(0, 50) || undefined;
+    await this.prisma.userPushDevice.upsert({
+      where: { clientId },
+      update: { userId, platform, os, appVersion, lastSeenAt: new Date() },
+      create: { clientId, userId, platform, os, appVersion },
+    });
+    return { success: true, clientId };
   }
 
   private async requireOfficialRider(userId: string) {

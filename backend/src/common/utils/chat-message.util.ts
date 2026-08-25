@@ -17,6 +17,15 @@ export interface ParsedChatMessageContent {
     url?: string;
     size?: number | string;
   };
+  note?: {
+    title?: string;
+    content?: string;
+    noteId?: string;
+    authorName?: string;
+    authorAvatar?: string;
+    coverImage?: string;
+    type?: number;
+  };
   order?: {
     orderId?: string;
     orderNo?: string;
@@ -145,7 +154,24 @@ export function parseChatMessageContent(contentValue: any, declaredType?: any): 
   }
 
   if (content.startsWith('notes:')) {
-    return { renderType: 'note', messageType: 'TEXT', typeLabel: '笔记消息', previewText: '[笔记]' };
+    const parts = content.slice(6).split('|');
+    const noteBody = parts[1] || '';
+    const note = {
+      title: parts[0] || noteBody.split(/\r?\n/)[0].slice(0, 60) || '无标题',
+      content: noteBody,
+      noteId: parts[2] || '',
+      authorName: parts[3] || '未知用户',
+      authorAvatar: parts[4] || '',
+      coverImage: parts[5] || '',
+      type: Number(parts[6]) || 1,
+    };
+    return {
+      renderType: 'note',
+      messageType: 'TEXT',
+      typeLabel: '笔记消息',
+      previewText: `[笔记] ${note.title}`,
+      note,
+    };
   }
 
   if (content.startsWith('order:')) {

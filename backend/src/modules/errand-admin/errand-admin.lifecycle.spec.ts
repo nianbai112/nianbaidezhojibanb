@@ -1,3 +1,5 @@
+jest.mock('../errand/errand.service', () => ({ ErrandService: class {} }));
+
 import { ErrandAdminService } from './errand-admin.service';
 
 describe('ErrandAdminService closed-loop detail', () => {
@@ -42,6 +44,27 @@ describe('ErrandAdminService closed-loop detail', () => {
     await service.getOrders({} as any, 'admin-a');
     expect(prisma.errandOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { regionId: { in: ['region-a'] } } }));
     await expect(service.getOrderDetail('order-b', 'admin-a')).rejects.toThrow('无权操作该区域跑腿订单');
+  });
+
+  it('returns user UID when selecting approved official riders in an admin region', async () => {
+    const prisma: any = {
+      regionRider: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const scope = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: false, regionIds: ['region-a'] }) };
+    const service = new ErrandAdminService(prisma, scope as any);
+
+    await service.getRiders(
+      { regionId: 'region-a', riderType: 'official', auditStatus: 'approved' },
+      'admin-a',
+    );
+
+    expect(prisma.regionRider.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { regionId: 'region-a', riderType: 'official', verifyStatus: 'approved' },
+      include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } } },
+    }));
   });
 
   it('delegates an authorized admin cancellation to the existing refund-aware order flow', async () => {

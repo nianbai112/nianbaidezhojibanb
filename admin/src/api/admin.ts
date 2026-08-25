@@ -710,6 +710,22 @@ export async function fetchCampusMapCollectionTasks(
   return request.get(`/admin/campus-map/collections/${regionId}/tasks`, { params })
 }
 
+export async function fetchCampusMapCollectionRiders(
+  regionId: string | number,
+  keyword = '',
+) {
+  return request.get('/admin/riders', {
+    params: {
+      page: 1,
+      pageSize: 50,
+      regionId,
+      keyword: keyword.trim() || undefined,
+      riderType: 'official',
+      auditStatus: 'approved',
+    },
+  })
+}
+
 export async function createCampusMapCollectionTask(regionId: string | number, data: any) {
   return request.post(`/admin/campus-map/collections/${regionId}/tasks`, data)
 }
@@ -724,6 +740,27 @@ export async function fetchCampusMapCollectionSession(
   sessionId: string,
 ) {
   return request.get(`/admin/campus-map/collections/${regionId}/tasks/${taskId}/sessions/${sessionId}`)
+}
+
+export async function fetchCampusMapCollectionObjects(
+  regionId: string | number,
+  params: {
+    reviewStatus?: string
+    taskId?: string
+    objectType?: string
+    page?: number
+    pageSize?: number
+  } = {},
+) {
+  return request.get(`/admin/campus-map/collections/${regionId}/objects`, { params })
+}
+
+export async function reviewCampusMapCollectionObject(
+  regionId: string | number,
+  objectId: string,
+  data: { decision: string; note: string },
+) {
+  return request.patch(`/admin/campus-map/collections/${regionId}/objects/${objectId}/review`, data)
 }
 
 export async function updateCampusMapCollectionTask(regionId: string | number, taskId: string, data: any) {
@@ -1272,10 +1309,6 @@ export async function fetchRealtimeWsTestToken() {
   return request.get('/admin/realtime/ws-test-token')
 }
 
-export async function testPushToUser(userId: string, message: string) {
-  return request.post('/admin/realtime/test-push', { userId, message })
-}
-
 export async function fetchOfficialConversations(params: Record<string, any> = {}) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -1298,12 +1331,12 @@ export async function fetchOfficialConversationMessages(conversationId: string, 
   return request.get(`/admin/realtime/official-conversations/${conversationId}/messages${qs ? '?' + qs : ''}`)
 }
 
-export async function replyOfficialConversation(conversationId: string, content: string) {
-  return request.post(`/admin/realtime/official-conversations/${conversationId}/reply`, { content })
+export async function replyOfficialConversation(conversationId: string, content: string, ticketId?: string) {
+  return request.post(`/admin/realtime/official-conversations/${conversationId}/reply`, { content, ticketId })
 }
 
-export async function updateOfficialConversationStatus(conversationId: string, status: string, content?: string) {
-  return request.put(`/admin/realtime/official-conversations/${conversationId}/status`, { status, content })
+export async function updateOfficialConversationStatus(conversationId: string, status: string, content?: string, ticketId?: string) {
+  return request.put(`/admin/realtime/official-conversations/${conversationId}/status`, { status, content, ticketId })
 }
 
 // ==================== 微信公众号 ====================
@@ -1346,21 +1379,4 @@ export async function fetchOfficialBindings(params: Record<string, any> = {}) {
 
 export async function deleteOfficialBinding(id: string) {
   return request.delete(`/admin/wechat/official/bindings/${id}`)
-}
-
-export async function broadcastToAll(message: string, title?: string) {
-  return request.post('/admin/notifications/send', {
-    title: title || '系统广播',
-    content: message,
-    channelMask: { inApp: true, websocket: true },
-  })
-}
-
-export async function pushToRegion(regionId: string, message: string, title?: string) {
-  return request.post('/admin/notifications/send', {
-    regionId,
-    title: title || '区域通知',
-    content: message,
-    channelMask: { inApp: true, websocket: true },
-  })
 }

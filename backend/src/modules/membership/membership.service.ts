@@ -17,7 +17,7 @@ const BENEFIT_CATALOG = [
   { key: 'post_pin_free_quota', name: '每月免费帖子置顶次数', category: '内容类权益', type: 'quota', unit: '次' },
   { key: 'content_exposure_boost', name: '发布内容轻量曝光加权', category: '内容类权益', type: 'boost', unit: '权重' },
   { key: 'comment_member_highlight', name: '评论/回复会员标识高亮', category: '内容类权益', type: 'flag', unit: '' },
-  { key: 'advanced_content_tools', name: '投票/抽奖/活动高级配置', category: '内容类权益', type: 'flag', unit: '' },
+  { key: 'advanced_content_tools', name: '投票/活动高级配置', category: '内容类权益', type: 'flag', unit: '' },
   { key: 'content_audit_priority', name: '内容审核优先队列', category: '内容类权益', type: 'flag', unit: '' },
   { key: 'second_hand_refresh_quota', name: '二手商品免费刷新次数', category: '交易类权益', type: 'quota', unit: '次' },
   { key: 'second_hand_exposure_boost', name: '二手商品曝光加权', category: '交易类权益', type: 'boost', unit: '权重' },

@@ -68,6 +68,7 @@ const productionCorsOrigin = Joi.string()
 // ---------------------------------------------------------------------------
 const minimalSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  HOST: Joi.string().optional().allow(''),
   PORT: Joi.number().default(3000),
   API_PREFIX: Joi.string().default('/api/v1'),
   SETUP_WIZARD: Joi.alternatives().try(Joi.boolean(), Joi.string()).optional(),
@@ -142,17 +143,6 @@ const minimalSchema = Joi.object({
   OPS_RESTART_COMMAND: Joi.string().allow('').default(''),
   OPS_RESTART_COOLDOWN_SECONDS: Joi.number().default(300),
   OPS_LOG_RETENTION_DAYS: Joi.number().default(30),
-  LICENSING_ENABLED: Joi.alternatives().try(Joi.boolean(), Joi.string()).optional(),
-  LICENSE_SERVER: Joi.string().optional().allow('').default(''),
-  LICENSE_KEY: Joi.string().optional().allow('').default(''),
-  LICENSE_PUBLIC_KEY_BASE64: Joi.string().optional().allow('').default(''),
-  LICENSE_DOMAIN: Joi.string().optional().allow('').default(''),
-  LICENSE_API_DOMAIN: Joi.string().optional().allow('').default(''),
-  LICENSE_SERVER_IP: Joi.string().optional().allow('').default(''),
-  LICENSE_WECHAT_APPID: Joi.string().optional().allow('').default(''),
-  LICENSE_PRODUCT: Joi.string().optional().allow('').default('lingmeng'),
-  LICENSE_COMPONENT: Joi.string().optional().allow('').default('full'),
-  LICENSE_CACHE_DAYS: Joi.number().default(7),
   APP_VERSION: Joi.string().optional().allow('').default(''),
 });
 
@@ -165,6 +155,7 @@ const fullSchema = Joi.object({
     .valid('development', 'production', 'test')
     .default('development'),
 
+  HOST: Joi.string().optional().allow(''),
   PORT: Joi.number().default(3000),
   API_PREFIX: Joi.string().default('/api/v1'),
   SETUP_WIZARD: Joi.alternatives().try(Joi.boolean(), Joi.string()).optional(),
@@ -264,17 +255,6 @@ const fullSchema = Joi.object({
   OPS_RESTART_COMMAND: Joi.string().allow('').default(''),
   OPS_RESTART_COOLDOWN_SECONDS: Joi.number().default(300),
   OPS_LOG_RETENTION_DAYS: Joi.number().default(30),
-  LICENSING_ENABLED: Joi.alternatives().try(Joi.boolean(), Joi.string()).optional(),
-  LICENSE_SERVER: Joi.string().optional().allow('').default(''),
-  LICENSE_KEY: Joi.string().optional().allow('').default(''),
-  LICENSE_PUBLIC_KEY_BASE64: Joi.string().optional().allow('').default(''),
-  LICENSE_DOMAIN: Joi.string().optional().allow('').default(''),
-  LICENSE_API_DOMAIN: Joi.string().optional().allow('').default(''),
-  LICENSE_SERVER_IP: Joi.string().optional().allow('').default(''),
-  LICENSE_WECHAT_APPID: Joi.string().optional().allow('').default(''),
-  LICENSE_PRODUCT: Joi.string().optional().allow('').default('lingmeng'),
-  LICENSE_COMPONENT: Joi.string().optional().allow('').default('full'),
-  LICENSE_CACHE_DAYS: Joi.number().default(7),
   APP_VERSION: Joi.string().optional().allow('').default(''),
 });
 

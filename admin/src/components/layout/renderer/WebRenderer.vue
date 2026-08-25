@@ -8,7 +8,7 @@
 
     <!-- 搜索框 -->
     <div v-else-if="block.type === 'search'" class="pr-search">
-      <span class="pr-search-icon">🔍</span>
+      <span class="pr-search-icon txtIcon icon-search-1-copy" />
       <span class="pr-search-ph">{{ block.cfg.placeholder || '搜索' }}</span>
     </div>
 
@@ -30,7 +30,10 @@
           </div>
         </div>
       </template>
-      <div v-else class="pr-empty-slot" :style="{ height: bannerH }">轮播图 · 待配置图片</div>
+      <div v-else class="pr-empty-slot pr-empty-banner" :style="{ height: bannerH }">
+        <span class="pr-empty-icon txtIcon icon-tupian" />
+        <span class="pr-empty-label">轮播图 · 待配置图片</span>
+      </div>
     </div>
 
     <!-- 金刚区 -->
@@ -45,12 +48,15 @@
         <div v-else class="pr-grid-icon pr-grid-icon-ph">{{ g.firstLetter }}</div>
         <span class="pr-grid-text">{{ g.text || g.name }}</span>
       </div>
-      <div v-if="!block.gridItems.length" class="pr-empty-slot pr-grid-empty">金刚区 · 待配置入口</div>
+      <div v-if="!block.gridItems.length" class="pr-empty-slot pr-grid-empty">
+        <span class="pr-empty-icon txtIcon icon-jiugongge" />
+        <span class="pr-empty-label">金刚区 · 待配置入口</span>
+      </div>
     </div>
 
     <!-- 公告（纵向 swiper → 轮换单行） -->
     <div v-else-if="block.type === 'announcement'" class="pr-notice">
-      <span class="pr-notice-icon">📢</span>
+      <span class="pr-notice-icon txtIcon icon-gonggao" />
       <div v-if="block.notices.length" class="pr-notice-swiper">
         <div class="pr-notice-line">{{ noticeText(block.notices[noticeIndex % block.notices.length]) }}</div>
       </div>
@@ -79,7 +85,10 @@
     <!-- 图片 -->
     <div v-else-if="block.type === 'image'" class="pr-image-wrap">
       <img v-if="block.cfg.image || block.cfg.src" class="pr-image" :src="block.cfg.image || block.cfg.src" alt="" @error="hideImg" />
-      <div v-else class="pr-empty-slot">图片 · 待配置</div>
+      <div v-else class="pr-empty-slot pr-empty-image">
+        <span class="pr-empty-icon txtIcon icon-tupian" />
+        <span class="pr-empty-label">图片 · 待配置</span>
+      </div>
       <div
         v-if="block.cfg.mask"
         class="pr-image-mask"
@@ -195,6 +204,35 @@ const hideImg = (e: Event) => ((e.target as HTMLElement).style.display = 'none')
 .web-renderer {
   pointer-events: none;
 }
+
+/* 空态占位：带图标和文字，形状与真实组件高度匹配 */
+.pr-empty-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px dashed rgba(52, 209, 123, 0.35);
+  border-radius: 10px;
+  background: rgba(52, 209, 123, 0.04);
+  color: #8a9384;
+  font-size: 11px;
+  margin: 4px 12px;
+}
+.pr-empty-banner { min-height: 120px; }
+.pr-empty-image { min-height: 80px; }
+.pr-grid-empty { min-height: 72px; width: calc(100% - 24px); }
+.pr-empty-icon {
+  font-size: 22px;
+  color: rgba(52, 209, 123, 0.5);
+}
+.pr-empty-label { letter-spacing: .02em; }
+
+/* 搜索框 iconfont 图标对齐 */
+.pr-search-icon.txtIcon { font-size: 14px; }
+/* 公告 iconfont 图标对齐 */
+.pr-notice-icon.txtIcon { font-size: 15px; flex: 0 0 auto; }
+
 /* swiper 指示点（真机由 swiper 组件自带，这里按 indicator-color 复刻） */
 .pr-banner-swiper {
   position: relative;

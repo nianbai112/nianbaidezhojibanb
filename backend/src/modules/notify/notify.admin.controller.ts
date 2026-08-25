@@ -163,9 +163,15 @@ export class NotifyAdminController {
   replyOfficialConversation(
     @Param('id') id: string,
     @CurrentUser('sub') adminId: string,
-    @Body() body: { content: string },
+    @Body() body: { content: string; ticketId?: string; ticket_id?: string },
   ) {
-    return this.notifyService.replyOfficialConversation(id, body.content, adminId, adminId);
+    return this.notifyService.replyOfficialConversation(
+      id,
+      body.content,
+      adminId,
+      adminId,
+      body.ticketId || body.ticket_id,
+    );
   }
 
   @Put('realtime/official-conversations/:id/status')
@@ -174,9 +180,15 @@ export class NotifyAdminController {
   updateOfficialConversationStatus(
     @Param('id') id: string,
     @CurrentUser('sub') adminId: string,
-    @Body() body: { status: string; content?: string },
+    @Body() body: { status: string; content?: string; ticketId?: string; ticket_id?: string },
   ) {
-    return this.notifyService.updateOfficialConversationStatus(id, body.status, adminId, body.content);
+    return this.notifyService.updateOfficialConversationStatus(
+      id,
+      body.status,
+      adminId,
+      body.content,
+      body.ticketId || body.ticket_id,
+    );
   }
 
   // ==================== 通知总览 ====================

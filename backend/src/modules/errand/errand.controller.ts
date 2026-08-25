@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ErrandService } from './errand.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -81,6 +81,15 @@ export class ErrandController {
   @ApiBearerAuth()
   confirmReceipt(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string) {
     return this.errandService.confirmReceipt(orderId, userId);
+  }
+
+  @Post('errand/order/:orderId/confirm-receipt-by-code')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  confirmReceiptByCode(@Param('orderId') orderId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    const code = String(dto?.code || dto?.receiptCode || dto?.receipt_code || '').trim();
+    if (!code) throw new BadRequestException('缺少收货码');
+    return this.errandService.confirmReceiptByCode(orderId, userId, code);
   }
 
   @Post('errand/order/:orderId/review')

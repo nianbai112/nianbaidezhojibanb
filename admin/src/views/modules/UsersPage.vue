@@ -14,9 +14,18 @@
       <div class="action-bar">
         <div class="btn-row">
           <el-button type="primary" :icon="Plus" @click="showRobotDialog = true">添加机器人</el-button>
-          <el-button type="warning" :icon="Open" @click="batchAction('enable')">批量启用</el-button>
-          <el-button type="warning" :icon="Close" @click="batchAction('disable')">批量禁用</el-button>
-          <el-button type="danger" :icon="Lock" @click="batchAction('ban')">批量封禁</el-button>
+          <el-dropdown trigger="click" @command="batchAction">
+            <el-button>
+              批量操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="enable">批量启用</el-dropdown-item>
+                <el-dropdown-item command="disable">批量禁用</el-dropdown-item>
+                <el-dropdown-item command="ban">批量封禁</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button :icon="Download" @click="handleExport">导出数据</el-button>
         </div>
         <div class="action-bar-right">
@@ -29,49 +38,58 @@
         :data="users"
         style="width: 100%"
         @selection-change="handleSelectionChange"
-        border
         stripe
       >
-        <el-table-column type="selection" width="55" />
-        <el-table-column label="头像/昵称" min-width="180">
+        <el-table-column type="selection" width="48" />
+        <el-table-column label="用户" min-width="190" fixed="left">
           <template #default="{ row }">
             <div class="user-cell">
-              <el-avatar :src="row.avatar" :size="40">{{ (row.nickname || '?')[0] }}</el-avatar>
+              <el-avatar :src="row.avatar" :size="36">{{ (row.nickname || '?')[0] }}</el-avatar>
               <div class="user-info">
                 <div class="nickname">{{ row.nickname || '-' }}</div>
-                <div class="user-id">{{ uidText(row) }}</div>
+                <div class="user-id">UID {{ uidText(row) }}</div>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="UID" prop="uid" min-width="90">
-          <template #default="{ row }">{{ row.uid || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="手机号" prop="phone" min-width="130">
-          <template #default="{ row }">{{ row.phone || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="绑定状态" min-width="150">
+        <el-table-column label="手机号" min-width="150">
           <template #default="{ row }">
-            <div class="tag-stack">
-              <el-tag :type="row.phoneBound ? 'success' : 'info'" size="small" effect="plain">
-                {{ row.phoneBound ? '已绑手机号' : '未绑手机号' }}
+            <div class="cell-row">
+              <span>{{ row.phone || '-' }}</span>
+              <el-tooltip :content="row.phoneBound ? '已绑手机号' : '未绑手机号'" placement="top">
+                <span class="bind-badge" :class="{ on: row.phoneBound }">机</span>
+              </el-tooltip>
+              <el-tooltip :content="row.wxBound ? '已绑微信' : '待绑微信'" placement="top">
+                <span class="bind-badge wx" :class="{ on: row.wxBound }">微</span>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="类型 / 认证" min-width="140">
+          <template #default="{ row }">
+            <div class="cell-row">
+              <el-tag :type="row.userType === 'robot' ? 'info' : 'success'" size="small">
+                {{ row.typeLabel }}
               </el-tag>
-              <el-tag :type="row.wxBound ? 'success' : 'warning'" size="small" effect="plain">
-                {{ row.wxBound ? '已绑微信' : '待绑微信' }}
+              <el-tag v-if="row.studentCertStatus && row.studentCertStatus !== 'none'" :type="certTagType(row.studentCertStatus)" size="small" effect="plain">
+                {{ certLabel(row.studentCertStatus) }}
               </el-tag>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="用户类型" min-width="100">
+        <el-table-column label="状态" min-width="120">
           <template #default="{ row }">
-            <el-tag :type="row.userType === 'robot' ? 'info' : 'success'" size="small">
-              {{ row.typeLabel }}
-            </el-tag>
+            <div class="cell-row">
+              <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+              <el-tooltip v-if="Number(row.reportedCount || 0) > 0" content="被举报次数" placement="top">
+                <span class="risk-count">{{ row.reportedCount }}</span>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="会员/标签" min-width="160">
+        <el-table-column label="会员 / 标签" min-width="150">
           <template #default="{ row }">
-            <div class="tag-stack">
+            <div class="cell-row cell-overflow">
               <el-tag v-if="row.membershipLabel" type="warning" size="small">{{ row.membershipLabel }}</el-tag>
               <el-tag v-for="tag in (row.tags || []).slice(0, 2)" :key="tag.id || tag.name" size="small" effect="plain">
                 {{ tag.name }}
@@ -80,76 +98,18 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="归属区域" prop="regionName" min-width="150">
-          <template #default="{ row }">
-            <div class="region-cell">
-              <span>{{ row.ownedRegionName || row.regionName || '未归属' }}</span>
-              <small v-if="row.currentRegionName" class="muted">
-                当前：{{ row.currentRegionName }}
-              </small>
-              <el-tag v-if="row.currentRegionSource && row.currentRegionSource !== 'profile' && row.currentRegionSource !== 'none'" size="small" type="info" effect="plain">
-                {{ regionSourceLabel(row.currentRegionSource) }}
-              </el-tag>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="学生认证" min-width="100">
-          <template #default="{ row }">
-            <el-tag :type="certTagType(row.studentCertStatus)" size="small">
-              {{ certLabel(row.studentCertStatus) }}
-            </el-tag>
-          </template>
+        <el-table-column label="归属区域" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.ownedRegionName || row.regionName || '未归属' }}</template>
         </el-table-column>
         <el-table-column label="余额" min-width="100">
           <template #default="{ row }">
             <span class="money">¥{{ formatCents(row.balance) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="内容数据" min-width="140">
-          <template #default="{ row }">
-            <div class="data-cell">
-              <span>帖 {{ row.postCount || 0 }}</span>
-              <span>评 {{ row.commentCount || 0 }}</span>
-              <span>举报 {{ row.reportCount || 0 }}</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="订单数据" min-width="140">
-          <template #default="{ row }">
-            <div class="data-cell">
-              <span>单 {{ row.orderCount || 0 }}</span>
-              <span>退 {{ row.refundCount || 0 }}</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="账号状态" min-width="90">
-          <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="风险" min-width="90">
-          <template #default="{ row }">
-            <el-tag :type="Number(row.reportedCount || 0) > 0 || row.status !== 'active' ? 'danger' : 'success'" size="small">
-              {{ Number(row.reportedCount || 0) > 0 ? `被举报 ${row.reportedCount}` : '正常' }}
-            </el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="注册时间" prop="createdAt" min-width="160">
           <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="最后登录" prop="lastLoginAt" min-width="160">
-          <template #default="{ row }">{{ row.lastLoginAt ? formatDate(row.lastLoginAt) : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="登录IP" prop="lastLoginIp" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.lastLoginIp || '-' }}</template>
-        </el-table-column>
-        <el-table-column v-if="ipGeoDisplay.enabled" :label="ipLocationColumnLabel" min-width="190" show-overflow-tooltip>
-          <template #default="{ row }">{{ formatIpLocation(row) }}</template>
-        </el-table-column>
-        <el-table-column label="登录设备" prop="lastLoginDevice" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.lastLoginDevice || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" fixed="right" min-width="200">
+        <el-table-column label="操作" fixed="right" width="160">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
             <el-button link :type="row.status === 'active' ? 'warning' : 'success'" size="small" @click="toggleStatus(row)">
@@ -555,7 +515,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Open, Close, Lock, Download } from '@element-plus/icons-vue'
+import { Refresh, Plus, Download, ArrowDown } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -636,7 +596,6 @@ const statsItems = computed(() => [
 
 const searchFields: SearchField[] = [
   { key: 'keyword', label: '关键词', type: 'input', placeholder: '搜索昵称、手机号、UID、openid' },
-  { key: 'userId', label: '用户ID', type: 'input', placeholder: '精确搜索UID' },
   { key: 'userType', label: '用户类型', type: 'select', options: [
     { label: '全部', value: '' },
     { label: '小程序用户', value: 'normal' },
@@ -645,6 +604,13 @@ const searchFields: SearchField[] = [
     { label: '骑手用户', value: 'rider' },
     { label: '区域代理', value: 'agent' },
   ]},
+  { key: 'status', label: '账号状态', type: 'select', options: [
+    { label: '全部', value: '' },
+    { label: '正常', value: 'active' },
+    { label: '禁用', value: 'disabled' },
+    { label: '封禁', value: 'banned' },
+  ]},
+  { key: 'userId', label: '用户ID', type: 'input', placeholder: '精确搜索UID' },
   { key: 'regionId', label: '区域筛选', type: 'select', options: [] },
   { key: 'studentCertStatus', label: '学生认证', type: 'select', options: [
     { label: '全部', value: '' },
@@ -652,12 +618,6 @@ const searchFields: SearchField[] = [
     { label: '待审核', value: 'pending' },
     { label: '已认证', value: 'approved' },
     { label: '已驳回', value: 'rejected' },
-  ]},
-  { key: 'status', label: '账号状态', type: 'select', options: [
-    { label: '全部', value: '' },
-    { label: '正常', value: 'active' },
-    { label: '禁用', value: 'disabled' },
-    { label: '封禁', value: 'banned' },
   ]},
   { key: 'balanceSort', label: '余额排序', type: 'select', options: [
     { label: '默认', value: '' },
@@ -1275,24 +1235,62 @@ onMounted(() => {
   color: var(--mx-muted);
 }
 
-.region-cell {
+.cell-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
-}
-
-.data-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-}
-
-.tag-stack {
-  display: flex;
-  flex-wrap: wrap;
   gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.cell-overflow {
+  overflow: hidden;
+}
+
+.cell-overflow .el-tag {
+  flex-shrink: 0;
+}
+
+.bind-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--mx-muted);
+  background: var(--mx-soft);
+  border: 1px solid var(--mx-border);
+  flex-shrink: 0;
+}
+
+.bind-badge.on {
+  color: var(--el-color-success);
+  border-color: var(--el-color-success-light-5);
+  background: var(--el-color-success-light-9);
+}
+
+.bind-badge.wx.on {
+  color: #07c160;
+  border-color: #07c16055;
+  background: #07c16014;
+}
+
+.risk-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--el-color-danger);
+  flex-shrink: 0;
 }
 
 .money {

@@ -94,6 +94,7 @@ const makeMockNotify = () => ({
 });
 
 const makeMockAiRuntime = () => ({
+  detectSensitiveHit: jest.fn().mockResolvedValue(null),
   moderateContent: jest.fn().mockResolvedValue({
     decision: 'approve',
     reason: '测试默认通过',
@@ -129,6 +130,7 @@ describe('PostService', () => {
   let service: PostService;
   let prisma: any;
   let notifyService: any;
+  let aiRuntime: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -148,6 +150,25 @@ describe('PostService', () => {
     service = module.get<PostService>(PostService);
     prisma = module.get(PrismaService);
     notifyService = module.get(NotifyService);
+    aiRuntime = module.get(AiRuntimeService);
+  });
+
+  it('初次 AI 审核会把帖子图片与文字一起提交', async () => {
+    prisma.config.findUnique.mockResolvedValue({
+      value: { note_approval_type: 'ai', ai_review_failure_to_manual: 1 },
+    });
+
+    await (service as any).resolveInitialReview(
+      { title: '', content: '你好', regionId: 'region-1' },
+      [{ type: 'IMAGE', url: 'https://cdn.example.com/risk.jpg' }],
+      'user-1',
+    );
+
+    expect(aiRuntime.moderateContent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'post',
+      content: '你好',
+      imageUrls: ['https://cdn.example.com/risk.jpg'],
+    }));
   });
 
   // ============ detail ============

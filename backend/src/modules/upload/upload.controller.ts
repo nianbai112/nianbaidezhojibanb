@@ -187,9 +187,18 @@ export class UploadController {
     @Req() req?: Request,
   ) {
     const folder = `users/${userId}`;
-    const result = await this.uploadService.upload(file, { type: 'video', folder });
-    await this.uploadService.recordUpload(userId, 'user', result, 'post', req);
-    return result;
+    const result = await this.uploadService.uploadVideoWithThumbnail(file, folder);
+    await Promise.all([
+      this.uploadService.recordUpload(userId, 'user', result.video, 'post', req),
+      this.uploadService.recordUpload(userId, 'user', result.thumbnail, 'post-thumbnail', req),
+    ]);
+    return {
+      ...result.video,
+      video_url: result.video.url,
+      thumbnail_url: result.thumbnail.url,
+      width: result.width,
+      height: result.height,
+    };
   }
 
   // ===========================================================================

@@ -1,7 +1,9 @@
-import { GoneException } from '@nestjs/common';
+import { BadRequestException, GoneException, ValidationPipe } from '@nestjs/common';
 import { NotifyService } from './notify.service';
+import { AdminBroadcastDto } from './dto/create-notification.dto';
 
-const createPrismaMock = () => ({
+const createPrismaMock = () => {
+  const prisma = {
   officialAssistantMessage: {
     create: jest.fn(),
     findMany: jest.fn(),
@@ -14,6 +16,7 @@ const createPrismaMock = () => ({
     count: jest.fn().mockResolvedValue(0),
     update: jest.fn(),
     updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    createMany: jest.fn(),
   },
   conversationMember: {
     findMany: jest.fn().mockResolvedValue([]),
@@ -28,6 +31,7 @@ const createPrismaMock = () => ({
   assistantTicketReply: { create: jest.fn() },
   user: {
     upsert: jest.fn().mockResolvedValue({ id: 'official-user', nickname: '校园小助手', avatar: '/static/logo.png' }),
+    findUnique: jest.fn(),
     findMany: jest.fn().mockResolvedValue([]),
   },
   adminAccount: { findMany: jest.fn().mockResolvedValue([]) },
@@ -44,6 +48,8 @@ const createPrismaMock = () => ({
   },
   message: {
     create: jest.fn(),
+    findMany: jest.fn().mockResolvedValue([]),
+    count: jest.fn().mockResolvedValue(0),
   },
   userProfile: {
     findUnique: jest.fn(),
@@ -58,17 +64,11 @@ const createPrismaMock = () => ({
     findUnique: jest.fn(),
     update: jest.fn(),
   },
-  $transaction: jest.fn((handler: any) => handler({
-    comment: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-    },
-    post: {
-      update: jest.fn(),
-      updateMany: jest.fn(),
-    },
-  })),
-});
+    $transaction: jest.fn(),
+  };
+  prisma.$transaction.mockImplementation((handler: any) => handler(prisma));
+  return prisma;
+};
 
 const createService = (prisma: ReturnType<typeof createPrismaMock>, channelService?: any) => new NotifyService(
   prisma as any,
@@ -132,20 +132,101 @@ describe('NotifyService rider app realtime sessions', () => {
   });
 });
 
+describe('NotifyService targeted admin notifications', () => {
+  it('keeps userId through the production whitelist DTO', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true });
+    const dto = await pipe.transform({
+      title: '单用户通知',
+      content: '仅发送给目标用户',
+      targetType: 'user',
+      userId: 'user-1',
+      channelMask: { inApp: true, websocket: true, push: false },
+    }, { type: 'body', metatype: AdminBroadcastDto });
+
+    expect(dto).toEqual(expect.objectContaining({ targetType: 'user', userId: 'user-1' }));
+    expect(dto.channelMask).toEqual(expect.objectContaining({ push: false }));
+  });
+
+  it('creates exactly one persisted notification for a scoped user target', async () => {
+    const prisma = createPrismaMock();
+    prisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+    prisma.userProfile.findUnique.mockResolvedValue({ regionId: 'region-1' });
+    const service = createService(prisma);
+    const createAndDispatch = jest.spyOn(service, 'createAndDispatch').mockResolvedValue({ id: 'notification-1' } as any);
+
+    const result = await service.adminBroadcast('admin-1', {
+      title: '单用户通知',
+      content: '仅发送给目标用户',
+      targetType: 'user',
+      userId: 'user-1',
+      channelMask: { inApp: true, websocket: true },
+    });
+
+    expect(createAndDispatch).toHaveBeenCalledTimes(1);
+    expect(createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      regionId: 'region-1',
+      type: 'ADMIN_BROADCAST',
+      scene: 'admin_broadcast',
+    }));
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({
+      targetType: 'user', createdCount: 1, notificationId: 'notification-1',
+    }));
+  });
+});
+
 describe('NotifyService official assistant messages', () => {
+  it('keeps client message ids in the admin official-conversation history contract', async () => {
+    const prisma = createPrismaMock();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1',
+      type: 'private',
+      members: [
+        { userId: 'official-user', user: { id: 'official-user', nickname: '校园小助手', avatar: '/static/logo.png', phone: '', openid: '', userType: 4 } },
+        { userId: 'user-1', user: { id: 'user-1', nickname: '用户', avatar: '/avatar.png', phone: '', openid: 'openid-1', userType: 1 } },
+      ],
+    });
+    prisma.message.findMany.mockResolvedValue([{
+      id: 'message-1',
+      clientMessageId: 'client-1',
+      senderId: 'user-1',
+      content: '你好',
+      type: 'TEXT',
+      createdAt: new Date('2026-08-24T00:00:00.000Z'),
+      sender: { id: 'user-1', nickname: '用户', avatar: '/avatar.png', userType: 1 },
+    }]);
+    prisma.message.count.mockResolvedValue(1);
+    const service = createService(prisma);
+
+    const result = await service.getOfficialConversationMessages('conversation-1', { page: 1, pageSize: 30 });
+
+    expect(result.messages[0]).toEqual(expect.objectContaining({
+      id: 'message-1',
+      clientMessageId: 'client-1',
+      client_message_id: 'client-1',
+    }));
+  });
+
   it('records a resolved service status and notifies the user in the official conversation', async () => {
     const prisma = createPrismaMock();
     prisma.conversation.findFirst.mockResolvedValue({
       id: 'conversation-1',
+      regionId: 'region-1',
       isBlocked: false,
       members: [{ userId: 'user-1' }, { userId: 'official-user' }],
     });
     prisma.conversationMember.findFirst.mockResolvedValue({ userId: 'user-1' });
+    prisma.assistantTicket.findFirst.mockResolvedValue({
+      id: 'ticket-1', userId: 'user-1', regionId: 'region-1', conversationId: 'conversation-1', status: 'processing',
+    });
     prisma.message.create.mockResolvedValue({ id: 'message-1', createdAt: new Date('2026-07-12T10:00:00.000Z') });
     prisma.conversation.update.mockResolvedValue({ id: 'conversation-1', serviceStatus: 'resolved', serviceHandlerId: 'admin-1' });
     const service = createService(prisma);
 
-    const result = await service.updateOfficialConversationStatus('conversation-1', 'resolved', 'admin-1', '已为你完成处理，请刷新订单查看。');
+    const result = await service.updateOfficialConversationStatus(
+      'conversation-1', 'resolved', 'admin-1', '已为你完成处理，请刷新订单查看。', 'ticket-1',
+    );
 
     expect(prisma.conversation.update).toHaveBeenLastCalledWith({
       where: { id: 'conversation-1' },
@@ -158,7 +239,134 @@ describe('NotifyService official assistant messages', () => {
     expect(prisma.message.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ content: '已为你完成处理，请刷新订单查看。' }),
     });
+    expect(prisma.assistantTicket.update).toHaveBeenCalledTimes(1);
+    expect(prisma.assistantTicket.update).toHaveBeenCalledWith({
+      where: { id: 'ticket-1' },
+      data: expect.objectContaining({ status: 'resolved', handlerId: 'admin-1' }),
+    });
     expect(result).toEqual(expect.objectContaining({ status: 'resolved' }));
+  });
+
+  it('links an admin reply only to the explicitly selected ticket', async () => {
+    const prisma = createPrismaMock();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1',
+      regionId: 'region-1',
+      isBlocked: false,
+      members: [{ userId: 'user-1' }, { userId: 'official-user' }],
+    });
+    prisma.assistantTicket.findFirst.mockResolvedValue({
+      id: 'ticket-1', userId: 'user-1', regionId: 'region-1', conversationId: null, status: 'pending',
+    });
+    prisma.message.create.mockResolvedValue({ id: 'message-1', createdAt: new Date('2026-08-24T10:00:00.000Z') });
+    const service = createService(prisma);
+
+    const result = await service.replyOfficialConversation(
+      'conversation-1',
+      '已收到你的材料',
+      'admin-1',
+      undefined,
+      'ticket-1',
+    );
+
+    expect(prisma.assistantTicket.findFirst).toHaveBeenCalledWith({
+      where: { id: 'ticket-1', userId: 'user-1' },
+    });
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ ticketId: 'ticket-1' }),
+    });
+    expect(prisma.assistantTicketReply.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ ticketId: 'ticket-1', messageId: 'message-1', content: '已收到你的材料' }),
+    });
+    expect(prisma.assistantTicket.update).toHaveBeenCalledWith({
+      where: { id: 'ticket-1' },
+      data: expect.objectContaining({ conversationId: 'conversation-1', latestReply: '已收到你的材料' }),
+    });
+    expect(result).toEqual(expect.objectContaining({ assistantTicketId: 'ticket-1' }));
+  });
+
+  it('rolls back the official message ledger and does not push when the ticket projection fails', async () => {
+    const prisma = createPrismaMock();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1',
+      regionId: 'region-1',
+      isBlocked: false,
+      members: [{ userId: 'user-1' }, { userId: 'official-user' }],
+    });
+    prisma.assistantTicket.findFirst.mockResolvedValue({
+      id: 'ticket-1', userId: 'user-1', regionId: 'region-1', conversationId: 'conversation-1', status: 'pending',
+    });
+    const committedMessages: any[] = [];
+    const pendingMessages: any[] = [];
+    const tx = {
+      message: {
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          const saved = { id: 'message-rollback', createdAt: new Date('2026-08-24T10:01:00.000Z'), ...data };
+          pendingMessages.push(saved);
+          return saved;
+        }),
+      },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      conversationMember: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      assistantTicketReply: { create: jest.fn().mockRejectedValue(new Error('reply projection failed')) },
+      assistantTicket: { update: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation(async (handler: any) => {
+      const result = await handler(tx);
+      committedMessages.push(...pendingMessages);
+      return result;
+    });
+    const service = createService(prisma);
+
+    await expect(service.replyOfficialConversation(
+      'conversation-1', '后台回复', 'admin-1', undefined, 'ticket-1',
+    )).rejects.toThrow('reply projection failed');
+
+    expect(tx.message.create).toHaveBeenCalledTimes(1);
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(committedMessages).toEqual([]);
+    expect((service as any).wsNative.pushToUser).not.toHaveBeenCalled();
+    expect((service as any).wsGateway.pushNotification).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding an unlinked legacy ticket from another campus', async () => {
+    const prisma = createPrismaMock();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1', regionId: 'region-current', isBlocked: false,
+      members: [{ userId: 'user-1' }, { userId: 'official-user' }],
+    });
+    prisma.assistantTicket.findFirst.mockResolvedValue({
+      id: 'ticket-old-region', userId: 'user-1', regionId: 'region-old', conversationId: null, status: 'pending',
+    });
+    const service = createService(prisma);
+
+    await expect(service.replyOfficialConversation(
+      'conversation-1', '后台回复', 'admin-1', undefined, 'ticket-old-region',
+    )).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(prisma.assistantTicketReply.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a proactive official reply out of all tickets when ticketId is omitted', async () => {
+    const prisma = createPrismaMock();
+    prisma.conversation.findFirst.mockResolvedValue({
+      id: 'conversation-1',
+      isBlocked: false,
+      members: [{ userId: 'user-1' }, { userId: 'official-user' }],
+    });
+    prisma.message.create.mockResolvedValue({ id: 'message-proactive-1', createdAt: new Date('2026-08-24T10:05:00.000Z') });
+    const service = createService(prisma);
+
+    const result = await service.replyOfficialConversation('conversation-1', '欢迎使用校园服务', undefined, undefined);
+
+    expect(prisma.assistantTicket.findFirst).not.toHaveBeenCalled();
+    expect(prisma.assistantTicketReply.create).not.toHaveBeenCalled();
+    expect(prisma.assistantTicket.update).not.toHaveBeenCalled();
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ ticketId: null, content: '欢迎使用校园服务' }),
+    });
+    expect(result).toEqual(expect.objectContaining({ assistantTicketId: null }));
   });
 
   it('creates a published official assistant card with safe defaults', async () => {
@@ -409,6 +617,31 @@ describe('NotifyService.createAndDispatch notification channels', () => {
         deliveryAttempts: { increment: 1 },
       }),
     }));
+  });
+
+  it('does not retry a retired notification', async () => {
+    const prisma = createPrismaMock();
+    const notification = {
+      id: 'notice-retired',
+      userId: 'user-1',
+      deliveryStatus: 'retired',
+      channelMask: { inApp: true, websocket: true },
+      deliveryReport: { websocket: { status: 'failed' } },
+    };
+    prisma.notification.findUnique.mockResolvedValue(notification);
+    const channelService = {
+      isChannelEnabled: jest.fn(),
+      sendEmail: jest.fn(),
+    };
+    const service = createService(prisma, channelService);
+
+    await expect(service.retryNotificationDelivery('notice-retired')).resolves.toEqual({
+      success: true,
+      notification,
+      message: '该通知已退役，不再重试投递',
+    });
+    expect(prisma.notification.update).not.toHaveBeenCalled();
+    expect(channelService.isChannelEnabled).not.toHaveBeenCalled();
   });
 
   it('automatically retries eligible partial deliveries and stops at the query limit', async () => {

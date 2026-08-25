@@ -35,6 +35,7 @@ export class AiAdminService {
       coldStartEnabled: true,
       reviewBeforePost: true,
       contentSafetyEnabled: true,
+      reviewSampleRate: 0,
       quietHoursEnabled: true,
       quietStart: '23:00',
       quietEnd: '07:00',

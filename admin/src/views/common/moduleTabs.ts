@@ -101,15 +101,11 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
     { key: 'share', title: '分享有礼', icon: 'Share', component: asyncPage(() => import('@/views/marketing/ShareInvite.vue')) }
   ],
   'marketing-messages': [
-    { key: 'assistant', title: '官方助手消息', icon: 'Service', component: asyncPage(() => import('@/views/marketing/OfficialAssistantMessages.vue')) },
-    { key: 'notifications', title: '系统通知群发', icon: 'Bell', component: asyncPage(() => import('@/views/marketing/NotificationList.vue')) }
+    { key: 'assistant', title: '校园内容', icon: 'Document', component: asyncPage(() => import('@/views/marketing/OfficialAssistantMessages.vue')) },
+    { key: 'notifications', title: '通知投递', icon: 'Bell', component: asyncPage(() => import('@/views/marketing/NotificationList.vue')) }
   ],
 
   // ── 内容中心 ─────────────────────────────
-  'content-discussions': [
-    { key: 'comments', title: '评论管理', icon: 'ChatDotSquare', component: asyncPage(() => import('@/views/content/CommentsPage.vue')) },
-    { key: 'lotteries', title: '评论抽奖', icon: 'Present', component: asyncPage(() => import('@/views/content/CommentLotteryManage.vue')) }
-  ],
   'content-assets': [
     { key: 'stickers', title: '表情包管理', icon: 'Picture', component: asyncPage(() => import('@/views/content/StickersPage.vue')) },
     { key: 'covers', title: '文字封面模板', icon: 'Brush', component: asyncPage(() => import('@/views/content/TextCoverTemplates.vue')) },
@@ -127,12 +123,12 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
   'system-publishing': [
     { key: 'website', title: '官网管理', icon: 'Monitor', component: asyncPage(() => import('@/views/system/WebsiteManager.vue')) },
     { key: 'agreements', title: '协议与条款', icon: 'DocumentChecked', component: asyncPage(() => import('@/views/system/AgreementCenter.vue')) },
-    { key: 'notification-center', title: '通知中心配置', icon: 'Bell', component: asyncPage(() => import('@/views/system/NotificationCenterSettings.vue')) },
+    { key: 'notification-center', title: '通知配置', icon: 'Bell', component: asyncPage(() => import('@/views/system/NotificationCenterSettings.vue')) },
     { key: 'mini-program-paths', title: '小程序路径', icon: 'DocumentCopy', component: asyncPage(() => import('@/views/system/MiniProgramPaths.vue')) }
   ],
   'system-observability': [
     { key: 'monitor', title: '服务监控', icon: 'Cpu', component: asyncPage(() => import('@/views/system/ServiceMonitor.vue')) },
-    { key: 'sessions', title: '在线连接', icon: 'Connection', component: asyncPage(() => import('@/views/system/RealtimeSessionsPage.vue')) },
+    { key: 'sessions', title: '客服工作台', icon: 'Service', component: asyncPage(() => import('@/views/system/RealtimeSessionsPage.vue')) },
     { key: 'jobs', title: '定时任务', icon: 'Timer', component: asyncPage(() => import('@/views/ops/ScheduledJobs.vue')) },
     { key: 'operation-logs', title: '操作日志', icon: 'Document', component: asyncPage(() => import('@/views/system/OperationLogs.vue')) },
     { key: 'login-logs', title: '登录日志', icon: 'Key', component: asyncPage(() => import('@/views/system/LoginLogs.vue')) },
