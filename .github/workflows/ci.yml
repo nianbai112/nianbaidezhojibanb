@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-node24-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CI: true
+      NODE_ENV: test
+      DB_PROVIDER: postgresql
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/lingmeng_ci?schema=public
+      JWT_SECRET: ci-only-jwt-secret-at-least-thirty-two-characters
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify Prisma schema variants
+        run: npm --workspace backend run db:sync-schemas -- --check
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Run backend unit tests
+        run: npm --workspace backend test -- --runInBand
+
+      - name: Run Node.js regression tests
+        run: >-
+          find admin/src backend/scripts minitest utils site/tests -type f
+          \( -name '*.test.mjs' -o -name '*.test.cjs' -o -name '*.spec.cjs' \)
+          -exec node --test {} +
+
+      - name: Verify committed miniapp API contract
+        run: node utils/checkApiContractSnapshot.cjs
+
+      - name: Lint backend and admin
+        run: npm run lint:check
+
+      - name: Type-check admin
+        run: npm run typecheck:admin
+
+      - name: Build all workspaces
+        run: npm run build
+
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Reject newly introduced high-risk dependencies
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high

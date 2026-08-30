@@ -115,7 +115,7 @@ describe('OperationService post-share claims', () => {
       sharerId: 'inviter-1',
       regionId: 'region-1',
       status: 'ACTIVE',
-      expiresAt: new Date('2026-08-22T08:00:00.000Z'),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       post: { id: 'post-1', status: 'PUBLISHED', deletedAt: null },
     });
     prisma.postShareVisit.findFirst.mockResolvedValue({ openedAt: new Date('2026-07-22T09:00:00.000Z') });
