@@ -24,6 +24,9 @@ test('round-trips server-controlled rider route metadata through the visual edit
   assert.match(painter, /sourceProperties\?: Record<string, any>/)
   assert.match(painter, /\.\.\.\(route\.sourceProperties \|\| \{\}\)/)
   assert.match(painter, /sourceProperties: \{ \.\.\.properties \}/)
+  assert.match(painter, /synchronizeCollectedCalibrationPoints\(\)/)
+  assert.match(painter, /place-calibration-\$\{placeId\}/)
+  assert.match(painter, /已从历史地点核验中恢复/)
 })
 
 test('maps an official rider row to the user id required by task assignments', () => {

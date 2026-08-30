@@ -1033,6 +1033,42 @@ describe("CampusMapCollectionService", () => {
     });
   });
 
+  it("updates the same place calibration instead of creating duplicate points", () => {
+    const service = new CampusMapCollectionService(createPrisma() as any);
+    const manifest: any = {
+      coordinateSystem: { type: "image" },
+      positioning: { enabled: false, calibrationPoints: [] },
+    };
+    const place = { id: "place-library", officialName: "图书馆", artworkAnchorX: 1200, artworkAnchorY: 900 };
+    const verification = {
+      acceptedLongitude: 106.5,
+      acceptedLatitude: 29.6,
+      acceptedAccuracy: 4,
+      acceptedRecordedAt: new Date("2026-08-26T01:00:00.000Z"),
+    };
+
+    const created = (service as any).mergeApprovedPlaceCalibrationPoint(
+      manifest, place, null, { id: "object-1" }, verification, new Date("2026-08-26T02:00:00.000Z"),
+    );
+    const updated = (service as any).mergeApprovedPlaceCalibrationPoint(
+      manifest,
+      place,
+      null,
+      { id: "object-2" },
+      { ...verification, acceptedLongitude: 106.5001 },
+      new Date("2026-08-27T02:00:00.000Z"),
+    );
+
+    expect(created).toMatchObject({ applied: true, action: "created", pointCount: 1 });
+    expect(updated).toMatchObject({ applied: true, action: "updated", pointCount: 1 });
+    expect(manifest.positioning.calibrationPoints).toHaveLength(1);
+    expect(manifest.positioning.calibrationPoints[0]).toMatchObject({
+      id: "place-calibration-place-library",
+      longitude: 106.5001,
+      sourceCollectionObjectId: "object-2",
+    });
+  });
+
   it("does not silently replace the primary entrance when an admin selects location only", async () => {
     const prisma = makeTransactional();
     const evidence: any = {
