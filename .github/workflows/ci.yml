@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-node24-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,6 +44,11 @@ jobs:
 
       - name: Generate Prisma client
         run: npm run db:generate
+
+      - name: Validate Docker Compose deployment contract
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose --file backend/docker-compose.yml config --quiet
 
       - name: Run backend unit tests
         run: npm --workspace backend test -- --runInBand
