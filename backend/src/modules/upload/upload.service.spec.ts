@@ -84,6 +84,9 @@ function makePrisma(value: Record<string, any> | null = makeStorageConfig()): Pr
     config: {
       findUnique: jest.fn().mockResolvedValue(value ? { value } : null),
     },
+    uploadRecord: {
+      create: jest.fn().mockResolvedValue({}),
+    },
   } as unknown as PrismaService;
 }
 
@@ -198,6 +201,45 @@ describe("UploadService", () => {
     );
     expect(result.type).toBe("audio");
     expect(result.key).toMatch(/^users\/u1\/messages\/\d+_[a-f0-9]{32}\.mp3$/);
+  });
+
+  it("stores dorm-shop delivery proof in an isolated user folder", () => {
+    expect(service.resolveFolder("delivery-proof", "user-1")).toBe(
+      "users/user-1/delivery-proofs",
+    );
+  });
+
+  it("fails a required delivery-proof upload when its ownership record cannot be saved", async () => {
+    const prisma = makePrisma();
+    (prisma.uploadRecord.create as jest.Mock).mockRejectedValue(
+      new Error("database unavailable"),
+    );
+    const strictModule = await Test.createTestingModule({
+      providers: [
+        UploadService,
+        { provide: ConfigService, useValue: makeConfig() },
+        { provide: RedisService, useValue: makeRedis() },
+        { provide: PrismaService, useValue: prisma },
+      ],
+    }).compile();
+    const strictService = strictModule.get<UploadService>(UploadService);
+
+    await expect(
+      strictService.recordUpload(
+        "user-1",
+        "user",
+        {
+          url: "https://cdn.example.com/proof.jpg",
+          key: "users/user-1/delivery-proofs/proof.jpg",
+          size: 1024,
+          mimeType: "image/jpeg",
+          type: "image",
+        },
+        "delivery-proof",
+        undefined,
+        true,
+      ),
+    ).rejects.toThrow(InternalServerErrorException);
   });
 
   // ============ COS 配置缺失 ============

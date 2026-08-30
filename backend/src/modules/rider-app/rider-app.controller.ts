@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -18,15 +18,20 @@ export class RiderAppController {
   }
 
   @Post('rider-app/login/phone/send-code')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: '发送骑手 App 手机验证码' })
   sendPhoneCode(@Body() dto: { phone?: string; mobile?: string }, @Req() req: Request) {
     return this.riderAppService.sendPhoneCode(dto, this.clientIp(req));
   }
 
+  @Post('partner-app/login/phone/send-code')
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: '发送校园伙伴端手机验证码' })
+  sendPartnerPhoneCode(@Body() dto: { phone?: string; mobile?: string }, @Req() req: Request) {
+    return this.riderAppService.sendPhoneCode(dto, this.clientIp(req));
+  }
+
   @Post('rider-app/login/phone')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: '骑手 App 手机验证码登录' })
   loginPhone(
@@ -40,8 +45,21 @@ export class RiderAppController {
     );
   }
 
+  @Post('partner-app/login/phone')
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: '校园伙伴端手机号登录并识别身份' })
+  loginPartnerPhone(
+    @Body() dto: { phone?: string; mobile?: string; code?: string },
+    @Req() req: Request,
+  ) {
+    return this.riderAppService.loginPartnerPhone(
+      dto,
+      this.clientIp(req),
+      String(req.headers['user-agent'] || ''),
+    );
+  }
+
   @Post('rider-app/login/wechat')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: '骑手 App 微信登录（需开放平台配置）' })
   loginWechat() {
@@ -54,6 +72,14 @@ export class RiderAppController {
   @ApiOperation({ summary: '获取骑手 App 会话和正式骑手资格' })
   getSession(@CurrentUser('sub') userId: string) {
     return this.riderAppService.getSession(userId);
+  }
+
+  @Get('partner-app/session')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取校园伙伴端身份与工作台列表' })
+  getPartnerSession(@CurrentUser('sub') userId: string) {
+    return this.riderAppService.getPartnerSession(userId);
   }
 
   @Get('rider-app/orders')
@@ -222,5 +248,22 @@ export class RiderAppController {
   @ApiOperation({ summary: '上报 uni-push 推送标识' })
   registerPushToken(@CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.riderAppService.registerPushToken(userId, dto);
+  }
+
+
+  @Post('partner-app/push/token')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '上报校园伙伴端 uni-push 推送标识' })
+  registerPartnerPushToken(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.riderAppService.registerPartnerPushToken(userId, dto);
+  }
+
+  @Delete('partner-app/push/token')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '解绑当前账号的校园伙伴端推送标识' })
+  unregisterPartnerPushToken(@CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.riderAppService.unregisterPartnerPushToken(userId, dto);
   }
 }

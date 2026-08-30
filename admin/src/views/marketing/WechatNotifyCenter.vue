@@ -1,6 +1,6 @@
 <template>
   <div class="page-container">
-    <PageHeader title="服务号通知中心" desc="通过微信服务号向已关注用户推送跑腿状态和社区互动消息" />
+    <PageHeader title="微信通知中心" desc="统一配置服务号模板消息与跑腿小程序订阅消息" />
 
     <!-- 接入状态横幅 -->
     <el-alert
@@ -188,7 +188,7 @@
       <el-tab-pane label="消息模板" name="templates">
         <div class="tpl-hint">
           <el-icon><InfoFilled /></el-icon>
-          在微信公众平台申请模板后，将模板 ID 粘贴到对应场景，再从下拉框选择每个模板变量对应的业务字段。
+          在微信公众平台分别申请服务号模板和小程序订阅模板，将模板 ID 粘贴到对应场景，再选择模板变量对应的业务字段。
           <el-link type="primary" :underline="false" @click="openUrl('https://mp.weixin.qq.com/advanced/tmplmsg?action=list')" style="margin-left:6px">打开模板消息管理 →</el-link>
         </div>
 
@@ -199,64 +199,90 @@
                 <span class="tpl-scene-name">{{ row.scene }}</span>
                 <span class="tpl-scene-desc">{{ row.desc }}</span>
               </div>
-              <el-tag :type="row.templateId ? 'success' : 'info'" size="small">
-                {{ row.templateId ? '已配置' : '待配置' }}
-              </el-tag>
+              <div class="tpl-status-tags">
+                <el-tag v-if="row.supportsOfficial !== false" :type="row.templateId ? 'success' : 'info'" size="small">
+                  服务号{{ row.templateId ? '已配置' : '待配置' }}
+                </el-tag>
+                <el-tag v-if="row.supportsMiniProgram" :type="row.miniTemplateId ? 'success' : 'info'" size="small">
+                  小程序{{ row.miniTemplateId ? '已配置' : '待配置' }}
+                </el-tag>
+              </div>
             </div>
 
             <div class="tpl-scene-body">
-              <!-- 模板 ID -->
-              <div class="tpl-field-row tpl-id-row">
-                <span class="tpl-field-label">模板 ID</span>
-                <el-input
-                  v-model="row.templateId"
-                  placeholder="从公众平台复制，如 ABC123xyz..."
-                  clearable
-                  @blur="saveTpl(row)"
-                  class="tpl-id-input"
-                />
-              </div>
-
-              <!-- 字段映射：每个模板变量 → 业务字段 -->
-              <div v-if="row.fieldDefs.length" class="tpl-field-mapping">
-                <div class="tpl-mapping-title">字段映射</div>
-                <div class="tpl-mapping-hint">选择每个模板变量对应的业务字段；未选择的变量不会填充。</div>
-                <div class="tpl-mapping-grid">
-                  <template v-for="(fd, fdIndex) in row.fieldDefs" :key="fdIndex">
-                    <div class="tpl-var-name">
-                      <el-input
-                        v-model="fd.varName"
-                        size="small"
-                        placeholder="模板变量名，如 thing1"
-                        @change="saveTpl(row)"
-                      >
-                        <template #prepend>&#123;&#123;</template>
-                        <template #append>.DATA&#125;&#125;</template>
-                      </el-input>
-                      <span class="tpl-var-desc">{{ fd.label }}</span>
-                    </div>
-                    <div class="tpl-map-control">
-                      <el-select
-                        v-model="fd.mappedField"
-                        placeholder="选择对应字段"
-                        clearable
-                        size="small"
-                        @change="saveTpl(row)"
-                        class="tpl-var-select"
-                      >
-                        <el-option
-                          v-for="opt in row.fieldOptions"
-                          :key="opt.value"
-                          :label="opt.label"
-                          :value="opt.value"
-                        />
-                      </el-select>
-                      <el-button link type="danger" @click="removeTemplateField(row, fdIndex)">删除</el-button>
-                    </div>
-                  </template>
+              <section v-if="row.supportsOfficial !== false" class="tpl-platform-section">
+                <div class="tpl-platform-title">服务号模板消息</div>
+                <div class="tpl-field-row tpl-id-row">
+                  <span class="tpl-field-label">模板 ID</span>
+                  <el-input
+                    v-model="row.templateId"
+                    placeholder="从服务号公众平台复制，如 ABC123xyz..."
+                    clearable
+                    @blur="saveTpl(row)"
+                    class="tpl-id-input"
+                  />
                 </div>
-                <el-button link type="primary" @click="addTemplateField(row)">+ 添加模板变量</el-button>
-              </div>
+
+                <div v-if="row.fieldDefs.length" class="tpl-field-mapping">
+                  <div class="tpl-mapping-title">服务号字段映射</div>
+                  <div class="tpl-mapping-hint">选择每个模板变量对应的业务字段；未选择的变量不会填充。</div>
+                  <div class="tpl-mapping-grid">
+                    <template v-for="(fd, fdIndex) in row.fieldDefs" :key="fdIndex">
+                      <div class="tpl-var-name">
+                        <el-input v-model="fd.varName" size="small" placeholder="模板变量名，如 thing1" @change="saveTpl(row)">
+                          <template #prepend>&#123;&#123;</template>
+                          <template #append>.DATA&#125;&#125;</template>
+                        </el-input>
+                        <span class="tpl-var-desc">{{ fd.label }}</span>
+                      </div>
+                      <div class="tpl-map-control">
+                        <el-select v-model="fd.mappedField" placeholder="选择对应字段" clearable size="small" @change="saveTpl(row)" class="tpl-var-select">
+                          <el-option v-for="opt in row.fieldOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                        </el-select>
+                        <el-button link type="danger" @click="removeTemplateField(row, fdIndex)">删除</el-button>
+                      </div>
+                    </template>
+                  </div>
+                  <el-button link type="primary" @click="addTemplateField(row)">+ 添加模板变量</el-button>
+                </div>
+              </section>
+
+              <section v-if="row.supportsMiniProgram" class="tpl-platform-section tpl-mini-section">
+                <div class="tpl-platform-title">小程序订阅消息</div>
+                <div class="tpl-field-row tpl-id-row">
+                  <span class="tpl-field-label">模板 ID</span>
+                  <el-input
+                    v-model="row.miniTemplateId"
+                    placeholder="从小程序公众平台的订阅消息中复制"
+                    clearable
+                    @blur="saveMiniTpl(row)"
+                    class="tpl-id-input"
+                  />
+                </div>
+
+                <div v-if="row.miniFieldDefs.length" class="tpl-field-mapping">
+                  <div class="tpl-mapping-title">小程序字段映射</div>
+                  <div class="tpl-mapping-hint">变量名必须与小程序订阅模板详情一致，保存后对应业务页面才能申请该场景授权。</div>
+                  <div class="tpl-mapping-grid">
+                    <template v-for="(fd, fdIndex) in row.miniFieldDefs" :key="fdIndex">
+                      <div class="tpl-var-name">
+                        <el-input v-model="fd.varName" size="small" placeholder="订阅模板变量名，如 thing1" @change="saveMiniTpl(row)">
+                          <template #prepend>&#123;&#123;</template>
+                          <template #append>.DATA&#125;&#125;</template>
+                        </el-input>
+                        <span class="tpl-var-desc">{{ fd.label }}</span>
+                      </div>
+                      <div class="tpl-map-control">
+                        <el-select v-model="fd.mappedField" placeholder="选择对应字段" clearable size="small" @change="saveMiniTpl(row)" class="tpl-var-select">
+                          <el-option v-for="opt in row.fieldOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                        </el-select>
+                        <el-button link type="danger" @click="removeMiniTemplateField(row, fdIndex)">删除</el-button>
+                      </div>
+                    </template>
+                  </div>
+                  <el-button link type="primary" @click="addMiniTemplateField(row)">+ 添加订阅模板变量</el-button>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -309,7 +335,7 @@
       <el-tab-pane label="发送日志" name="logs">
         <div class="tab-toolbar">
           <el-select v-model="logFilters.scene" placeholder="场景" clearable style="width:150px" @change="loadLogs">
-            <el-option v-for="s in allScenes" :key="s.key" :label="s.name" :value="s.key" />
+            <el-option v-for="s in allTemplateSceneOptions" :key="s.key" :label="s.name" :value="s.key" />
           </el-select>
           <el-select v-model="logFilters.status" placeholder="状态" clearable style="width:120px" @change="loadLogs">
             <el-option label="发送成功" value="success" />
@@ -473,7 +499,7 @@ const communityScenes = ref([
   { key: 'community_at', name: '@提醒', desc: '帖子或评论中被@时推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
   { key: 'community_reply', name: '收到回复', desc: '有人回复我的帖子或评论', enabled: true, strategy: 'merge', strategyLabel: '限频推送' },
   { key: 'community_like', name: '收到点赞汇总', desc: '累计满阈值时推送一条汇总', enabled: true, strategy: 'threshold', strategyLabel: '阈值汇总' },
-  { key: 'community_circle_new', name: '关注圈子新内容', desc: '关注的圈子有新帖时每日推一条', enabled: false, strategy: 'daily', strategyLabel: '每日汇总' },
+  { key: 'community_circle_new', name: '关注圈子新内容（预留）', desc: '当前未接入业务触发，请保持关闭', enabled: false, strategy: 'daily', strategyLabel: '未启用' },
 ])
 
 const allScenes = computed(() => [...errandScenes.value, ...communityScenes.value])
@@ -509,6 +535,8 @@ const ERRAND_ORDER_FIELDS = [
   { label: '异常原因', value: 'abnormalReason' },
   { label: '处理建议', value: 'suggestion' },
   { label: '备注/提示', value: 'remark' },
+  { label: '通知标题', value: 'title' },
+  { label: '通知内容', value: 'content' },
 ]
 
 const COMMUNITY_FIELDS = [
@@ -519,16 +547,78 @@ const COMMUNITY_FIELDS = [
   { label: '获赞数量', value: 'likeCount' },
   { label: '时间段描述', value: 'timePeriod' },
   { label: '备注/提示', value: 'remark' },
+  { label: '通知时间', value: 'time' },
+  { label: '通知内容', value: 'content' },
+]
+
+const CONTENT_AUDIT_FIELDS = [
+  ...COMMUNITY_FIELDS,
+  { label: '审核结果', value: 'auditResult' },
+  { label: '审核原因', value: 'auditReason' },
+  { label: '审核时间', value: 'auditTime' },
 ]
 
 // fieldDefs: 模板变量列表；varName 是微信模板里的变量名（如 thing1、character_string2）
 // 运营者从公众平台模板详情页查到变量名，在此选对应业务字段
-const templateRows = ref([
+const templateRows = ref<any[]>([
+  {
+    key: 'takeaway_order_status',
+    scene: '外卖订单状态',
+    desc: '付款用户接收商家接单、配送和送达状态',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesA/order/order',
+    fieldOptions: ERRAND_ORDER_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'thing2', label: '订单状态/提示', mappedField: 'content' },
+      { varName: 'time3', label: '预计时间', mappedField: 'estimatedTime' },
+    ],
+  },
+  {
+    key: 'takeaway_merchant_order',
+    scene: '商家新订单',
+    desc: '商家接收新外卖订单和催处理提醒',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesA/MerchantManagement/Order',
+    fieldOptions: ERRAND_ORDER_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'thing2', label: '订单提示', mappedField: 'content' },
+      { varName: 'time3', label: '处理时间', mappedField: 'estimatedTime' },
+    ],
+  },
+  {
+    key: 'takeaway_rider_order',
+    scene: '骑手新配送任务',
+    desc: '骑手上线后接收取餐和配送任务提醒',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesA/Grab/Grab',
+    fieldOptions: ERRAND_ORDER_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'thing2', label: '任务摘要', mappedField: 'content' },
+      { varName: 'time3', label: '预计时间', mappedField: 'estimatedTime' },
+    ],
+  },
   {
     key: 'errand_accepted',
     scene: '骑手已接单',
     desc: '骑手接受订单时推送给下单用户',
     templateId: '',
+    supportsMiniProgram: true,
+    miniTemplateId: '',
     fieldOptions: ERRAND_ORDER_FIELDS,
     fieldDefs: [
       { varName: 'thing1', label: '第1个文本变量', mappedField: 'orderNo' },
@@ -536,17 +626,29 @@ const templateRows = ref([
       { varName: 'time3', label: '第3个时间变量', mappedField: 'estimatedTime' },
       { varName: 'thing4', label: '第4个文本变量（可选）', mappedField: '' },
     ],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'thing2', label: '骑手姓名', mappedField: 'riderName' },
+      { varName: 'time3', label: '预计时间', mappedField: 'estimatedTime' },
+    ],
   },
   {
     key: 'errand_picked',
     scene: '骑手已取货',
     desc: '骑手到达取件点并取货后推送',
     templateId: '',
+    supportsMiniProgram: true,
+    miniTemplateId: '',
     fieldOptions: ERRAND_ORDER_FIELDS,
     fieldDefs: [
       { varName: 'thing1', label: '第1个文本变量', mappedField: 'orderNo' },
       { varName: 'thing2', label: '第2个文本变量', mappedField: 'pickupAddress' },
       { varName: 'time3', label: '第3个时间变量', mappedField: 'estimatedTime' },
+    ],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'thing2', label: '取件地址', mappedField: 'pickupAddress' },
+      { varName: 'time3', label: '预计时间', mappedField: 'estimatedTime' },
     ],
   },
   {
@@ -554,23 +656,96 @@ const templateRows = ref([
     scene: '订单已完成',
     desc: '骑手确认送达后推送',
     templateId: '',
+    supportsMiniProgram: true,
+    miniTemplateId: '',
     fieldOptions: ERRAND_ORDER_FIELDS,
     fieldDefs: [
       { varName: 'thing1', label: '第1个文本变量', mappedField: 'orderNo' },
       { varName: 'time2', label: '第2个时间变量', mappedField: 'finishedAt' },
       { varName: 'thing3', label: '第3个文本变量（可选）', mappedField: 'remark' },
     ],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '订单号', mappedField: 'orderNo' },
+      { varName: 'time2', label: '完成时间', mappedField: 'finishedAt' },
+      { varName: 'thing3', label: '备注/提示', mappedField: 'remark' },
+    ],
   },
   {
     key: 'errand_abnormal',
     scene: '订单异常',
-    desc: '订单遇到取消、超时等异常时推送',
+    desc: '订单取消、退款、超时等异常由服务号持续通知',
     templateId: '',
     fieldOptions: ERRAND_ORDER_FIELDS,
     fieldDefs: [
       { varName: 'thing1', label: '第1个文本变量', mappedField: 'orderNo' },
       { varName: 'thing2', label: '第2个文本变量', mappedField: 'abnormalReason' },
       { varName: 'thing3', label: '第3个文本变量（可选）', mappedField: 'suggestion' },
+    ],
+  },
+  {
+    key: 'post_audit_result',
+    scene: '帖子审核结果',
+    desc: '人工审核完成后通知帖子发布者',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesB/post/post',
+    fieldOptions: CONTENT_AUDIT_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '帖子标题', mappedField: 'postTitle' },
+      { varName: 'phrase2', label: '审核结果', mappedField: 'auditResult' },
+      { varName: 'thing3', label: '审核原因', mappedField: 'auditReason' },
+      { varName: 'time4', label: '审核时间', mappedField: 'auditTime' },
+    ],
+  },
+  {
+    key: 'post_comment',
+    scene: '帖子收到评论',
+    desc: '帖子作者收到新评论时推送一次性订阅消息',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesB/post/post',
+    fieldOptions: COMMUNITY_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '帖子标题', mappedField: 'postTitle' },
+      { varName: 'thing2', label: '评论用户', mappedField: 'fromNickname' },
+      { varName: 'thing3', label: '内容摘要', mappedField: 'contentSummary' },
+      { varName: 'time4', label: '评论时间', mappedField: 'time' },
+    ],
+  },
+  {
+    key: 'comment_reply',
+    scene: '评论收到回复',
+    desc: '评论用户收到新回复时推送一次性订阅消息',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
+    miniDefaultPage: '/pagesB/post/post',
+    fieldOptions: COMMUNITY_FIELDS,
+    fieldDefs: [],
+    miniFieldDefs: [
+      { varName: 'thing1', label: '帖子标题', mappedField: 'postTitle' },
+      { varName: 'thing2', label: '回复用户', mappedField: 'fromNickname' },
+      { varName: 'thing3', label: '回复摘要', mappedField: 'contentSummary' },
+      { varName: 'time4', label: '回复时间', mappedField: 'time' },
+    ],
+  },
+  {
+    key: 'community_at',
+    scene: '@提醒',
+    desc: '服务号提醒已绑定用户在帖子或评论中被@',
+    templateId: '',
+    fieldOptions: COMMUNITY_FIELDS,
+    fieldDefs: [
+      { varName: 'thing1', label: '互动类型', mappedField: 'actionLabel' },
+      { varName: 'thing2', label: '内容摘要', mappedField: 'contentSummary' },
+      { varName: 'character_string3', label: '触发用户', mappedField: 'fromNickname' },
     ],
   },
   {
@@ -600,20 +775,22 @@ const templateRows = ref([
   },
 ])
 
+const allTemplateSceneOptions = computed(() => {
+  const rows = [
+    ...allScenes.value,
+    ...templateRows.value.map((row: any) => ({ key: row.key, name: row.scene })),
+  ]
+  return Array.from(new Map(rows.map(item => [item.key, item])).values())
+})
+
 async function saveTpl(row: any) {
   if (!row.id && !String(row.templateId || '').trim()) return
-  // 将 fieldDefs 转为 fieldMapping: { varName -> mappedField }
-  const fieldMapping: Record<string, string> = {}
-  for (const fd of row.fieldDefs) {
-    const varName = String(fd.varName || '').trim().replace(/\{\{|\}\}|\.DATA/gi, '')
-    if (varName && fd.mappedField) fieldMapping[varName] = fd.mappedField
-  }
   const payload = {
     platformType: 'official',
     templateType: row.key,
     templateId: String(row.templateId || '').trim(),
     title: row.scene,
-    fieldMapping,
+    fieldMapping: buildFieldMapping(row.fieldDefs),
     enabled: !!String(row.templateId || '').trim(),
   }
   try {
@@ -627,6 +804,37 @@ async function saveTpl(row: any) {
   }
 }
 
+function buildFieldMapping(fieldDefs: any[]) {
+  const fieldMapping: Record<string, string> = {}
+  for (const fd of fieldDefs) {
+    const varName = String(fd.varName || '').trim().replace(/\{\{|\}\}|\.DATA/gi, '')
+    if (varName && fd.mappedField) fieldMapping[varName] = fd.mappedField
+  }
+  return fieldMapping
+}
+
+async function saveMiniTpl(row: any) {
+  if (!row.miniTemplateConfigId && !String(row.miniTemplateId || '').trim()) return
+  const payload = {
+    platformType: 'miniprogram',
+    templateType: row.key,
+    templateId: String(row.miniTemplateId || '').trim(),
+    title: row.scene,
+    defaultPage: row.miniDefaultPage || '/pagesA/order/order',
+    fieldMapping: buildFieldMapping(row.miniFieldDefs),
+    enabled: !!String(row.miniTemplateId || '').trim(),
+  }
+  try {
+    const saved: any = row.miniTemplateConfigId
+      ? await updateWechatTemplate(row.miniTemplateConfigId, payload)
+      : await createWechatTemplate(payload)
+    row.miniTemplateConfigId = saved?.id || row.miniTemplateConfigId
+    ElMessage.success(`「${row.scene}」小程序订阅模板已保存`)
+  } catch (e: any) {
+    ElMessage.error(e?.message || `保存「${row.scene}」小程序订阅模板失败`)
+  }
+}
+
 function addTemplateField(row: any) {
   row.fieldDefs.push({ varName: '', label: '自定义模板变量', mappedField: '' })
 }
@@ -634,6 +842,15 @@ function addTemplateField(row: any) {
 async function removeTemplateField(row: any, index: number) {
   row.fieldDefs.splice(index, 1)
   if (row.id) await saveTpl(row)
+}
+
+function addMiniTemplateField(row: any) {
+  row.miniFieldDefs.push({ varName: '', label: '自定义订阅模板变量', mappedField: '' })
+}
+
+async function removeMiniTemplateField(row: any, index: number) {
+  row.miniFieldDefs.splice(index, 1)
+  if (row.miniTemplateConfigId) await saveMiniTpl(row)
 }
 
 // ===== 防骚扰规则 =====
@@ -676,7 +893,7 @@ async function loadLogs(reset?: boolean) {
     logs.value = list.map((item: any) => ({
       ...item,
       sentAt: item.sentAt || item.createdAt,
-      sceneName: allScenes.value.find(scene => scene.key === item.templateType)?.name || item.templateType,
+      sceneName: allTemplateSceneOptions.value.find(scene => scene.key === item.templateType)?.name || item.templateType,
       summary: item.page || item.templateId || '-',
       errMsg: item.errorMessage || '',
     }))
@@ -743,25 +960,41 @@ async function loadNotifySettings() {
 }
 
 async function loadTemplates() {
-  const res: any = await fetchWechatTemplates({ platformType: 'official', page: 1, pageSize: 100 })
-  const list = res?.list || res?.data?.list || []
+  const [officialRes, miniRes]: any[] = await Promise.all([
+    fetchWechatTemplates({ platformType: 'official', page: 1, pageSize: 100 }),
+    fetchWechatTemplates({ platformType: 'miniprogram', page: 1, pageSize: 100 }),
+  ])
+  const list = officialRes?.list || officialRes?.data?.list || []
+  const miniList = miniRes?.list || miniRes?.data?.list || []
   for (const row of templateRows.value as any[]) {
     const saved = list.find((item: any) => item.templateType === row.key && !item.regionId)
       || list.find((item: any) => item.templateType === row.key)
-    if (!saved) continue
-    row.id = saved.id
-    row.templateId = saved.templateId || ''
-    const mapping = saved.fieldMapping && typeof saved.fieldMapping === 'object' ? saved.fieldMapping : {}
-    const mappingEntries = Object.entries(mapping).filter(([, value]) => typeof value === 'string')
-    if (mappingEntries.length) {
-      const originalDefs = [...row.fieldDefs]
-      row.fieldDefs = mappingEntries.map(([varName, mappedField]) => ({
-        varName,
-        label: originalDefs.find((item: any) => item.varName === varName)?.label || '已配置模板变量',
-        mappedField,
-      }))
+    if (saved) {
+      row.id = saved.id
+      row.templateId = saved.templateId || ''
+      row.fieldDefs = hydrateFieldDefs(row.fieldDefs, saved.fieldMapping)
+    }
+    if (row.supportsMiniProgram) {
+      const miniSaved = miniList.find((item: any) => item.templateType === row.key && !item.regionId)
+        || miniList.find((item: any) => item.templateType === row.key)
+      if (miniSaved) {
+        row.miniTemplateConfigId = miniSaved.id
+        row.miniTemplateId = miniSaved.templateId || ''
+        row.miniFieldDefs = hydrateFieldDefs(row.miniFieldDefs, miniSaved.fieldMapping)
+      }
     }
   }
+}
+
+function hydrateFieldDefs(originalDefs: any[], mapping: unknown) {
+  const safeMapping = mapping && typeof mapping === 'object' ? mapping as Record<string, unknown> : {}
+  const entries = Object.entries(safeMapping).filter(([, value]) => typeof value === 'string')
+  if (!entries.length) return originalDefs
+  return entries.map(([varName, mappedField]) => ({
+    varName,
+    label: originalDefs.find((item: any) => item.varName === varName)?.label || '已配置模板变量',
+    mappedField,
+  }))
 }
 
 onMounted(async () => {
@@ -836,8 +1069,13 @@ onMounted(async () => {
 .tpl-scene-meta { display: flex; flex-direction: column; gap: 3px; }
 .tpl-scene-name { font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
 .tpl-scene-desc { font-size: 12px; color: var(--el-text-color-placeholder); }
+.tpl-status-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .tpl-scene-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.tpl-platform-section { display: flex; flex-direction: column; gap: 14px; }
+.tpl-platform-section + .tpl-platform-section { border-top: 1px solid var(--el-border-color-lighter); padding-top: 18px; }
+.tpl-platform-title { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
+.tpl-mini-section { background: var(--el-color-primary-light-9); margin: 0 -6px -4px; padding: 14px 6px 4px; border-radius: 8px; }
 
 /* 模板 ID 行 */
 .tpl-field-row { display: flex; align-items: center; gap: 12px; }

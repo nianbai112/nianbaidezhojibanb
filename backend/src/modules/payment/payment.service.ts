@@ -8,6 +8,8 @@ import { PrintService } from '../print/print.service';
 import * as crypto from 'crypto';
 import axios from 'axios';
 import * as fs from 'fs';
+import { errandExtendedConfigKey, normalizeErrandExtendedConfig } from '../errand/errand-config.util';
+import { assessApprovedRiderFallbackEligibility } from '../errand/errand-order-taking-policy';
 
 type WxPayRuntimeConfig = {
   appid: string;
@@ -380,14 +382,28 @@ export class PaymentService {
       bizUpdateResult = await this.updateBizOrder(tx, payment);
     });
 
-    if ((payment.bizType === 'errand_order' && bizUpdateResult.refundExpiredErrand) || (payment.bizType === 'order' && bizUpdateResult.refundCancelledShopOrder)) {
-      const reason = bizUpdateResult.refundCancelledShopOrder ? '订单取消后支付成功自动退款' : '跑腿订单时间已过期自动退款';
+    if (
+      (payment.bizType === 'errand_order' && bizUpdateResult.refundExpiredErrand)
+      || (payment.bizType === 'order' && bizUpdateResult.refundCancelledShopOrder)
+      || (payment.bizType === 'self_unban' && bizUpdateResult.refundInvalidSelfUnban)
+    ) {
+      const reason = bizUpdateResult.refundInvalidSelfUnban
+        ? bizUpdateResult.refundInvalidSelfUnbanReason || '封禁状态已变化，迟到的解封付款自动退款'
+        : bizUpdateResult.refundCancelledShopOrder
+          ? '订单取消后支付成功自动退款'
+          : '跑腿订单时间已过期自动退款';
       await this.refund({
         bizType: payment.bizType,
         bizId: payment.bizId,
         amount: Number(payment.amount),
         reason,
-      }).catch((error) => {
+      }).catch(async (error) => {
+        if (payment.bizType === 'self_unban') {
+          await this.prisma.selfUnbanRequest.updateMany({
+            where: { id: payment.bizId, status: 'refunding' },
+            data: { status: 'refund_failed' },
+          }).catch(() => undefined);
+        }
         this.logger.warn(`支付成功后的自动退款失败: ${payment.bizId} ${error?.message || ''}`);
       });
       this.logger.warn(`支付成功但业务订单不可履约，已进入退款流程: ${payment.bizId}`);
@@ -770,6 +786,70 @@ export class PaymentService {
         break;
       }
 
+      case 'self_unban': {
+        let request = await tx.selfUnbanRequest.findUnique({
+          where: { id: payment.bizId },
+          include: {
+            user: { select: { status: true, banVersion: true } },
+          },
+        });
+        if (!request) throw new BadRequestException('解封申请不存在');
+
+        const sameBanCycle = request.status === 'pending_payment'
+          && request.user?.status === 'BANNED'
+          && Number(request.banVersion) === Number(request.user?.banVersion);
+        const moved = sameBanCycle
+          ? await tx.selfUnbanRequest.updateMany({
+              where: {
+                id: payment.bizId,
+                status: 'pending_payment',
+                banVersion: request.banVersion,
+                user: {
+                  is: {
+                    status: 'BANNED',
+                    banVersion: request.banVersion,
+                  },
+                },
+              },
+              data: {
+                status: 'pending_review',
+                paymentNo: payment.paymentNo,
+              },
+            })
+          : { count: 0 };
+        if (moved.count !== 1) {
+          request = await tx.selfUnbanRequest.findUnique({
+            where: { id: payment.bizId },
+            include: {
+              user: { select: { status: true, banVersion: true } },
+            },
+          });
+          const staleBanCycle = request?.status === 'pending_payment'
+            && (
+              request.user?.status !== 'BANNED'
+              || Number(request.banVersion) !== Number(request.user?.banVersion)
+            );
+          if (request?.status === 'cancelled' || staleBanCycle) {
+            const refunding = await tx.selfUnbanRequest.updateMany({
+              where: { id: payment.bizId, status: request.status },
+              data: { status: 'refunding' },
+            });
+            if (refunding.count !== 1) {
+              throw new BadRequestException('解封申请状态已变化，无法确认支付');
+            }
+            result.refundInvalidSelfUnban = true;
+            result.refundInvalidSelfUnbanReason = request.status === 'cancelled'
+              ? '管理员已解除封禁，迟到的解封付款自动退款'
+              : '账号已进入新的封禁周期，旧解封付款自动退款';
+            break;
+          }
+          if (request?.status !== 'pending_review') {
+            throw new BadRequestException('解封申请状态已变化，无法确认支付');
+          }
+        }
+        break;
+      }
+
       default:
         this.logger.warn(`未知支付业务类型: ${payment.bizType}`);
     }
@@ -940,6 +1020,16 @@ export class PaymentService {
     });
     if (!order?.regionId) return;
     const regionId = order.regionId;
+    const savedConfig = await this.prisma.config.findUnique({
+      where: { key: errandExtendedConfigKey(regionId) },
+    }).catch(() => null);
+    const extendedConfig = normalizeErrandExtendedConfig(savedConfig?.value, 0);
+    const fallbackEligibility = assessApprovedRiderFallbackEligibility({
+      policy: extendedConfig.orderTakingPolicy || extendedConfig.order_taking_policy,
+      order,
+      now: new Date(),
+    });
+    if (!fallbackEligibility.allowed) return;
 
     const riders = await this.prisma.regionRider.findMany({
       where: {
@@ -971,8 +1061,8 @@ export class PaymentService {
             amount,
           },
           linkType: 'page',
-          linkValue: '/RunErrands?tab=pending_orders',
-          channelMask: { inApp: true, websocket: true },
+          linkValue: '/pages/tabbar/RunErrands/RunErrands',
+          channelMask: { inApp: true, websocket: true, push: true },
         }),
       ),
     );
@@ -1023,7 +1113,7 @@ export class PaymentService {
       },
       linkType: 'page',
       linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchant.id}`,
-      channelMask: { inApp: true, websocket: true },
+      channelMask: { inApp: true, websocket: true, push: isDormShop },
     });
     if (order.fulfillmentStartTime) {
       await this.prisma.orderLog.create({
@@ -1104,7 +1194,15 @@ export class PaymentService {
             completeTime: true,
             refundStatus: true,
             merchantId: true,
+            businessType: true,
             merchant: { select: { userId: true, name: true, regionId: true } },
+            shopDeliveryAssignment: {
+              select: {
+                assigneeUserId: true,
+                assigneeType: true,
+                status: true,
+              },
+            },
           },
         });
         if (!order) throw new BadRequestException('订单不存在');
@@ -1198,7 +1296,37 @@ export class PaymentService {
               },
               linkType: 'page',
               linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
-              channelMask: { inApp: true, websocket: true },
+              channelMask: {
+                inApp: true,
+                websocket: true,
+                push: order.businessType === 'dorm_shop',
+              },
+            })
+            .catch(() => undefined);
+        }
+        const staffUserId =
+          order.businessType === 'dorm_shop' &&
+          order.shopDeliveryAssignment?.assigneeType === 'staff'
+            ? order.shopDeliveryAssignment.assigneeUserId
+            : null;
+        if (staffUserId && staffUserId !== userId) {
+          await this.notifyService
+            .createAndDispatch({
+              userId: staffUserId,
+              regionId: order.merchant?.regionId || undefined,
+              type: 'delivery',
+              scene: 'dorm_shop_delivery_refund_applied',
+              title: '配送订单申请退款',
+              content: `订单 ${order.orderNo} 已申请退款，请立即暂停取货或送达，等待处理结果。`,
+              data: {
+                orderId,
+                orderNo: order.orderNo,
+                refundId: refundRecord.id,
+                merchantId: order.merchantId,
+              },
+              linkType: 'page',
+              linkValue: '/pages/orders/orders',
+              channelMask: { inApp: true, websocket: true, push: true },
             })
             .catch(() => undefined);
         }
@@ -1227,6 +1355,19 @@ export class PaymentService {
         });
         if (!payment) throw new BadRequestException('未找到支付单');
         if (payment.userId !== userId) throw new ForbiddenException('无权操作该订单');
+        const order = await this.prisma.order.findUnique({
+          where: { id: orderId },
+          select: {
+            id: true,
+            orderNo: true,
+            merchantId: true,
+            businessType: true,
+            merchant: { select: { userId: true, regionId: true } },
+            shopDeliveryAssignment: {
+              select: { assigneeUserId: true, assigneeType: true },
+            },
+          },
+        });
         const pending = await this.prisma.paymentRefund.findFirst({
           where: {
             paymentId: payment.id,
@@ -1262,6 +1403,49 @@ export class PaymentService {
             },
           })
           .catch(() => undefined);
+        const notices: Promise<unknown>[] = [];
+        if (order?.merchant?.userId && order.merchant.userId !== userId) {
+          notices.push(
+            this.notifyService.createAndDispatch({
+              userId: order.merchant.userId,
+              regionId: order.merchant.regionId || undefined,
+              type: 'order',
+              scene: 'shop_order_refund_cancelled_merchant',
+              title: '用户已撤销退款申请',
+              content: `订单 ${order.orderNo} 已恢复履约，请刷新后按原流程处理。`,
+              data: { orderId, orderNo: order.orderNo },
+              linkType: 'page',
+              linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
+              channelMask: {
+                inApp: true,
+                websocket: true,
+                push: order.businessType === 'dorm_shop',
+              },
+            }),
+          );
+        }
+        const staffUserId =
+          order?.businessType === 'dorm_shop' &&
+          order.shopDeliveryAssignment?.assigneeType === 'staff'
+            ? order.shopDeliveryAssignment.assigneeUserId
+            : null;
+        if (staffUserId && staffUserId !== userId) {
+          notices.push(
+            this.notifyService.createAndDispatch({
+              userId: staffUserId,
+              regionId: order?.merchant?.regionId || undefined,
+              type: 'delivery',
+              scene: 'dorm_shop_delivery_refund_cancelled',
+              title: '配送订单已恢复',
+              content: `订单 ${order?.orderNo || orderId} 的退款申请已撤销，请刷新后继续原配送流程。`,
+              data: { orderId, orderNo: order?.orderNo },
+              linkType: 'page',
+              linkValue: '/pages/orders/orders',
+              channelMask: { inApp: true, websocket: true, push: true },
+            }),
+          );
+        }
+        await Promise.allSettled(notices);
         return { success: true, message: '退款申请已撤销' };
       },
       60,
@@ -1385,6 +1569,9 @@ export class PaymentService {
     }
 
     // 尝试调用微信退款 API
+    let submittedWxRefund: any = null;
+    let localSettlementCompleted = false;
+    let wxRefundRequestStarted = false;
     try {
       const wxPayConfig = await this.getWxPayConfig();
       const url = `/v3/refund/domestic/refunds`;
@@ -1402,7 +1589,9 @@ export class PaymentService {
         params.notify_url = wxPayConfig.refundNotifyUrl;
       }
 
+      wxRefundRequestStarted = true;
       const wxRefund = await this.wxPayRequest('POST', url, params, wxPayConfig);
+      submittedWxRefund = wxRefund;
 
       // AUD-P1-059: PROCESSING 时不累计 refundedAmount、不写 completed 平台流水
       // 只有微信明确返回 SUCCESS 才在本次事务中完成记账
@@ -1451,6 +1640,7 @@ export class PaymentService {
           await this.updateBizRefunding(tx, dto.bizType, dto.bizId, amount);
         }
       });
+      localSettlementCompleted = true;
 
       if (isWxSuccess) {
         await this.notifyShopRefundSuccess(payment, amount, dto.reason);
@@ -1465,6 +1655,57 @@ export class PaymentService {
       };
     } catch (error: any) {
       this.logger.error(`退款失败: ${error.message}`);
+
+      // 微信已受理后，本地结算或通知异常不能把退款恢复成可再次审批/履约状态。
+      // 保持 processing，等待微信签名回调按 refundNo 幂等完成对账。
+      if (submittedWxRefund && !localSettlementCompleted) {
+        const failReason = `微信已受理，等待回调对账: ${error.response?.data?.message || error.message}`;
+        await this.prisma.paymentRefund.updateMany({
+          where: { id: refundRecord.id, status: 'pending' },
+          data: {
+            wxRefundId: submittedWxRefund.refund_id || null,
+            status: 'processing',
+            failReason,
+          },
+        }).catch((reconcileError: any) => {
+          this.logger.error(`退款对账状态写入失败: ${reconcileError?.message || reconcileError}`);
+        });
+        await this.notifyShopRefundProcessing(payment, amount, dto.reason, dto.operatorId).catch(() => undefined);
+        return {
+          success: true,
+          refundNo,
+          status: 'processing',
+          reconciliationRequired: true,
+        };
+      }
+
+      // 退款账务已经提交成功时，通知失败不应逆转退款终态。
+      if (submittedWxRefund && localSettlementCompleted) {
+        return {
+          success: true,
+          refundNo,
+          status: submittedWxRefund.status === 'SUCCESS' ? 'success' : 'processing',
+        };
+      }
+
+      // 请求发出后的网络超时/断连无法证明微信未受理，必须等待按 refundNo 对账。
+      const definitiveProviderRejection = Boolean(error?.response?.data) || error instanceof BadRequestException;
+      if (wxRefundRequestStarted && !submittedWxRefund && !definitiveProviderRejection) {
+        const failReason = `微信退款响应未知，等待回调对账: ${error?.message || '网络异常'}`;
+        await this.prisma.paymentRefund.updateMany({
+          where: { id: refundRecord.id, status: 'pending' },
+          data: { status: 'processing', failReason },
+        }).catch((reconcileError: any) => {
+          this.logger.error(`退款对账状态写入失败: ${reconcileError?.message || reconcileError}`);
+        });
+        await this.notifyShopRefundProcessing(payment, amount, dto.reason, dto.operatorId).catch(() => undefined);
+        return {
+          success: true,
+          refundNo,
+          status: 'processing',
+          reconciliationRequired: true,
+        };
+      }
 
       // 标记退款失败
       await this.prisma.paymentRefund.updateMany({
@@ -1626,7 +1867,22 @@ export class PaymentService {
     });
     if (!settlement) return;
 
-    const goodsAmount = Math.max(0, Number(order.totalAmount || 0) - Number(order.originalFreightAmount || order.freightAmount || 0));
+    const grossAmount = Math.max(
+      0,
+      order.payAmount === null || order.payAmount === undefined
+        ? Number(order.totalAmount || 0)
+        : Number(order.payAmount || 0) + Number(order.subsidyAmount || 0),
+    );
+    const selfDelivery =
+      order.businessType === 'dorm_shop' ||
+      order.deliveryMode === 'self_delivery';
+    const originalFreight = Number(order.originalFreightAmount || 0);
+    const platformDeliveryAmount = selfDelivery
+      ? 0
+      : originalFreight > 0
+        ? originalFreight
+        : Number(order.freightAmount || 0);
+    const goodsAmount = Math.max(0, grossAmount - platformDeliveryAmount);
     const previousRefundedAmount = Math.max(0, Number(refundedAmount || 0) - Number(refundAmount || 0));
     const previousGoodsRefund = Math.min(goodsAmount, previousRefundedAmount);
     const totalGoodsRefund = isFullRefund ? goodsAmount : Math.min(goodsAmount, Math.max(0, Number(refundedAmount || 0)));
@@ -1768,6 +2024,19 @@ export class PaymentService {
             refundAmount: refundedAmount,
           },
         });
+        if (isFullRefund) {
+          await tx.shopDeliveryAssignment.updateMany({
+            where: {
+              orderId: bizId,
+              status: { in: ['pending_accept', 'accepted', 'picked_up'] },
+            },
+            data: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              cancelReason: '订单已全额退款',
+            },
+          });
+        }
         await this.adjustSettledShopOrderForRefund(tx, order, amount, isFullRefund, refundedAmount, refundId);
         if (isFullRefund && order?.status === 'PAID' && !order.merchantAcceptTime && order.stockReserved) {
           const released = await tx.order.updateMany({
@@ -1869,6 +2138,12 @@ export class PaymentService {
         });
         await this.membershipService.revokeMembershipOrder(bizId, '退款成功', tx);
         break;
+      case 'self_unban':
+        await tx.selfUnbanRequest.update({
+          where: { id: bizId },
+          data: { status: 'refunded', activeKey: null },
+        });
+        break;
     }
 
     if (refundId) {
@@ -1939,6 +2214,12 @@ export class PaymentService {
         break;
       case 'membership_order':
         await tx.membershipOrder.update({
+          where: { id: bizId },
+          data: { status: 'refunding' },
+        });
+        break;
+      case 'self_unban':
+        await tx.selfUnbanRequest.update({
           where: { id: bizId },
           data: { status: 'refunding' },
         });
@@ -2277,7 +2558,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: `/pagesA/order/errand-detail/errand-detail?id=${payment.bizId}`,
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2299,7 +2580,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: '/pagesA/Grab/Grab',
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2317,7 +2598,11 @@ export class PaymentService {
           merchantId: true,
           riderId: true,
           refundStatus: true,
+          businessType: true,
           merchant: { select: { userId: true, regionId: true } },
+          shopDeliveryAssignment: {
+            select: { assigneeUserId: true, assigneeType: true },
+          },
         },
       })
       .catch(() => null);
@@ -2360,7 +2645,11 @@ export class PaymentService {
           },
           linkType: 'page',
           linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
-          channelMask: { inApp: true, websocket: true },
+          channelMask: {
+            inApp: true,
+            websocket: true,
+            push: order.businessType === 'dorm_shop',
+          },
         }),
       );
     }
@@ -2387,6 +2676,36 @@ export class PaymentService {
         }),
       );
     }
+    const staffUserId =
+      order?.businessType === 'dorm_shop' &&
+      order.shopDeliveryAssignment?.assigneeType === 'staff'
+        ? order.shopDeliveryAssignment.assigneeUserId
+        : null;
+    if (staffUserId && staffUserId !== payment.userId) {
+      const refunded = order?.refundStatus === 'refunded';
+      notices.push(
+        this.notifyService.createAndDispatch({
+          userId: staffUserId,
+          regionId: order?.merchant?.regionId || undefined,
+          type: 'delivery',
+          scene: 'dorm_shop_delivery_refund_success',
+          title: refunded ? '配送订单已退款' : '配送订单部分退款完成',
+          content: refunded
+            ? '订单已全额退款，配送任务已关闭，无需继续处理。'
+            : '订单部分退款已完成，请刷新后按当前状态继续处理。',
+          data: {
+            orderId: order?.id,
+            orderNo: order?.orderNo,
+            paymentNo: payment.paymentNo,
+            refundAmount: Number(amount),
+            refundStatus: order?.refundStatus,
+          },
+          linkType: 'page',
+          linkValue: '/pages/orders/orders',
+          channelMask: { inApp: true, websocket: true, push: true },
+        }),
+      );
+    }
     await Promise.allSettled(notices);
   }
 
@@ -2409,7 +2728,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: `/pagesA/order/errand-detail/errand-detail?id=${payment.bizId}`,
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2430,7 +2749,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: '/pagesA/Grab/Grab',
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2447,7 +2766,11 @@ export class PaymentService {
           orderNo: true,
           merchantId: true,
           riderId: true,
+          businessType: true,
           merchant: { select: { userId: true, regionId: true } },
+          shopDeliveryAssignment: {
+            select: { assigneeUserId: true, assigneeType: true },
+          },
         },
       })
       .catch(() => null);
@@ -2490,7 +2813,11 @@ export class PaymentService {
           },
           linkType: 'page',
           linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
-          channelMask: { inApp: true, websocket: true },
+          channelMask: {
+            inApp: true,
+            websocket: true,
+            push: order.businessType === 'dorm_shop',
+          },
         }),
       );
     }
@@ -2515,6 +2842,36 @@ export class PaymentService {
         }),
       );
     }
+    const staffUserId =
+      order?.businessType === 'dorm_shop' &&
+      order.shopDeliveryAssignment?.assigneeType === 'staff'
+        ? order.shopDeliveryAssignment.assigneeUserId
+        : null;
+    if (
+      staffUserId &&
+      staffUserId !== payment.userId &&
+      staffUserId !== operatorId
+    ) {
+      notices.push(
+        this.notifyService.createAndDispatch({
+          userId: staffUserId,
+          regionId: order?.merchant?.regionId || undefined,
+          type: 'delivery',
+          scene: 'dorm_shop_delivery_refund_processing',
+          title: '配送订单退款处理中',
+          content: '订单退款处理中，请暂停取货或送达，等待处理结果。',
+          data: {
+            orderId: order?.id,
+            orderNo: order?.orderNo,
+            paymentNo: payment.paymentNo,
+            refundAmount: Number(amount),
+          },
+          linkType: 'page',
+          linkValue: '/pages/orders/orders',
+          channelMask: { inApp: true, websocket: true, push: true },
+        }),
+      );
+    }
     await Promise.allSettled(notices);
   }
 
@@ -2533,7 +2890,7 @@ export class PaymentService {
             data: { orderId: payment.bizId, paymentNo: payment.paymentNo },
             linkType: 'page',
             linkValue: `/pagesA/order/errand-detail/errand-detail?id=${payment.bizId}`,
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2553,7 +2910,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: '/pagesA/Grab/Grab',
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }
@@ -2569,7 +2926,11 @@ export class PaymentService {
           orderNo: true,
           merchantId: true,
           riderId: true,
+          businessType: true,
           merchant: { select: { userId: true, regionId: true } },
+          shopDeliveryAssignment: {
+            select: { assigneeUserId: true, assigneeType: true },
+          },
         },
       })
       .catch(() => null);
@@ -2605,7 +2966,11 @@ export class PaymentService {
           },
           linkType: 'page',
           linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
-          channelMask: { inApp: true, websocket: true },
+          channelMask: {
+            inApp: true,
+            websocket: true,
+            push: order.businessType === 'dorm_shop',
+          },
         }),
       );
     }
@@ -2629,6 +2994,31 @@ export class PaymentService {
         }),
       );
     }
+    const staffUserId =
+      order?.businessType === 'dorm_shop' &&
+      order.shopDeliveryAssignment?.assigneeType === 'staff'
+        ? order.shopDeliveryAssignment.assigneeUserId
+        : null;
+    if (staffUserId && staffUserId !== payment.userId) {
+      notices.push(
+        this.notifyService.createAndDispatch({
+          userId: staffUserId,
+          regionId: order?.merchant?.regionId || undefined,
+          type: 'delivery',
+          scene: 'dorm_shop_delivery_refund_failed',
+          title: '配送订单已恢复',
+          content: '退款未完成，订单已恢复原状态，请刷新后继续配送。',
+          data: {
+            orderId: order?.id,
+            orderNo: order?.orderNo,
+            paymentNo: payment.paymentNo,
+          },
+          linkType: 'page',
+          linkValue: '/pages/orders/orders',
+          channelMask: { inApp: true, websocket: true, push: true },
+        }),
+      );
+    }
     await Promise.allSettled(notices);
   }
 
@@ -2646,6 +3036,13 @@ export class PaymentService {
     });
     if (!result.count) return;
     this.logger.warn(`退款失败: ${outRefundNo}, status=${refundStatus}`);
+    if (refund?.payment?.bizType === 'self_unban') {
+      await this.prisma.selfUnbanRequest.update({
+        where: { id: refund.payment.bizId },
+        data: { status: 'refund_failed' },
+      });
+      return;
+    }
     if (!refund?.payment || !['order', 'errand_order'].includes(refund.payment.bizType)) return;
     const processing = await this.prisma.paymentRefund.count({
       where: {
@@ -2758,7 +3155,9 @@ export class PaymentService {
           data: { orderId: payment.bizId, paymentNo: payment.paymentNo },
           linkType: 'page',
           linkValue: isErrand ? `/pagesA/order/errand-detail/errand-detail?id=${payment.bizId}` : `/pagesA/order/order-detail/order-detail?id=${payment.bizId}`,
-          channelMask: { inApp: true, websocket: true },
+          channelMask: isErrand
+            ? { inApp: true, websocket: true, officialAccount: true }
+            : { inApp: true, websocket: true },
         }),
       );
     }
@@ -2780,7 +3179,7 @@ export class PaymentService {
             },
             linkType: 'page',
             linkValue: '/pagesA/Grab/Grab',
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, officialAccount: true },
           }),
         );
       }

@@ -26,6 +26,9 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <el-button type="warning" plain @click="openSelfUnbanDialog">
+            解封申请（{{ pendingSelfUnbanCount }}）
+          </el-button>
           <el-button :icon="Download" @click="handleExport">导出数据</el-button>
         </div>
         <div class="action-bar-right">
@@ -471,6 +474,59 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="selfUnbanDialogVisible" title="自助解封申请" width="1000px" top="6vh">
+      <div class="action-bar">
+        <div class="btn-row">
+          <el-input v-model="selfUnbanKeyword" clearable placeholder="申请单号、昵称或手机号" style="width: 260px" @keyup.enter="loadSelfUnbanRequests" />
+          <el-select v-model="selfUnbanStatus" clearable placeholder="全部状态" style="width: 180px" @change="loadSelfUnbanRequests">
+            <el-option label="待支付" value="pending_payment" />
+            <el-option label="待审核" value="pending_review" />
+            <el-option label="已通过" value="approved" />
+            <el-option label="退款发起中" value="rejecting" />
+            <el-option label="退款中" value="refunding" />
+            <el-option label="已退款" value="refunded" />
+            <el-option label="退款失败" value="refund_failed" />
+            <el-option label="已取消" value="cancelled" />
+          </el-select>
+          <el-button :icon="Refresh" @click="loadSelfUnbanRequests">刷新</el-button>
+        </div>
+      </div>
+      <el-table v-loading="selfUnbanLoading" :data="selfUnbanRequests" stripe max-height="560">
+        <el-table-column label="申请单号" prop="requestNo" min-width="190" />
+        <el-table-column label="用户" min-width="150">
+          <template #default="{ row }">
+            <div>{{ row.nickname || '-' }}</div>
+            <div class="muted">UID {{ row.uid || '-' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="区域" prop="regionName" min-width="140" />
+        <el-table-column label="封禁原因" prop="banReason" min-width="180" show-overflow-tooltip />
+        <el-table-column label="费用" width="100">
+          <template #default="{ row }">¥{{ Number(row.amount || 0).toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }"><el-tag :type="selfUnbanStatusType(row.status)">{{ selfUnbanStatusLabel(row.status) }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="申请时间" width="170">
+          <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <template v-if="row.status === 'pending_review' && canReviewSelfUnban">
+              <el-button link type="success" @click="reviewSelfUnban(row, true)">通过</el-button>
+              <el-button link type="danger" @click="reviewSelfUnban(row, false)">驳回退款</el-button>
+            </template>
+            <el-button v-else-if="row.status === 'refund_failed' && canReviewSelfUnban" link type="danger" @click="retrySelfUnban(row)">重试退款</el-button>
+            <span v-else-if="row.status === 'refunding'" class="muted">等待微信结果</span>
+            <span v-else class="muted">-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div class="pagination-wrap">
+        <el-pagination v-model:current-page="selfUnbanPage" v-model:page-size="selfUnbanPageSize" :total="selfUnbanTotal" layout="total, prev, pager, next" @current-change="loadSelfUnbanRequests" />
+      </div>
+    </el-dialog>
+
     <el-dialog v-model="showRobotDialog" title="添加机器人用户" width="600px">
       <el-form :model="robotForm" label-width="120px">
         <el-form-item label="所属区域" required>
@@ -542,6 +598,10 @@ import {
   updateUserRegion,
   fetchMembershipPlans,
   fetchConfigGroup,
+  updateUserStatus,
+  fetchSelfUnbanRequests,
+  reviewSelfUnbanRequest,
+  retrySelfUnbanRefund,
 } from '@/api/admin'
 import type { SearchField } from '@/types/admin'
 
@@ -549,6 +609,7 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canAdjustBalance = computed(() => auth.user.role === '超级管理员' || auth.permissions.includes('finance:balance-adjust'))
+const canReviewSelfUnban = computed(() => auth.user.role === '超级管理员' || auth.permissions.includes('user:ban'))
 const loading = ref(false)
 const users = ref<any[]>([])
 const total = ref(0)
@@ -646,6 +707,15 @@ const balanceDialogVisible = ref(false)
 const couponDialogVisible = ref(false)
 const membershipDialogVisible = ref(false)
 const regionDialogVisible = ref(false)
+const selfUnbanDialogVisible = ref(false)
+const selfUnbanLoading = ref(false)
+const selfUnbanRequests = ref<any[]>([])
+const selfUnbanTotal = ref(0)
+const pendingSelfUnbanCount = ref(0)
+const selfUnbanPage = ref(1)
+const selfUnbanPageSize = ref(20)
+const selfUnbanKeyword = ref('')
+const selfUnbanStatus = ref('')
 const couponOptions = ref<any[]>([])
 const benefitCatalog = ref<any[]>([])
 const membershipPlans = ref<any[]>([])
@@ -1114,7 +1184,7 @@ async function toggleStatus(row: any) {
   const label = newStatus === 'active' ? '启用' : '禁用'
   try {
     await ElMessageBox.confirm(`确认${label}用户 "${row.nickname || row.id}" 吗？`, '确认操作', { type: 'warning' })
-    await runModuleAction('users', 'update', { row, data: { status: newStatus } })
+    await updateUserStatus(row.id, newStatus, `${label}账号`)
     ElMessage.success(`${label}成功`)
     loadUsers()
     loadStats()
@@ -1128,11 +1198,12 @@ async function toggleBan(row: any) {
   try {
     const { value: reason } = await ElMessageBox.prompt(`确认${label}用户 "${row.nickname || row.id}" 吗？`, label + '用户', {
       inputType: 'textarea',
-      inputPlaceholder: '请输入原因（可选）',
+      inputPlaceholder: isBanned ? '请输入解封说明（可选）' : '请输入封禁原因',
+      inputValidator: (value: string) => isBanned || value.trim() ? true : '请填写封禁原因',
       confirmButtonText: '确认',
       cancelButtonText: '取消',
-    }).catch(() => ({ value: '' }))
-    await runModuleAction('users', 'update', { row, data: { status: isBanned ? 'active' : 'banned' } })
+    })
+    await updateUserStatus(row.id, isBanned ? 'active' : 'banned', reason)
     ElMessage.success(`${label}成功`)
     loadUsers()
     loadStats()
@@ -1149,7 +1220,16 @@ async function batchAction(action: string) {
   const label = labels[action] || action
   try {
     await ElMessageBox.confirm(`确认对 ${selectedRows.value.length} 个用户执行「${label}」操作吗？`, '批量操作', { type: 'warning' })
-    await runModuleAction('users', `batch${action.charAt(0).toUpperCase() + action.slice(1)}` as any, { rows: selectedRows.value })
+    const status = action === 'enable' ? 'active' : action === 'disable' ? 'disabled' : 'banned'
+    let reason = `批量${label}`
+    if (action === 'ban') {
+      const result = await ElMessageBox.prompt('请输入本次批量封禁原因', '批量封禁', {
+        inputType: 'textarea',
+        inputValidator: (value: string) => value.trim() ? true : '请填写封禁原因',
+      })
+      reason = result.value
+    }
+    await Promise.all(selectedRows.value.map((row: any) => updateUserStatus(row.id, status, reason)))
     ElMessage.success('操作成功')
     loadUsers()
     loadStats()
@@ -1158,6 +1238,99 @@ async function batchAction(action: string) {
 
 function handleExport() {
   exportRows('用户数据', users.value)
+}
+
+const selfUnbanStatusLabel = (status: string) => ({
+  pending_payment: '待支付',
+  pending_review: '待审核',
+  approved: '已通过',
+  rejecting: '退款发起中',
+  refunding: '退款中',
+  refunded: '已退款',
+  refund_failed: '退款失败',
+  cancelled: '已取消',
+} as Record<string, string>)[status] || status || '-'
+
+const selfUnbanStatusType = (status: string) => ({
+  pending_payment: 'info',
+  pending_review: 'warning',
+  approved: 'success',
+  rejecting: 'warning',
+  refunding: 'warning',
+  refunded: 'info',
+  refund_failed: 'danger',
+  cancelled: 'info',
+} as Record<string, string>)[status] || 'info'
+
+async function loadSelfUnbanRequests() {
+  selfUnbanLoading.value = true
+  try {
+    const res: any = await fetchSelfUnbanRequests({
+      page: selfUnbanPage.value,
+      pageSize: selfUnbanPageSize.value,
+      keyword: selfUnbanKeyword.value,
+      status: selfUnbanStatus.value,
+    })
+    const data = res?.data || res || {}
+    selfUnbanRequests.value = data.list || []
+    selfUnbanTotal.value = Number(data.total || 0)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载解封申请失败')
+  } finally {
+    selfUnbanLoading.value = false
+  }
+}
+
+async function loadPendingSelfUnbanCount() {
+  try {
+    const res: any = await fetchSelfUnbanRequests({ page: 1, pageSize: 1, status: 'pending_review' })
+    const data = res?.data || res || {}
+    pendingSelfUnbanCount.value = Number(data.total || 0)
+  } catch {
+    pendingSelfUnbanCount.value = 0
+  }
+}
+
+async function openSelfUnbanDialog() {
+  selfUnbanDialogVisible.value = true
+  selfUnbanPage.value = 1
+  await loadSelfUnbanRequests()
+}
+
+async function reviewSelfUnban(row: any, approved: boolean) {
+  try {
+    let reason = ''
+    if (approved) {
+      await ElMessageBox.confirm(`确认通过 ${row.nickname || row.userId} 的解封申请？`, '通过解封', { type: 'warning' })
+      reason = '自助解封审核通过'
+    } else {
+      const result = await ElMessageBox.prompt('驳回后将原路退款，请填写原因', '驳回并退款', {
+        inputType: 'textarea',
+        inputValidator: (value: string) => value.trim() ? true : '请填写驳回原因',
+      })
+      reason = result.value
+    }
+    await reviewSelfUnbanRequest(row.id, approved, reason)
+    ElMessage.success(approved ? '已解封该用户' : '已驳回并发起退款')
+    await Promise.all([loadSelfUnbanRequests(), loadPendingSelfUnbanCount(), loadUsers(), loadStats()])
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '审核失败')
+  }
+}
+
+async function retrySelfUnban(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确认重试 ${row.nickname || row.userId} 的原路退款？`,
+      '重试退款',
+      { type: 'warning' },
+    )
+    await retrySelfUnbanRefund(row.id)
+    ElMessage.success('已重新发起退款')
+    await loadSelfUnbanRequests()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '重试退款失败')
+  }
 }
 
 async function handleCreateRobots() {
@@ -1187,6 +1360,7 @@ onMounted(() => {
   loadCouponOptions()
   loadMembershipPlans()
   loadUsers()
+  loadPendingSelfUnbanCount()
 })
 </script>
 

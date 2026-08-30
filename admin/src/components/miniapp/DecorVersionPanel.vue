@@ -49,7 +49,7 @@ import { request } from '@/api/request'
 const props = defineProps<{
   modelValue: boolean
   regionId: string
-  /** 当前编辑状态，形状与快照一致：{ regionPayload?, tabbarConfig?, decorLayout? } */
+  /** 当前编辑状态，形状与快照一致：{ regionPayload?, tabbarConfig? } */
   current: Record<string, any>
 }>()
 const emit = defineEmits<{
@@ -66,7 +66,7 @@ const diffLabels = ref<string[]>([])
 const diffLoading = ref(0)
 const rollbacking = ref(0)
 
-/** 快照顶层字段 → 中文名（regionPayload 内层字段 + 顶层 tabbar/decor） */
+/** 快照顶层字段 → 中文名（regionPayload 内层字段 + 顶层 tabbar） */
 const FIELD_LABELS: Record<string, string> = {
   carousel_images: 'Hero 区 / 轮播图',
   home_nav_layout_config: '金刚区',
@@ -84,7 +84,6 @@ const FIELD_LABELS: Record<string, string> = {
   profile_layout_items: '我的页菜单',
   settings: '我的页视觉 / 设置',
   tabbarConfig: '底部导航',
-  decorLayout: '自定义版块',
 }
 
 /** 键序无关的稳定序列化：快照经 Postgres jsonb 存取后键序会重排，直接 JSON.stringify 对比会误报差异 */
@@ -108,7 +107,7 @@ function computeDiff(snapshot: any, current: any): string[] {
   for (const k of new Set([...Object.keys(rpA), ...Object.keys(rpB)])) {
     if (!eq(rpA[k], rpB[k])) labels.push(FIELD_LABELS[k] || k)
   }
-  for (const k of ['tabbarConfig', 'decorLayout']) {
+  for (const k of ['tabbarConfig']) {
     if (snapshot?.[k] !== undefined || current?.[k] !== undefined) {
       if (!eq(snapshot?.[k], current?.[k])) labels.push(FIELD_LABELS[k] || k)
     }
@@ -158,7 +157,7 @@ async function toggleDiff(v: VersionItem) {
 async function onRollback(v: VersionItem) {
   try {
     await ElMessageBox.confirm(
-      `将把当前页面装修回滚到 v${v.version}（${formatTime(v.savedAt)}），现有线上配置会被该版本覆盖。`,
+      `将把当前页面配置回滚到 v${v.version}（${formatTime(v.savedAt)}），现有配置会被该版本覆盖。`,
       '确认回滚？',
       { confirmButtonText: '回滚', cancelButtonText: '取消', type: 'warning' },
     )

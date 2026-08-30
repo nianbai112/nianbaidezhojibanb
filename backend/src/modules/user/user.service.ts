@@ -8,6 +8,7 @@ import { GrowthService } from '../growth/growth.service';
 import { UserSessionRevocationService } from '../websocket/user-session-revocation.service';
 import { WsNativeGateway } from '../websocket/ws-native.gateway';
 import { IpGeoService } from '../ip-geo/ip-geo.service';
+import { PaymentService } from '../payment/payment.service';
 import {
   UpdateProfileDto, UpdateSettingsDto, StudentVerifyDto, ListQueryDto,
 } from './dto/user.dto';
@@ -28,6 +29,7 @@ export class UserService {
     private readonly userSessionRevocation: UserSessionRevocationService,
     private readonly wsNative: WsNativeGateway,
     private readonly ipGeo: IpGeoService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   private profileCacheKey(userId: string, regionId?: string, viewerId?: string) {
@@ -39,6 +41,16 @@ export class UserService {
       this.redis.delPattern(`user:profile:${userId}:*`).catch(() => undefined),
       this.redis.delPattern(`user:profile:v2:${userId}:*`).catch(() => undefined),
     ]);
+  }
+
+  private async withSelfUnbanUserLock<T>(userId: string, task: () => Promise<T>): Promise<T> {
+    const wrapped = await this.redis.withLock(
+      `self-unban:user:${userId}`,
+      60,
+      async () => ({ value: await task() }),
+    );
+    if (!wrapped) throw new BadRequestException('解封状态正在处理，请稍后重试');
+    return wrapped.value;
   }
 
   private formatPublicUser(user: any) {
@@ -243,7 +255,7 @@ export class UserService {
       { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.png', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
       { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', main_image: '/static/logo.png', path: '/pagesA/DormShopOwner/DormShopOwner', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4 },
       { id: 'second_hand_manage', title: '我的闲置', description: '发布、下架和处理二手交易', main_image: '/static/logo.png', path: '/pagesC/SecondHand/MySecondHand/MySecondHand', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 5 },
-      { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', main_image: '/static/logo.png', path: '/pages/B/circle-manage', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 6 },
+      { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', main_image: '/static/logo.png', path: '/pagesB/circle-manage/circle-manage', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 6 },
       { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.png', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 7 },
     ];
     const ensureRequiredItems = (sourceItems: any[]) => {
@@ -257,7 +269,7 @@ export class UserService {
         const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
         return item?.id === 'circle_manage'
           || this.normalizeNavigationPermission(item?.navigation_permission || item?.navigationPermission || '') === 'circle_owner'
-          || path.includes('pages/B/circle-manage');
+          || path.includes('circle-manage');
       });
       const hasSecondHandManage = sourceItems.some((item: any) => {
         const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
@@ -1316,16 +1328,163 @@ export class UserService {
   }
 
   async getBanStatus(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { status: true } });
-    return { isBanned: user?.status === 'BANNED', status: user?.status };
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, status: true, muteEndAt: true, muteReason: true },
+    });
+    if (!user) throw new NotFoundException('用户不存在');
+
+    const now = new Date();
+    const isBanned = user.status === UserStatus.BANNED;
+    const isMuted = !!user.muteEndAt && user.muteEndAt > now;
+    const latestBan = isBanned
+      ? await this.prisma.auditLog.findFirst({
+          where: { userId, module: 'user', action: 'BAN' },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null;
+    const detail = latestBan?.detail && typeof latestBan.detail === 'object'
+      ? latestBan.detail as Record<string, any>
+      : {};
+    const banReason = String(detail.reason || '违反社区规范').trim();
+    const muteEndAt = user.muteEndAt?.toISOString() || null;
+
+    return {
+      user_id: userId,
+      userId,
+      status: user.status,
+      is_banned: isBanned,
+      isBanned,
+      is_muted: isMuted,
+      isMuted,
+      ban_info: isBanned
+        ? {
+            reason: banReason,
+            is_permanent: true,
+            start_time: latestBan?.createdAt || null,
+            end_time: null,
+            end_time_text: '',
+          }
+        : null,
+      mute_info: isMuted
+        ? {
+            reason: user.muteReason || '违反社区规范',
+            is_permanent: false,
+            end_time: muteEndAt,
+            end_time_text: user.muteEndAt?.toLocaleString('zh-CN', { hour12: false }) || '',
+          }
+        : null,
+      can_post: !isBanned && !isMuted && user.status === UserStatus.ACTIVE,
+      can_comment: !isBanned && !isMuted && user.status === UserStatus.ACTIVE,
+      check_time: now.toISOString(),
+    };
   }
 
   async payUnban(userId: string) {
-    // AUD-P1-179/AUD-P1-180: 禁止一键直解封。自助解封必须走支付→审核→处罚解除的完整流程。
-    // 当前临时关闭该入口，避免被封禁用户通过旧 token 直接把状态改回 ACTIVE。
-    throw new BadRequestException(
-      '自助解封功能暂未开放。如需解封请联系客服处理。',
-    );
+    return this.withSelfUnbanUserLock(userId, () => this.payUnbanLocked(userId));
+  }
+
+  private async payUnbanLocked(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, status: true, banVersion: true, openid: true },
+    });
+    if (!user) throw new NotFoundException('用户不存在');
+    if (user.status !== UserStatus.BANNED) {
+      throw new BadRequestException('当前账号未被封禁，无需申请解封');
+    }
+    if (!user.openid) throw new BadRequestException('当前账号未绑定微信，无法发起支付');
+
+    const config = await this.getSelfUnbanConfig(userId);
+    if (!config.enabled && config.request_status !== 'pending_review') {
+      throw new BadRequestException(config.reason || '当前区域暂未开放自助解封');
+    }
+    if (config.request_status === 'pending_review') {
+      return {
+        request_id: config.request_id,
+        status: 'pending_review',
+        message: '解封申请已付款，等待后台审核',
+      };
+    }
+    const regionId = String(config.region_id || '').trim();
+    if (!regionId) throw new BadRequestException('未设置所属区域，无法申请解封');
+
+    let request = await this.prisma.selfUnbanRequest.findFirst({
+      where: { userId, status: 'pending_payment', banVersion: user.banVersion },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!request) {
+      const requestNo = `UNBAN${Date.now()}${crypto.randomInt(1000, 10000)}`;
+      try {
+        request = await this.prisma.selfUnbanRequest.create({
+          data: {
+            requestNo,
+            activeKey: userId,
+            userId,
+            banVersion: user.banVersion,
+            regionId,
+            amount: config.fee,
+            status: 'pending_payment',
+            banReason: config.ban_reason || undefined,
+          },
+        });
+      } catch (error: any) {
+        if (error?.code !== 'P2002') throw error;
+        request = await this.prisma.selfUnbanRequest.findFirst({
+          where: { activeKey: userId, banVersion: user.banVersion },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!request || request.status !== 'pending_payment') {
+          throw new BadRequestException('已有解封申请正在处理，请刷新状态');
+        }
+      }
+    }
+
+    if (Number(request.banVersion) !== Number(user.banVersion)) {
+      throw new BadRequestException('封禁状态已变化，请刷新后重试');
+    }
+
+    const payment = await this.paymentService.wxUnifiedOrder({
+      bizType: 'self_unban',
+      bizId: request.id,
+      orderNo: request.requestNo,
+      amount: Number(request.amount),
+      description: `账号解封申请-${config.region_name || '校小伴'}`,
+      openid: user.openid,
+      userId,
+    });
+
+    // 微信预支付单生成期间可能发生再次封禁或人工解封。
+    // 在将支付参数交给小程序前再校验一次，避免用户支付已失效申请。
+    const currentUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { status: true, banVersion: true },
+    });
+    if (
+      currentUser?.status !== UserStatus.BANNED
+      || Number(currentUser.banVersion) !== Number(request.banVersion)
+    ) {
+      await this.prisma.selfUnbanRequest.updateMany({
+        where: { id: request.id, status: 'pending_payment', banVersion: request.banVersion },
+        data: {
+          status: 'cancelled',
+          activeKey: null,
+          adminNote: '封禁状态已变化，未下发支付参数',
+        },
+      });
+      throw new BadRequestException('封禁状态已变化，请刷新后重试');
+    }
+    await this.prisma.selfUnbanRequest.update({
+      where: { id: request.id },
+      data: { paymentNo: payment.paymentNo },
+    });
+
+    return {
+      ...payment,
+      request_id: request.id,
+      request_no: request.requestNo,
+      status: 'pending_payment',
+    };
   }
 
   async getSelfUnbanConfig(userId?: string) {
@@ -1335,11 +1494,42 @@ export class UserService {
     }
 
     try {
-      // 读用户 profile 获取区域
-      const profile = await this.prisma.userProfile.findUnique({
-        where: { userId },
-        select: { regionId: true },
-      });
+      const [user, profile, foundRequest] = await Promise.all([
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { status: true, banVersion: true },
+        }),
+        this.prisma.userProfile.findUnique({
+          where: { userId },
+          select: { regionId: true },
+        }),
+        this.prisma.selfUnbanRequest.findFirst({
+          where: {
+            userId,
+            status: { in: ['pending_payment', 'pending_review', 'rejecting', 'refunding', 'refund_failed'] },
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+      let activeRequest = foundRequest;
+      if (
+        activeRequest?.status === 'pending_payment'
+        && Number(activeRequest.banVersion) !== Number(user?.banVersion)
+      ) {
+        await this.prisma.selfUnbanRequest.updateMany({
+          where: {
+            id: activeRequest.id,
+            status: 'pending_payment',
+            banVersion: activeRequest.banVersion,
+          },
+          data: {
+            status: 'cancelled',
+            activeKey: null,
+            adminNote: '已取消上一次封禁周期的未付款申请',
+          },
+        });
+        activeRequest = null;
+      }
       if (!profile?.regionId) {
         return { enabled: false, fee: 0, reason: '未设置所属区域' };
       }
@@ -1350,14 +1540,38 @@ export class UserService {
         select: { id: true, name: true, selfUnbanFee: true },
       });
 
-      const fee = region?.selfUnbanFee ? Number(region.selfUnbanFee) : 0;
-      const enabled = fee > 0;
+      const configuredFee = region?.selfUnbanFee ? Number(region.selfUnbanFee) : 0;
+      // 未支付申请采用创建时的价格快照，确保页面展示金额与微信下单金额一致。
+      const pendingRequestFee = activeRequest?.status === 'pending_payment'
+        ? Number(activeRequest.amount || 0)
+        : 0;
+      const fee = pendingRequestFee > 0 ? pendingRequestFee : configuredFee;
+      const isBanned = user?.status === UserStatus.BANNED;
+      const waitingReview = activeRequest?.status === 'pending_review';
+      const canResumePayment = !activeRequest || activeRequest.status === 'pending_payment';
+      const enabled = isBanned && fee > 0 && canResumePayment;
+      const banStatus = isBanned ? await this.getBanStatus(userId) : null;
 
       return {
         enabled,
         fee,
+        user_id: userId,
+        region_id: profile.regionId,
         region_name: region?.name || '',
-        reason: enabled ? undefined : '当前区域暂未开放自助解封',
+        request_id: activeRequest?.id || null,
+        request_status: activeRequest?.status || null,
+        ban_reason: banStatus?.ban_info?.reason || '',
+        reason: enabled
+          ? undefined
+          : waitingReview
+            ? '已付款，等待后台审核'
+            : activeRequest?.status === 'refund_failed'
+              ? '退款失败，请联系客服处理'
+              : ['rejecting', 'refunding'].includes(String(activeRequest?.status || ''))
+                ? '退款处理中，请稍后再试'
+            : !isBanned
+              ? '当前账号未被封禁'
+              : '当前区域暂未开放自助解封',
       };
     } catch {
       return { enabled: false, fee: 0, reason: '配置读取失败' };

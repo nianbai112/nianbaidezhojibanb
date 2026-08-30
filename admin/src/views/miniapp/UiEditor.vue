@@ -2,7 +2,7 @@
   <div class="ui-editor" :class="{ 'ue-designer': mode === 'designer' }">
     <!-- ===== 左侧：控制中心导航（设计器全屏沉浸时隐藏） ===== -->
     <aside v-if="mode !== 'designer'" class="ue-nav glass-card">
-      <div class="ue-nav-title">UI 编辑器</div>
+      <div class="ue-nav-title">页面控制中心</div>
       <div v-for="g in navGroups" :key="g.label" class="ue-nav-group">
         <div class="ue-nav-group-label">{{ g.label }}</div>
         <button
@@ -55,13 +55,13 @@ const navGroups = [
   {
     label: '总览',
     items: [
-      { key: 'overview', name: '总览 · 发布', icon: Odometer, hint: '区域装修完整度、发布检查清单一键发布到小程序' },
+      { key: 'overview', name: '总览 · 检查', icon: Odometer, hint: '检查区域页面控制项、导航和分享配置' },
     ],
   },
   {
     label: '页面',
     items: [
-      { key: 'designer', name: '设计器', icon: MagicStick, hint: '画布就是真实页面：点哪改哪，保存即生效' },
+      { key: 'designer', name: '页面控制', icon: MagicStick, hint: '直接调整原生页面内容、入口和显示开关，保存即生效' },
     ],
   },
   {
@@ -83,23 +83,10 @@ const navGroups = [
 const allItems = navGroups.flatMap((g) => g.items)
 const validKeys = allItems.map((i) => i.key)
 
-/** 旧版独立入口已全部收编进统一设计器 */
-const legacyModeMap: Record<string, string> = {
-  realtime: 'designer',
-  layout: 'designer',
-  tmagic: 'designer',
-}
 const resolveMode = (raw: unknown): string => {
   const key = String(raw || '')
   if (validKeys.includes(key)) return key
-  if (legacyModeMap[key]) return legacyModeMap[key]
   return 'overview'
-}
-
-// 旧链接 ?mode=tmagic（无 page 参数）直接落到设计器的活动页页签
-const rawMode = String(route.query.mode || '')
-if (rawMode === 'tmagic' && !route.query.page) {
-  router.replace({ query: { ...route.query, mode: 'designer', page: 'tmagic' } })
 }
 
 const mode = ref(resolveMode(route.query.mode))
@@ -108,14 +95,12 @@ const currentItem = computed(() => allItems.find((i) => i.key === mode.value))
 function switchMode(key: string, page?: string) {
   const target = resolveMode(key)
   if (!validKeys.includes(target)) return
-  // 总览检查清单可带 page 跳转（designer:home/message/profile）；
-  // 旧 key（realtime/layout/tmagic）映射到设计器，tmagic 补 page=tmagic。
+  // 总览检查清单可带 page 跳转（designer:home/message/profile）。
   // 注意：mode 与 page 必须在同一次 replace 里写入，且用 skipQuerySync 抑制
   // watch(mode) 的兜底 replace——后者在导航完成前执行会基于旧 query 二次
   // replace，把刚写入的 page 冲掉（去配置跳转丢页签）。
   const query: Record<string, any> = { ...route.query, mode: target }
   if (page) query.page = page
-  else if (key === 'tmagic' && !route.query.page) query.page = 'tmagic'
   skipQuerySync = true
   router.replace({ query }).finally(() => { skipQuerySync = false })
   mode.value = target

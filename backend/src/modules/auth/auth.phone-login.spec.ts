@@ -2,17 +2,22 @@ import { BadRequestException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 
 describe('AuthService phone login identity resolution', () => {
-  const createService = (riders: Array<{ userId: string }> = []) => {
+  const createService = (
+    riders: Array<{ userId: string }> = [],
+    phoneUsers: Array<{ id: string }> = [{ id: 'phone-only-user' }],
+  ) => {
     const prisma = {
       regionRider: {
         findMany: jest.fn().mockResolvedValue(riders),
       },
       user: {
+        findMany: jest.fn().mockResolvedValue(phoneUsers),
         findFirst: jest.fn().mockImplementation(({ where }: any) =>
           Promise.resolve(where.id
             ? { id: where.id, phone: null }
             : { id: 'phone-only-user', phone: '13800138000' }),
         ),
+        create: jest.fn(),
       },
     };
     const service = new AuthService(
@@ -54,5 +59,45 @@ describe('AuthService phone login identity resolution', () => {
     await expect(
       (service as any).findPhoneLoginUser('13800138000', true),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an ambiguous partner phone across user and rider identity sources', async () => {
+    const { service } = createService(
+      [{ userId: 'rider-user' }],
+      [{ id: 'phone-user' }],
+    );
+
+    await expect(
+      (service as any).findPhoneLoginUser('13800138000', true, true),
+    ).rejects.toThrow('多个账号');
+  });
+
+  it('deduplicates the same canonical partner user found by both phone sources', async () => {
+    const { service, prisma } = createService(
+      [{ userId: 'same-user' }],
+      [{ id: 'same-user' }],
+    );
+
+    await expect(
+      (service as any).findPhoneLoginUser('13800138000', true, true),
+    ).resolves.toMatchObject({ id: 'same-user' });
+    expect(prisma.user.findFirst).toHaveBeenLastCalledWith({
+      where: { id: 'same-user', status: { not: 'DELETED' } },
+    });
+  });
+
+  it('does not create a new account from the campus partner login', async () => {
+    const { service, prisma } = createService([], []);
+    jest.spyOn(service as any, 'verifyPhoneLoginCode').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'buildLoginMeta').mockResolvedValue({});
+    jest.spyOn(service as any, 'findPhoneLoginUser').mockResolvedValue(null);
+
+    await expect(service.phoneLogin(
+      { phone: '13800138000', code: '123456' },
+      undefined,
+      undefined,
+      { strictPartnerIdentity: true },
+    )).rejects.toThrow('请先在小程序登录并绑定手机号');
+    expect(prisma.user.create).not.toHaveBeenCalled();
   });
 });

@@ -167,21 +167,21 @@ const checklist = computed<CheckItem[]>(() => [
   },
   {
     title: '首页布局已配置',
-    description: '首页页面装修已保存',
+    description: '首页原生布局样式已选择',
     passed: !!props.homeLayout,
     required: false,
     tab: 'layout-home'
   },
   {
     title: '消息页布局已配置',
-    description: '消息页页面装修已保存',
+    description: '消息页原生布局样式已选择',
     passed: !!props.messageLayout,
     required: false,
     tab: 'layout-message'
   },
   {
     title: '我的页布局已配置',
-    description: '我的页页面装修已保存',
+    description: '我的页原生布局样式已选择',
     passed: !!props.profileLayout,
     required: false,
     tab: 'layout-profile'

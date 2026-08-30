@@ -23,7 +23,7 @@ const routes: RouteRecordRaw[] = [
       // ========== 区域中心 ==========
       { path: 'region/list', component: () => import('@/views/region/RegionList.vue'), meta: { title: '区域列表' } },
       { path: 'region/config', component: () => import('@/views/region/RegionConfigCenter.vue'), meta: { title: '区域配置' } },
-      // 页面装修相关能力已全部收编进 UI 编辑器（/region/app-pages），旧入口保留重定向
+      // 页面、导航与分享控制统一收编进页面控制中心
       { path: 'region/page-decoration', redirect: { path: '/region/app-pages', query: { mode: 'overview' } } },
       { path: 'region/tabbar', redirect: (to: any) => ({ path: '/region/app-pages', query: { ...to.query, mode: 'tabbar' } }) },
       { path: 'region/share-settings', redirect: (to: any) => ({ path: '/region/app-pages', query: { ...to.query, mode: 'share' } }) },
@@ -167,11 +167,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'system/realtime-sessions', component: () => import('@/views/system/RealtimeSessionsPage.vue'), meta: { title: '客服工作台' } },
       { path: 'ops/jobs', component: () => import('@/views/ops/ScheduledJobs.vue'), meta: { title: '定时任务' } },
 
-      // ========== 页面装修 ==========
-      { path: 'layout/home', component: () => import('@/views/layout/HomeLayoutConfig.vue'), meta: { title: '首页布局配置' } },
-      { path: 'layout/message', component: () => import('@/views/layout/MessageLayoutConfig.vue'), meta: { title: '消息页布局配置' } },
-      { path: 'layout/profile', component: () => import('@/views/layout/ProfileLayoutConfig.vue'), meta: { title: '我的页布局配置' } },
-
       // ========== 数据分析 ==========
       { path: 'analytics/overview', component: () => import('@/views/analytics/AnalyticsOverview.vue'), meta: { title: '数据概览' } },
       { path: 'analytics/users', component: () => import('@/views/analytics/UserAnalytics.vue'), meta: { title: '用户分析' } },
@@ -224,7 +219,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'user/loyalty', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '成长中心', tabsKey: 'user-loyalty' } },
       { path: 'system/publishing', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '官网与内容', tabsKey: 'system-publishing' } },
       { path: 'system/observability', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '监控与日志', tabsKey: 'system-observability' } },
-      { path: 'region/app-pages', component: () => import('@/views/miniapp/UiEditor.vue'), meta: { title: 'UI 编辑器', fullBleed: true } },
+      { path: 'region/app-pages', component: () => import('@/views/miniapp/UiEditor.vue'), meta: { title: '页面控制中心', fullBleed: true } },
     ]
   },
   { path: '/:pathMatch(.*)*', component: () => import('@/views/error/NotFound.vue') }

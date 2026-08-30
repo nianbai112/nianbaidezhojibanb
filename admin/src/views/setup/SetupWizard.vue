@@ -194,11 +194,11 @@
             <template #default>
               <div v-if="initResult.requiresMigration" class="command-box">
                 <p>向导已自动尝试迁移，但数据库权限或连接仍有问题。修好后可重试；必要时再手动执行下面命令。</p>
-                <code>cd /www/wwwroot/lingmeng/backend && npm run db:migrate:deploy && npm run db:generate && pm2 restart lingmeng-backend</code>
+                <code>cd /www/wwwroot/lingmeng/backend && npm run db:migrate:deploy && npm run db:generate && pm2 restart lingmeng-worker lingmeng-realtime lingmeng-backend --update-env</code>
               </div>
               <div v-else-if="initResult.success" class="command-box">
-                <p v-if="initResult.autoRestart">初始化成功，后端正在自动重启并重新加载配置。稍等片刻后会返回登录页。</p>
-                <p v-else>初始化成功，系统已自动写入已安装状态。请手动重启后端后登录后台，继续补齐小程序、对象存储、支付等业务配置。</p>
+                <p v-if="initResult.autoRestart">初始化成功，API、Worker、Realtime 正在自动重载配置。稍等片刻后会返回登录页。</p>
+                <p v-else>初始化成功，系统已自动写入已安装状态。请手动重启 API、Worker、Realtime 后登录后台，继续补齐小程序、对象存储、支付等业务配置。</p>
               </div>
               <div v-else class="command-box">
                 <p>初始化没有完成，请按下面顺序排查后再点“执行初始化”。</p>

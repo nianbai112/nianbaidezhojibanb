@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, RequestMethod } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, RequestMethod } from '@nestjs/common';
 import { CampusMapController } from './campus-map.controller';
 import { CampusMapImportService } from './campus-map-import.service';
 import { CampusMapService } from './campus-map.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
+import { UploadService } from '../upload/upload.service';
 
 // 校园地图安全回归：`GET campus-map/active` 曾无任何守卫，任何人可用 region_id
 // 遍历拉取全部校区地图数据（含 inlineData 全量要素坐标与名称）。
@@ -18,6 +19,12 @@ const mockAdminPermissionGuard = { canActivate: jest.fn().mockResolvedValue(true
 const mockService = {
   getActiveMap: jest.fn(),
   getProjectCatalog: jest.fn(),
+  resolveCatalogRegionId: jest.fn(),
+  upsertProject: jest.fn(),
+  deleteProject: jest.fn(),
+  addProjectPhoto: jest.fn(),
+  removeProjectPhoto: jest.fn(),
+  seedProjectsFromCatalog: jest.fn(),
   listAvailabilityStatuses: jest.fn(),
   getRegionMap: jest.fn(),
   upsertRegionMap: jest.fn(),
@@ -26,6 +33,7 @@ const mockService = {
   listVersions: jest.fn(),
   rollbackVersion: jest.fn(),
   disableRegionMap: jest.fn(),
+  submitUserCheckIn: jest.fn(),
 };
 const mockImportService = {
   getConverterStatus: jest.fn(),
@@ -39,6 +47,9 @@ const mockScope = {
   assertRegionAccess: jest.fn().mockResolvedValue(undefined),
   regionFieldWhere: jest.fn().mockResolvedValue({}),
 };
+const mockUpload = {
+  upload: jest.fn(),
+};
 
 describe('CampusMapController - 公开接口登录校验回归', () => {
   let controller: CampusMapController;
@@ -50,6 +61,7 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     mockAdminPermissionGuard.canActivate.mockResolvedValue(true);
     mockScope.assertRegionAccess.mockResolvedValue(undefined);
     mockScope.regionFieldWhere.mockResolvedValue({});
+    mockService.resolveCatalogRegionId.mockImplementation(async (regionId?: string, mapId?: string) => regionId || (mapId ? 'region-from-map' : undefined));
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [CampusMapController],
@@ -57,6 +69,7 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
         { provide: CampusMapService, useValue: mockService },
         { provide: CampusMapImportService, useValue: mockImportService },
         { provide: AdminDataScopeService, useValue: mockScope },
+        { provide: UploadService, useValue: mockUpload },
       ],
     })
       .overrideGuard(JwtGuard)
@@ -90,6 +103,16 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     expect(guards).not.toContain(AdminPermissionGuard);
   });
 
+  it('到达打卡路由只要求普通用户登录', () => {
+    const proto = CampusMapController.prototype as any;
+    expect(Reflect.getMetadata('path', proto.submitPlaceCheckIn)).toBe('campus-map/places/:placeId/check-ins');
+    expect(Reflect.getMetadata('method', proto.submitPlaceCheckIn)).toBe(RequestMethod.POST);
+    const guards = Reflect.getMetadata('__guards__', proto.submitPlaceCheckIn) || [];
+    expect(guards).toContain(JwtGuard);
+    expect(guards).not.toContain(AdminGuard);
+    expect(guards).not.toContain(AdminPermissionGuard);
+  });
+
   it('登录后仍可按 region_id / regionId 读取活动地图', async () => {
     mockService.getActiveMap.mockResolvedValue({ enabled: true, mapId: 'region-map' });
 
@@ -100,18 +123,49 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     expect(mockService.getActiveMap).toHaveBeenCalledWith('region-2');
   });
 
-  it('后台官方项目目录返回 37 个条目', async () => {
-    mockService.getProjectCatalog.mockReturnValue(Array.from({ length: 37 }, (_, index) => ({
+  it('后台官方项目目录返回含北大门的 38 个条目', async () => {
+    mockService.getProjectCatalog.mockReturnValue(Array.from({ length: 38 }, (_, index) => ({
       officialNumber: index + 1,
     })));
 
-    const result = (controller as any).getProjectCatalog();
+    const result = await (controller as any).getProjectCatalog();
 
-    expect(result).toHaveLength(37);
+    expect(result).toHaveLength(38);
     expect(mockService.getProjectCatalog).toHaveBeenCalledTimes(1);
     const proto = CampusMapController.prototype as any;
     expect(Reflect.getMetadata('path', proto.getProjectCatalog)).toBe('admin/campus-map/project-catalog');
     expect(Reflect.getMetadata('method', proto.getProjectCatalog)).toBe(RequestMethod.GET);
+  });
+
+  it('旧目录写接口缺少 regionId/mapId 时明确失败，不写入 global', async () => {
+    mockService.resolveCatalogRegionId.mockRejectedValueOnce(new BadRequestException('regionId 必填'));
+    const req = { user: { sub: 'admin-1' } } as any;
+
+    await expect((controller as any).upsertProject('7', { officialName: '人和楼' }, req))
+      .rejects.toThrow('regionId 必填');
+
+    expect(mockService.upsertProject).not.toHaveBeenCalled();
+    expect(mockScope.assertRegionAccess).not.toHaveBeenCalled();
+  });
+
+  it('旧目录写接口可用 mapId 解析区域并先校验数据权限', async () => {
+    mockService.resolveCatalogRegionId.mockResolvedValueOnce('region-1');
+    mockService.upsertProject.mockResolvedValueOnce({ id: 'place-7' });
+    const req = { user: { sub: 'admin-1' } } as any;
+
+    await expect((controller as any).upsertProject(
+      '7',
+      { officialName: '人和楼' },
+      req,
+      undefined,
+      'map-1',
+    )).resolves.toEqual({ id: 'place-7' });
+
+    expect(mockService.resolveCatalogRegionId).toHaveBeenCalledWith(undefined, 'map-1');
+    expect(mockScope.assertRegionAccess).toHaveBeenCalledWith('admin-1', 'region-1');
+    expect(mockService.upsertProject).toHaveBeenCalledWith(expect.objectContaining({
+      regionId: 'region-1', officialNumber: 7,
+    }), 'admin-1');
   });
 
   it('后台校园地图状态列表使用管理员区域数据范围', async () => {
@@ -132,7 +186,7 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
 
   it.each([
     ['读取地图', (req: any) => (controller as any).getAdminRegionMap('region-1', req)],
-    ['兼容发布', (req: any) => (controller as any).upsertAdminRegionMap('region-1', { enabled: false }, req)],
+    ['兼容保存草稿', (req: any) => (controller as any).upsertAdminRegionMap('region-1', { enabled: false }, req)],
     ['保存草稿', (req: any) => (controller as any).saveAdminRegionMapDraft('region-1', { config: { enabled: false } }, req)],
     ['发布草稿', (req: any) => (controller as any).publishAdminRegionMapDraft('region-1', { revision: 1 }, req)],
     ['读取版本', (req: any) => (controller as any).listAdminRegionMapVersions('region-1', '1', '20', req)],

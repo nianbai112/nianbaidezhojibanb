@@ -21,14 +21,14 @@ const COS = require('cos-nodejs-sdk-v5');
 // =============================================================================
 
 /** 业务场景：决定不同的文件大小限制 */
-export type UploadScene = 'avatar' | 'post' | 'message' | 'admin' | 'region' | 'config' | 'ad' | 'marketing-popup' | 'share-invite';
+export type UploadScene = 'avatar' | 'post' | 'message' | 'delivery-proof' | 'admin' | 'region' | 'config' | 'ad' | 'marketing-popup' | 'share-invite';
 export type UploadFileKind = 'image' | 'video' | 'audio';
 
 /** 上传选项 */
 interface UploadOptions {
   type: UploadFileKind;
   folder: string;
-  /** 业务场景，默认 'post'。avatar=2MB, post=10MB（可通过配置覆盖） */
+  /** 业务场景，默认 'post'。avatar=2MB，delivery-proof=10MB */
   scene?: UploadScene;
 }
 
@@ -173,6 +173,7 @@ const SCENE_SIZE_LIMITS: Record<UploadScene, number> = {
   avatar: 2,   // 头像：最大 2MB
   post: 10,    // 帖子图片：最大 10MB
   message: 20, // 私信语音/图片：最大 20MB
+  'delivery-proof': 10, // 宿舍小店送达凭证：最大 10MB
   admin: 10,   // 后台通用上传
   region: 10,  // 区域封面
   config: 10,  // 系统配置图片
@@ -927,6 +928,8 @@ export class UploadService {
         return `users/${userId}/posts`;
       case 'message':
         return `users/${userId}/messages`;
+      case 'delivery-proof':
+        return `users/${userId}/delivery-proofs`;
       case 'region':
         return `admin/regions/${userId}`;
       case 'config':
@@ -1132,7 +1135,7 @@ export class UploadService {
   // =============================================================================
 
   /**
-   * 记录上传到数据库（失败不阻塞主流程）
+   * 记录上传到数据库；普通内容失败不阻塞，业务凭证可要求强一致。
    */
   async recordUpload(
     uploaderId: string,
@@ -1140,6 +1143,7 @@ export class UploadService {
     result: UploadResult,
     scene: string,
     req?: Request,
+    required = false,
   ): Promise<void> {
     try {
       await this.prisma.uploadRecord.create({
@@ -1156,6 +1160,9 @@ export class UploadService {
         },
       });
     } catch (e: any) {
+      if (required) {
+        throw new InternalServerErrorException('上传文件已保存，但业务凭证登记失败，请重新上传');
+      }
       this.logger.warn(`上传记录入库失败: ${e.message}`);
     }
   }

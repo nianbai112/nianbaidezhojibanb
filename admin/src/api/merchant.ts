@@ -74,6 +74,20 @@ export async function releaseMerchantOrderRider(id: string) {
   return postAction(`/admin/order-center/orders/${id}/release-rider`, {})
 }
 
+// ==================== 宿舍小店配送监管 ====================
+export async function getDormShopDeliveryMerchants(params: Record<string, any> = {}) {
+  return getPage('/admin/order-center/dorm-shop/merchants', params)
+}
+export async function getDormShopDeliveryStaff(params: Record<string, any> = {}) {
+  return getPage('/admin/order-center/dorm-shop/staff', params)
+}
+export async function updateDormShopDeliveryStaffStatus(
+  staffId: string,
+  data: { status: 'active' | 'paused' | 'removed'; reason?: string },
+) {
+  return request.patch(`/admin/order-center/dorm-shop/staff/${staffId}/status`, data)
+}
+
 // ==================== 退款售后 ====================
 export async function getRefunds(params: Record<string, any> = {}) {
   return getPage('/admin/refunds', params)

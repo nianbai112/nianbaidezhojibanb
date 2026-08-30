@@ -38,7 +38,9 @@ import Point from 'ol/geom/Point'
 import LineString from 'ol/geom/LineString'
 import Polygon from 'ol/geom/Polygon'
 import VectorLayer from 'ol/layer/Vector'
+import ImageLayer from 'ol/layer/Image'
 import VectorSource from 'ol/source/Vector'
+import ImageStatic from 'ol/source/ImageStatic'
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from 'ol/style'
 import { defaults as defaultControls } from 'ol/control'
 import { defaults as defaultInteractions } from 'ol/interaction'
@@ -63,6 +65,7 @@ type CadItem = {
 type EditableKind = 'poi' | 'area' | 'route' | 'calibration'
 
 const props = defineProps<{
+  artworkUrl: string
   pois: CadItem[]
   areas: CadItem[]
   routes: CadItem[]
@@ -80,7 +83,8 @@ const emit = defineEmits<{
 
 const mapRef = ref<HTMLElement>()
 const hiddenLayerKeys = ref(new Set<string>())
-const showFutureReference = ref(false)
+// 总后台默认展示画师图上的全部楼栋和地点；待建状态只改变样式，不再隐藏名称。
+const showFutureReference = ref(true)
 const source = new VectorSource()
 const projection = new Projection({
   code: 'CAD_RATIO',
@@ -90,6 +94,14 @@ const projection = new Projection({
 const layer = new VectorLayer({
   source,
   style: featureStyle,
+})
+const artworkLayer = new ImageLayer({
+  source: new ImageStatic({
+    url: props.artworkUrl,
+    projection,
+    imageExtent: [0, 0, 100, 100],
+    interpolate: true,
+  }),
 })
 
 let map: Map | null = null
@@ -105,7 +117,8 @@ const layerRows = computed(() => cadLayerRows(featureRecords.value))
 onMounted(() => {
   map = new Map({
     target: mapRef.value,
-    layers: [layer],
+    // 画师 SVG 与名称、建筑和路线共用同一投影及视图，缩放/拖动时不会错位。
+    layers: [artworkLayer, layer],
     controls: defaultControls({ attribution: false, rotate: false }),
     interactions: defaultInteractions({ altShiftDragRotate: false, pinchRotate: false }),
     view: new View({

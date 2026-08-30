@@ -274,7 +274,7 @@ export class PostService {
         data: { postId: params.postId, fromUserId: params.publicActorId ?? params.actorId },
         linkType: 'post',
         linkValue: params.postId,
-        channelMask: { inApp: true, websocket: true },
+        channelMask: { inApp: true, websocket: true, officialAccount: true },
       }, { actorId: params.actorId }).catch(() => undefined)));
   }
 
@@ -1690,7 +1690,7 @@ export class PostService {
           data: { postId, fromUserId: userId },
           linkType: 'post',
           linkValue: postId,
-          channelMask: { inApp: true, websocket: true },
+          channelMask: { inApp: true, websocket: true, officialAccount: true },
         });
       }
     } catch {}

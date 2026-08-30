@@ -256,6 +256,7 @@ model User {
   nickname                String?
   phone                   String?
   status                  UserStatus @default(ACTIVE)
+  banVersion              Int        @default(0)
   userType                Int        @default(1) // 1=normal user, 4=bot
   systemRole              String?    @unique // OFFICIAL_ASSISTANT 等平台唯一系统身份；普通机器人保持为空
   muteEndAt               DateTime?
@@ -275,105 +276,109 @@ model User {
   deletedAt               DateTime?
 
   // Relations
-  profile                 UserProfile?
-  settings                UserSettings?
-  studentVerify           StudentVerify?
-  roles                   UserRole[]
-  posts                   Post[]
-  postEchoInteractions    PostEchoInteraction[]
-  comments                Comment[]
-  postMentions            PostMention[]            @relation("MentionedPostUser")
-  commentMentions         CommentMention[]         @relation("MentionedCommentUser")
-  likes                   Like[]
-  favorites               Favorite[]
-  follows                 Follow[]                 @relation("UserFollows")
-  followers               Follow[]                 @relation("UserFollowers")
-  blocks                  Block[]                  @relation("UserBlocks")
-  blockedBy               Block[]                  @relation("UserBlockedBy")
-  browseHistory           BrowseHistory[]
-  tags                    UserTag[]
-  experiences             UserExperience[]
-  circles                 CircleMember[]
-  circlePayments          CirclePayment[]
-  cartItems               Cart[]
-  orders                  Order[]                  @relation("UserOrders")
-  deliveryOrders          DeliveryOrder[]          @relation("UserDeliveryOrders")
-  riderOrders             DeliveryOrder[]          @relation("RiderDeliveryOrders")
-  wallet                  Wallet?
-  transactions            WalletTransaction[]
-  withdraws               Withdraw[]
-  messages                Message[]                @relation("SenderMessages")
-  conversations           ConversationMember[]
-  notifications           Notification[]
-  coupons                 CouponReceive[]
-  checkIns                CheckIn[]
-  badges                  UserBadge[]
-  activityJoins           ActivityJoin[]
-  competitionPhotos       CompetitionPhoto[]
-  competitionVotes        CompetitionPhotoVote[]
-  competitionRatings      CompetitionPhotoRating[]
-  activityClubMembers     ActivityClubMember[]
-  secondHands             SecondHand[]
-  matches                 Match[]                  @relation("UserMatches")
-  matchTargets            Match[]                  @relation("TargetMatches")
-  netDisks                NetDisk[]
-  postCollaborators       PostCollaborator[]
-  reviews                 Review[]
-  reports                 Report[]                 @relation("Reporter")
-  reported                Report[]                 @relation("Reported")
-  auditLogs               AuditLog[]
-  addresses               Address[]
-  titleRecords            UserTitleRecord[]
-  datingProfile           DatingProfile?
-  netDiskResources        NetDiskResource[]
-  netDiskDownloads        NetDiskDownload[]
-  netDiskComments         NetDiskComment[]
-  stickers                Sticker[]
-  inviterInvites          ShareInvite[]            @relation("InviterRelation")
-  inviteeInvites          ShareInvite[]            @relation("InviteeRelation")
-  shareRewards            ShareReward[]
-  postShareLinks          PostShareLink[]          @relation("PostShareSharer")
-  claimedPostShareLinks   PostShareLink[]          @relation("PostShareClaimant")
-  punchInRecords          PunchInRecord[]
-  punchInWishlists        PunchInWishlist[]
-  punchInComments         PunchInComment[]
-  userRatings             UserRating[]
-  mallMerchants           MallMerchant[]
-  mallOrders              MallOrder[]
-  mallReviews             MallReview[]
-  distributor             MallDistributor?
-  groupBuyOrders          GroupBuyOrder[]
-  groupBuyReviews         GroupBuyReview[]
-  alipayTransfers         AlipayTransfer[]         @relation("OperatorAlipayTransfers")
-  regionBalanceLogs       RegionBalanceLog[]       @relation("OperatorRegionBalanceLogs")
-  activityOrders          ActivityOrder[]
-  secondHandOrders        SecondHandOrder[]
-  topupOrders             TopupOrder[]
-  errandOrders            ErrandOrder[]
-  datingOrders            DatingOrder[]
-  datingQuota             DatingQuota?
-  datingReportsFiled      DatingReport[]           @relation("DatingReporter")
-  datingReportsAgainst    DatingReport[]           @relation("DatingReported")
-  communityPayments       CommunityPayment[]
-  incentiveRecords        IncentiveRecord[]
-  merchants               Merchant[]
-  regionRiders            RegionRider[]
-  riderSettlements        RiderSettlement[]        @relation("RiderSettlements")
-  cityAgent               CityAgent?
-  cityAgentApplications   CityAgentApplication[]
-  transferRequests        TransferRequest[]
-  adminWechatBinding      AdminWechatBinding?
-  adminQrLoginSessions    AdminQrLoginSession[]
-  botAccount              BotAccount?
-  photoContestEntries     PhotoContestEntry[]
-  photoContestRatings     PhotoContestRating[]
-  ratingReplies           RatingReply[]
-  managedRegions          Region[]                 @relation("RegionManagerUser")
-  agreementConsents       UserAgreementConsent[]
-  memberships             UserMembership[]
-  membershipOrders        MembershipOrder[]
-  membershipBenefitGrants MembershipBenefitGrant[]
-  membershipBenefitUsages MembershipBenefitUsage[]
+  profile                  UserProfile?
+  settings                 UserSettings?
+  studentVerify            StudentVerify?
+  roles                    UserRole[]
+  posts                    Post[]
+  postEchoInteractions     PostEchoInteraction[]
+  comments                 Comment[]
+  postMentions             PostMention[]            @relation("MentionedPostUser")
+  commentMentions          CommentMention[]         @relation("MentionedCommentUser")
+  likes                    Like[]
+  favorites                Favorite[]
+  follows                  Follow[]                 @relation("UserFollows")
+  followers                Follow[]                 @relation("UserFollowers")
+  blocks                   Block[]                  @relation("UserBlocks")
+  blockedBy                Block[]                  @relation("UserBlockedBy")
+  browseHistory            BrowseHistory[]
+  tags                     UserTag[]
+  experiences              UserExperience[]
+  circles                  CircleMember[]
+  circlePayments           CirclePayment[]
+  cartItems                Cart[]
+  orders                   Order[]                  @relation("UserOrders")
+  deliveryOrders           DeliveryOrder[]          @relation("UserDeliveryOrders")
+  riderOrders              DeliveryOrder[]          @relation("RiderDeliveryOrders")
+  wallet                   Wallet?
+  transactions             WalletTransaction[]
+  withdraws                Withdraw[]
+  messages                 Message[]                @relation("SenderMessages")
+  conversations            ConversationMember[]
+  notifications            Notification[]
+  coupons                  CouponReceive[]
+  checkIns                 CheckIn[]
+  badges                   UserBadge[]
+  activityJoins            ActivityJoin[]
+  competitionPhotos        CompetitionPhoto[]
+  competitionVotes         CompetitionPhotoVote[]
+  competitionRatings       CompetitionPhotoRating[]
+  activityClubMembers      ActivityClubMember[]
+  secondHands              SecondHand[]
+  matches                  Match[]                  @relation("UserMatches")
+  matchTargets             Match[]                  @relation("TargetMatches")
+  netDisks                 NetDisk[]
+  postCollaborators        PostCollaborator[]
+  reviews                  Review[]
+  reports                  Report[]                 @relation("Reporter")
+  reported                 Report[]                 @relation("Reported")
+  auditLogs                AuditLog[]
+  selfUnbanRequests        SelfUnbanRequest[]
+  addresses                Address[]
+  titleRecords             UserTitleRecord[]
+  datingProfile            DatingProfile?
+  netDiskResources         NetDiskResource[]
+  netDiskDownloads         NetDiskDownload[]
+  netDiskComments          NetDiskComment[]
+  stickers                 Sticker[]
+  inviterInvites           ShareInvite[]            @relation("InviterRelation")
+  inviteeInvites           ShareInvite[]            @relation("InviteeRelation")
+  shareRewards             ShareReward[]
+  postShareLinks           PostShareLink[]          @relation("PostShareSharer")
+  claimedPostShareLinks    PostShareLink[]          @relation("PostShareClaimant")
+  punchInRecords           PunchInRecord[]
+  punchInWishlists         PunchInWishlist[]
+  punchInComments          PunchInComment[]
+  userRatings              UserRating[]
+  mallMerchants            MallMerchant[]
+  mallOrders               MallOrder[]
+  mallReviews              MallReview[]
+  distributor              MallDistributor?
+  groupBuyOrders           GroupBuyOrder[]
+  groupBuyReviews          GroupBuyReview[]
+  alipayTransfers          AlipayTransfer[]         @relation("OperatorAlipayTransfers")
+  regionBalanceLogs        RegionBalanceLog[]       @relation("OperatorRegionBalanceLogs")
+  activityOrders           ActivityOrder[]
+  secondHandOrders         SecondHandOrder[]
+  topupOrders              TopupOrder[]
+  errandOrders             ErrandOrder[]
+  datingOrders             DatingOrder[]
+  datingQuota              DatingQuota?
+  datingReportsFiled       DatingReport[]           @relation("DatingReporter")
+  datingReportsAgainst     DatingReport[]           @relation("DatingReported")
+  communityPayments        CommunityPayment[]
+  incentiveRecords         IncentiveRecord[]
+  merchants                Merchant[]
+  merchantStaffMemberships MerchantStaff[]          @relation("MerchantStaffUser")
+  merchantStaffInvites     MerchantStaff[]          @relation("MerchantStaffInviter")
+  shopDeliveryAssignments  ShopDeliveryAssignment[] @relation("ShopDeliveryAssignee")
+  regionRiders             RegionRider[]
+  riderSettlements         RiderSettlement[]        @relation("RiderSettlements")
+  cityAgent                CityAgent?
+  cityAgentApplications    CityAgentApplication[]
+  transferRequests         TransferRequest[]
+  adminWechatBinding       AdminWechatBinding?
+  adminQrLoginSessions     AdminQrLoginSession[]
+  botAccount               BotAccount?
+  photoContestEntries      PhotoContestEntry[]
+  photoContestRatings      PhotoContestRating[]
+  ratingReplies            RatingReply[]
+  managedRegions           Region[]                 @relation("RegionManagerUser")
+  agreementConsents        UserAgreementConsent[]
+  memberships              UserMembership[]
+  membershipOrders         MembershipOrder[]
+  membershipBenefitGrants  MembershipBenefitGrant[]
+  membershipBenefitUsages  MembershipBenefitUsage[]
 
   @@index([openid])
   @@index([phone])
@@ -850,6 +855,7 @@ model Region {
   schools                 School[]
   growthExperiences       UserExperience[]
   anonymousIdentities     AnonymousIdentity[]
+  selfUnbanRequests       SelfUnbanRequest[]
 
   @@index([managerUserId])
   @@map("regions")
@@ -1384,13 +1390,17 @@ model Merchant {
   dormBuilding         String?   @map("dorm_building")
   dormRoom             String?   @map("dorm_room")
   studentVerified      Boolean   @default(false) @map("student_verified")
+  autoDispatchEnabled  Boolean   @default(false) @map("auto_dispatch_enabled")
+  autoDispatchMinutes  Int       @default(5) @map("auto_dispatch_minutes")
+  staffAcceptSeconds   Int       @default(90) @map("staff_accept_seconds")
+  staffMaxActiveOrders Int       @default(2) @map("staff_max_active_orders")
   latitude             Float?
   longitude            Float?
   businessHours        String?
   closedNotice         String?
   description          String?
   categoryId           String?
-  category             Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category             Category? @relation("MerchantPrimaryCategory", fields: [categoryId], references: [id], onDelete: SetNull)
   status               String    @default("pending") // pending, approved, rejected, closed
   rejectReason         String?
   rating               Float     @default(5)
@@ -1398,13 +1408,16 @@ model Merchant {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  products         Product[]
-  orders           Order[]
-  freightTemplates FreightTemplate[]
-  settlements      MerchantSettlement[]
-  priceAdjustments ProductPriceAdjustment[]
-  groupBuyPackages GroupBuyPackage[]
-  coupons          Coupon[]
+  products            Product[]
+  orders              Order[]
+  freightTemplates    FreightTemplate[]
+  settlements         MerchantSettlement[]
+  priceAdjustments    ProductPriceAdjustment[]
+  groupBuyPackages    GroupBuyPackage[]
+  coupons             Coupon[]
+  ownedCategories     Category[]               @relation("MerchantOwnedCategories")
+  staffMembers        MerchantStaff[]
+  deliveryAssignments ShopDeliveryAssignment[]
 
   @@index([userId])
   @@index([businessType, status])
@@ -1412,26 +1425,86 @@ model Merchant {
   @@map("merchants")
 }
 
+model MerchantStaff {
+  id              String    @id @default(cuid())
+  merchantId      String    @map("merchant_id")
+  merchant        Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  userId          String    @map("user_id")
+  user            User      @relation("MerchantStaffUser", fields: [userId], references: [id], onDelete: Cascade)
+  invitedById     String?   @map("invited_by_id")
+  invitedBy       User?     @relation("MerchantStaffInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedPhone    String    @map("invited_phone")
+  role            String    @default("delivery_staff")
+  status          String    @default("invited") // invited, active, paused, removed
+  onDuty          Boolean   @default(false) @map("on_duty")
+  invitedAt       DateTime  @default(now()) @map("invited_at")
+  inviteExpiresAt DateTime  @map("invite_expires_at")
+  acceptedAt      DateTime? @map("accepted_at")
+  disabledAt      DateTime? @map("disabled_at")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  assignments ShopDeliveryAssignment[]
+
+  @@unique([merchantId, userId])
+  @@index([userId, status])
+  @@index([merchantId, status, onDuty])
+  @@map("merchant_staffs")
+}
+
+model ShopDeliveryAssignment {
+  id             String         @id @default(cuid())
+  orderId        String         @unique @map("order_id")
+  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  merchantId     String         @map("merchant_id")
+  merchant       Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  staffId        String?        @map("staff_id")
+  staff          MerchantStaff? @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  assigneeUserId String         @map("assignee_user_id")
+  assignee       User           @relation("ShopDeliveryAssignee", fields: [assigneeUserId], references: [id], onDelete: Cascade)
+  assigneeType   String         @default("staff") @map("assignee_type") // owner, staff
+  source         String         @default("manual") // manual, auto
+  status         String         @default("pending_accept") // pending_accept, accepted, picked_up, delivered, cancelled
+  attemptNo      Int            @default(1) @map("attempt_no")
+  acceptDeadline DateTime?      @map("accept_deadline")
+  assignedAt     DateTime       @default(now()) @map("assigned_at")
+  acceptedAt     DateTime?      @map("accepted_at")
+  pickedUpAt     DateTime?      @map("picked_up_at")
+  deliveredAt    DateTime?      @map("delivered_at")
+  cancelledAt    DateTime?      @map("cancelled_at")
+  cancelReason   String?        @map("cancel_reason")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([merchantId, status, assignedAt])
+  @@index([assigneeUserId, status, assignedAt])
+  @@index([staffId, status])
+  @@map("shop_delivery_assignments")
+}
+
 model Category {
-  id           String    @id @default(cuid())
-  parentId     String?
-  parent       Category? @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  name         String
-  icon         String?
-  sortOrder    Int       @default(0)
-  isShow       Boolean   @default(true)
-  type         String    @default("product") // product, post, circle
-  businessType String    @default("takeaway") @map("business_type") // takeaway, dorm_shop
-  status       String    @default("active") // active, disabled, deleted
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  merchantId    String?   @map("merchant_id")
+  ownerMerchant Merchant? @relation("MerchantOwnedCategories", fields: [merchantId], references: [id], onDelete: Cascade)
+  parentId      String?
+  parent        Category? @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  name          String
+  icon          String?
+  sortOrder     Int       @default(0)
+  isShow        Boolean   @default(true)
+  type          String    @default("product") // product, post, circle
+  businessType  String    @default("takeaway") @map("business_type") // takeaway, dorm_shop
+  status        String    @default("active") // active, disabled, deleted
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   children         Category[]               @relation("CategoryChildren")
   products         Product[]
-  merchants        Merchant[]
+  merchants        Merchant[]               @relation("MerchantPrimaryCategory")
   priceAdjustments ProductPriceAdjustment[]
 
   @@index([businessType, type, status])
+  @@index([merchantId, status, sortOrder], map: "categories_merchant_id_status_sort_order_idx")
   @@map("categories")
 }
 
@@ -1582,13 +1655,17 @@ model Order {
   trackingCompany        String?
   refundStatus           String          @default("none") // none, refunding, refunded
   refundAmount           Decimal?        @db.Decimal(10, 2)
+  deliveryReceiptCode    String?         @map("delivery_receipt_code")
+  deliveryCodeAttempts   Int             @default(0) @map("delivery_code_attempts")
+  deliveryCodeLockedAt   DateTime?       @map("delivery_code_locked_at")
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
-  items     OrderItem[]
-  refunds   Refund[]
-  reviews   Review[]
-  orderLogs OrderLog[]
+  items                  OrderItem[]
+  refunds                Refund[]
+  reviews                Review[]
+  orderLogs              OrderLog[]
+  shopDeliveryAssignment ShopDeliveryAssignment?
 
   @@index([userId, createdAt])
   @@index([merchantId, status])
@@ -1904,6 +1981,31 @@ model WalletTransaction {
   @@index([userId, createdAt])
   @@index([type])
   @@map("wallet_transactions")
+}
+
+model SelfUnbanRequest {
+  id         String    @id @default(cuid())
+  requestNo  String    @unique
+  activeKey  String?   @unique
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  banVersion Int       @default(0)
+  regionId   String
+  region     Region    @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  amount     Decimal   @db.Decimal(10, 2)
+  status     String    @default("pending_payment")
+  paymentNo  String?
+  banReason  String?   @db.Text
+  adminNote  String?   @db.Text
+  reviewedBy String?
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId, status, createdAt])
+  @@index([regionId, status, createdAt])
+  @@index([paymentNo])
+  @@map("self_unban_requests")
 }
 
 model Withdraw {
@@ -2560,6 +2662,113 @@ model LayoutVersion {
   @@map("layout_versions")
 }
 
+/// 校园地图官方建筑项目目录（可在后台增删改，38号北大门已包含）
+model CampusMapProject {
+  id                    String     @id @default(cuid())
+  regionId              String     @default("global")
+  mapId                 String?
+  map                   CampusMap? @relation(fields: [mapId], references: [id], onDelete: SetNull)
+  officialNumber        Int
+  officialName          String
+  displayName           String?
+  engineeringAlias      String     @default("")
+  phase                 String     @default("phase1")
+  constructionStatus    String     @default("built")
+  serviceStatus         String     @default("unknown")
+  unavailableMessage    String?    @db.Text
+  publishStatus         String     @default("draft")
+  visibilityScope       String     @default("phase1_review")
+  semanticType          String     @default("building")
+  searchable            Boolean    @default(false)
+  navigable             Boolean    @default(false)
+  geometryStatus        String     @default("unmatched")
+  sourceConfidence      String     @default("official_signage_only")
+  artworkFeatureKey     String?
+  artworkAnchorX        Float?
+  artworkAnchorY        Float?
+  artworkGeometry       Json?
+  longitude             Float?
+  latitude              Float?
+  coordinateType        String     @default("gcj02")
+  coordinateStatus      String     @default("uncollected")
+  coordinateSource      String?
+  coordinateAccuracy    Float?
+  coordinateCollectedAt DateTime?
+  addressDescription    String?    @db.Text
+  addressCandidate      String?    @db.Text
+  description           String?    @db.Text
+  coverUrl              String?    @db.Text
+  photos                Json       @default("[]")
+  notes                 String?    @db.Text
+  sortOrder             Int        @default(0)
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  media     CampusMapPlaceMedia[]
+  entrances CampusMapPlaceEntrance[]
+  taskLinks CampusMapCollectionTaskPlace[]
+
+  @@unique([regionId, officialNumber])
+  @@unique([mapId, artworkFeatureKey])
+  @@index([regionId, sortOrder])
+  @@index([mapId, publishStatus])
+  @@index([constructionStatus, visibilityScope])
+  @@map("campus_map_projects")
+}
+
+model CampusMapPlaceMedia {
+  id                     String           @id @default(cuid())
+  placeId                String
+  place                  CampusMapProject @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  collectionAttachmentId String?          @unique
+  mediaType              String           @default("gallery")
+  sourceType             String           @default("admin")
+  url                    String           @db.Text
+  storageKey             String?          @db.Text
+  mimeType               String?
+  byteSize               Int              @default(0)
+  checksum               String?          @db.VarChar(64)
+  reviewStatus           String           @default("approved")
+  isPublic               Boolean          @default(false)
+  sortOrder              Int              @default(0)
+  capturedAt             DateTime?
+  captureLongitude       Float?
+  captureLatitude        Float?
+  captureAccuracy        Float?
+  metadata               Json?
+  createdBy              String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  @@index([placeId, isPublic, sortOrder])
+  @@index([reviewStatus, createdAt])
+  @@map("campus_map_place_media")
+}
+
+model CampusMapPlaceEntrance {
+  id                 String           @id @default(cuid())
+  placeId            String
+  place              CampusMapProject @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  name               String
+  longitude          Float
+  latitude           Float
+  coordinateType     String           @default("gcj02")
+  accuracy           Float?
+  addressDescription String?          @db.Text
+  serviceStatus      String           @default("unknown")
+  isPrimary          Boolean          @default(false)
+  sourceType         String           @default("admin")
+  createdBy          String?
+  updatedBy          String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([placeId, isPrimary])
+  @@map("campus_map_place_entrances")
+}
+
 model CampusMap {
   id              String   @id @default(cuid())
   regionId        String   @unique
@@ -2575,6 +2784,7 @@ model CampusMap {
   versions      CampusMapVersion[] @relation("CampusMapVersions")
   activeVersion CampusMapVersion?  @relation("CampusMapActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
   assets        CampusMapAsset[]
+  places        CampusMapProject[]
 
   @@index([enabled, updatedAt])
   @@map("campus_maps")
@@ -2656,8 +2866,11 @@ model CampusMapCollectionTask {
   name                String
   instructions        String?   @db.Text
   status              String    @default("draft")
+  taskType            String    @default("mixed")
   allowedClients      Json
   objectTypes         Json
+  targetPlaceIds      Json?
+  targetFeatureIds    Json?
   boundary            Json?
   priority            Int       @default(3)
   dueAt               DateTime?
@@ -2669,9 +2882,24 @@ model CampusMapCollectionTask {
 
   assignments CampusMapCollectionAssignment[]
   sessions    CampusMapCollectionSession[]
+  placeLinks  CampusMapCollectionTaskPlace[]
 
   @@index([regionId, status, updatedAt])
   @@map("campus_map_collection_tasks")
+}
+
+model CampusMapCollectionTaskPlace {
+  id        String                  @id @default(cuid())
+  taskId    String
+  task      CampusMapCollectionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  placeId   String
+  place     CampusMapProject        @relation(fields: [placeId], references: [id], onDelete: Restrict)
+  sortOrder Int                     @default(0)
+  createdAt DateTime                @default(now())
+
+  @@unique([taskId, placeId])
+  @@index([placeId, createdAt])
+  @@map("campus_map_collection_task_places")
 }
 
 model CampusMapCollectionAssignment {
@@ -2721,6 +2949,7 @@ model CampusMapCollectionSession {
   task            CampusMapCollectionTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
   collectorUserId String
   clientSessionId String                  @unique
+  activeKey       String?                 @unique
   coordinateType  String                  @default("gcj02")
   sourceClient    String                  @default("miniapp")
   device          Json
@@ -2747,25 +2976,30 @@ model CampusMapCollectionSession {
 }
 
 model CampusMapCollectionObject {
-  id             String                     @id @default(cuid())
-  sessionId      String
-  session        CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  clientObjectId String
-  objectType     String
-  geometry       Json
-  properties     Json
-  longitude      Float?
-  latitude       Float?
-  accuracy       Float?
-  recordedAt     DateTime
-  bindings       Json
-  quality        Json?
-  reviewStatus   String                     @default("pending")
-  reviewNote     String?                    @db.Text
-  reviewedBy     String?
-  reviewedAt     DateTime?
-  createdAt      DateTime                   @default(now())
-  updatedAt      DateTime                   @updatedAt
+  id                   String                     @id @default(cuid())
+  sessionId            String
+  session              CampusMapCollectionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  clientObjectId       String
+  objectType           String
+  geometry             Json
+  properties           Json
+  longitude            Float?
+  latitude             Float?
+  accuracy             Float?
+  recordedAt           DateTime
+  bindings             Json
+  quality              Json?
+  reviewStatus         String                     @default("pending")
+  reviewNote           String?                    @db.Text
+  reviewedBy           String?
+  reviewedAt           DateTime?
+  appliedToDraftAt     DateTime?
+  appliedDraftId       String?
+  appliedDraftRevision Int?
+  applyFingerprint     String?                    @db.VarChar(64)
+  applyResult          Json?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
 
   attachments CampusMapCollectionAttachment[]
 
@@ -4543,7 +4777,7 @@ model PrintJob {
   provider      String    @default("feie")
   event         String // auto, manual, test
   dedupeKey     String    @unique
-  status        String    @default("queued") // queued, submitted, printed, failed, uncertain
+  status        String    @default("queued") // queued, processing, submitted, printed, failed, uncertain
   content       String
   providerJobId String?
   attempts      Int       @default(0)
@@ -6532,6 +6766,7 @@ model RealtimeSession {
   @@index([userId, online])
   @@index([adminId, online])
   @@index([platform, online])
+  @@index([socketId, online])
   @@map("realtime_sessions")
 }
 

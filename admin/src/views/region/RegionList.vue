@@ -142,7 +142,7 @@
             />
           </div>
           <el-button text :icon="EditPen" @click="openEditBasic(region)">编辑档案</el-button>
-          <el-button text :icon="MagicStick" @click="goRegionModule(region, '/region/app-pages')">UI 编辑器</el-button>
+          <el-button text :icon="MagicStick" @click="goRegionModule(region, '/region/app-pages')">页面控制</el-button>
           <el-button text :icon="School" @click="goRegionModule(region, '/user/schools')">学校库</el-button>
         </div>
       </article>
@@ -290,7 +290,7 @@
               <el-checkbox v-model="createForm.initTabs">初始化首页 Tabs</el-checkbox>
               <el-checkbox v-model="createForm.initHomeNav">初始化首页导航/金刚区</el-checkbox>
               <el-checkbox v-model="createForm.initTabbar">初始化底部导航 Tabbar</el-checkbox>
-              <el-checkbox v-model="createForm.goDecorationAfterCreate">创建后直接进入页面装修</el-checkbox>
+              <el-checkbox v-model="createForm.goDecorationAfterCreate">创建后直接进入页面控制</el-checkbox>
             </div>
           </template>
         </div>

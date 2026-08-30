@@ -1079,6 +1079,7 @@ export class ErrandService {
     if (rider?.verifyStatus === 'approved') {
       if (queryRegionId && rider.regionId !== queryRegionId) throw new BadRequestException('不能查看其他区域的订单')
       const policy = await this.getOrderTakingPolicy(rider.regionId)
+      const canTakeOrders = ['online', 'busy'].includes(String(rider.status || ''))
       return {
         role: 'approved_rider',
         receiverType: 'approved_rider',
@@ -1086,8 +1087,8 @@ export class ErrandService {
         rider,
         user,
         policy,
-        canTakeOrders: true,
-        reason: '认证骑手可接单',
+        canTakeOrders,
+        reason: canTakeOrders ? '认证骑手可接单' : '请先切换为在线状态再接单',
         counts: await this.getOrdinaryOrderCounts(userId),
       }
     }
@@ -1138,7 +1139,10 @@ export class ErrandService {
   }
 
   private filterErrandRowsForOrderTaking(rows: any[], identity: any, now = new Date()) {
-    if (identity?.role === 'approved_rider') return rows
+    if (identity?.role === 'approved_rider') {
+      if (!identity?.canTakeOrders) return []
+      return this.filterErrandRowsForApprovedRider(rows, identity, now)
+    }
     if (!identity?.canTakeOrders) return []
     return rows.filter((row) => {
       const policy = identity.policy
@@ -1165,6 +1169,9 @@ export class ErrandService {
     const regionId = this.cleanRegionId(order?.regionId || existingRider?.regionId)
     if (!regionId) throw new BadRequestException('订单区域信息缺失，暂不能普通用户接单')
     if (existingRider) {
+      if (existingRider.verifyStatus !== 'ordinary_user' && existingRider.riderType !== 'ordinary_user') {
+        return existingRider
+      }
       return tx.regionRider.update({
         where: { userId },
         data: { regionId, status: 'busy' },
@@ -2270,7 +2277,40 @@ export class ErrandService {
         receiver_type: this.displayReceiverTypeFromOrder(updated),
       },
     });
+    await this.notifyErrandAccepted(updated).catch((error) => {
+      this.logger.warn(`跑腿接单通知失败 order=${updated.id}: ${error?.message || error}`)
+    })
     return { success: true, message: '接单成功', data: formatted };
+  }
+
+  private async notifyErrandAccepted(order: any) {
+    if (!order?.userId || !this.notifyService?.createAndDispatch) return
+    const riderName = order?.RegionRider?.realName || order?.RegionRider?.User?.nickname || '接单人'
+    await this.notifyService.createAndDispatch({
+      userId: order.userId,
+      regionId: order.regionId || undefined,
+      type: 'delivery',
+      scene: 'errand_accepted',
+      title: '跑腿订单已接单',
+      content: `您的跑腿订单 ${order.orderNo || ''} 已由${riderName}接单，请留意后续进度。`,
+      data: {
+        orderId: order.id,
+        orderNo: order.orderNo || '',
+        riderName,
+        pickupAddress: order.pickupAddress || '',
+        deliveryAddress: order.deliverAddress || '',
+        estimatedTime: order.deliverTime || order.acceptTime || new Date(),
+      },
+      linkType: 'page',
+      linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
+      channelMask: {
+        inApp: true,
+        websocket: true,
+        push: false,
+        wechatSubscribe: true,
+        officialAccount: true,
+      },
+    })
   }
 
   private async acceptShopOrder(orderId: string, userId: string) {
@@ -2663,7 +2703,9 @@ export class ErrandService {
       const payAmount = this.numberValue(row.payAmount, 0)
       const rider = row.RegionRider ? this.publicRiderProfile(row.RegionRider) : null
       const finalReceiverType = row.riderId
-        ? (row.RegionRider?.riderType === 'ordinary_user' || row.RegionRider?.verifyStatus === 'ordinary_user' ? 'ordinary_user' : 'approved_rider')
+        ? (row.RegionRider
+          ? (row.RegionRider.verifyStatus === 'approved' ? 'approved_rider' : 'ordinary_user')
+          : requestedReceiverType)
         : requestedReceiverType
       const fallbackToRiderEnabled = requestedReceiverType === 'ordinary_user' && remark.fallback_to_rider_enabled === true
       const fallbackReleaseAt = this.fallbackReleaseAtFromOrder(row, {
@@ -2965,6 +3007,18 @@ export class ErrandService {
     const regionId = this.cleanRegionId(order?.regionId);
     if (!regionId) return;
 
+    const orderForDispatch = await this.prisma.errandOrder.findUnique({
+      where: { id: order.id },
+      include: { tasks: true },
+    }).catch(() => null);
+    const policy = await this.getOrderTakingPolicy(regionId)
+    const fallbackEligibility = assessApprovedRiderFallbackEligibility({
+      policy,
+      order: orderForDispatch || order,
+      now: new Date(),
+    })
+    if (!fallbackEligibility.allowed) return
+
     const riders = await this.prisma.regionRider.findMany({
       where: {
         regionId,
@@ -2976,10 +3030,6 @@ export class ErrandService {
     });
     if (!riders.length) return;
 
-    const orderForDispatch = await this.prisma.errandOrder.findUnique({
-      where: { id: order.id },
-      include: { tasks: true },
-    }).catch(() => null);
     const dispatchOrder = this.buildDispatchOrderPayload(orderForDispatch || order);
     // PERF-P0-01: 批量计算所有骑手在途单量，避免 N+1 扇出（原来每个骑手 2 次 count，
     // 一次派单 = 2×骑手数 个并发查询；高并发下会瞬间打满连接池）。改为 2 次 groupBy。
@@ -3015,7 +3065,7 @@ export class ErrandService {
         dispatch_reason: assessment.reasonText,
       },
       linkType: 'page',
-      linkValue: '/RunErrands?tab=pending_orders',
+      linkValue: '/pages/tabbar/RunErrands/RunErrands',
       channelMask: { inApp: true, websocket: true, push: true },
     })));
     const failed = results.filter((item) => item.status === 'rejected').length;

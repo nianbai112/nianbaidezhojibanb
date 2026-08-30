@@ -6,10 +6,7 @@
     </div>
 
     <div class="toolbar-left">
-      <el-radio-group :model-value="editorMode" size="small" @change="emitEditorMode">
-        <el-radio-button label="image">CAD 清理工作台</el-radio-button>
-        <el-radio-button label="amap">真实地图发布预览</el-radio-button>
-      </el-radio-group>
+      <span class="artwork-surface-badge">画师矢量图工作台</span>
       <el-radio-group :model-value="toolMode" size="small" @change="emitToolMode">
         <el-radio-button v-for="tool in tools" :key="tool.value" :label="tool.value">
           {{ tool.label }}
@@ -104,10 +101,6 @@ const tools = [
   { value: 'calibration', label: '校准' },
 ]
 
-function emitEditorMode(value: string | number | boolean) {
-  emit('update:editorMode', String(value))
-}
-
 function emitToolMode(value: string | number | boolean) {
   emit('update:toolMode', String(value))
 }
@@ -165,6 +158,17 @@ function emitPoiCategory(value: string | number | boolean) {
 
 .category-select {
   width: 128px;
+}
+
+.artwork-surface-badge {
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 @media (max-width: 1180px) {

@@ -760,7 +760,7 @@ const DEFAULT_PROFILE_ITEMS = [
   { id: 'share', title: '分享有礼', description: '邀请同学加入本地生活圈', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/news/SharingCourtesy/SharingCourtesy', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 2, requireLogin: true },
   { id: 'merchant', title: '商家中心', description: '商家入驻与店铺管理', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/MerchantManagement/managerial', query: '', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3, requireLogin: true },
   { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', icon: '', main_image: '/static/logo.jpg', path: '/pagesA/DormShopOwner/DormShopOwner', query: '', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4, requireLogin: true },
-  { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', icon: '', main_image: '/static/logo.jpg', path: '/pages/B/circle-manage', query: '', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 5, requireLogin: true },
+  { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', icon: '', main_image: '/static/logo.jpg', path: '/pagesB/circle-manage/circle-manage', query: '', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 5, requireLogin: true },
   { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', icon: '', main_image: '/static/logo.jpg', path: '/pages/auth/settings/settings', query: '', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 6, requireLogin: false }
 ]
 function ensureProfileDefaultItems(items: any[]) {
@@ -777,7 +777,7 @@ function ensureProfileDefaultItems(items: any[]) {
   const hasCircleManage = list.some((item: any) => {
     const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim()
     const permission = String(item?.navigation_permission || item?.navigationPermission || '').trim()
-    return item?.id === 'circle_manage' || permission === 'circle_owner' || path.includes('pages/B/circle-manage')
+    return item?.id === 'circle_manage' || permission === 'circle_owner' || path.includes('circle-manage')
   })
   if (!hasCircleManage) {
     const circleManageEntry = DEFAULT_PROFILE_ITEMS.find((item) => item.id === 'circle_manage')

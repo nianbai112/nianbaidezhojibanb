@@ -5,7 +5,7 @@
       <div class="ov-region">
         <el-avatar :size="52" :src="region?.logo">{{ (region?.name || '区').slice(0, 1) }}</el-avatar>
         <div class="ov-region-info">
-          <div class="ov-eyebrow">当前装修区域</div>
+          <div class="ov-eyebrow">当前控制区域</div>
           <div class="ov-name">{{ region?.name || '请选择区域' }}</div>
           <el-tag :type="region?.isOpen ? 'success' : 'info'" size="small" effect="light">
             {{ region?.isOpen ? '运营中' : '未开放' }}
@@ -15,7 +15,7 @@
       <div class="ov-progress">
         <div class="ov-progress-num">
           <b>{{ percent }}%</b>
-          <span>装修完整度</span>
+          <span>配置完整度</span>
         </div>
         <el-progress :percentage="percent" :color="progressColor" :stroke-width="10" />
         <div class="ov-progress-sub">{{ passedCount }}/{{ checks.length }} 项就绪</div>
@@ -25,8 +25,8 @@
           <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
         </el-select>
         <el-button :icon="Refresh" :loading="loading" @click="loadAll">重新检测</el-button>
-        <el-button type="primary" :icon="Promotion" :loading="publishing" :disabled="!regionId" @click="publish">
-          发布到小程序
+        <el-button type="primary" :icon="Promotion" :disabled="!regionId" @click="completeCheck">
+          完成检查
         </el-button>
       </div>
     </section>
@@ -74,20 +74,9 @@ const regionId = ref('')
 const region = ref<any>(null)
 const tabbar = ref<any>(null)
 const share = ref<any>(null)
-/** 新设计器数据源：三页布局状态（data.status / data.config.components） */
-const layouts = ref<Record<string, any>>({})
 const loading = ref(false)
-const publishing = ref(false)
 
 interface Check { key: string; name: string; pass: boolean; okText: string; failText: string; mode?: string }
-
-/** 页面布局是否已发布且非空 */
-const layoutState = (page: string) => {
-  const res = layouts.value[page]
-  const data = res?.data || res
-  const count = (data?.config?.components || []).length
-  return { published: data?.status === 'published' && count > 0, count }
-}
 
 const checks = computed<Check[]>(() => {
   if (!region.value) return []
@@ -95,16 +84,13 @@ const checks = computed<Check[]>(() => {
   const tabbarList = tabbar.value?.config?.list || tabbar.value?.list || []
   const publishMenu = r.settings?.publishMenu
   const publishEntries = publishMenu?.entries ? Object.values(publishMenu.entries).filter((e: any) => e?.enabled !== false).length : 0
-  const home = layoutState('home')
-  const message = layoutState('message')
-  const profile = layoutState('profile')
   return [
-    { key: 'home', name: '首页布局', pass: home.published, okText: `已发布 · ${home.count} 个组件`, failText: '首页布局还没发布（或画布为空）', mode: 'designer:home' },
-    { key: 'message', name: '消息页布局', pass: message.published, okText: `已发布 · ${message.count} 个组件`, failText: '消息页布局还没发布（或画布为空）', mode: 'designer:message' },
-    { key: 'profile', name: '我的页布局', pass: profile.published, okText: `已发布 · ${profile.count} 个组件`, failText: '我的页布局还没发布（或画布为空）', mode: 'designer:profile' },
+    { key: 'home', name: '首页控制项', pass: true, okText: '原生首页内容和显隐开关可配置', failText: '', mode: 'designer:home' },
+    { key: 'message', name: '消息页控制项', pass: true, okText: '原生消息入口和私信开关可配置', failText: '', mode: 'designer:message' },
+    { key: 'profile', name: '我的页控制项', pass: true, okText: '原生个人页入口和视觉项可配置', failText: '', mode: 'designer:profile' },
     { key: 'tabbar', name: '底部导航', pass: tabbarList.length >= 2, okText: `${tabbarList.length} 个导航项`, failText: '底部导航还没配置', mode: 'tabbar' },
     { key: 'share', name: '分享卡片', pass: !!share.value?.title, okText: `「${share.value.title}」`, failText: '分享首页卡片还没配置标题', mode: 'share' },
-    { key: 'publishMenu', name: '发布入口', pass: !!publishMenu && publishEntries > 0, okText: `${publishEntries} 个发布入口启用`, failText: '发布弹窗入口还没装修', mode: 'publish-entry' },
+    { key: 'publishMenu', name: '发布入口', pass: !!publishMenu && publishEntries > 0, okText: `${publishEntries} 个发布入口启用`, failText: '发布弹窗入口还没配置', mode: 'publish-entry' },
     { key: 'open', name: '区域状态', pass: !!r.isOpen, okText: '区域已开放运营', failText: '区域未开放，用户看不到配置效果', mode: undefined },
   ]
 })
@@ -114,7 +100,7 @@ const percent = computed(() => (checks.value.length ? Math.round((passedCount.va
 const progressColor = computed(() => (percent.value >= 80 ? '#67c23a' : percent.value >= 60 ? '#e6a23c' : '#f56c6c'))
 
 const quickLinks = [
-  { mode: 'designer:home', title: '设计器', desc: '五个页面一个画布', icon: MagicStick, color: '#36a853' },
+  { mode: 'designer:home', title: '页面控制', desc: '首页、消息页、我的页', icon: MagicStick, color: '#36a853' },
   { mode: 'tabbar', title: 'TabBar', desc: '底部导航配置', icon: Menu, color: '#2563eb' },
   { mode: 'share', title: '分享配置', desc: '分享卡片与路径', icon: Share, color: '#0891b2' },
   { mode: 'publish-entry', title: '发布入口', desc: '发布弹窗装修', icon: Aim, color: '#e6a23c' },
@@ -132,50 +118,26 @@ async function loadAll() {
   loading.value = true
   const safe = (p: Promise<any>, fb: any) => p.catch(() => fb)
   try {
-    const [regionRes, tabbarRes, shareRes, homeRes, messageRes, profileRes] = await Promise.all([
+    const [regionRes, tabbarRes, shareRes] = await Promise.all([
       safe(request.get(`/admin/regions/${regionId.value}`), null),
       safe(fetchRegionTabbar(regionId.value), null),
       safe(fetchRegionShareSetting(regionId.value), null),
-      safe(request.get(`/admin/layout/home/${regionId.value}`), null),
-      safe(request.get(`/admin/layout/message/${regionId.value}`), null),
-      safe(request.get(`/admin/layout/profile/${regionId.value}`), null),
     ])
     region.value = regionRes?.data || regionRes
     tabbar.value = tabbarRes
     share.value = shareRes?.data || shareRes
-    layouts.value = { home: homeRes, message: messageRes, profile: profileRes }
   } finally {
     loading.value = false
   }
 }
 
-async function publish() {
+async function completeCheck() {
   const failed = checks.value.filter((c) => !c.pass && c.key !== 'open')
   if (failed.length) {
-    try {
-      await ElMessageBox.confirm(
-        `还有 ${failed.length} 项未就绪（${failed.map((f) => f.name).join('、')}），确定继续发布吗？`,
-        '发布前检查',
-        { type: 'warning', confirmButtonText: '仍然发布', cancelButtonText: '去处理' },
-      )
-    } catch {
-      return
-    }
-  } else {
-    try {
-      await ElMessageBox.confirm('全部检查已通过，确认发布当前区域的装修配置吗？', '确认发布', { type: 'info' })
-    } catch {
-      return
-    }
+    ElMessage.warning(`还有 ${failed.length} 项未就绪：${failed.map((f) => f.name).join('、')}`)
+    return
   }
-  publishing.value = true
-  try {
-    // 各装修模块保存即生效；这里把「自定义版块」的草稿布局正式发布
-    await request.post(`/admin/layout/home/${regionId.value}/publish`).catch(() => null)
-    ElMessage.success('已发布，小程序端即时生效 🎉')
-  } finally {
-    publishing.value = false
-  }
+  await ElMessageBox.alert('检查已通过。页面控制项在各页面点击「保存并发布」后即时生效，不再经过通用 UI 编译器。', '配置就绪', { type: 'success' })
 }
 
 onMounted(async () => {

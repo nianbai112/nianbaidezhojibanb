@@ -672,7 +672,7 @@ export class AuthService {
     dto: { phone?: string; mobile?: string; code?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
     ip?: string,
     ua?: string,
-    options: { preferApprovedOfficialRider?: boolean } = {},
+    options: { preferApprovedOfficialRider?: boolean; strictPartnerIdentity?: boolean } = {},
   ) {
     const phone = this.normalizePhone(dto.phone || dto.mobile);
     const code = String(dto.code || '').trim();
@@ -683,8 +683,12 @@ export class AuthService {
     let user: any = await this.findPhoneLoginUser(
       phone,
       options.preferApprovedOfficialRider === true,
+      options.strictPartnerIdentity === true,
     );
     if (!user) {
+      if (options.strictPartnerIdentity === true) {
+        throw new BadRequestException('请先在小程序登录并绑定手机号，再使用校园伙伴端');
+      }
       user = await (this.prisma.user as any).create({
         data: {
           openid: this.buildPhoneLoginOpenid(phone),
@@ -711,7 +715,38 @@ export class AuthService {
     return this.formatLoginResponse(user, tokens, studentVerify);
   }
 
-  private async findPhoneLoginUser(phone: string, preferApprovedOfficialRider: boolean) {
+  private async findPhoneLoginUser(
+    phone: string,
+    preferApprovedOfficialRider: boolean,
+    strictPartnerIdentity = false,
+  ) {
+    if (strictPartnerIdentity) {
+      const [phoneUsers, riderUsers] = await Promise.all([
+        this.prisma.user.findMany({
+          where: { phone, status: { not: 'DELETED' as any } },
+          select: { id: true },
+          take: 3,
+        }),
+        this.prisma.regionRider.findMany({
+          where: { phone, User: { status: { not: 'DELETED' as any } } },
+          select: { userId: true },
+          take: 3,
+        }),
+      ]);
+      const userIds = Array.from(new Set([
+        ...phoneUsers.map((item) => item.id),
+        ...riderUsers.map((item) => item.userId),
+      ]));
+      if (userIds.length > 1) {
+        throw new BadRequestException('该手机号关联了多个账号，请联系管理员合并后再登录');
+      }
+      if (userIds.length === 1) {
+        return this.prisma.user.findFirst({
+          where: { id: userIds[0], status: { not: 'DELETED' as any } },
+        });
+      }
+      return null;
+    }
     if (preferApprovedOfficialRider) {
       const riders = await this.prisma.regionRider.findMany({
         where: {
@@ -1481,19 +1516,16 @@ export class AuthService {
   }
 
   private async generateTokens(userId: string, openid: string) {
-    // AUD-P1-178: 签发 token 前必须校验用户状态为 ACTIVE，封禁/禁用/已删除用户不得获取新 token
+    // 封禁用户仍需受限会话访问状态查询、原生客服和自助解封；JwtGuard 会按实时用户状态封锁其他接口。
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, status: true },
     });
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || !['ACTIVE', 'BANNED'].includes(user.status)) {
       // 清理可能残留的 refresh token，防止旧 token 被刷新
       await this.redis.del(`refresh:${userId}`).catch(() => undefined);
       if (!user) {
         throw new UnauthorizedException('用户不存在');
-      }
-      if (user.status === 'BANNED') {
-        throw new UnauthorizedException('账号已被封禁，暂无法登录');
       }
       if (user.status === 'INACTIVE') {
         throw new UnauthorizedException('账号已被禁用，暂无法登录');
@@ -1504,7 +1536,12 @@ export class AuthService {
       throw new UnauthorizedException('账号状态异常，暂无法登录');
     }
 
-    const payload = { sub: userId, openid, isAdmin: false };
+    const payload = {
+      sub: userId,
+      openid,
+      isAdmin: false,
+      restricted: user.status === 'BANNED',
+    };
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.config.get('JWT_ACCESS_EXPIRES_IN') || '2h',
     });

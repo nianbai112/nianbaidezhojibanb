@@ -11,10 +11,16 @@ const backendDir = path.join(rootDir, "backend");
 const adminDir = path.join(rootDir, "admin");
 const rootEnvPath = path.join(rootDir, ".env");
 const backendEnvPath = path.join(backendDir, ".env");
-const deployEnvExamplePath = path.join(rootDir, "deploy", "env.backend.example");
+const deployEnvExamplePath = path.join(
+  rootDir,
+  "deploy",
+  "env.backend.example",
+);
 const backendEnvExamplePath = path.join(backendDir, ".env.example");
 
 const pm2Name = process.env.PM2_NAME || "lingmeng-backend";
+const pm2WorkerName = process.env.PM2_WORKER_NAME || "lingmeng-worker";
+const pm2RealtimeName = process.env.PM2_REALTIME_NAME || "lingmeng-realtime";
 const skipInstall = isEnabled(process.env.SKIP_INSTALL);
 const skipBuild = isEnabled(process.env.SKIP_BUILD);
 const skipMigrate = isEnabled(process.env.SKIP_MIGRATE);
@@ -101,14 +107,19 @@ function hasValue(value) {
 function buildDatabaseUrl(env) {
   if (hasValue(env.DATABASE_URL)) return String(env.DATABASE_URL).trim();
 
-  const provider = String(env.DB_PROVIDER || "mysql").trim().toLowerCase();
+  const provider = String(env.DB_PROVIDER || "mysql")
+    .trim()
+    .toLowerCase();
   const host = String(env.DB_HOST || "").trim();
   const user = String(env.DB_USER || "").trim();
   const password = String(env.DB_PASSWORD || "").trim();
   const database = String(env.DB_NAME || "").trim();
   if (!host || !user || !database) return "";
 
-  const port = String(env.DB_PORT || (provider === "postgresql" || provider === "postgres" ? "5432" : "3306")).trim();
+  const port = String(
+    env.DB_PORT ||
+      (provider === "postgresql" || provider === "postgres" ? "5432" : "3306"),
+  ).trim();
   const schema = String(env.DB_SCHEMA || "public").trim();
   const auth = password
     ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}`
@@ -128,18 +139,28 @@ function normalizeEnv(env) {
     normalized.DATABASE_URL = databaseUrl;
   }
 
-  if (!hasValue(normalized.SETUP_WIZARD) && hasValue(normalized.DB_IS_INSTALLED)) {
-    normalized.SETUP_WIZARD = String(normalized.DB_IS_INSTALLED).trim() === "1" ? "false" : "true";
+  if (
+    !hasValue(normalized.SETUP_WIZARD) &&
+    hasValue(normalized.DB_IS_INSTALLED)
+  ) {
+    normalized.SETUP_WIZARD =
+      String(normalized.DB_IS_INSTALLED).trim() === "1" ? "false" : "true";
   }
 
-  if (!hasValue(normalized.THROTTLE_TTL) && hasValue(normalized.RATE_LIMIT_WINDOW_MS)) {
+  if (
+    !hasValue(normalized.THROTTLE_TTL) &&
+    hasValue(normalized.RATE_LIMIT_WINDOW_MS)
+  ) {
     const windowMs = Number(normalized.RATE_LIMIT_WINDOW_MS);
     if (Number.isFinite(windowMs) && windowMs > 0) {
       normalized.THROTTLE_TTL = String(Math.ceil(windowMs / 1000));
     }
   }
 
-  if (!hasValue(normalized.THROTTLE_LIMIT) && hasValue(normalized.RATE_LIMIT_MAX)) {
+  if (
+    !hasValue(normalized.THROTTLE_LIMIT) &&
+    hasValue(normalized.RATE_LIMIT_MAX)
+  ) {
     normalized.THROTTLE_LIMIT = String(normalized.RATE_LIMIT_MAX).trim();
   }
 
@@ -147,7 +168,9 @@ function normalizeEnv(env) {
 }
 
 function upsertEnv(filePath, updates) {
-  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  const existing = fs.existsSync(filePath)
+    ? fs.readFileSync(filePath, "utf8")
+    : "";
   const seen = new Set();
   const lines = existing.split(/\r?\n/).map((line) => {
     const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
@@ -198,7 +221,11 @@ function ensureRootEnv() {
   if (!env.SETUP_TOKEN || env.SETUP_TOKEN.includes("please-change")) {
     updates.SETUP_TOKEN = randomBytes(24).toString("hex");
   }
-  if (!env.JWT_SECRET || env.JWT_SECRET.includes("please-generate") || env.JWT_SECRET.includes("<CHANGE_ME>")) {
+  if (
+    !env.JWT_SECRET ||
+    env.JWT_SECRET.includes("please-generate") ||
+    env.JWT_SECRET.includes("<CHANGE_ME>")
+  ) {
     updates.JWT_SECRET = randomBytes(48).toString("hex");
   }
   if (Object.keys(updates).length) {
@@ -241,13 +268,23 @@ function migrateDatabase(env) {
 
   section("数据库迁移");
   if (!env.DATABASE_URL) {
-    log("未配置 DATABASE_URL，跳过 migrate deploy。先打开 /setup 或编辑根目录 .env 配好数据库。");
+    log(
+      "未配置 DATABASE_URL，跳过 migrate deploy。先打开 /setup 或编辑根目录 .env 配好数据库。",
+    );
     return;
   }
-  const provider = String(env.DB_PROVIDER || "").toLowerCase() || (String(env.DATABASE_URL).startsWith("mysql://") ? "mysql" : "postgresql");
+  const provider =
+    String(env.DB_PROVIDER || "").toLowerCase() ||
+    (String(env.DATABASE_URL).startsWith("mysql://") ? "mysql" : "postgresql");
   const schema = `prisma/schema.${provider === "mysql" ? "mysql" : "postgresql"}.prisma`;
-  run("npm", ["run", "db:generate"], { cwd: backendDir, env: { ...env, DB_PROVIDER: provider } });
-  run("npx", ["prisma", "db", "push", "--schema", schema], { cwd: backendDir, env });
+  run("npm", ["run", "db:generate"], {
+    cwd: backendDir,
+    env: { ...env, DB_PROVIDER: provider },
+  });
+  run("npx", ["prisma", "db", "push", "--schema", schema], {
+    cwd: backendDir,
+    env,
+  });
 }
 
 async function bootstrapMembershipContent(env) {
@@ -265,63 +302,140 @@ async function bootstrapMembershipContent(env) {
     return;
   }
 
-  const prisma = new PrismaClient({ datasources: { db: { url: env.DATABASE_URL } } });
+  const prisma = new PrismaClient({
+    datasources: { db: { url: env.DATABASE_URL } },
+  });
   try {
     const permissionDefs = [
-      { code: "membership:list", name: "查看会员概览", module: "membership", action: "list" },
-      { code: "membership:plan:list", name: "查看会员套餐", module: "membership", action: "plan:list" },
-      { code: "membership:plan:create", name: "创建会员套餐", module: "membership", action: "plan:create" },
-      { code: "membership:plan:update", name: "更新会员套餐", module: "membership", action: "plan:update" },
-      { code: "membership:plan:delete", name: "删除会员套餐", module: "membership", action: "plan:delete" },
-      { code: "membership:order:list", name: "查看会员订单", module: "membership", action: "order:list" },
-      { code: "membership:user:list", name: "查看会员用户", module: "membership", action: "user:list" },
-      { code: "membership:usage:list", name: "查看会员权益使用记录", module: "membership", action: "usage:list" },
-      { code: "membership:grant", name: "赠送会员", module: "membership", action: "grant" },
+      {
+        code: "membership:list",
+        name: "查看会员概览",
+        module: "membership",
+        action: "list",
+      },
+      {
+        code: "membership:plan:list",
+        name: "查看会员套餐",
+        module: "membership",
+        action: "plan:list",
+      },
+      {
+        code: "membership:plan:create",
+        name: "创建会员套餐",
+        module: "membership",
+        action: "plan:create",
+      },
+      {
+        code: "membership:plan:update",
+        name: "更新会员套餐",
+        module: "membership",
+        action: "plan:update",
+      },
+      {
+        code: "membership:plan:delete",
+        name: "删除会员套餐",
+        module: "membership",
+        action: "plan:delete",
+      },
+      {
+        code: "membership:order:list",
+        name: "查看会员订单",
+        module: "membership",
+        action: "order:list",
+      },
+      {
+        code: "membership:user:list",
+        name: "查看会员用户",
+        module: "membership",
+        action: "user:list",
+      },
+      {
+        code: "membership:usage:list",
+        name: "查看会员权益使用记录",
+        module: "membership",
+        action: "usage:list",
+      },
+      {
+        code: "membership:grant",
+        name: "赠送会员",
+        module: "membership",
+        action: "grant",
+      },
     ];
 
     const permissions = [];
     for (const def of permissionDefs) {
-      permissions.push(await prisma.adminPermission.upsert({
-        where: { code: def.code },
-        update: { name: def.name, module: def.module, action: def.action },
-        create: def,
-      }));
+      permissions.push(
+        await prisma.adminPermission.upsert({
+          where: { code: def.code },
+          update: { name: def.name, module: def.module, action: def.action },
+          create: def,
+        }),
+      );
     }
 
     const menuDefs = [
-      { id: "menu__membership", name: "会员运营", path: "/membership", icon: "CrownOutlined", sortOrder: 16 },
-      { id: "menu__membership_overview", name: "会员概览", path: "/membership/overview", parentId: "menu__membership", sortOrder: 0 },
+      {
+        id: "menu__membership",
+        name: "会员运营",
+        path: "/membership",
+        icon: "CrownOutlined",
+        sortOrder: 16,
+      },
+      {
+        id: "menu__membership_overview",
+        name: "会员概览",
+        path: "/membership/overview",
+        parentId: "menu__membership",
+        sortOrder: 0,
+      },
     ];
     const menus = [];
     for (const def of menuDefs) {
-      menus.push(await prisma.adminMenu.upsert({
-        where: { id: def.id },
-        update: {
-          name: def.name,
-          path: def.path,
-          icon: def.icon || null,
-          parentId: def.parentId || null,
-          sortOrder: def.sortOrder,
-          isHidden: false,
-        },
-        create: {
-          id: def.id,
-          name: def.name,
-          path: def.path,
-          icon: def.icon || null,
-          parentId: def.parentId || null,
-          sortOrder: def.sortOrder,
-        },
-      }));
+      menus.push(
+        await prisma.adminMenu.upsert({
+          where: { id: def.id },
+          update: {
+            name: def.name,
+            path: def.path,
+            icon: def.icon || null,
+            parentId: def.parentId || null,
+            sortOrder: def.sortOrder,
+            isHidden: false,
+          },
+          create: {
+            id: def.id,
+            name: def.name,
+            path: def.path,
+            icon: def.icon || null,
+            parentId: def.parentId || null,
+            sortOrder: def.sortOrder,
+          },
+        }),
+      );
     }
-    await prisma.adminMenu.deleteMany({ where: { path: "/membership/overview", id: { not: "menu__membership_overview" } } });
-    await prisma.adminMenu.deleteMany({ where: { path: "/membership", id: { not: "menu__membership" } } });
+    await prisma.adminMenu.deleteMany({
+      where: {
+        path: "/membership/overview",
+        id: { not: "menu__membership_overview" },
+      },
+    });
+    await prisma.adminMenu.deleteMany({
+      where: { path: "/membership", id: { not: "menu__membership" } },
+    });
 
-    const roles = await prisma.adminRole.findMany({ where: { code: { in: ["super_admin", "platform_ops"] } } });
+    const roles = await prisma.adminRole.findMany({
+      where: { code: { in: ["super_admin", "platform_ops"] } },
+    });
     for (const role of roles) {
       for (const permission of permissions) {
         await prisma.adminRolePermission.upsert({
-          where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+          where: {
+            roleId_permissionId: {
+              roleId: role.id,
+              permissionId: permission.id,
+            },
+          },
           update: {},
           create: { roleId: role.id, permissionId: permission.id },
         });
@@ -395,12 +509,21 @@ async function bootstrapMembershipContent(env) {
       });
     }
     await prisma.membershipDisplayItem.updateMany({
-      where: { benefitKey: "post_pin_free_quota", actionUrl: "/pages/tabbar/circle/circle" },
+      where: {
+        benefitKey: "post_pin_free_quota",
+        actionUrl: "/pages/tabbar/circle/circle",
+      },
       data: { actionType: "navigate", actionUrl: "/pagesB/post/createPost" },
     });
     await prisma.membershipDisplayItem.updateMany({
-      where: { benefitKey: "activity_ticket_coupon_monthly", actionUrl: "/pagesA/activity/list" },
-      data: { actionType: "navigate", actionUrl: "/pagesA/selection/activity/activity" },
+      where: {
+        benefitKey: "activity_ticket_coupon_monthly",
+        actionUrl: "/pagesA/activity/list",
+      },
+      data: {
+        actionType: "navigate",
+        actionUrl: "/pagesA/selection/activity/activity",
+      },
     });
     await prisma.membershipDisplayItem.updateMany({
       where: { benefitKey: "member_coupon_monthly", buttonText: "可用" },
@@ -413,22 +536,26 @@ async function bootstrapMembershipContent(env) {
         data: [
           {
             question: "会员如何续费？",
-            answer: "在会员中心选择需要续费的套餐并完成支付即可。未到期会员续费后，有效期会顺延，不会覆盖当前剩余时间。",
+            answer:
+              "在会员中心选择需要续费的套餐并完成支付即可。未到期会员续费后，有效期会顺延，不会覆盖当前剩余时间。",
             sortOrder: 1,
           },
           {
             question: "会员有效期如何计算？",
-            answer: "会员有效期从支付成功或运营赠送成功时开始计算，到期后未使用完的月度权益会自动失效。",
+            answer:
+              "会员有效期从支付成功或运营赠送成功时开始计算，到期后未使用完的月度权益会自动失效。",
             sortOrder: 2,
           },
           {
             question: "会员价格如何享受？",
-            answer: "开通会员后，系统会在外卖、商城、跑腿、活动等场景自动识别会员身份，并按后台配置的权益进行优惠或抵扣。",
+            answer:
+              "开通会员后，系统会在外卖、商城、跑腿、活动等场景自动识别会员身份，并按后台配置的权益进行优惠或抵扣。",
             sortOrder: 3,
           },
           {
             question: "如何查看权益剩余额度？",
-            answer: "会员中心的“权益额度”会实时同步后台发放记录，展示当前可用次数、折扣或专属资格。",
+            answer:
+              "会员中心的“权益额度”会实时同步后台发放记录，展示当前可用次数、折扣或专属资格。",
             sortOrder: 4,
           },
         ],
@@ -463,12 +590,18 @@ function restartPm2(env) {
     return;
   }
 
-  section("重启服务");
-  if (tryRun("pm2", ["describe", pm2Name], { cwd: backendDir })) {
-    run("pm2", ["restart", pm2Name, "--update-env"], { cwd: backendDir, env });
-  } else {
-    run("pm2", ["start", "npm", "--name", pm2Name, "--", "run", "start:prod"], { cwd: backendDir, env });
-  }
+  section("重启 API / Worker / Realtime 服务");
+  const ecosystemPath = path.join(rootDir, "deploy", "ecosystem.config.cjs");
+  run("pm2", ["startOrReload", ecosystemPath, "--update-env"], {
+    cwd: backendDir,
+    env: {
+      ...env,
+      APP_ROOT: rootDir,
+      PM2_NAME: pm2Name,
+      PM2_WORKER_NAME: pm2WorkerName,
+      PM2_REALTIME_NAME: pm2RealtimeName,
+    },
+  });
   run("pm2", ["save"], { cwd: backendDir, env });
 }
 
@@ -493,17 +626,22 @@ function requestHealth(url) {
 async function checkHealth(env) {
   if (skipHealth || skipPm2) return;
   const port = env.PORT || "3000";
-  const url = `http://127.0.0.1:${port}/healthz`;
+  const realtimePort = env.REALTIME_PORT || "3001";
+  const urls = [
+    `http://127.0.0.1:${port}/healthz`,
+    `http://127.0.0.1:${realtimePort}/healthz`,
+    `http://127.0.0.1:${port}/healthz/services`,
+  ];
   section("健康检查");
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    if (await requestHealth(url)) {
-      log(`OK ${url}`);
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const results = await Promise.all(urls.map((url) => requestHealth(url)));
+    if (results.every(Boolean)) {
+      urls.forEach((url) => log(`OK ${url}`));
       return;
     }
     await wait(2000);
   }
-  log(`未确认健康检查通过：${url}`);
-  log("可以稍后手动执行：curl http://127.0.0.1:3000/healthz");
+  fail(`三服务健康检查未通过：${urls.join(", ")}`);
 }
 
 async function main() {

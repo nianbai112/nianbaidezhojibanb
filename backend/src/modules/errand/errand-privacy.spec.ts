@@ -14,6 +14,10 @@ describe('errand privacy projections', () => {
     latitude: 30.123,
     longitude: 120.456,
     total_amount: '8.00',
+    delivery_time: '2026-08-29T10:30:00.000Z',
+    fallback_to_rider_enabled: true,
+    fallback_release_at: '2026-08-29T10:20:00.000Z',
+    receiver_settlement_note: '兜底单，按原价结算',
     details: [{ code: 'PICKUP-8899', pickup_code: 'PICKUP-8899', description: '文件' }],
     tasks: [{ code: 'PICKUP-8899' }],
     user: { id: 'user-1', phone: '13800138000' },
@@ -28,6 +32,11 @@ describe('errand privacy projections', () => {
     expect(serialized).not.toContain('PICKUP-8899');
     expect(serialized).not.toContain('30.123');
     expect(value).not.toHaveProperty('delivery_phone');
+    expect(value).toEqual(expect.objectContaining({
+      delivery_time: '2026-08-29T10:30:00.000Z',
+      fallback_to_rider_enabled: true,
+      receiver_settlement_note: '兜底单，按原价结算',
+    }));
   });
 
   it('keeps the public completed feed anonymous and coarse', () => {

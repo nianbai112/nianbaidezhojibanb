@@ -1,6 +1,6 @@
 import { Controller, Post, Body, Get, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -27,7 +27,6 @@ export class AuthController {
   /** 微信小程序登录 — 严格限流防暴力破解 */
   @Post('wx-auth/wx-mini-login')
   @ApiOperation({ summary: '微信小程序登录' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async wxMiniLogin(@Body() dto: any, @Req() req: Request) {
     const ip = this.getClientIp(req);
@@ -38,7 +37,7 @@ export class AuthController {
   /** 获取微信手机号 — 严格限流 */
   @Post('wx-auth/get-phone-number')
   @ApiOperation({ summary: '获取微信手机号' })
-  @UseGuards(JwtGuard, ThrottlerGuard)
+  @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async getPhoneNumber(@Body() dto: any, @CurrentUser('sub') userId: string) {
@@ -48,7 +47,6 @@ export class AuthController {
   /** 微信手机号一键登录 — 小程序端 getPhoneNumber + uni.login */
   @Post('wx-auth/phone-one-tap-login')
   @ApiOperation({ summary: '微信手机号一键登录' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async phoneOneTapLogin(@Body() dto: any, @Req() req: Request) {
     const ip = this.getClientIp(req);
@@ -59,7 +57,6 @@ export class AuthController {
   /** 发送手机号登录验证码 */
   @Post('auth/phone/send-code')
   @ApiOperation({ summary: '发送手机号登录验证码' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 5 } })
   async sendPhoneLoginCode(@Body() dto: any, @Req() req: Request) {
     const ip = this.getClientIp(req);
@@ -69,7 +66,6 @@ export class AuthController {
   /** 手机号验证码登录 */
   @Post('auth/phone/login')
   @ApiOperation({ summary: '手机号验证码登录' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async phoneLogin(@Body() dto: any, @Req() req: Request) {
     const ip = this.getClientIp(req);
@@ -80,7 +76,6 @@ export class AuthController {
   /** 刷新 Token — 限流防止滥用 */
   @Post('wx-auth/refresh')
   @ApiOperation({ summary: '刷新 Token' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   async refreshToken(@Body() dto: { refreshToken: string }) {
     return this.authService.refreshToken(dto.refreshToken);
@@ -109,7 +104,6 @@ export class AuthController {
   /** 后台管理员登录 — 限流防暴力破解（默认 30 次/分钟，可通过 ADMIN_AUTH_THROTTLE_LIMIT 调整） */
   @Post('admin/login')
   @ApiOperation({ summary: '后台管理员登录' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ admin_auth: { ttl: 60000, limit: parseInt(process.env.ADMIN_AUTH_THROTTLE_LIMIT || '30', 10) } })
   async adminLogin(
     @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string },
@@ -122,7 +116,6 @@ export class AuthController {
 
   @Post('auth/admin/login')
   @ApiOperation({ summary: '管理员登录（新后台兼容路径）' })
-  @UseGuards(ThrottlerGuard)
   @Throttle({ admin_auth: { ttl: 60000, limit: 30 } })
   async adminLoginCompat(
     @Body() dto: { username: string; password: string; captchaId?: string; captcha?: string; mfaCode?: string },

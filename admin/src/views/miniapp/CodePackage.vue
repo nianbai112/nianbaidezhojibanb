@@ -58,7 +58,7 @@
         <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
           <template #title>
             上传的图片保存在小程序源码 <code>static/editor/</code> 里，随代码包一起打包。
-            在自由布局 / 装修中把图片地址填为 <code>/static/editor/文件名.png</code> 即可离线显示，不依赖服务器。
+            在小程序源码或页面配置中使用 <code>/static/editor/文件名.png</code>，即可随代码包离线显示。
           </template>
         </el-alert>
         <div v-if="assets.length" class="asset-grid">

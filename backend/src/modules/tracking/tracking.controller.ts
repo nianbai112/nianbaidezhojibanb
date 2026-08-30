@@ -8,7 +8,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { TrackingService } from './tracking.service';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -23,7 +23,7 @@ export class TrackingController {
   constructor(private readonly trackingService: TrackingService) {}
 
   @Post('tracking/events')
-  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({ auth: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: '上报单个事件' })
   trackEvent(@Body() body: any, @Req() req: Request, @CurrentUser('sub') userId?: string) {
@@ -31,7 +31,7 @@ export class TrackingController {
   }
 
   @Post('api/tracking/events')
-  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({ auth: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: '上报单个事件（旧路径兼容）' })
   trackEventLegacy(@Body() body: any, @Req() req: Request, @CurrentUser('sub') userId?: string) {
@@ -50,7 +50,7 @@ export class TrackingController {
   }
 
   @Post('tracking/batch')
-  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: '批量上报事件' })
   trackBatch(@Body() body: { events: any[] }, @Req() req: Request, @CurrentUser('sub') userId?: string) {
@@ -58,7 +58,7 @@ export class TrackingController {
   }
 
   @Post('api/tracking/batch')
-  @UseGuards(OptionalAuthGuard, ThrottlerGuard)
+  @UseGuards(OptionalAuthGuard)
   @Throttle({ auth: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: '批量上报事件（旧路径兼容）' })
   trackBatchLegacy(@Body() body: { events: any[] }, @Req() req: Request, @CurrentUser('sub') userId?: string) {

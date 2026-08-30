@@ -51,23 +51,23 @@ export function campusMapWorkflowSteps({
   return [
     {
       key: 'cad',
-      title: hasVectorBaseMap ? 'CAD 清理' : '导入底图',
-      subtitle: hasVectorBaseMap ? '按图层保留有效对象' : 'CAD / 平面图 / 无 CAD',
+      title: '画师矢量图',
+      subtitle: hasBase ? '完整校园图已加载' : '等待加载 SVG',
       status: hasBase ? 'done' : 'current',
       disabled: false,
     },
     {
       key: 'draw',
-      title: '绘制校园',
-      subtitle: featureCount ? `${featureCount} 个对象` : '建筑、点位、路线',
-      status: hasBase && editorMode !== 'amap' ? 'current' : featureCount ? 'done' : 'todo',
+      title: '地点与建筑',
+      subtitle: featureCount ? `${featureCount} 个可控对象` : '名称、状态、照片',
+      status: hasBase ? 'current' : 'todo',
       disabled: !hasBase,
     },
     {
       key: 'amap',
-      title: '真实地图',
-      subtitle: calibrationPointCount ? `${calibrationPointCount} 个校准点` : '高德定位和校准',
-      status: editorMode === 'amap' ? 'current' : calibrationPointCount >= 2 ? 'done' : 'todo',
+      title: '真实坐标',
+      subtitle: calibrationPointCount ? `${calibrationPointCount} 个校准点` : '高德仅用于定位',
+      status: calibrationPointCount >= 3 ? 'done' : 'todo',
       disabled: !hasBase && featureCount === 0,
     },
     {

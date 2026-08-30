@@ -2,34 +2,21 @@
   <div class="campus-map-painter">
     <CampusMapActionBar
       :region-name="regionName"
-      :editor-mode="editorMode"
-      :poi-count="pois.length"
-      :area-count="areas.length"
-      :route-count="routes.length"
+      :release-cockpit="releaseCockpit"
+      :active-stage="releaseStage"
       :publish-summary="publishReadiness.summary"
       :can-publish="publishReadiness.canPublish"
       :active-version="workflow.activeVersion"
+      :published-place-count="livePublication.publicPlaceCount"
+      :publication-verified="livePublication.verified"
       :draft-revision="workflow.draftRevision"
       :has-unsaved-changes="hasUnsavedChanges"
-      :assistant-score="mapAssistantScore"
-      :assistant-summary="mapAssistantSummary"
-      :enabled="form.enabled"
       :loading="loading"
       :saving="saving"
       :draft-saving="draftSaving"
-      :disabling="disabling"
-      @update:enabled="form.enabled = $event"
-      @assistant="openAssistantDrawer"
-      @import="openImportDrawer"
-      @collection="collectionDrawerVisible = true"
-      @refresh="loadMap"
-      @advanced="openAdvancedDrawer"
-      @preview="openPreviewDrawer"
-      @quality="openQualityDrawer"
-      @versions="versionDrawerVisible = true"
-      @save-draft="saveDraft()"
-      @disable="disableMap"
-      @publish="publishMap"
+      @select-stage="handleReleaseStage"
+      @run-action="handleReleaseAction"
+      @operation="handleOperationsCommand"
     />
 
     <CampusMapAvailabilityPanel
@@ -52,7 +39,7 @@
           :can-publish="publishReadiness.canPublish"
           @update:model-value="setToolMode"
           @import-cad="openImportDrawer"
-          @switch-amap="handleEditorModeChange('amap')"
+          @switch-amap="openCoordinatePicker"
           @open-quality="openQualityDrawer"
         />
 
@@ -77,50 +64,12 @@
             @add-calibration="addCalibrationAtRatio(0.5, 0.5)"
           />
 
-          <div v-show="editorMode === 'amap'" class="amap-workbench">
-            <div class="amap-search-bar">
-              <el-input
-                v-model="amapSearchKeyword"
-                clearable
-                placeholder="搜索学校、楼栋、校门、食堂..."
-                @input="onAmapSearchInput"
-                @keyup.enter="searchAmapPlaces()"
-              >
-                <template #prefix>
-                  <el-icon><Search /></el-icon>
-                </template>
-              </el-input>
-              <el-button :icon="Search" :loading="amapLoading" @click="searchAmapPlaces()">搜索</el-button>
-              <el-button @click="addAmapPoiAtCenter">中心点位</el-button>
-            </div>
-            <div v-if="amapSearchResults.length" class="amap-search-results">
-              <button
-                v-for="item in amapSearchResults"
-                :key="item.id"
-                type="button"
-                class="amap-search-item"
-                @click="selectAmapPlace(item)"
-              >
-                <span>{{ item.name }}</span>
-                <small>{{ item.address || item.district }}</small>
-              </button>
-            </div>
-            <div class="amap-stage">
-              <div ref="amapMapRef" class="amap-drawing-map"></div>
-              <div v-if="amapLoading" class="amap-loading">加载地图中...</div>
-              <div v-if="!amapReady && !amapLoading" class="amap-empty-state">
-                <el-icon><MapLocation /></el-icon>
-                <strong>{{ amapStatus }}</strong>
-                <el-button text @click="openAdvancedDrawer">配置地图信息</el-button>
-              </div>
-            </div>
-          </div>
-
           <CampusMapCadWorkbench
-            v-if="editorMode !== 'amap' && hasVisualBaseMap"
-            :pois="pois"
-            :areas="areas"
-            :routes="routes"
+            v-if="hasVisualBaseMap"
+            :artwork-url="ARTWORK_URL"
+            :pois="artworkPois"
+            :areas="artworkAreas"
+            :routes="artworkRoutes"
             :calibration-points="calibrationPoints"
             :draft-area-points="draftAreaPoints"
             :draft-route-points="draftRoutePoints"
@@ -130,45 +79,24 @@
             @select-layer-item="selectLayerItem"
           />
 
-          <div v-else-if="editorMode !== 'amap'" class="campus-map-start">
-            <button type="button" class="start-card primary" @click="openImportDrawer">
-              <el-icon><UploadFilled /></el-icon>
-              <strong>导入 CAD / DXF</strong>
-              <span>解析后进入 CAD 清理工作台</span>
-            </button>
-            <div class="start-card upload-card">
-              <ImageUploadBox
-                v-model="form.imageUrl"
-                scene="campus-map-base"
-                accept="image/*"
-                :max-size="8"
-                shape="wide"
-                placeholder="上传校园底图"
-                tip="支持 PNG/JPG，建议使用完整校园俯视图"
-              />
+          <div v-else class="campus-map-start">
+            <div class="start-card primary">
+              <el-icon><Warning /></el-icon>
+              <strong>画师矢量图未加载</strong>
+              <span>请检查后台静态资源 /campusMap/assets/cqcx-campus-map.svg</span>
             </div>
           </div>
 
           <div class="map-status-strip">
-            <span>{{ editorMode === 'amap' ? amapStatus : hasVectorBaseMap ? 'CAD 矢量底图已就绪' : form.imageUrl ? '图片底图已就绪' : '等待上传底图' }}</span>
-            <span v-if="editorMode === 'amap'">中心 {{ amapDefaults.center[0].toFixed(6) }}, {{ amapDefaults.center[1].toFixed(6) }}</span>
-            <el-button v-if="editorMode === 'amap'" text @click="fitAmapOverlays">适配范围</el-button>
-          </div>
-
-          <div v-if="editorMode === 'image'" class="image-inline-tools">
-            <ImageUploadBox
-              v-model="form.imageUrl"
-              scene="campus-map-base"
-              accept="image/*"
-              :max-size="8"
-              shape="wide"
-              placeholder="替换校园底图"
-            />
+            <span>画师 SVG 是唯一主地图；蓝色地点、建筑状态和骑手采集结果是可控覆盖层</span>
+            <el-button text @click="openCoordinatePicker">设置真实坐标</el-button>
           </div>
         </main>
 
         <CampusMapInspector
           :selected-editable-item="selectedEditableItem"
+          :region-id="currentRegionId()"
+          :map-id="form.mapId"
           :semantic-categories="semanticCategories"
           :project-catalog="projectCatalog"
           :editor-mode="editorMode"
@@ -177,17 +105,28 @@
           :routes="routes"
           :calibration-points="calibrationPoints"
           :format-lng-lat="formatLngLat"
+          :active-version="workflow.activeVersion"
+          :has-unsaved-changes="hasUnsavedChanges"
+          :release-cockpit="releaseCockpit"
+          :release-stage="releaseStage"
           @clear-selection="selectedId = ''"
           @before-edit="recordMapHistory"
           @pick-location="openCalibrationPicker"
           @sync-semantic="syncSelectedSemantic"
           @sync-availability="syncSelectedAvailability"
-          @assign-project="handleAssignProject"
+          @assign-place="handleAssignPlace"
           @remove-poi="removePoi"
           @remove-area="removeArea"
           @remove-route="removeRoute"
           @remove-calibration="removeCalibration"
           @select-layer-item="selectLayerItem"
+          @remove-photo="handleRemovePhoto"
+          @photo-added="handlePhotoAdded"
+          @project-updated="handleProjectUpdated"
+          @media-changed="loadProjectCatalog(true)"
+          @collect-place="openPlaceCollectionTask"
+          @collect-route="openRouteCollectionTask"
+          @run-issue="handleReleaseIssue"
         />
       </div>
     </div>
@@ -241,9 +180,24 @@
     />
 
     <CampusMapCollectionDrawer
+      ref="collectionDrawerRef"
       v-model="collectionDrawerVisible"
       :region-id="currentRegionId()"
       :region-name="regionName"
+      :places="collectionPlaces"
+      :features="collectionFeatures"
+      :has-unsaved-changes="hasUnsavedChanges"
+      @draft-changed="handleCollectionDraftChanged"
+    />
+
+    <CampusMapProjectCatalogDrawer
+      v-model="catalogDrawerVisible"
+      :region-id="currentRegionId()"
+      :region-name="regionName"
+      :map-id="form.mapId"
+      :places="collectionPlaces"
+      @catalog-changed="handleCatalogChanged"
+      @focus-place="focusCatalogPlace"
     />
 
     <el-drawer v-model="advancedDrawerVisible" title="高级设置" size="460px" append-to-body>
@@ -291,20 +245,13 @@ import {
   Guide,
   Location,
   MagicStick,
-  MapLocation,
-  Mouse,
   Place,
   Plus,
   Position,
-  RefreshRight,
-  Search,
   Setting,
-  UploadFilled,
-  View,
   Warning,
 } from '@element-plus/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
-import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
 import AmapLocationPicker from '@/components/common/AmapLocationPicker.vue'
 import CampusMapActionBar from './campus-map/CampusMapActionBar.vue'
 import CampusMapAssistantDrawer from './campus-map/CampusMapAssistantDrawer.vue'
@@ -318,6 +265,7 @@ import CampusMapQualityDrawer from './campus-map/CampusMapQualityDrawer.vue'
 import CampusMapToolRail from './campus-map/CampusMapToolRail.vue'
 import CampusMapVersionDrawer from './campus-map/CampusMapVersionDrawer.vue'
 import CampusMapWorkbenchHeader from './campus-map/CampusMapWorkbenchHeader.vue'
+import CampusMapProjectCatalogDrawer from './campus-map/CampusMapProjectCatalogDrawer.vue'
 import {
   amapPlaceSearch,
   deleteRegionCampusMapImport,
@@ -325,6 +273,8 @@ import {
   fetchCampusMapStatuses,
   fetchCampusMapConverterStatus,
   fetchCampusMapProjectCatalog,
+  fetchActiveCampusMap,
+  removeCampusMapProjectPhoto,
   fetchAmapRuntimeConfig,
   fetchRegionCampusMapImport,
   fetchRegionCampusMapImports,
@@ -332,10 +282,18 @@ import {
   publishRegionCampusMapDraft,
   retryRegionCampusMapImport,
   saveRegionCampusMapDraft,
+  upsertCampusMapProject,
   uploadRegionCampusMapImport,
 } from '@/api/admin'
 import {
+  campusMapPublicationSnapshot,
+  verifyCampusMapPublication,
+} from './campus-map/campusMapPublishVerification.mjs'
+import { buildCampusReleaseCockpit } from './campus-map/campusMapReleaseModel.mjs'
+import {
   applyCampusProject,
+  catalogPlaceId,
+  createCampusProjectCatalogLoader,
   campusProjectCounts,
   normalizeImportedAreaProject,
   normalizeImportedPoiProject,
@@ -355,19 +313,29 @@ type RatioPoint = {
   latitude?: number
 }
 type CampusProjectFields = {
+  placeId?: string
+  artworkFeatureKey?: string
+  artworkAnchorX?: number
+  artworkAnchorY?: number
+  artworkGeometry?: Record<string, any>
   officialNumber?: number
   officialName?: string
   engineeringAlias?: string
   phase?: 'phase1' | 'future'
-  constructionStatus?: 'built' | 'under_construction'
+  constructionStatus?: 'built' | 'under_construction' | 'planned' | 'renovating'
+  publishStatus?: 'draft' | 'review' | 'published' | 'hidden'
   visibilityScope?: 'phase1_active' | 'phase1_review' | 'future_reference'
   searchable?: boolean
   navigable?: boolean
   geometryStatus?: 'verified_polygon' | 'verified_point' | 'point_only' | 'unmatched'
   sourceConfidence?: 'official_signage_and_cad' | 'official_signage_only'
+  address?: string
+  addressDescription?: string
+  coordinateStatus?: string
+  photos?: string[]
 }
 type BuildingAvailabilityFields = {
-  serviceStatus?: 'open' | 'unopened'
+  serviceStatus?: 'unknown' | 'open' | 'limited' | 'unopened' | 'temporarily_closed' | 'closed'
   unavailableMessage?: string
 }
 type PoiItem = RatioPoint & CampusProjectFields & BuildingAvailabilityFields & {
@@ -389,7 +357,11 @@ type AreaItem = CampusProjectFields & BuildingAvailabilityFields & {
   sourceLayer?: string
   points: RatioPoint[]
 }
-type RouteItem = Omit<AreaItem, keyof BuildingAvailabilityFields>
+type RouteItem = Omit<AreaItem, keyof BuildingAvailabilityFields> & {
+  // 路线审核写入的服务端证据必须经后台加载/保存往返后仍然存在。
+  // 最终可信性由后端再次对账 approved 采集对象，前端这里只负责不丢字段。
+  sourceProperties?: Record<string, any>
+}
 type CalibrationPoint = RatioPoint & {
   id: string
   title: string
@@ -421,6 +393,8 @@ type PreviewShape = {
   points: string
 }
 type EditableKind = 'poi' | 'area' | 'route' | 'calibration'
+type ReleaseAction = 'catalog' | 'collection' | 'save' | 'quality' | 'publish'
+type ReleaseStageKey = 'binding' | 'verification' | 'candidate' | 'version' | 'online'
 type SelectedEditableItem = {
   kind: EditableKind
   label: string
@@ -489,6 +463,25 @@ type AssistantStep = {
   actionLabel: string
 }
 
+// 与画师 AI 原文件的 1-38 号文字中心坐标一致；真实经纬度单独由骑手现场采集。
+const illustratedArtworkBounds = [0, 0, 2761.14, 2990.41] as const
+const ARTWORK_URL = '/admin/assets/cqcx-campus-map.svg'
+const illustratedSeedAnchors = new Map<number, [number, number]>([
+  [1, [302.44, 1715.91]], [2, [233.14, 1933.59]], [3, [535.15, 1648.29]],
+  [4, [672.78, 1858.49]], [5, [720.94, 1655.22]], [6, [890.06, 1733.56]],
+  [7, [742.48, 2130.70]], [8, [655.81, 2242.13]], [9, [832.20, 1364.73]],
+  [10, [1061.05, 1372.11]], [11, [934.26, 1507.70]], [12, [1196.67, 1447.56]],
+  [13, [1116.64, 1603.29]], [14, [971.98, 2370.60]], [15, [1150.91, 1948.63]],
+  [16, [1658.55, 2021.58]], [17, [1706.55, 2138.70]], [18, [1375.77, 1448.04]],
+  [19, [1144.27, 1017.71]], [20, [1389.63, 1171.86]], [21, [1416.85, 1687.17]],
+  [22, [2063.94, 1444.38]], [23, [1226.54, 695.50]], [24, [1532.91, 854.83]],
+  [25, [1433.48, 780.17]], [26, [1335.45, 549.79]], [27, [1602.70, 530.79]],
+  [28, [1459.99, 348.84]], [29, [1955.93, 737.25]], [30, [1859.70, 1084.44]],
+  [31, [2256.82, 1018.03]], [32, [1742.73, 454.41]], [33, [1980.33, 617.82]],
+  [34, [1677.75, 212.79]], [35, [2068.77, 435.85]], [36, [2330.11, 691.65]],
+  [37, [1304.99, 49.90]], [38, [1235.49, 395.45]],
+])
+
 const props = defineProps<{
   regionId?: string | number
   regionName?: string
@@ -532,10 +525,13 @@ const draftSaving = ref(false)
 const disabling = ref(false)
 const importing = ref(false)
 const amapLoading = ref(false)
-const editorMode = ref<EditorMode>('amap')
+// 运营界面永远编辑画师 SVG；sourceCoordinateMode 只决定保存时是否保留高德真实坐标清单。
+const editorMode = ref<EditorMode>('image')
+const sourceCoordinateMode = ref<EditorMode>('amap')
 const toolMode = ref<ToolMode>('poi')
 const sideTab = ref('poi')
 const selectedId = ref('')
+const releaseStage = ref<ReleaseStageKey>('binding')
 const previewDrawerVisible = ref(false)
 const qualityDrawerVisible = ref(false)
 const advancedDrawerVisible = ref(false)
@@ -543,6 +539,7 @@ const importDrawerVisible = ref(false)
 const assistantDrawerVisible = ref(false)
 const versionDrawerVisible = ref(false)
 const collectionDrawerVisible = ref(false)
+const catalogDrawerVisible = ref(false)
 const hasUnsavedChanges = ref(false)
 const previewOpened = ref(false)
 const poiCategory = ref('building')
@@ -559,7 +556,11 @@ const importJobs = ref<CampusMapImportJob[]>([])
 const activeImportJob = ref<CampusMapImportJob | null>(null)
 const converterStatus = ref<CampusMapConverterStatus | null>(null)
 const projectCatalog = ref<any[]>([])
+const collectionDrawerRef = ref<InstanceType<typeof CampusMapCollectionDrawer> | null>(null)
+const fetchProjectCatalogOnce = createCampusProjectCatalogLoader(fetchCampusMapProjectCatalog)
+let projectCatalogLoadSeq = 0
 const calibrationMode = computed(() => toolMode.value === 'calibration')
+
 const pois = ref<PoiItem[]>([])
 const areas = ref<AreaItem[]>([])
 const routes = ref<RouteItem[]>([])
@@ -590,10 +591,11 @@ const form = reactive({
   title: '校园地图',
   mapId: '',
   version: '',
-  imageUrl: '',
-  mapWidth: 1200,
-  mapHeight: 800,
+  imageUrl: ARTWORK_URL,
+  mapWidth: Number(illustratedArtworkBounds[2]),
+  mapHeight: Number(illustratedArtworkBounds[3]),
   opacity: 1,
+  svgOverlayUrl: ARTWORK_URL,
 })
 const publishedAvailabilityStatus = ref<'open' | 'unopened' | 'unconfigured'>('unconfigured')
 
@@ -603,26 +605,93 @@ const workflow = reactive({
   activeVersionId: '',
 })
 
+const livePublication = reactive({
+  publicPlaceCount: 0,
+  verified: false,
+})
+
+function applyLivePublication(config: any) {
+  const snapshot = campusMapPublicationSnapshot(config)
+  livePublication.publicPlaceCount = snapshot.publicPlaceCount
+  livePublication.verified = snapshot.enabled
+    && snapshot.activeVersion > 0
+    && snapshot.publicPlaceCount > 0
+    && snapshot.activeVersion === workflow.activeVersion
+    && (!workflow.activeVersionId || snapshot.activeVersionId === workflow.activeVersionId)
+  return snapshot
+}
+
 const hasVisualBaseMap = computed(() => Boolean(form.imageUrl || hasVectorBaseMap.value))
 
 const canvasStyle = computed(() => {
-  const width = Math.max(Number(form.mapWidth) || 1200, 100)
-  const height = Math.max(Number(form.mapHeight) || 800, 100)
+  const width = illustratedArtworkBounds[2]
+  const height = illustratedArtworkBounds[3]
   return {
     aspectRatio: `${width} / ${height}`,
-    backgroundImage: form.imageUrl ? `linear-gradient(rgba(255,255,255,.08), rgba(255,255,255,.08)), url("${form.imageUrl}")` : '',
+    width: 'min(100%, 794px)',
+    margin: '0 auto',
+    backgroundColor: '#f5f5c7',
   }
 })
 
+function isLikelyGcj02Pair(x: number, y: number) {
+  return x >= 73 && x <= 136 && y >= 3 && y <= 54
+}
+
+function artworkAnchorFor(item: any = {}): [number, number] | null {
+  const x = Number(item.artworkAnchorX)
+  const y = Number(item.artworkAnchorY)
+  const inside = Number.isFinite(x) && Number.isFinite(y)
+    && x > illustratedArtworkBounds[0] && x < illustratedArtworkBounds[2]
+    && y > illustratedArtworkBounds[1] && y < illustratedArtworkBounds[3]
+  // 旧版本曾把中国境内经纬度误写成 SVG 像素；这类值必须忽略。
+  if (inside && !isLikelyGcj02Pair(x, y)) return [x, y]
+  const number = Number(item.officialNumber)
+  const seed = illustratedSeedAnchors.get(number)
+  return seed ? [seed[0], illustratedArtworkBounds[3] - seed[1]] : null
+}
+
+function withArtworkPoint<T extends Record<string, any>>(item: T): T | null {
+  const anchor = artworkAnchorFor(item)
+  if (!anchor) return null
+  return {
+    ...item,
+    xRatio: clampRatio(anchor[0] / illustratedArtworkBounds[2]),
+    yRatio: clampRatio(1 - anchor[1] / illustratedArtworkBounds[3]),
+  }
+}
+
+function artworkShapePoints(item: any, geometryType: 'Polygon' | 'LineString') {
+  const geometry = item?.artworkGeometry || item?.sourceProperties?.artworkGeometry
+  if (geometry?.type === geometryType) {
+    const coordinates = geometryType === 'Polygon' ? geometry.coordinates?.[0] : geometry.coordinates
+    if (Array.isArray(coordinates)) {
+      return coordinates
+        .slice(0, geometryType === 'Polygon' ? -1 : undefined)
+        .map((pair: number[]) => toRatioPoint(pair))
+    }
+  }
+  const points = Array.isArray(item?.points) ? item.points : []
+  return points.some(hasLngLat) ? [] : points
+}
+
+const artworkPois = computed(() => pois.value.map(withArtworkPoint).filter(Boolean) as PoiItem[])
+const artworkAreas = computed(() => areas.value
+  .map((item) => ({ ...item, points: artworkShapePoints(item, 'Polygon') }))
+  .filter((item) => item.points.length >= 3))
+const artworkRoutes = computed(() => routes.value
+  .map((item) => ({ ...item, points: artworkShapePoints(item, 'LineString') }))
+  .filter((item) => item.points.length >= 2))
+
 const mapQualityChecks = computed<QualityCheck[]>(() => {
-  const validPoiCount = pois.value.filter((poi) => editorMode.value === 'amap' ? hasLngLat(poi) : true).length
-  const validAreaCount = areas.value.filter((area) => area.points.length >= 3).length
-  const validRouteCount = routes.value.filter((route) => route.points.length >= 2).length
+  const validPoiCount = artworkPois.value.length
+  const validAreaCount = artworkAreas.value.length
+  const validRouteCount = artworkRoutes.value.length
   const featureCount = validPoiCount + validAreaCount + validRouteCount
   const unnamedCount = [
-    ...pois.value.map((item) => item.title),
-    ...areas.value.map((item) => item.title),
-    ...routes.value.map((item) => item.title),
+    ...artworkPois.value.map((item) => item.title),
+    ...artworkAreas.value.map((item) => item.title),
+    ...artworkRoutes.value.map((item) => item.title),
   ].filter((title) => !String(title || '').trim()).length
   const checks: QualityCheck[] = [
     {
@@ -664,6 +733,16 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   const unmatchedActive = projectItems.filter((item) => item.visibilityScope === 'phase1_active' && item.geometryStatus === 'unmatched')
   const unavailableWithoutMessage = projectItems.filter((item) => item.serviceStatus === 'unopened'
     && !String(item.unavailableMessage || '').trim())
+  const approvedRiderRouteCount = routes.value.filter((route) =>
+    String(route.sourceProperties?.collectionSource || '') === 'rider_app_approved').length
+  const publishedArtworkPlaceCount = projectCatalog.value.filter((place) =>
+    place?.publishStatus === 'published'
+      && place?.visibilityScope === 'phase1_active'
+      && Boolean(artworkAnchorFor(place)),
+  ).length
+  const illustratedCalibrationPlaces = projectCatalog.value.filter(isPublishedArtworkCalibrationPlace)
+  const illustratedNavigationReady = illustratedCalibrationPlaces.length >= 3
+    && hasNonCollinearGpsPoints(illustratedCalibrationPlaces)
   const projectErrors = duplicateNumbers.length + futureVisible.length + unmatchedActive.length
   checks.push({
     key: 'campus-projects',
@@ -681,6 +760,24 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       ? `${unavailableWithoutMessage.length} 栋未开放建筑缺少说明`
       : '未开放建筑均已填写说明',
   })
+  checks.push({
+    key: 'public-places',
+    label: '正式公开地点',
+    status: publishedArtworkPlaceCount > 0 ? 'pass' : 'error',
+    message: publishedArtworkPlaceCount > 0
+      ? `${publishedArtworkPlaceCount} 个已发布地点会进入小程序`
+      : '至少将 1 个已绑定矢量图的地点设为“已发布 + 一期可见”',
+  })
+  if (approvedRiderRouteCount > 0) {
+    checks.push({
+      key: 'illustrated-navigation-calibration',
+      label: '矢量图导航校准',
+      status: illustratedNavigationReady ? 'pass' : 'error',
+      message: illustratedNavigationReady
+        ? `${illustratedCalibrationPlaces.length} 个已发布地点可把骑手路线投射到用户矢量图`
+        : '发布骑手导航路线前，至少要有 3 个分散地点同时具备已核验坐标和矢量图锚点',
+    })
+  }
 
   if (editorMode.value === 'image') {
     checks.unshift({
@@ -692,8 +789,12 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
     checks.push({
       key: 'positioning',
       label: '定位校准',
-      status: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? 'pass' : 'error',
-      message: calibrationPoints.value.filter((point) => point.longitude && point.latitude).length >= 2 ? '已配置定位校准' : '图片/CAD 地图发布前必须配置至少 2 个定位校准点',
+      status: calibrationReadyForProjection.value ? 'pass' : 'error',
+      message: calibrationReadyForProjection.value
+        ? `已配置 ${calibratedPointCount.value} 个分散校准点（建议 6–8 个）`
+        : calibratedPointCount.value < 3
+          ? '至少需要 3 个非共线校准点，否则骑手参考底图和路线合并不可用'
+          : '校准点过于共线，请把控制点分散到校园四周；建议配置 6–8 个',
     })
   } else {
     checks.unshift({
@@ -736,11 +837,68 @@ const publishReadiness = computed(() => {
   }
 })
 
-const validPoiCount = computed(() => pois.value.filter((poi) => editorMode.value !== 'amap' || hasLngLat(poi)).length)
-const validAreaCount = computed(() => areas.value.filter((area) => area.points.length >= 3).length)
-const validRouteCount = computed(() => routes.value.filter((route) => route.points.length >= 2).length)
+const validPoiCount = computed(() => artworkPois.value.length)
+const validAreaCount = computed(() => artworkAreas.value.length)
+const validRouteCount = computed(() => artworkRoutes.value.length)
 const drawableFeatureCount = computed(() => validPoiCount.value + validAreaCount.value + validRouteCount.value)
-const calibratedPointCount = computed(() => calibrationPoints.value.filter((point) => point.longitude && point.latitude).length)
+function hasNonCollinearCalibration(points: any[]) {
+  const coordinates = points
+    .map((point) => [Number(point.mapX ?? point.xRatio), Number(point.mapY ?? point.yRatio)])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+  for (let a = 0; a < coordinates.length - 2; a += 1) {
+    for (let b = a + 1; b < coordinates.length - 1; b += 1) {
+      for (let c = b + 1; c < coordinates.length; c += 1) {
+        const [ax, ay] = coordinates[a]
+        const [bx, by] = coordinates[b]
+        const [cx, cy] = coordinates[c]
+        if (Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) > 1e-8) return true
+      }
+    }
+  }
+  return false
+}
+
+function hasNonCollinearGpsPoints(points: any[]) {
+  const coordinates = points
+    .map((point) => [Number(point.longitude), Number(point.latitude)])
+    .filter(([longitude, latitude]) => Number.isFinite(longitude) && Number.isFinite(latitude))
+  for (let a = 0; a < coordinates.length - 2; a += 1) {
+    for (let b = a + 1; b < coordinates.length - 1; b += 1) {
+      for (let c = b + 1; c < coordinates.length; c += 1) {
+        const [ax, ay] = coordinates[a]
+        const [bx, by] = coordinates[b]
+        const [cx, cy] = coordinates[c]
+        if (Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) > 1e-12) return true
+      }
+    }
+  }
+  return false
+}
+
+function isPublishedArtworkCalibrationPlace(place: any) {
+  if (place?.publishStatus !== 'published'
+    || place?.visibilityScope !== 'phase1_active'
+    || place?.coordinateStatus !== 'verified') return false
+  const longitude = Number(place.longitude)
+  const latitude = Number(place.latitude)
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)
+    || longitude < 70 || longitude > 140 || latitude <= 0 || latitude > 60) return false
+  const [minX, minY, maxX, maxY] = illustratedArtworkBounds
+  const artworkX = Number(place.artworkAnchorX)
+  const artworkY = Number(place.artworkAnchorY)
+  const hasExplicitAnchor = Number.isFinite(artworkX) && Number.isFinite(artworkY)
+    && artworkX > minX && artworkX < maxX && artworkY > minY && artworkY < maxY
+  const officialNumber = Number(place.officialNumber)
+  const hasBuiltInAnchor = Number.isInteger(officialNumber)
+    && officialNumber >= 1 && officialNumber <= 38
+  return hasExplicitAnchor || hasBuiltInAnchor
+}
+
+const validCalibrationPoints = computed(() => calibrationPoints.value.filter((point) =>
+  Number.isFinite(Number(point.longitude)) && Number.isFinite(Number(point.latitude)),
+))
+const calibratedPointCount = computed(() => validCalibrationPoints.value.length)
+const calibrationReadyForProjection = computed(() => calibratedPointCount.value >= 3 && hasNonCollinearCalibration(validCalibrationPoints.value))
 const unnamedObjectCount = computed(() => [
   ...pois.value.map((item) => item.title),
   ...areas.value.map((item) => item.title),
@@ -771,7 +929,7 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
   const contentReady = drawableFeatureCount.value > 0
   const semanticReady = importantKeyPlaceCount.value >= 3
   const semanticPartial = importantKeyPlaceCount.value >= 1 || totalKeyPlaceCount.value >= 3
-  const calibrationReady = editorMode.value === 'amap' || calibratedPointCount.value >= 2
+  const calibrationReady = editorMode.value === 'amap' || calibrationReadyForProjection.value
   const previewReady = previewOpened.value
   const publishReady = publishReadiness.value.canPublish
   return [
@@ -806,7 +964,11 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
       key: 'calibration',
       order: 4,
       label: '定位校准',
-      message: calibrationReady ? '小程序定位可投射到地图' : `还需要 ${Math.max(0, 2 - calibratedPointCount.value)} 个校准点`,
+      message: calibrationReady
+        ? '小程序定位可投射到地图（图片/矢量底图建议 6–8 个分散控制点）'
+        : calibratedPointCount.value < 3
+          ? `还需要 ${Math.max(0, 3 - calibratedPointCount.value)} 个非共线校准点；否则骑手参考底图和路线合并不可用`
+          : '校准点过于共线，请把控制点分散到校园四周',
       status: calibrationReady ? 'pass' : 'warning',
       action: calibrationReady ? '' : 'calibration',
       actionLabel: '校准',
@@ -863,7 +1025,7 @@ const assistantWarnings = computed(() => {
     const missing = keyPlaceCoverage.value.filter((item) => item.important && !item.done).map((item) => item.label)
     warnings.push(`核心地点缺少：${missing.join('、')}。`)
   }
-  if (editorMode.value === 'image' && calibratedPointCount.value < 2) warnings.push('定位校准点不足，用户当前位置和距离只能作为临时参考。')
+  if (editorMode.value === 'image' && !calibrationReadyForProjection.value) warnings.push('需要至少 3 个非共线校准点；否则骑手参考底图和路线合并不可用。建议在校园四周分散配置 6–8 个。')
   if (pois.value.length > 80) warnings.push('点位较多，建议隐藏低频点或按分类展示，避免小程序地图拥挤。')
   if (draftAreaPoints.value.length || draftRoutePoints.value.length) warnings.push('还有未完成的区域或路线草稿，发布前请完成或清空。')
   if (activeImportJob.value?.status === 'needs_converter') warnings.push('DWG 自动转换缺少 ODA 转换器，建议上传 DXF 或安装转换器。')
@@ -888,12 +1050,110 @@ const selectedEditableItem = computed<SelectedEditableItem | null>(() => {
   if (calibration) return { kind: 'calibration', label: '校准点', item: calibration }
   return null
 })
+const collectionPlaces = computed(() => {
+  const featureCandidates = [
+    ...areas.value.map((item) => ({ ...item, featureKind: 'area' })),
+    ...pois.value.map((item) => ({ ...item, featureKind: 'poi' })),
+  ]
+  const normalizedFeatures = featureCandidates.map((feature) => {
+    const project = projectCatalog.value.find((candidate) =>
+      (feature.placeId && catalogPlaceId(candidate, currentRegionId()) === String(feature.placeId))
+        || (candidate.artworkFeatureKey && String(candidate.artworkFeatureKey) === String(feature.id)),
+    )
+    const placeId = project ? catalogPlaceId(project, currentRegionId()) : String(feature.placeId || feature.id)
+    return { ...project, ...feature, placeId, id: placeId, featureId: feature.id, catalogBacked: Boolean(project) }
+  })
+  const catalogOnly = projectCatalog.value.filter((project) => {
+    const placeId = catalogPlaceId(project, currentRegionId())
+    return !normalizedFeatures.some((feature) => feature.placeId === placeId)
+  }).map((project) => {
+    const placeId = catalogPlaceId(project, currentRegionId())
+    return { ...project, placeId, id: placeId, featureId: '', catalogBacked: true }
+  })
+  return [...new Map([...catalogOnly, ...normalizedFeatures].map((item) => [String(item.placeId || item.id), item])).values()]
+})
+const collectionFeatures = computed(() => routes.value.map((route) => ({
+  id: String(route.id),
+  title: String(route.title || '未命名路线'),
+  kind: 'route',
+})))
+const releaseCockpit = computed(() => buildCampusReleaseCockpit({
+  places: collectionPlaces.value,
+  features: [...pois.value, ...areas.value],
+  routes: routes.value,
+  qualityChecks: mapQualityChecks.value,
+  activeVersion: workflow.activeVersion,
+  publishedPlaceCount: livePublication.publicPlaceCount,
+  publicationVerified: livePublication.verified,
+  hasUnsavedChanges: hasUnsavedChanges.value,
+}))
+
+async function openPlaceCollectionTask(item: any) {
+  const placeId = String(item?.placeId || '').trim()
+  if (!placeId) {
+    ElMessage.warning('请先把这个图形绑定到地点档案，再派骑手核验')
+    return
+  }
+  collectionDrawerVisible.value = true
+  await nextTick()
+  collectionDrawerRef.value?.openTaskForm({
+    name: `核验 ${item.officialNumber ? `#${item.officialNumber} ` : ''}${item.officialName || item.title || '校园地点'}`,
+    instructions: '请到现场采集准确坐标、校内地址、建设/开放状态、主入口和现场照片。',
+    status: 'draft',
+    taskType: 'place_verification',
+    objectTypes: ['place_verification'],
+    targetPlaceIds: [placeId],
+    targetFeatureIds: [],
+    assignments: [],
+    priority: 2,
+  })
+}
+
+async function openRouteCollectionTask(item: any) {
+  const featureId = String(item?.id || '').trim()
+  if (!featureId) return
+  collectionDrawerVisible.value = true
+  await nextTick()
+  collectionDrawerRef.value?.openTaskForm({
+    name: `采集路线：${item.title || '未命名路线'}`,
+    instructions: '请沿地图高亮路线完整行走采集；每个路口添加沿途旁注，单段结束后提交，避免把多条道路混在同一会话。',
+    status: 'draft',
+    taskType: 'route_collection',
+    objectTypes: ['road'],
+    targetPlaceIds: [],
+    targetFeatureIds: [featureId],
+    assignments: [],
+    priority: 2,
+  })
+}
+
+function projectForFeature(feature: any) {
+  return projectCatalog.value.find((candidate) =>
+    (feature.placeId && catalogPlaceId(candidate, currentRegionId()) === String(feature.placeId))
+      || (candidate.artworkFeatureKey && String(candidate.artworkFeatureKey) === String(feature.id)),
+  )
+}
+
+function resolvedCampusProjectMetadata(feature: any) {
+  const project = projectForFeature(feature)
+  if (!project) return pickCampusProjectMetadata(feature)
+  return {
+    ...pickCampusProjectMetadata(project),
+    ...pickCampusProjectMetadata(feature),
+    placeId: catalogPlaceId(project, currentRegionId()),
+    artworkFeatureKey: String(project.artworkFeatureKey || feature.id || ''),
+  }
+}
 
 watch(() => props.regionId, () => {
   resetDrafts()
-  loadProjectCatalog()
+  projectCatalog.value = []
   loadMap()
 }, { immediate: true })
+
+watch(() => form.mapId, (mapId, previousMapId) => {
+  if (mapId && mapId !== previousMapId && currentRegionId()) loadProjectCatalog(true)
+})
 
 watch(() => form.imageUrl, (value) => {
   if (value) syncImageSize(value)
@@ -998,18 +1258,26 @@ function handleMapKeydown(event: KeyboardEvent) {
 const calibrationPickerVisible = ref(false)
 
 function openCalibrationPicker() {
-  if (!selectedEditableItem.value || selectedEditableItem.value.kind !== 'calibration') return
+  if (!selectedEditableItem.value || !['poi', 'calibration'].includes(selectedEditableItem.value.kind)) return
+  calibrationPickerVisible.value = true
+}
+
+function openCoordinatePicker() {
+  if (!selectedEditableItem.value || !['poi', 'calibration'].includes(selectedEditableItem.value.kind)) {
+    ElMessage.info('请先在画师矢量图上选择一个地点或校准点，再设置真实坐标')
+    return
+  }
   calibrationPickerVisible.value = true
 }
 
 function handleCalibrationLocationPicked(location: any) {
   const selected = selectedEditableItem.value
-  if (!selected || selected.kind !== 'calibration') return
+  if (!selected || !['poi', 'calibration'].includes(selected.kind)) return
   recordMapHistory()
   selected.item.longitude = roundLngLat(Number(location.longitude))
   selected.item.latitude = roundLngLat(Number(location.latitude))
   if (editorMode.value === 'amap') refreshAmapOverlays()
-  ElMessage.success('校准点坐标已更新')
+  ElMessage.success(selected.kind === 'poi' ? '地点真实坐标已更新' : '校准点坐标已更新')
 }
 
 function currentRegionId() {
@@ -1049,6 +1317,87 @@ function openAssistantDrawer() {
   assistantDrawerVisible.value = true
 }
 
+function handleReleaseStage(stage: string) {
+  if (!['binding', 'verification', 'candidate', 'version', 'online'].includes(stage)) return
+  releaseStage.value = stage as ReleaseStageKey
+  selectedId.value = ''
+}
+
+function handleReleaseAction(action: ReleaseAction) {
+  if (action === 'catalog') {
+    catalogDrawerVisible.value = true
+    return
+  }
+  if (action === 'collection') {
+    collectionDrawerVisible.value = true
+    return
+  }
+  if (action === 'save') {
+    saveDraft()
+    return
+  }
+  if (action === 'quality' || !publishReadiness.value.canPublish) {
+    openQualityDrawer()
+    return
+  }
+  publishMap()
+}
+
+function handleReleaseIssue(issue: any) {
+  const featureId = String(issue?.featureId || '')
+  if (featureId) {
+    if (areas.value.some((item) => String(item.id) === featureId)) selectLayerItem('area', featureId)
+    else if (pois.value.some((item) => String(item.id) === featureId)) selectLayerItem('poi', featureId)
+    else if (routes.value.some((item) => String(item.id) === featureId)) selectLayerItem('route', featureId)
+  }
+
+  if (issue?.action === 'catalog') {
+    catalogDrawerVisible.value = true
+    return
+  }
+  if (issue?.action === 'collection') {
+    const stablePlaceId = String(issue?.placeId || '')
+    const place = collectionPlaces.value.find((item) => String(item.placeId || item.id) === stablePlaceId)
+    if (place?.placeId) {
+      openPlaceCollectionTask(place)
+      return
+    }
+    collectionDrawerVisible.value = true
+    return
+  }
+  if (['quality', 'publish'].includes(String(issue?.action || ''))) {
+    handleReleaseAction(issue.action as ReleaseAction)
+  }
+}
+
+async function handleOperationsCommand(command: string) {
+  if (command === 'import') {
+    await openImportDrawer()
+    return
+  }
+  if (command === 'catalog') {
+    catalogDrawerVisible.value = true
+    return
+  }
+  if (command === 'preview') {
+    openPreviewDrawer()
+    return
+  }
+  if (command === 'versions') {
+    versionDrawerVisible.value = true
+    return
+  }
+  if (command === 'advanced') {
+    openAdvancedDrawer()
+    return
+  }
+  if (command === 'refresh') {
+    await loadMap()
+    return
+  }
+  if (command === 'disable') await disableMap()
+}
+
 async function openImportDrawer() {
   importDrawerVisible.value = true
   await Promise.all([loadImportJobs(), loadConverterStatus()])
@@ -1076,7 +1425,7 @@ function runAssistantAction(action: AssistantAction) {
   if (action === 'poi' || action === 'area' || action === 'route' || action === 'calibration') {
     setToolMode(action)
     assistantDrawerVisible.value = false
-    if (action === 'calibration') ElMessage.info('请在地图上添加至少 2 个校准点')
+    if (action === 'calibration') ElMessage.info('请在校园四周添加至少 4 个分散的校准点，建议采集 6 至 8 个')
     return
   }
   if (action === 'preview') {
@@ -1126,26 +1475,221 @@ function syncSelectedAvailability(status: 'open' | 'unopened') {
   }))
 }
 
-function handleAssignProject(officialNumber: number) {
-  const selected = selectedEditableItem.value
-  if (!selected || (selected.kind !== 'poi' && selected.kind !== 'area')) return
-  const project = projectCatalog.value.find((item) => Number(item.officialNumber) === Number(officialNumber))
-  if (!project) return
-  recordMapHistory()
-  Object.assign(selected.item, applyCampusProject(selected.item, project, selected.kind))
-  applySemanticFields(selected.item, selected.item.semanticType)
-  ElMessage.success(`已分配 #${project.officialNumber} ${project.officialName}`)
+function buildArtworkBinding(selected: SelectedEditableItem) {
+  const item = selected.item
+  if (selected.kind === 'poi') {
+    const coordinates = toMapCoordinate(item)
+    return {
+      artworkAnchorX: coordinates[0],
+      artworkAnchorY: coordinates[1],
+      artworkGeometry: { type: 'Point', coordinates },
+      geometryStatus: 'verified_point',
+    }
+  }
+  const coordinates = (item.points || []).map(toMapCoordinate)
+  if (coordinates.length < 3) return null
+  const anchor = coordinates.reduce((sum: number[], point: number[]) => [sum[0] + point[0], sum[1] + point[1]], [0, 0])
+    .map((value: number) => Number((value / coordinates.length).toFixed(8)))
+  const ring = coordinates.map((point: number[]) => [...point])
+  const first = ring[0]
+  const last = ring[ring.length - 1]
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) ring.push([...first])
+  return {
+    artworkAnchorX: anchor[0],
+    artworkAnchorY: anchor[1],
+    artworkGeometry: { type: 'Polygon', coordinates: [ring] },
+    geometryStatus: 'verified_polygon',
+  }
 }
 
-async function loadProjectCatalog() {
-  if (projectCatalog.value.length) return
+async function handleAssignPlace(placeId: string) {
+  const selected = selectedEditableItem.value
+  if (!selected || (selected.kind !== 'poi' && selected.kind !== 'area')) return
+  if (!placeId) {
+    const currentProject = projectCatalog.value.find((item) =>
+      catalogPlaceId(item, currentRegionId()) === String(selected.item.placeId || '')
+        || Number(item.officialNumber) === Number(selected.item.officialNumber),
+    )
+    if (!currentProject) return
+    try {
+      const res: any = await upsertCampusMapProject(currentProject.officialNumber, {
+        ...currentProject,
+        artworkFeatureKey: '',
+        artworkAnchorX: null,
+        artworkAnchorY: null,
+        artworkGeometry: {},
+        geometryStatus: 'unmatched',
+      }, currentRegionId(), form.mapId)
+      const updated = res?.data || res || {}
+      const idx = projectCatalog.value.findIndex((item) => catalogPlaceId(item, currentRegionId()) === catalogPlaceId(currentProject, currentRegionId()))
+      if (idx >= 0) projectCatalog.value[idx] = { ...currentProject, ...updated }
+      recordMapHistory()
+      Object.assign(selected.item, {
+        placeId: '', artworkFeatureKey: '', officialNumber: undefined, officialName: '', geometryStatus: 'unmatched',
+      })
+      ElMessage.success('已解除地点档案与图形的绑定')
+    } catch (error: any) {
+      ElMessage.error(error?.message || '解除绑定失败，图上数据未改变')
+    }
+    return
+  }
+  const project = projectCatalog.value.find((item) => catalogPlaceId(item, currentRegionId()) === String(placeId))
+  if (!project) return
+  const currentlyBoundProject = projectForFeature(selected.item)
+  if (currentlyBoundProject
+    && catalogPlaceId(currentlyBoundProject, currentRegionId()) !== catalogPlaceId(project, currentRegionId())) {
+    ElMessage.warning(`该图形已绑定 #${currentlyBoundProject.officialNumber} ${currentlyBoundProject.officialName}，请先清除绑定再重新选择`)
+    return
+  }
+  const binding = buildArtworkBinding(selected)
+  if (!binding) {
+    ElMessage.warning('建筑轮廓至少需要 3 个有效点，暂时不能绑定')
+    return
+  }
   try {
-    const res: any = await fetchCampusMapProjectCatalog()
-    const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
-    projectCatalog.value = list
+    const res: any = await upsertCampusMapProject(project.officialNumber, {
+      ...project,
+      artworkFeatureKey: selected.item.id,
+      ...binding,
+    }, currentRegionId(), form.mapId)
+    const updated = { ...project, ...(res?.data || res || {}), artworkFeatureKey: selected.item.id, ...binding }
+    const idx = projectCatalog.value.findIndex((item) => catalogPlaceId(item, currentRegionId()) === String(placeId))
+    if (idx >= 0) projectCatalog.value[idx] = updated
+    recordMapHistory()
+    Object.assign(selected.item, applyCampusProject(selected.item, updated, selected.kind))
+    applySemanticFields(selected.item, selected.item.semanticType)
+    ElMessage.success(`已绑定 #${project.officialNumber} ${project.officialName}，锚点已写入地点档案`)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '地点绑定保存失败，图上数据未改变')
+  }
+}
+
+function focusCatalogPlace(placeId: string) {
+  const project = projectCatalog.value.find((candidate) =>
+    catalogPlaceId(candidate, currentRegionId()) === String(placeId),
+  )
+  const item = [...areas.value, ...pois.value].find((candidate) =>
+    String(candidate.placeId || '') === String(placeId)
+      || (project?.artworkFeatureKey && String(candidate.id) === String(project.artworkFeatureKey)),
+  )
+  if (!item) {
+    ElMessage.warning('这个地点还没有绑定图上点位或建筑轮廓')
+    return
+  }
+  catalogDrawerVisible.value = false
+  selectedId.value = item.id
+  toolMode.value = 'select'
+  ElMessage.success('已在图上定位到该地点')
+}
+
+async function handleRemovePhoto(officialNumber: number, url: string) {
+  try {
+    const res: any = await removeCampusMapProjectPhoto(officialNumber, url, currentRegionId(), form.mapId)
+    const updated = res?.data || res
+    const idx = projectCatalog.value.findIndex((p) => p.officialNumber === officialNumber)
+    if (idx >= 0 && updated && typeof updated === 'object') {
+      projectCatalog.value[idx] = { ...projectCatalog.value[idx], ...updated }
+    }
+    ElMessage.success('照片已删除')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '删除照片失败')
+  }
+}
+
+function handlePhotoAdded(officialNumber: number, url: string) {
+  const idx = projectCatalog.value.findIndex((p) => p.officialNumber === officialNumber)
+  if (idx >= 0) {
+    const existing = Array.isArray(projectCatalog.value[idx].photos) ? projectCatalog.value[idx].photos : []
+    projectCatalog.value[idx] = { ...projectCatalog.value[idx], photos: [...existing, url] }
+  }
+}
+
+function handleProjectUpdated(project: any) {
+  const projectId = catalogPlaceId(project, currentRegionId())
+  const idx = projectCatalog.value.findIndex((item) =>
+    catalogPlaceId(item, currentRegionId()) === projectId
+      || Number(item.officialNumber) === Number(project.officialNumber),
+  )
+  if (idx >= 0) projectCatalog.value[idx] = { ...projectCatalog.value[idx], ...project }
+}
+
+function handleCatalogChanged(items?: any[]) {
+  if (Array.isArray(items)) {
+    const nextNumbers = new Set(items.map((item) => Number(item.officialNumber)).filter(Number.isInteger))
+    const nextPlaceIds = new Set(items.map((item) => catalogPlaceId(item, currentRegionId())).filter(Boolean))
+    const wasManaged = (item: any) => Number.isInteger(Number(item.officialNumber))
+      || Boolean(item.placeId && projectCatalog.value.some((project) => catalogPlaceId(project, currentRegionId()) === String(item.placeId)))
+    const remainsManaged = (item: any) => nextNumbers.has(Number(item.officialNumber))
+      || nextPlaceIds.has(String(item.placeId || ''))
+    pois.value = pois.value.filter((item) => !wasManaged(item) || remainsManaged(item))
+    areas.value = areas.value.filter((item) => !wasManaged(item) || remainsManaged(item))
+    projectCatalog.value = items
+    synchronizeCatalogArtworkPois()
+    return
+  }
+  loadProjectCatalog(true)
+}
+
+async function loadProjectCatalog(force = false) {
+  if (projectCatalog.value.length && !force) return
+  const seq = ++projectCatalogLoadSeq
+  const regionId = currentRegionId()
+  const mapId = form.mapId
+  if (!regionId) {
+    projectCatalog.value = []
+    return
+  }
+  try {
+    const list = await fetchProjectCatalogOnce(regionId, mapId)
+    if (seq === projectCatalogLoadSeq && String(regionId) === String(currentRegionId())) {
+      projectCatalog.value = list
+    }
   } catch (error) {
     console.error('校园官方项目目录加载失败:', error)
   }
+}
+
+function synchronizeCatalogArtworkPois() {
+  const previousLock = historyLocked.value
+  historyLocked.value = true
+  projectCatalog.value.forEach((project) => {
+    const placeId = catalogPlaceId(project, currentRegionId())
+    const number = Number(project.officialNumber)
+    const existing = pois.value.find((item) =>
+      (placeId && String(item.placeId || '') === placeId)
+        || (Number.isInteger(number) && Number(item.officialNumber) === number),
+    )
+    if (existing) {
+      Object.assign(existing, applyCampusProject(existing, project, 'poi'))
+      const positioned = withArtworkPoint({ ...existing, ...project })
+      if (positioned) Object.assign(existing, positioned)
+      return
+    }
+    const positioned = withArtworkPoint(project)
+    if (!positioned) return
+    const item = applySemanticFields(applyCampusProject({
+      id: String(project.artworkFeatureKey || `artwork-place-${number}`),
+      title: String(project.officialName || `地点 ${number}`),
+      category: String(project.semanticType || 'building'),
+      semanticType: String(project.semanticType || 'building'),
+      serviceStatus: String(project.serviceStatus || 'unknown'),
+      ...positioned,
+    }, project, 'poi'), project.semanticType) as PoiItem
+    pois.value.push(item)
+  })
+  nextTick(() => {
+    historyLocked.value = previousLock
+    if (!previousLock) hasUnsavedChanges.value = false
+  })
+}
+
+async function handleCollectionDraftChanged() {
+  if (hasUnsavedChanges.value) {
+    ElMessage.warning('地图工作台仍有未保存编辑，未自动覆盖；请先保存或撤销后再刷新草稿')
+    return
+  }
+  await Promise.all([loadMap(), loadProjectCatalog(true)])
+  ElMessage.info('已重新加载骑手审核合并后的地图草稿；请预览确认后再人工发布')
 }
 
 function importStatusLabel(status: CampusMapImportJob['status']) {
@@ -1578,10 +2122,9 @@ async function initAmapWorkbench() {
 }
 
 function handleEditorModeChange(value: EditorMode) {
-  editorMode.value = value
-  if (value === 'amap') {
-    nextTick(() => initAmapWorkbench())
-  }
+  // 兼容旧组件事件，但不允许运营界面再切回高德主画面。
+  editorMode.value = 'image'
+  if (value === 'amap') openCoordinatePicker()
 }
 
 function handleAmapClick(event: any) {
@@ -2103,7 +2646,7 @@ function buildFeatureCollection(features: any[]) {
 }
 
 function buildPayload() {
-  if (editorMode.value === 'amap') return buildAmapPayload()
+  if (sourceCoordinateMode.value === 'amap') return buildAmapPayload()
   const width = Math.max(Number(form.mapWidth) || 1200, 100)
   const height = Math.max(Number(form.mapHeight) || 800, 100)
   const poiFeatures = pois.value.map((poi) => ({
@@ -2117,7 +2660,7 @@ function buildPayload() {
       color: poi.color || semanticMeta(poi).color,
       sourceLayer: poi.sourceLayer || undefined,
       Text: poi.title || '点位',
-      ...pickCampusProjectMetadata(poi),
+      ...resolvedCampusProjectMetadata(poi),
       ...normalizeBuildingAvailability(poi),
     },
     geometry: {
@@ -2140,7 +2683,7 @@ function buildPayload() {
           icon: area.icon || semanticMeta(area).icon,
           color: area.color || semanticMeta(area).color,
           sourceLayer: area.sourceLayer || undefined,
-          ...pickCampusProjectMetadata(area),
+          ...resolvedCampusProjectMetadata(area),
           ...normalizeBuildingAvailability(area),
         },
         geometry: {
@@ -2154,6 +2697,7 @@ function buildPayload() {
     .map((route) => ({
       type: 'Feature',
       properties: {
+        ...(route.sourceProperties || {}),
         id: route.id,
         title: route.title || '路线',
         category: route.category || 'walk',
@@ -2210,7 +2754,7 @@ function buildPayload() {
       opacity: form.opacity,
     },
     positioning: {
-      enabled: publishedCalibrationPoints.length >= 2,
+      enabled: publishedCalibrationPoints.length >= 3 && hasNonCollinearCalibration(publishedCalibrationPoints),
       coordinateType: 'gcj02',
       permissionPurpose: '用于在校园地图中显示你所在的位置，并计算到目标地点的距离',
       calibrationPoints: publishedCalibrationPoints,
@@ -2250,6 +2794,7 @@ function buildPayload() {
 
 function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | AreaItem | RouteItem) {
   const properties = {
+    ...(kind === 'route' ? ((item as RouteItem).sourceProperties || {}) : {}),
     id: item.id,
     title: item.title || (kind === 'poi' ? '点位' : kind === 'area' ? '区域' : '路线'),
       category: item.category || (kind === 'poi' ? 'building' : kind === 'area' ? 'teaching' : 'walk'),
@@ -2258,7 +2803,7 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
       color: (item as any).color || semanticMeta(item).color,
       sourceLayer: (item as any).sourceLayer || undefined,
       provider: 'amap',
-      ...pickCampusProjectMetadata(item),
+      ...resolvedCampusProjectMetadata(item),
       ...(kind === 'route' ? {} : normalizeBuildingAvailability(item)),
     coordinateType: 'gcj02',
     Text: item.title || '',
@@ -2506,9 +3051,10 @@ async function loadMap() {
   if (!currentRegionId()) return
   loading.value = true
   try {
-    const [config, statusesResponse]: any[] = await Promise.all([
+    const [config, statusesResponse, activeConfig]: any[] = await Promise.all([
       fetchRegionCampusMap(currentRegionId()),
       fetchCampusMapStatuses().catch(() => []),
+      fetchActiveCampusMap(currentRegionId()).catch(() => null),
     ])
     const statuses = Array.isArray(statusesResponse?.data)
       ? statusesResponse.data
@@ -2519,6 +3065,10 @@ async function loadMap() {
       ? currentStatus.publishedStatus
       : 'unconfigured'
     applyMapConfig(config?.data || config)
+    if (activeConfig) applyLivePublication(activeConfig)
+    else livePublication.verified = false
+    await loadProjectCatalog(true)
+    synchronizeCatalogArtworkPois()
   } catch (error: any) {
     ElMessage.error(error?.message || '校园地图加载失败')
   } finally {
@@ -2563,6 +3113,13 @@ async function publishMap() {
   if (!(await validateBeforePublish())) return
   saving.value = true
   try {
+    const beforePublication = {
+      workflow: {
+        activeVersion: workflow.activeVersion,
+        activeVersionId: workflow.activeVersionId,
+      },
+      publicPlaces: Array.from({ length: livePublication.publicPlaceCount }),
+    }
     const draft = await saveDraft({ silent: true })
     if (!draft) return
     const revision = Number(draft.workflow?.draftRevision || workflow.draftRevision)
@@ -2571,7 +3128,14 @@ async function publishMap() {
     applyWorkflow(config.workflow)
     publishedAvailabilityStatus.value = normalizeSchoolAvailability(config?.availability).status
     hasUnsavedChanges.value = false
-    ElMessage.success('校园地图已发布')
+    const activeConfig: any = await fetchActiveCampusMap(currentRegionId())
+    const verification = verifyCampusMapPublication(beforePublication, config, activeConfig)
+    applyLivePublication(activeConfig)
+    if (!verification.ok) {
+      ElMessage.error(`发布接口已完成，但用户端校验未通过：${verification.issues.join('；')}`)
+      return
+    }
+    ElMessage.success(`校园地图已正式发布：线上 v${verification.live.activeVersion}，公开地点 ${verification.live.publicPlaceCount} 个`)
   } catch (error: any) {
     ElMessage.error(error?.message || '校园地图发布失败')
   } finally {
@@ -2619,7 +3183,8 @@ function applyMapConfig(config: any = {}) {
   }
   if (amapConfig.city) amapDefaults.city = String(amapConfig.city)
 
-  editorMode.value = isAmapConfig ? 'amap' : 'image'
+  sourceCoordinateMode.value = isAmapConfig ? 'amap' : 'image'
+  editorMode.value = 'image'
   form.enabled = config.enabled !== false
   const availability = normalizeSchoolAvailability(config.availability)
   form.availabilityStatus = availability.status
@@ -2627,14 +3192,13 @@ function applyMapConfig(config: any = {}) {
   form.title = config.title || '校园地图'
   form.mapId = config.mapId || `campus-map-${currentRegionId() || 'region'}`
   form.version = config.version || ''
-  form.imageUrl = imageMap.imageUrl || imageMap.url || ''
-  form.mapWidth = Number(imageMap.width || config.renderBBox?.[2] || config.bbox?.[2] || 1200)
-  form.mapHeight = Number(imageMap.height || config.renderBBox?.[3] || config.bbox?.[3] || 800)
-  form.opacity = Number(imageMap.opacity || 1)
+  form.imageUrl = ARTWORK_URL
+  form.mapWidth = illustratedArtworkBounds[2]
+  form.mapHeight = illustratedArtworkBounds[3]
+  form.opacity = 1
   const layers = Array.isArray(config.layers) ? config.layers : []
-  const hasLayerFeatures = layers.some((layer: any) => getLayerFeatures(layer).length > 0)
   const coordinateType = String(config.coordinateSystem?.type || '').toLowerCase()
-  hasVectorBaseMap.value = !isAmapConfig && !form.imageUrl && (coordinateType === 'cad-vector' || hasLayerFeatures)
+  hasVectorBaseMap.value = !isAmapConfig && coordinateType === 'cad-vector'
   vectorCoordinateSystem.value = hasVectorBaseMap.value ? (config.coordinateSystem || { type: 'cad-vector' }) : null
   pois.value = isAmapConfig
     ? parseAmapPoiLayer(layers.find((layer: any) => layer.id === 'operator_pois'))
@@ -2646,9 +3210,6 @@ function applyMapConfig(config: any = {}) {
     ? parseAmapRouteLayer(layers.find((layer: any) => layer.id === 'operator_routes'))
     : parseRouteLayer(layers.find((layer: any) => layer.id === 'operator_routes'))
   calibrationPoints.value = parseCalibrationPoints(config.positioning)
-  if (isAmapConfig) {
-    nextTick(() => initAmapWorkbench())
-  }
   nextTick(() => {
     historyLocked.value = false
     hasUnsavedChanges.value = false
@@ -2784,6 +3345,7 @@ function parseRouteLayer(layer: any): RouteItem[] {
         icon: String(properties.icon || 'route'),
         color: String(properties.color || '#f97316'),
         sourceLayer: String(properties.sourceLayer || ''),
+        sourceProperties: { ...properties },
         points,
       }
     })
@@ -2805,6 +3367,7 @@ function parseAmapRouteLayer(layer: any): RouteItem[] {
         icon: String(properties.icon || 'route'),
         color: String(properties.color || '#f97316'),
         sourceLayer: String(properties.sourceLayer || ''),
+        sourceProperties: { ...properties },
         points,
       }
     })
@@ -2828,6 +3391,11 @@ function parseCalibrationPoints(positioning: any): CalibrationPoint[] {
 }
 
 function syncImageSize(url: string) {
+  if (String(url || '').includes('cqcx-campus-map.svg')) {
+    form.mapWidth = illustratedArtworkBounds[2]
+    form.mapHeight = illustratedArtworkBounds[3]
+    return
+  }
   const image = new Image()
   image.onload = () => {
     if (image.naturalWidth && image.naturalHeight) {
@@ -2846,52 +3414,12 @@ function syncImageSize(url: string) {
   width: 100%;
 }
 
-.map-action-bar {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-  gap: 14px;
-  align-items: center;
-  padding: 16px 18px;
-  border: 1px solid rgba(203, 213, 225, .9);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .92);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, .06);
-}
-
-.map-title-block {
-  min-width: 0;
-}
-
-.map-action-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: #475569;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.map-action-status span {
-  border: 1px solid #dbe4f0;
-  border-radius: 999px;
-  padding: 5px 9px;
-  background: #f8fafc;
-}
-
-.map-action-status .warning {
-  border-color: #fed7aa;
-  background: #fff7ed;
-  color: #c2410c;
-}
-
 .painter-shell {
   padding: 14px;
   border-color: rgba(203, 213, 225, .88);
   background: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(248, 250, 252, .94));
 }
 
-.head-actions,
 .map-top-strip,
 .toolbar-left,
 .toolbar-right,
@@ -3970,16 +4498,6 @@ function syncImageSize(url: string) {
   width: 100%;
 }
 
-@media (max-width: 1280px) {
-  .map-action-bar {
-    grid-template-columns: 1fr;
-  }
-
-  .map-action-status {
-    flex-wrap: wrap;
-  }
-}
-
 @media (max-width: 1180px) {
   .map-editor-layout {
     grid-template-columns: 1fr;
@@ -3997,7 +4515,6 @@ function syncImageSize(url: string) {
 }
 
 @media (max-width: 720px) {
-  .map-action-bar,
   .painter-shell {
     padding: 12px;
   }
@@ -4024,5 +4541,35 @@ function syncImageSize(url: string) {
   .amap-drawing-map {
     height: 460px;
   }
+}
+
+.svg-overlay-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.svg-overlay-sliders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  flex-wrap: wrap;
+}
+
+.svg-slider-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+.amap-stage {
+  position: relative;
 }
 </style>

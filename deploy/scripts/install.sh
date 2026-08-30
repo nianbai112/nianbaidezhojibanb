@@ -15,6 +15,8 @@ BACKEND_DIR="$APP_ROOT/backend"
 ADMIN_DIST="$APP_ROOT/admin/dist"
 SITE_DIST="$APP_ROOT/site/dist"
 PM2_NAME="${PM2_NAME:-lingmeng-backend}"
+PM2_WORKER_NAME="${PM2_WORKER_NAME:-lingmeng-worker}"
+PM2_REALTIME_NAME="${PM2_REALTIME_NAME:-lingmeng-realtime}"
 VERSION="$(cat "$PACKAGE_ROOT/VERSION" 2>/dev/null || cat "$PACKAGE_ROOT/deploy/VERSION")"
 
 echo "== Lingmeng self-hosted $VERSION install =="
@@ -135,8 +137,55 @@ else
   echo "DATABASE_URL is empty; database initialization remains in the protected setup wizard."
 fi
 
-APP_ROOT="$APP_ROOT" PM2_NAME="$PM2_NAME" pm2 start "$APP_ROOT/ecosystem.config.cjs" --only "$PM2_NAME" --update-env
+# Prisma CLI and build/test tooling are needed above, but not by the running service.
+npm prune --omit=dev --no-audit --no-fund
+
+APP_ROOT="$APP_ROOT" \
+PM2_NAME="$PM2_NAME" \
+PM2_WORKER_NAME="$PM2_WORKER_NAME" \
+PM2_REALTIME_NAME="$PM2_REALTIME_NAME" \
+pm2 startOrReload "$APP_ROOT/ecosystem.config.cjs" --update-env
 pm2 save
+
+check_url() {
+  node - "$1" <<'NODE'
+const http = require('node:http');
+const url = process.argv[2];
+const request = http.get(url, (response) => {
+  response.resume();
+  process.exit(response.statusCode >= 200 && response.statusCode < 300 ? 0 : 1);
+});
+request.setTimeout(3000, () => request.destroy(new Error('timeout')));
+request.on('error', () => process.exit(1));
+NODE
+}
+
+api_port="$(read_env PORT)"
+realtime_port="$(read_env REALTIME_PORT)"
+api_port="${api_port:-3000}"
+realtime_port="${realtime_port:-3001}"
+health_urls=(
+  "http://127.0.0.1:$api_port/healthz"
+  "http://127.0.0.1:$realtime_port/healthz"
+  "http://127.0.0.1:$api_port/healthz/services"
+)
+health_ready=""
+for _attempt in $(seq 1 10); do
+  health_ready="1"
+  for health_url in "${health_urls[@]}"; do
+    if ! check_url "$health_url"; then
+      health_ready=""
+      break
+    fi
+  done
+  if [ -n "$health_ready" ]; then break; fi
+  sleep 2
+done
+if [ -z "$health_ready" ]; then
+  echo "API / Worker / Realtime health checks failed."
+  exit 1
+fi
+for health_url in "${health_urls[@]}"; do echo "OK  $health_url"; done
 
 echo "Application files installed."
 echo "Setup token is stored only in $BACKEND_DIR/.env"

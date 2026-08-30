@@ -1,0 +1,1 @@
+SET @lm_sql = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'campus_map_collection_tasks' AND column_name = 'targetFeatureIds'), 'SELECT 1', 'ALTER TABLE `campus_map_collection_tasks` ADD COLUMN `targetFeatureIds` JSON NULL AFTER `targetPlaceIds`'); PREPARE lm_stmt FROM @lm_sql; EXECUTE lm_stmt; DEALLOCATE PREPARE lm_stmt;

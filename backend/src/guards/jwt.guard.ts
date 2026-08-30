@@ -85,21 +85,26 @@ export class JwtGuard implements CanActivate {
     const path = String(request.path || request.url || '').split('?')[0]
       .replace(/\/+/g, '/')
       .replace(/\/$/, '');
+    const isRoute = (route: string) => path === route || path === `/api${route}`;
 
     // GET 查询自身封禁状态 - 用户需要知道自己被封禁
-    if (method === 'GET' && path.includes('/auth/user/current-ban-status')) {
+    if (method === 'GET' && isRoute('/auth/user/current-ban-status')) {
       return true;
     }
     // GET 自身 profile（基础信息）
-    if (method === 'GET' && path.includes('/auth/me')) {
+    if (method === 'GET' && isRoute('/auth/me')) {
       return true;
     }
     // AUD-P1-180: GET 查询自助解封配置 - 封禁用户需要看到解封费用
-    if (method === 'GET' && path.includes('/auth/user/self-unban-config')) {
+    if (method === 'GET' && isRoute('/auth/user/self-unban-config')) {
+      return true;
+    }
+    // POST 创建自助解封支付单 - 仅此专用写口允许封禁用户访问，业务层仍会复核状态与金额
+    if (method === 'POST' && isRoute('/auth/user/pay-unban')) {
       return true;
     }
     // AUD-P1-181: POST 注销账号 - 封禁/禁用用户也可以注销
-    if (method === 'POST' && path.includes('/auth/user/cancel-account')) {
+    if (method === 'POST' && isRoute('/auth/user/cancel-account')) {
       return true;
     }
     return false;

@@ -261,7 +261,7 @@ export class RegionService {
       { id: 'merchant', title: '商家中心', description: '入驻与店铺管理', main_image: '/static/logo.png', path: 'pagesA/MerchantManagement/managerial', type: 'internal_jump', navigation_permission: 'merchant', enabled: true, sortOrder: 3 },
       { id: 'dorm_shop_owner', title: '宿舍小店', description: '商品、订单和营业设置', main_image: '/static/logo.png', path: '/pagesA/DormShopOwner/DormShopOwner', type: 'internal_jump', navigation_permission: 'dorm_shop_owner', enabled: true, sortOrder: 4 },
       { id: 'second_hand_manage', title: '我的闲置', description: '发布、下架和处理二手交易', main_image: '/static/logo.png', path: '/pagesC/SecondHand/MySecondHand/MySecondHand', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 5 },
-      { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', main_image: '/static/logo.png', path: '/pages/B/circle-manage', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 6 },
+      { id: 'circle_manage', title: '圈子管理', description: '管理我创建的圈子', main_image: '/static/logo.png', path: '/pagesB/circle-manage/circle-manage', type: 'internal_jump', navigation_permission: 'circle_owner', enabled: true, sortOrder: 6 },
       { id: 'settings', title: '账号设置', description: '资料、隐私和系统设置', main_image: '/static/logo.png', path: 'pages/auth/settings/settings', type: 'internal_jump', navigation_permission: 'unlimited', enabled: true, sortOrder: 7 },
     ];
     const ensureRequiredItems = (sourceItems: any[]) => {
@@ -275,7 +275,7 @@ export class RegionService {
         const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();
         return item?.id === 'circle_manage'
           || this.normalizeNavigationPermission(item?.navigation_permission || item?.navigationPermission || '') === 'circle_owner'
-          || path.includes('pages/B/circle-manage');
+          || path.includes('circle-manage');
       });
       const hasSecondHandManage = sourceItems.some((item: any) => {
         const path = String(item?.path || item?.url || item?.page || item?.link || item?.mini_program?.path || '').trim();

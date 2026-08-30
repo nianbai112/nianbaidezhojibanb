@@ -15,6 +15,9 @@ const createService = () => {
       count: jest.fn().mockResolvedValue(0),
     },
     orderLog: { create: jest.fn() },
+    shopDeliveryAssignment: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     product: { updateMany: jest.fn() },
     sKU: { updateMany: jest.fn() },
     productModifierOption: { updateMany: jest.fn() },
@@ -54,6 +57,15 @@ const createService = () => {
     },
     walletTransaction: { create: jest.fn() },
     recharge: { findUnique: jest.fn(), update: jest.fn() },
+    selfUnbanRequest: {
+      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUnique: jest.fn().mockResolvedValue({
+        status: 'pending_payment',
+        banVersion: 3,
+        user: { status: 'BANNED', banVersion: 3 },
+      }),
+    },
   };
   const prisma = {
     order: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
@@ -72,6 +84,10 @@ const createService = () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       count: jest.fn().mockResolvedValue(0),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    selfUnbanRequest: {
+      update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     paymentReservationRelease: { upsert: jest.fn().mockResolvedValue({}) },
@@ -97,6 +113,26 @@ const createService = () => {
 };
 
 describe('PaymentService terminal state and retry identity', () => {
+  it('moves a paid self-unban request into the admin review queue without directly unbanning', async () => {
+    const { service, tx } = createService();
+
+    await (service as any).updateBizOrder(tx, {
+      bizType: 'self_unban',
+      bizId: 'request-1',
+      paymentNo: 'PAY-1',
+    });
+
+    expect(tx.selfUnbanRequest.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'request-1',
+        status: 'pending_payment',
+        banVersion: 3,
+        user: { is: { status: 'BANNED', banVersion: 3 } },
+      },
+      data: expect.objectContaining({ status: 'pending_review', paymentNo: 'PAY-1' }),
+    });
+  });
+
   it('credits recharge exactly once and stores the resulting wallet balance in the ledger', async () => {
     const { service, tx } = createService();
     tx.recharge.findUnique.mockResolvedValue({
@@ -302,6 +338,7 @@ describe('PaymentService terminal state and retry identity', () => {
         userId: 'user-1',
         scene: 'errand_order_refund_success',
         linkValue: '/pagesA/order/errand-detail/errand-detail?id=errand-1',
+        channelMask: { inApp: true, websocket: true, officialAccount: true },
       }),
     );
   });
@@ -332,6 +369,7 @@ describe('PaymentService terminal state and retry identity', () => {
         scene: 'errand_order_refund_rider_success',
         title: '跑腿订单部分退款完成',
         content: expect.stringContaining('继续履约'),
+        channelMask: { inApp: true, websocket: true, officialAccount: true },
       }),
     );
   });
@@ -518,6 +556,212 @@ describe('PaymentService terminal state and retry identity', () => {
     ).resolves.toEqual(expect.objectContaining({ success: true, status: 'processing' }));
 
     expect(notify).toHaveBeenCalledWith(payment, 12.5, '用户取消', 'user-1');
+  });
+
+  it('keeps an accepted self-unban refund reconcilable when local settlement fails', async () => {
+    const { prisma, service, tx } = createService();
+    const payment = {
+      id: 'payment-1',
+      amount: 9.9,
+      refundedAmount: 0,
+      bizType: 'self_unban',
+      bizId: 'unban-1',
+      wxTransId: 'WX-1',
+      status: 'paid',
+      userId: 'user-1',
+    };
+    prisma.paymentOrder.findFirst.mockResolvedValue(payment);
+    prisma.paymentRefund.create.mockResolvedValue({
+      id: 'refund-1',
+      refundNo: 'REF-1',
+    });
+    jest.spyOn(service as any, 'getWxPayConfig').mockResolvedValue({ mchid: 'mch-id' });
+    jest.spyOn(service as any, 'wxPayRequest').mockResolvedValue({ status: 'SUCCESS', refund_id: 'WX-REF-1' });
+    jest.spyOn(service as any, 'notifyShopRefundProcessing').mockResolvedValue(undefined);
+    prisma.$transaction.mockRejectedValueOnce(new Error('local commit failed after provider accepted'));
+
+    await expect(
+      (service as any).refundUnlocked({
+        bizType: 'self_unban',
+        bizId: 'unban-1',
+        amount: 9.9,
+        reason: '审核未通过',
+        operatorId: 'admin-1',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ success: true, status: 'processing' }));
+
+    expect(prisma.paymentRefund.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'refund-1', status: 'pending' },
+        data: expect.objectContaining({ status: 'processing', wxRefundId: 'WX-REF-1' }),
+      }),
+    );
+    expect(prisma.paymentRefund.updateMany.mock.calls.some(([call]: any[]) => call?.data?.status === 'failed')).toBe(false);
+
+    prisma.paymentRefund.findFirst.mockResolvedValue({
+      id: 'refund-1',
+      refundNo: 'REF-1',
+      paymentId: 'payment-1',
+      amount: 9.9,
+      reason: '审核未通过',
+      status: 'processing',
+    });
+    prisma.$transaction.mockImplementation((handler: any) => handler(tx));
+    tx.paymentRefund.updateMany.mockResolvedValue({ count: 1 });
+    tx.paymentOrder.findUnique.mockResolvedValue(payment);
+
+    await (service as any).handleRefundSuccess('REF-1', 'WX-REF-1');
+
+    expect(tx.paymentRefund.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { in: ['pending', 'processing'] } }),
+        data: expect.objectContaining({ status: 'success' }),
+      }),
+    );
+    expect(tx.selfUnbanRequest.update).toHaveBeenCalledWith({
+      where: { id: 'unban-1' },
+      data: { status: 'refunded', activeKey: null },
+    });
+  });
+
+  it('keeps a timed-out WeChat refund non-approvable until its signed success callback', async () => {
+    const { prisma, service, tx } = createService();
+    const payment = {
+      id: 'payment-1',
+      amount: 9.9,
+      refundedAmount: 0,
+      bizType: 'self_unban',
+      bizId: 'unban-1',
+      wxTransId: 'WX-1',
+      status: 'paid',
+      userId: 'user-1',
+    };
+    prisma.paymentOrder.findFirst.mockResolvedValue(payment);
+    prisma.paymentRefund.create.mockResolvedValue({ id: 'refund-1', refundNo: 'REF-TIMEOUT' });
+    jest.spyOn(service as any, 'getWxPayConfig').mockResolvedValue({ mchid: 'mch-id' });
+    jest.spyOn(service as any, 'wxPayRequest').mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+    jest.spyOn(service as any, 'notifyShopRefundProcessing').mockResolvedValue(undefined);
+
+    await expect(
+      (service as any).refundUnlocked({
+        bizType: 'self_unban',
+        bizId: 'unban-1',
+        amount: 9.9,
+        reason: '审核未通过',
+        operatorId: 'admin-1',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ success: true, status: 'processing' }));
+    expect(prisma.paymentRefund.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'refund-1', status: 'pending' },
+        data: expect.objectContaining({ status: 'processing' }),
+      }),
+    );
+
+    prisma.paymentRefund.findFirst.mockResolvedValue({
+      id: 'refund-1',
+      refundNo: 'REF-TIMEOUT',
+      paymentId: 'payment-1',
+      amount: 9.9,
+      reason: '审核未通过',
+      status: 'processing',
+    });
+    prisma.$transaction.mockImplementation((handler: any) => handler(tx));
+    tx.paymentRefund.updateMany.mockResolvedValue({ count: 1 });
+    tx.paymentOrder.findUnique.mockResolvedValue(payment);
+
+    await (service as any).handleRefundSuccess('REF-TIMEOUT', 'WX-REF-1');
+
+    expect(tx.selfUnbanRequest.update).toHaveBeenCalledWith({
+      where: { id: 'unban-1' },
+      data: { status: 'refunded', activeKey: null },
+    });
+  });
+
+  it('automatically refunds a self-unban payment that arrives after manual cancellation', async () => {
+    const { prisma, service, tx } = createService();
+    const payment = {
+      id: 'payment-1',
+      paymentNo: 'PAY-LATE',
+      amount: 9.9,
+      refundedAmount: 0,
+      bizType: 'self_unban',
+      bizId: 'unban-1',
+      status: 'paying',
+      userId: 'user-1',
+    };
+    prisma.paymentOrder.findUnique.mockResolvedValue(payment);
+    tx.selfUnbanRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+    tx.selfUnbanRequest.findUnique.mockResolvedValue({ status: 'cancelled' });
+    const refund = jest.spyOn(service, 'refund').mockResolvedValue({ success: true, status: 'processing' } as any);
+
+    await (service as any).handlePaymentSuccess('PAY-LATE', 'WX-TRANS-1');
+
+    expect(tx.selfUnbanRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'unban-1', status: 'cancelled' },
+      data: { status: 'refunding' },
+    });
+    expect(refund).toHaveBeenCalledWith(expect.objectContaining({
+      bizType: 'self_unban',
+      bizId: 'unban-1',
+      amount: 9.9,
+    }));
+  });
+
+  it('automatically refunds a payment for an older ban cycle instead of awaiting review', async () => {
+    const { prisma, service, tx } = createService();
+    prisma.paymentOrder.findUnique.mockResolvedValue({
+      id: 'payment-1',
+      paymentNo: 'PAY-STALE',
+      amount: 9.9,
+      refundedAmount: 0,
+      bizType: 'self_unban',
+      bizId: 'unban-stale',
+      status: 'paying',
+      userId: 'user-1',
+    });
+    tx.selfUnbanRequest.findUnique.mockResolvedValue({
+      status: 'pending_payment',
+      banVersion: 3,
+      user: { status: 'BANNED', banVersion: 4 },
+    });
+    tx.selfUnbanRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+    const refund = jest.spyOn(service, 'refund').mockResolvedValue({ success: true, status: 'processing' } as any);
+
+    await (service as any).handlePaymentSuccess('PAY-STALE', 'WX-STALE');
+
+    expect(tx.selfUnbanRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'unban-stale', status: 'pending_payment' },
+      data: { status: 'refunding' },
+    });
+    expect(refund).toHaveBeenCalledWith(expect.objectContaining({
+      bizType: 'self_unban',
+      bizId: 'unban-stale',
+    }));
+  });
+
+  it('marks a late self-unban request refund_failed when WeChat explicitly rejects the refund', async () => {
+    const { prisma, service, tx } = createService();
+    prisma.paymentOrder.findUnique.mockResolvedValue({
+      id: 'payment-1',
+      paymentNo: 'PAY-LATE-FAIL',
+      amount: 9.9,
+      refundedAmount: 0,
+      bizType: 'self_unban',
+      bizId: 'unban-1',
+      status: 'paying',
+      userId: 'user-1',
+    });
+    tx.selfUnbanRequest.updateMany.mockResolvedValueOnce({ count: 1 });
+    tx.selfUnbanRequest.findUnique.mockResolvedValue({ status: 'cancelled' });
+    jest.spyOn(service, 'refund').mockRejectedValue(new Error('微信拒绝退款'));
+
+    await (service as any).handlePaymentSuccess('PAY-LATE-FAIL', 'WX-LATE-FAIL');
+
+    expect(prisma.selfUnbanRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: 'unban-1', status: 'refunding' },
+      data: { status: 'refund_failed' },
+    });
   });
 
   it('does not create another refund while the payment has an in-flight refund', async () => {
@@ -951,6 +1195,7 @@ describe('PaymentService refund terminal failures', () => {
       expect.objectContaining({
         userId: 'user-1',
         scene: 'errand_order_refund_failed',
+        channelMask: { inApp: true, websocket: true, officialAccount: true },
       }),
     );
   });
@@ -1303,7 +1548,7 @@ describe('PaymentService manual refund completion', () => {
     expect(tx.merchantSettlement.create).not.toHaveBeenCalled();
   });
 
-  it('removes the full goods settlement for a full refund even when a coupon reduced the paid amount', async () => {
+  it('does not settle a merchant-funded coupon as merchant income', async () => {
     const { service, tx } = createService();
     const completeTime = new Date('2026-07-17T10:00:00.000Z');
     tx.order.findUnique.mockResolvedValue({
@@ -1313,13 +1558,17 @@ describe('PaymentService manual refund completion', () => {
       status: 'COMPLETED',
       completeTime,
       totalAmount: 22,
+      payAmount: 10,
+      subsidyAmount: 0,
+      businessType: 'takeaway',
+      deliveryMode: 'platform_rider',
       originalFreightAmount: 2,
       items: [],
     });
     tx.merchantSettlement.findFirst.mockResolvedValue({
       id: 'settlement-1',
-      amount: 20,
-      platformFee: 2,
+      amount: 8,
+      platformFee: 0.8,
       status: 'completed',
     });
 
@@ -1331,9 +1580,20 @@ describe('PaymentService manual refund completion', () => {
         status: { in: ['pending', 'processing', 'completed', 'failed'] },
       },
       data: {
-        amount: { decrement: 20 },
-        platformFee: { decrement: 2 },
+        amount: { decrement: 8 },
+        platformFee: { decrement: 0.8 },
         orderCount: { decrement: 1 },
+      },
+    });
+    expect(tx.shopDeliveryAssignment.updateMany).toHaveBeenCalledWith({
+      where: {
+        orderId: 'order-1',
+        status: { in: ['pending_accept', 'accepted', 'picked_up'] },
+      },
+      data: {
+        status: 'cancelled',
+        cancelledAt: expect.any(Date),
+        cancelReason: '订单已全额退款',
       },
     });
   });

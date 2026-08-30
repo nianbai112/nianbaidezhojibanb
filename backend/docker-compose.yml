@@ -31,6 +31,8 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      SERVICE_ROLE: api
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,7 +42,63 @@ services:
       - lingmeng-network
     # Health check at the compose level (in addition to Dockerfile HEALTHCHECK)
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz/services"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Scheduled/background work. No HTTP port is exposed.
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lingmeng-worker
+    restart: unless-stopped
+    command: ["node", "dist/src/worker.js"]
+    env_file:
+      - .env
+    environment:
+      SERVICE_ROLE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - lingmeng-network
+    healthcheck:
+      disable: true
+
+  # ---------------------------------------------------------------------------
+  # WebSocket/Socket.IO service. Nginx routes /ws-native and /socket.io here.
+  # ---------------------------------------------------------------------------
+  realtime:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lingmeng-realtime
+    restart: unless-stopped
+    command: ["node", "dist/src/realtime.js"]
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      SERVICE_ROLE: realtime
+      REALTIME_HOST: 0.0.0.0
+      REALTIME_PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - lingmeng-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -90,9 +148,9 @@ services:
     env_file:
       - .env
     environment:
-      # Map .env vars to the names postgres image expects
+      # POSTGRES_PASSWORD is read directly from env_file to avoid a second
+      # Compose interpolation pass for passwords containing `$`.
       POSTGRES_USER:     ${POSTGRES_USER:-lingmeng}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err: POSTGRES_PASSWORD must be set}
       POSTGRES_DB:       ${POSTGRES_DB:-lingmeng_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data

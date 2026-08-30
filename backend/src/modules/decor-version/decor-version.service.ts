@@ -1,20 +1,17 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { AdminService } from '../admin/admin.service';
-import { LayoutConfigService } from '../layout-config/layout-config.service';
 
 /**
  * 装修版本服务：为三个小程序装修编辑器（首页/消息页/我的页）提供
- * 版本快照 / 版本列表 / 一键回滚，覆盖 regions 字段 + tabbar + decor layout，
- * 补齐 layout_config 键体系之外的发布安全闭环。
+ * 版本快照 / 版本列表 / 一键回滚，覆盖 regions 字段 + tabbar。
  *
  * 存储：复用 prisma config 表（避免 migration），key 模式：
  *   decorver_{regionId}_{version}
  * value = { regionId, version, note, operatorId, savedAt, snapshot }
- * snapshot = { regionPayload?, tabbarConfig?, decorLayout? }
+ * snapshot = { regionPayload?, tabbarConfig? }
  *   - regionPayload：与 PUT /admin/regions/:id 相同的字段子集（snake/camel 均可）
  *   - tabbarConfig：与 PUT /admin/regions/tabbar 的 config 相同
- *   - decorLayout：与 PUT /admin/layout/home/:rid 的 { components, settings } 相同
  */
 @Injectable()
 export class DecorVersionService {
@@ -23,7 +20,6 @@ export class DecorVersionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adminService: AdminService,
-    private readonly layoutConfig: LayoutConfigService,
   ) {}
 
   private keyOf(regionId: string, version: number) {
@@ -114,9 +110,8 @@ export class DecorVersionService {
   }
 
   /**
-   * 回滚：把目标版本快照回写到 regions 字段 + tabbar + layout home，
-   * 复用 AdminService.updateRegion / saveRegionTabBar 与
-   * LayoutConfigService.saveDraft + publish 的现有写入链路。
+   * 回滚：把目标版本快照回写到 regions 字段 + tabbar，
+   * 复用 AdminService.updateRegion / saveRegionTabBar 的现有写入链路。
    * 回滚本身也记录为一个新版本，保证历史可审计。
    */
   async rollback(regionId: string, version: number, operatorId: string, ip: string) {
@@ -141,14 +136,7 @@ export class DecorVersionService {
       written.push('tabbar');
     }
 
-    // 3) 自定义版块（decor layout：走 草稿→发布 同一条链路，保证小程序端读取一致）
-    if (snapshot.decorLayout && typeof snapshot.decorLayout === 'object' && Array.isArray(snapshot.decorLayout.components)) {
-      await this.layoutConfig.saveDraft('home', regionId, snapshot.decorLayout, operatorId, ip);
-      await this.layoutConfig.publish('home', regionId, operatorId, ip);
-      written.push('decorLayout');
-    }
-
-    // 4) 回滚本身记录为新版本
+    // 3) 回滚本身记录为新版本
     const result = await this.createSnapshot(
       regionId,
       snapshot,
@@ -156,7 +144,7 @@ export class DecorVersionService {
       operatorId,
     );
 
-    // 5) 操作日志（失败不阻断）
+    // 4) 操作日志（失败不阻断）
     try {
       await this.prisma.adminOperationLog.create({
         data: {

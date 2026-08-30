@@ -31,6 +31,7 @@ export const BINDING_RELATIONS = [
   "blocks",
   "alternative_to",
   "references",
+  "verifies",
 ] as const;
 export const BINDING_TARGET_TYPES = [
   "building",
@@ -43,6 +44,7 @@ export const BINDING_TARGET_TYPES = [
   "phase",
   "task",
   "marker",
+  "place",
 ] as const;
 export const MARKER_FIELD_TYPES = [
   "text",
@@ -53,10 +55,25 @@ export const MARKER_FIELD_TYPES = [
 ] as const;
 export const COLLECTION_OBJECT_TYPES = [
   "road",
+  "place_verification",
   "building",
   "entrance",
   "facility",
   "issue",
+] as const;
+export const COLLECTION_TASK_TYPES = [
+  "route_collection",
+  "place_verification",
+  "mixed",
+] as const;
+export const COLLECTION_APPLY_FIELDS = [
+  "location",
+  "entrance",
+  "address",
+  "constructionStatus",
+  "serviceStatus",
+  "geometry",
+  "media",
 ] as const;
 export const COLLECTION_CLIENTS = ["miniapp", "rider_app"] as const;
 export const COLLECTION_OBJECT_REVIEW_DECISIONS = [
@@ -71,9 +88,12 @@ export type CreateCollectionTaskDto = {
   name: string;
   instructions?: string;
   status?: string;
+  taskType?: string;
   collectorUserIds?: string[];
   allowedClients?: string[];
   objectTypes?: string[];
+  targetPlaceIds?: string[];
+  targetFeatureIds?: string[];
   boundary?: Record<string, unknown> | null;
   priority?: number;
   dueAt?: string | null;
@@ -183,6 +203,9 @@ export type CreateCollectionObjectDto = {
 export type ReviewCollectionObjectDto = {
   decision: string;
   note: string;
+  targetPlaceId?: string;
+  applyFields?: string[];
+  promoteAttachmentIds?: string[];
 };
 
 export function parseStartSession(dto: StartCollectionSessionDto) {
@@ -267,6 +290,47 @@ export function parseTask(dto: CreateCollectionTaskDto) {
   ) {
     throw new BadRequestException("采集对象类型无效");
   }
+  const inferredTaskType = objectTypes.length === 1 && objectTypes[0] === "road"
+    ? "route_collection"
+    : objectTypes.length === 1 && objectTypes[0] === "place_verification"
+      ? "place_verification"
+      : "mixed";
+  const taskType = String(dto.taskType || inferredTaskType).trim();
+  const explicitTaskType = Boolean(String(dto.taskType || "").trim());
+  if (!COLLECTION_TASK_TYPES.includes(taskType as (typeof COLLECTION_TASK_TYPES)[number])) {
+    throw new BadRequestException("采集任务类型无效");
+  }
+  const targetPlaceIds = [
+    ...new Set(
+      (dto.targetPlaceIds || [])
+        .map(String)
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (targetPlaceIds.length > 100) {
+    throw new BadRequestException("一个采集任务最多绑定 100 个地图地点");
+  }
+  const targetFeatureIds = [
+    ...new Set(
+      (dto.targetFeatureIds || [])
+        .map(String)
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (targetFeatureIds.length > 100) {
+    throw new BadRequestException("一个采集任务最多指定 100 个地图图形");
+  }
+  if (explicitTaskType && taskType === "route_collection" && (objectTypes.length !== 1 || objectTypes[0] !== "road")) {
+    throw new BadRequestException("路线采集任务的 objectTypes 必须为 road");
+  }
+  if (explicitTaskType && taskType === "place_verification" && (objectTypes.length !== 1 || objectTypes[0] !== "place_verification" || targetPlaceIds.length === 0)) {
+    throw new BadRequestException("地点核验任务必须选择 place_verification 且至少绑定一个地点");
+  }
+  if (explicitTaskType && taskType === "mixed" && (!objectTypes.includes("road") || !objectTypes.includes("place_verification"))) {
+    throw new BadRequestException("混合采集任务必须同时包含 road 和 place_verification");
+  }
   const priority = dto.priority === undefined ? 3 : Number(dto.priority);
   if (!Number.isInteger(priority) || priority < 1 || priority > 5)
     throw new BadRequestException("任务优先级必须为 1 至 5");
@@ -286,9 +350,12 @@ export function parseTask(dto: CreateCollectionTaskDto) {
     name,
     instructions: String(dto.instructions || "").trim() || undefined,
     status,
+    taskType,
     collectorUserIds,
     allowedClients,
     objectTypes,
+    targetPlaceIds,
+    targetFeatureIds,
     boundary: dto.boundary,
     priority,
     dueAt,
@@ -503,7 +570,7 @@ export function parsePointBatch(batchNo: number, dto: UploadPointBatchDto) {
     ) {
       throw new BadRequestException("轨迹点纬度无效");
     }
-    if (!Number.isFinite(point.accuracy) || point.accuracy < 0)
+    if (!Number.isFinite(point.accuracy) || point.accuracy <= 0)
       throw new BadRequestException("轨迹点精度无效");
     for (const value of [point.speed, point.heading, point.altitude]) {
       if (value !== undefined && !Number.isFinite(value))
@@ -513,6 +580,12 @@ export function parsePointBatch(batchNo: number, dto: UploadPointBatchDto) {
     pointSequences.add(point.pointSeq);
     return { ...point, clientPointId, recordedAt };
   });
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].pointSeq <= points[index - 1].pointSeq
+      || points[index].recordedAt.getTime() <= points[index - 1].recordedAt.getTime()) {
+      throw new BadRequestException("轨迹点必须按 pointSeq 和采集时间严格递增上传");
+    }
+  }
 
   return { batchNo, points };
 }
@@ -547,7 +620,21 @@ export function parseObjectReview(dto: ReviewCollectionObjectDto) {
   if (!note || note.length > 1_000) {
     throw new BadRequestException("审核原因不能为空且不能超过 1000 字");
   }
-  return { decision, note };
+  const targetPlaceId = String(dto?.targetPlaceId || "").trim() || undefined;
+  const applyFields = [...new Set((dto?.applyFields || []).map(String))];
+  if (applyFields.some((field) => !COLLECTION_APPLY_FIELDS.includes(field as (typeof COLLECTION_APPLY_FIELDS)[number]))) {
+    throw new BadRequestException("采集对象审核合并字段无效");
+  }
+  const promoteAttachmentIds = [
+    ...new Set((dto?.promoteAttachmentIds || []).map(String).map((id) => id.trim()).filter(Boolean)),
+  ];
+  if (promoteAttachmentIds.length > 20) {
+    throw new BadRequestException("一次最多提升 20 个附件");
+  }
+  if (promoteAttachmentIds.length && !applyFields.includes("media")) {
+    throw new BadRequestException("提升现场照片时必须显式选择 media 合并字段");
+  }
+  return { decision, note, targetPlaceId, applyFields, promoteAttachmentIds };
 }
 
 function parseCoordinatePair(value: unknown) {
@@ -571,6 +658,7 @@ function parseCoordinatePair(value: unknown) {
 export function parseCollectionObject(dto: CreateCollectionObjectDto) {
   const clientObjectId = String(dto?.clientObjectId || "").trim();
   const objectType = String(dto?.objectType || "").trim();
+  let normalizedProperties: Record<string, unknown> = {};
   const recordedAt = new Date(dto?.recordedAt);
   if (!clientObjectId || clientObjectId.length > 120)
     throw new BadRequestException("采集对象标识无效");
@@ -597,6 +685,7 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
   ) {
     throw new BadRequestException("采集对象属性无效");
   }
+  normalizedProperties = dto.properties;
   if (
     dto.quality !== undefined &&
     (!dto.quality ||
@@ -607,7 +696,7 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
   }
   if (
     dto.accuracy !== undefined &&
-    (!Number.isFinite(dto.accuracy) || dto.accuracy < 0)
+    (!Number.isFinite(dto.accuracy) || dto.accuracy <= 0)
   ) {
     throw new BadRequestException("采集对象精度无效");
   }
@@ -625,7 +714,44 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
       throw new BadRequestException("道路必须包含至少两个轨迹点");
     }
     coordinates.forEach(parseCoordinatePair);
+    const previousRouteObjectId = String(dto.properties.previousRouteObjectId || "").trim();
+    const sharedStartAnchorPointId = String(dto.properties.sharedStartAnchorPointId || "").trim();
+    const startJunctionAnchorKey = String(dto.properties.startJunctionAnchorKey || "").trim().toLowerCase();
+    const endJunctionAnchorKey = String(dto.properties.endJunctionAnchorKey || "").trim().toLowerCase();
+    if (Boolean(previousRouteObjectId) !== Boolean(sharedStartAnchorPointId)) {
+      throw new BadRequestException("相邻路线必须同时提供上一段对象和共享路口 ACK 点");
+    }
+    if (previousRouteObjectId.length > 120 || sharedStartAnchorPointId.length > 120) {
+      throw new BadRequestException("相邻路线的对象或路口锚点标识过长");
+    }
+    if (startJunctionAnchorKey && (previousRouteObjectId || sharedStartAnchorPointId)) {
+      throw new BadRequestException("路线起点不能同时选择已审核路口和上一段离线依赖");
+    }
+    if ((startJunctionAnchorKey && !/^[a-f0-9]{64}$/.test(startJunctionAnchorKey))
+      || (endJunctionAnchorKey && !/^[a-f0-9]{64}$/.test(endJunctionAnchorKey))) {
+      throw new BadRequestException("路线连接的已审核路口锚点无效");
+    }
+    if (startJunctionAnchorKey && startJunctionAnchorKey === endJunctionAnchorKey) {
+      throw new BadRequestException("同一路口环线必须在中途分段，路线起终点不能选择同一锚点");
+    }
+    normalizedProperties = { ...dto.properties };
+    delete normalizedProperties.previousRouteObjectId;
+    delete normalizedProperties.sharedStartAnchorPointId;
+    delete normalizedProperties.startJunctionAnchorKey;
+    delete normalizedProperties.endJunctionAnchorKey;
+    if (previousRouteObjectId && sharedStartAnchorPointId) {
+      normalizedProperties.previousRouteObjectId = previousRouteObjectId;
+      normalizedProperties.sharedStartAnchorPointId = sharedStartAnchorPointId;
+    }
+    if (startJunctionAnchorKey) normalizedProperties.startJunctionAnchorKey = startJunctionAnchorKey;
+    if (endJunctionAnchorKey) normalizedProperties.endJunctionAnchorKey = endJunctionAnchorKey;
   } else if (objectType === "building") {
+    if (Object.prototype.hasOwnProperty.call(dto.properties, "previousRouteObjectId")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "sharedStartAnchorPointId")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "startJunctionAnchorKey")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "endJunctionAnchorKey")) {
+      throw new BadRequestException("非道路采集对象不能携带路线锚点");
+    }
     const rings = coordinates;
     if (
       geometryType !== "Polygon" ||
@@ -643,9 +769,29 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
       throw new BadRequestException("建筑轮廓必须闭合");
     }
   } else {
+    if (Object.prototype.hasOwnProperty.call(dto.properties, "previousRouteObjectId")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "sharedStartAnchorPointId")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "startJunctionAnchorKey")
+      || Object.prototype.hasOwnProperty.call(dto.properties, "endJunctionAnchorKey")) {
+      throw new BadRequestException("非道路采集对象不能携带路线锚点");
+    }
     if (geometryType !== "Point")
-      throw new BadRequestException("入口、设施和异常必须使用点坐标");
+      throw new BadRequestException("地点核验、入口、设施和异常必须使用点坐标");
     parseCoordinatePair(coordinates);
+  }
+  if (objectType === "place_verification") {
+    const targetPlaceId = String(dto.properties.targetPlaceId || "").trim();
+    if (!targetPlaceId) throw new BadRequestException("地点核验对象必须绑定 targetPlaceId");
+    const clientPointIds = Array.isArray(dto.properties.clientPointIds)
+      ? dto.properties.clientPointIds.map(String).map((id) => id.trim()).filter(Boolean)
+      : [];
+    if (clientPointIds.length !== 5 || new Set(clientPointIds).size !== 5) {
+      throw new BadRequestException("地点核验必须提供 5 个有序且唯一的 clientPointIds");
+    }
+    normalizedProperties = { ...dto.properties, targetPlaceId, clientPointIds };
+    if (dto.longitude === undefined || dto.latitude === undefined) {
+      throw new BadRequestException("地点核验对象必须上传 GCJ-02 定位");
+    }
   }
 
   const bindingKeys = new Set<string>();
@@ -680,11 +826,80 @@ export function parseCollectionObject(dto: CreateCollectionObjectDto) {
     ) {
       throw new BadRequestException("附件大小无效");
     }
-    return { ...attachment, url };
+    const legacy = attachment as CollectionAttachmentDto & Record<string, unknown>;
+    const legacyMetadata = {
+      ...(legacy.evidenceType ? { evidenceType: legacy.evidenceType } : {}),
+      ...(legacy.mediaType ? { mediaType: legacy.mediaType } : {}),
+      ...(legacy.capturedAt ? { capturedAt: legacy.capturedAt } : {}),
+      ...(legacy.captureLongitude !== undefined || legacy.longitude !== undefined
+        ? { captureLongitude: legacy.captureLongitude ?? legacy.longitude }
+        : {}),
+      ...(legacy.captureLatitude !== undefined || legacy.latitude !== undefined
+        ? { captureLatitude: legacy.captureLatitude ?? legacy.latitude }
+        : {}),
+      ...(legacy.captureAccuracy !== undefined || legacy.accuracy !== undefined
+        ? { accuracy: legacy.captureAccuracy ?? legacy.accuracy }
+        : {}),
+      ...(legacy.source ? { source: legacy.source } : {}),
+      ...(legacy.coordinateType ? { coordinateType: legacy.coordinateType } : {}),
+      ...(legacy.sourceClient ? { sourceClient: legacy.sourceClient } : {}),
+    };
+    return {
+      ...attachment,
+      url,
+      metadata: { ...legacyMetadata, ...(attachment.metadata || {}) },
+    };
   });
+
+  if (objectType === "place_verification") {
+    const targetPlaceId = String(dto.properties.targetPlaceId || "").trim();
+    const verifiesTarget = bindings.some((binding) => binding.targetType === "place"
+      && binding.relationType === "verifies"
+      && binding.targetId === targetPlaceId);
+    if (!verifiesTarget) {
+      throw new BadRequestException("地点核验必须使用 place/verifies 绑定同一 targetPlaceId");
+    }
+    const evidence = new Set<string>();
+    for (const attachment of attachments) {
+      const kind = String(attachment.kind || "photo").toLowerCase();
+      const mimeType = String(attachment.mimeType || "").toLowerCase();
+      if (!(["photo", "image"].includes(kind) || mimeType.startsWith("image/"))) {
+        throw new BadRequestException("地点核验证据必须是现场图片");
+      }
+      const metadata = attachment.metadata && typeof attachment.metadata === "object"
+        ? attachment.metadata as Record<string, unknown>
+        : {};
+      const capturedAt = new Date(String(metadata.capturedAt || ""));
+      const captureLongitude = Number(metadata.captureLongitude ?? metadata.longitude);
+      const captureLatitude = Number(metadata.captureLatitude ?? metadata.latitude);
+      const accuracy = Number(metadata.accuracy ?? metadata.captureAccuracy);
+      const coordinateType = String(metadata.coordinateType || "gcj02").toLowerCase();
+      if (Number.isNaN(capturedAt.getTime())
+        || !Number.isFinite(captureLongitude) || captureLongitude < -180 || captureLongitude > 180
+        || !Number.isFinite(captureLatitude) || captureLatitude < -90 || captureLatitude > 90
+        || !Number.isFinite(accuracy) || accuracy <= 0
+        || coordinateType !== "gcj02"
+        || String(metadata.source || "").toLowerCase() !== "camera") {
+        throw new BadRequestException("地点核验图片必须包含有效拍摄时间、GCJ-02 坐标、精度和 camera 来源");
+      }
+      const mediaType = String(metadata.mediaType || "").toLowerCase();
+      const evidenceType = String(metadata.evidenceType || "").toLowerCase();
+      if (mediaType === "facade" || evidenceType === "building_front") evidence.add("facade");
+      if (mediaType === "entrance" || evidenceType === "entrance_or_sign") evidence.add("entrance");
+      if (mediaType === "construction" || evidenceType === "construction_progress") evidence.add("construction");
+    }
+    if (!evidence.has("facade") || !evidence.has("entrance")) {
+      throw new BadRequestException("地点核验必须同时上传建筑正面和入口/标识照片");
+    }
+    if (["under_construction", "renovating"].includes(String(dto.properties.constructionStatus || ""))
+      && !evidence.has("construction")) {
+      throw new BadRequestException("在建或改造中地点核验必须上传施工进度照片");
+    }
+  }
 
   return {
     ...dto,
+    properties: normalizedProperties,
     clientObjectId,
     objectType,
     recordedAt,
@@ -715,7 +930,7 @@ export function parseMarker(dto: CreateCollectionMarkerDto) {
   ) {
     throw new BadRequestException("标记纬度无效");
   }
-  if (!Number.isFinite(dto.accuracy) || dto.accuracy < 0)
+  if (!Number.isFinite(dto.accuracy) || dto.accuracy <= 0)
     throw new BadRequestException("标记精度无效");
   if (
     !dto.fieldValues ||

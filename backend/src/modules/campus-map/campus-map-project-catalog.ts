@@ -3,16 +3,52 @@ export type CampusProjectMetadata = {
   officialName: string;
   engineeringAlias: string;
   phase: 'phase1' | 'future';
-  constructionStatus: 'built' | 'under_construction';
+  constructionStatus: 'built' | 'under_construction' | 'planned' | 'renovating';
   visibilityScope: 'phase1_active' | 'phase1_review' | 'future_reference';
   semanticType: string;
   searchable: boolean;
   navigable: boolean;
   geometryStatus: 'verified_polygon' | 'verified_point' | 'point_only' | 'unmatched';
   sourceConfidence: 'official_signage_and_cad' | 'official_signage_only';
+  artworkFeatureKey: string;
+  artworkAnchorX: number;
+  artworkAnchorY: number;
+  artworkGeometry: { type: 'Point'; coordinates: [number, number] };
 };
 
 type ProjectSeed = [officialNumber: number, officialName: string, semanticType: string];
+
+// 画师 AI 原文件的页面尺寸与文字中心坐标。这里保存的是 PDF/SVG 顶部向下坐标，
+// 写入数据库时转换为后台画布使用的左下原点坐标。真实经纬度仍由骑手现场采集，
+// 两套坐标绝不互相替代。
+export const ILLUSTRATED_ARTWORK_WIDTH = 2761.14;
+export const ILLUSTRATED_ARTWORK_HEIGHT = 2990.41;
+export const ILLUSTRATED_LABEL_ANCHORS_FROM_TOP: Readonly<Record<number, readonly [number, number]>> = {
+  1: [302.44, 1715.91], 2: [233.14, 1933.59], 3: [535.15, 1648.29],
+  4: [672.78, 1858.49], 5: [720.94, 1655.22], 6: [890.06, 1733.56],
+  7: [742.48, 2130.70], 8: [655.81, 2242.13], 9: [832.20, 1364.73],
+  10: [1061.05, 1372.11], 11: [934.26, 1507.70], 12: [1196.67, 1447.56],
+  13: [1116.64, 1603.29], 14: [971.98, 2370.60], 15: [1150.91, 1948.63],
+  16: [1658.55, 2021.58], 17: [1706.55, 2138.70], 18: [1375.77, 1448.04],
+  19: [1144.27, 1017.71], 20: [1389.63, 1171.86], 21: [1416.85, 1687.17],
+  22: [2063.94, 1444.38], 23: [1226.54, 695.50], 24: [1532.91, 854.83],
+  25: [1433.48, 780.17], 26: [1335.45, 549.79], 27: [1602.70, 530.79],
+  28: [1459.99, 348.84], 29: [1955.93, 737.25], 30: [1859.70, 1084.44],
+  31: [2256.82, 1018.03], 32: [1742.73, 454.41], 33: [1980.33, 617.82],
+  34: [1677.75, 212.79], 35: [2068.77, 435.85], 36: [2330.11, 691.65],
+  37: [1304.99, 49.90], 38: [1235.49, 395.45],
+};
+
+function artworkMetadata(officialNumber: number) {
+  const [x, yFromTop] = ILLUSTRATED_LABEL_ANCHORS_FROM_TOP[officialNumber];
+  const y = Number((ILLUSTRATED_ARTWORK_HEIGHT - yFromTop).toFixed(2));
+  return {
+    artworkFeatureKey: `illustrated-place-${officialNumber}`,
+    artworkAnchorX: x,
+    artworkAnchorY: y,
+    artworkGeometry: { type: 'Point' as const, coordinates: [x, y] as [number, number] },
+  };
+}
 
 const BUILT_PROJECTS: ProjectSeed[] = [
   [1, '第三校门', 'gate'],
@@ -38,23 +74,24 @@ const FUTURE_PROJECTS: ProjectSeed[] = [
   [18, '第二校门', 'gate'],
   [19, '和沐书院', 'building'],
   [20, '运动场', 'sports'],
-  [21, '行政综合楼', 'office'],
+  [21, '校园景云街', 'service'],
   [22, '第一校门', 'gate'],
-  [23, '教学楼 A', 'teaching'],
+  [23, '教学楼A', 'teaching'],
   [24, '科研楼', 'research'],
-  [25, '教学楼 B', 'teaching'],
-  [26, '学生公寓 A', 'dorm'],
-  [27, '学生公寓 B', 'dorm'],
-  [28, '学生公寓 C', 'dorm'],
+  [25, '教学楼B', 'teaching'],
+  [26, '学生公寓A', 'dorm'],
+  [27, '学生公寓B', 'dorm'],
+  [28, '学生公寓C', 'dorm'],
   [29, '图书馆', 'library'],
   [30, '体育馆', 'sports'],
-  [31, '学生公寓 E', 'dorm'],
-  [32, '学生餐厅 A', 'canteen'],
-  [33, '学生餐厅 B', 'canteen'],
-  [34, '学生公寓 D', 'dorm'],
+  [31, '学生公寓E', 'dorm'],
+  [32, '学生餐厅A', 'canteen'],
+  [33, '学生餐厅B', 'canteen'],
+  [34, '学生公寓D', 'dorm'],
   [35, '校史馆', 'museum'],
-  [36, '学生公寓 F', 'dorm'],
+  [36, '学生公寓F', 'dorm'],
   [37, '教师公寓', 'dorm'],
+  [38, '北大门', 'gate'],
 ];
 
 const builtCatalog = BUILT_PROJECTS.map<CampusProjectMetadata>(([officialNumber, officialName, semanticType]) => ({
@@ -63,12 +100,13 @@ const builtCatalog = BUILT_PROJECTS.map<CampusProjectMetadata>(([officialNumber,
   engineeringAlias: '',
   phase: 'phase1',
   constructionStatus: 'built',
-  visibilityScope: 'phase1_review',
+  visibilityScope: 'phase1_active',
   semanticType,
   searchable: false,
   navigable: false,
-  geometryStatus: 'unmatched',
-  sourceConfidence: 'official_signage_only',
+  geometryStatus: 'verified_point',
+  sourceConfidence: 'official_signage_and_cad',
+  ...artworkMetadata(officialNumber),
 }));
 
 const futureCatalog = FUTURE_PROJECTS.map<CampusProjectMetadata>(([officialNumber, officialName, semanticType]) => ({
@@ -81,8 +119,9 @@ const futureCatalog = FUTURE_PROJECTS.map<CampusProjectMetadata>(([officialNumbe
   semanticType,
   searchable: false,
   navigable: false,
-  geometryStatus: 'unmatched',
-  sourceConfidence: 'official_signage_only',
+  geometryStatus: 'verified_point',
+  sourceConfidence: 'official_signage_and_cad',
+  ...artworkMetadata(officialNumber),
 }));
 
 export const CAMPUS_PROJECT_CATALOG: readonly CampusProjectMetadata[] = [...builtCatalog, ...futureCatalog]
@@ -112,7 +151,10 @@ export function normalizeCampusProjectMetadata(value: unknown): Partial<CampusPr
     phase: input.phase === 'future' || input.phase === 'phase1'
       ? input.phase
       : (catalogItem?.phase ?? 'phase1'),
-    constructionStatus: input.constructionStatus === 'under_construction' || input.constructionStatus === 'built'
+    constructionStatus: input.constructionStatus === 'under_construction'
+      || input.constructionStatus === 'built'
+      || input.constructionStatus === 'planned'
+      || input.constructionStatus === 'renovating'
       ? input.constructionStatus
       : (catalogItem?.constructionStatus ?? 'built'),
     visibilityScope: input.visibilityScope === 'phase1_active'
@@ -138,9 +180,14 @@ export function normalizeCampusProjectMetadata(value: unknown): Partial<CampusPr
   return normalized;
 }
 
-export function isPublicCampusProject(value: Partial<CampusProjectMetadata>) {
+export function isPublicCampusProject(value: Partial<CampusProjectMetadata> & { publishStatus?: string }) {
   const managed = Boolean(value.officialNumber || value.visibilityScope || value.constructionStatus);
   if (!managed) return true;
+  if (value.publishStatus !== undefined) {
+    return value.publishStatus === 'published'
+      && value.visibilityScope === 'phase1_active'
+      && value.geometryStatus !== 'unmatched';
+  }
   return value.constructionStatus === 'built'
     && value.visibilityScope === 'phase1_active'
     && value.geometryStatus !== 'unmatched';

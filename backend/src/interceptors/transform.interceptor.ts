@@ -104,8 +104,6 @@ const MINI_PROGRAM_PREFIXES = [
   "/transfer/",
   "/region-riders",
   "/platform/",
-  "/layout",
-  "/layout/",
 ];
 
 @Injectable()

@@ -8,7 +8,7 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 import { RoleType } from '@prisma/client';
 import { Request } from 'express';
 import { IpGeoService } from '../ip-geo/ip-geo.service';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('区域')
 @Controller()
@@ -131,7 +131,6 @@ export class RegionController {
   }
 
   @Get('status/location/recommendation')
-  @UseGuards(ThrottlerGuard)
   @Throttle({ auth: { ttl: 60000, limit: 5 } })
   async getLocationRecommendation(@Req() req: Request) {
     const location = await this.ipGeo.resolve(this.getClientIp(req));

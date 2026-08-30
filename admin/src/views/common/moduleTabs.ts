@@ -53,6 +53,7 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
     { key: 'audit', title: '小店审核', icon: 'Checked', component: asyncPage(() => import('@/views/merchant/MerchantAudit.vue')) },
     { key: 'categories', title: '小店分类', icon: 'Collection', component: asyncPage(() => import('@/views/merchant/ProductCategories.vue')) },
     { key: 'products', title: '小店商品', icon: 'Goods', component: asyncPage(() => import('@/views/merchant/MerchantProducts.vue')) },
+    { key: 'delivery', title: '店员与调度', icon: 'Van', component: asyncPage(() => import('@/views/merchant/DormShopDeliveryOps.vue')) },
     { key: 'orders', title: '小店订单', icon: 'Tickets', component: asyncPage(() => import('@/views/merchant/MerchantOrders.vue')) }
   ],
   'merchant-config': [

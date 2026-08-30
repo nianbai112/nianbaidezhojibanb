@@ -1,9 +1,14 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Interval } from '@nestjs/schedule';
-import { PrismaService } from '../../common/services/prisma.service';
-import { RedisService } from '../../common/services/redis.service';
-import { NotifyService } from '../notify/notify.service';
-import { errandExtendedConfigKey } from './errand-config.util';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
+import { Interval } from "@nestjs/schedule";
+import { PrismaService } from "../../common/services/prisma.service";
+import { RedisService } from "../../common/services/redis.service";
+import { NotifyService } from "../notify/notify.service";
+import { errandExtendedConfigKey } from "./errand-config.util";
 
 @Injectable()
 export class ErrandLifecycleService {
@@ -18,19 +23,25 @@ export class ErrandLifecycleService {
   @Interval(10 * 60 * 1000)
   async runScheduledAutoReceipt() {
     if (!this.redis) return;
-    return this.redis.withLock('errand:auto-receipt', 9 * 60, () => this.autoConfirmDueOrders());
+    const lock = (this.redis as any).withRenewingLock || this.redis.withLock;
+    return lock.call(this.redis, "errand:auto-receipt", 9 * 60, () =>
+      this.autoConfirmDueOrders(),
+    );
   }
 
   @Interval(5 * 60 * 1000)
   async runScheduledRiskScan() {
     if (!this.redis) return;
-    return this.redis.withLock('errand:risk-scan', 4 * 60, () => this.scanActionableRisks());
+    const lock = (this.redis as any).withRenewingLock || this.redis.withLock;
+    return lock.call(this.redis, "errand:risk-scan", 4 * 60, () =>
+      this.scanActionableRisks(),
+    );
   }
 
   async autoConfirmDueOrders(now = new Date()) {
     const orders = await this.prisma.errandOrder.findMany({
       where: {
-        status: 'arrived',
+        status: "arrived",
         receiptConfirmDeadline: { lte: now },
       },
       select: {
@@ -40,81 +51,109 @@ export class ErrandLifecycleService {
         regionId: true,
         refundStatus: true,
       },
-      orderBy: { receiptConfirmDeadline: 'asc' },
+      orderBy: { receiptConfirmDeadline: "asc" },
       take: 100,
     });
     if (!orders.length) return { checked: 0, completed: 0, held: 0 };
 
-    const regionIds = [...new Set(orders.map(order => order.regionId).filter(Boolean))] as string[];
+    const regionIds = [
+      ...new Set(orders.map((order) => order.regionId).filter(Boolean)),
+    ] as string[];
     const configRows = this.prisma.config?.findMany
-      ? await this.prisma.config.findMany({
-          where: { key: { in: [...regionIds.map(errandExtendedConfigKey), errandExtendedConfigKey('global')] } },
-          select: { key: true, value: true },
-        }).catch(() => [])
+      ? await this.prisma.config
+          .findMany({
+            where: {
+              key: {
+                in: [
+                  ...regionIds.map(errandExtendedConfigKey),
+                  errandExtendedConfigKey("global"),
+                ],
+              },
+            },
+            select: { key: true, value: true },
+          })
+          .catch(() => [])
       : [];
-    const configs = new Map(configRows.map((row: any) => [row.key, row.value || {}]));
-    const globalConfig: any = configs.get(errandExtendedConfigKey('global')) || {};
+    const configs = new Map(
+      configRows.map((row: any) => [row.key, row.value || {}]),
+    );
+    const globalConfig: any =
+      configs.get(errandExtendedConfigKey("global")) || {};
 
-    const orderIds = orders.map(order => order.id);
+    const orderIds = orders.map((order) => order.id);
     const [appeals, riskEvents] = await Promise.all([
       this.prisma.orderAppeal.findMany({
         where: {
           orderId: { in: orderIds },
-          orderType: { in: ['errand', 'errand_order'] },
-          status: { notIn: ['resolved', 'rejected', 'closed', 'cancelled', 'completed'] },
+          orderType: { in: ["errand", "errand_order"] },
+          status: {
+            notIn: ["resolved", "rejected", "closed", "cancelled", "completed"],
+          },
         },
         select: { orderId: true },
       }),
       this.prisma.deliveryRiskEvent.findMany({
         where: {
           orderId: { in: orderIds },
-          orderType: 'errand',
+          orderType: "errand",
           handled: false,
-          eventLevel: { in: ['error', 'critical'] },
+          eventLevel: { in: ["error", "critical"] },
         },
         select: { orderId: true },
       }),
     ]);
     const heldIds = new Set([
-      ...appeals.map(item => item.orderId),
-      ...riskEvents.map(item => item.orderId),
+      ...appeals.map((item) => item.orderId),
+      ...riskEvents.map((item) => item.orderId),
     ]);
     let completed = 0;
     let held = 0;
 
     for (const order of orders) {
-      const regionConfig: any = configs.get(errandExtendedConfigKey(order.regionId || 'global')) || globalConfig;
-      const autoReceiptEnabled = regionConfig.autoReceiptEnabled ?? regionConfig.auto_receipt_enabled ?? true;
+      const regionConfig: any =
+        configs.get(errandExtendedConfigKey(order.regionId || "global")) ||
+        globalConfig;
+      const autoReceiptEnabled =
+        regionConfig.autoReceiptEnabled ??
+        regionConfig.auto_receipt_enabled ??
+        true;
       if (
         autoReceiptEnabled === false ||
         heldIds.has(order.id) ||
-        ['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))
+        ["refunding", "refunded"].includes(String(order.refundStatus || "none"))
       ) {
         held += 1;
         continue;
       }
       try {
-        await this.confirmReceipt(order.id, order.userId, 'system');
+        await this.confirmReceipt(order.id, order.userId, "system");
         completed += 1;
         if (this.notifyService) {
-          await this.notifyService.createAndDispatch({
-            userId: order.userId,
-            regionId: order.regionId || undefined,
-            type: 'delivery',
-            scene: 'errand_order_auto_received',
-            title: '跑腿订单已自动确认收货',
-            content: '订单送达已满24小时，系统已自动确认收货；如有问题请尽快发起售后。',
-            data: { orderId: order.id, orderNo: order.orderNo },
-            linkType: 'page',
-            linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
-            channelMask: { inApp: true, websocket: true },
-          }).catch(error => {
-            this.logger.warn(`跑腿自动确认通知失败 order=${order.id}: ${error?.message || error}`);
-          });
+          await this.notifyService
+            .createAndDispatch({
+              userId: order.userId,
+              regionId: order.regionId || undefined,
+              type: "delivery",
+              scene: "errand_order_auto_received",
+              title: "跑腿订单已自动确认收货",
+              content:
+                "订单送达已满24小时，系统已自动确认收货；如有问题请尽快发起售后。",
+              data: { orderId: order.id, orderNo: order.orderNo },
+              linkType: "page",
+              linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
+              channelMask: { inApp: true, websocket: true },
+            })
+            .catch((error) => {
+              this.logger.warn(
+                `跑腿自动确认通知失败 order=${order.id}: ${error?.message || error}`,
+              );
+            });
         }
       } catch (error: any) {
         held += 1;
-        this.logger.warn(`跑腿自动确认跳过 order=${order.id}: ${error?.message || error}`);
+        this.logger.warn(
+          `跑腿自动确认跳过 order=${order.id}: ${error?.message || error}`,
+        );
       }
     }
 
@@ -124,62 +163,97 @@ export class ErrandLifecycleService {
   async scanActionableRisks(now = new Date()) {
     const [orders, rewardConfigs, failedRefunds] = await Promise.all([
       this.prisma.errandOrder.findMany({
-        where: { status: { in: ['pending_accept', 'accepted', 'in_progress', 'arrived'] } },
-        select: {
-          id: true, orderNo: true, regionId: true, riderId: true, status: true,
-          createdAt: true, acceptTime: true, pickupTime: true, receiptConfirmDeadline: true,
+        where: {
+          status: {
+            in: ["pending_accept", "accepted", "in_progress", "arrived"],
+          },
         },
-        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          orderNo: true,
+          regionId: true,
+          riderId: true,
+          status: true,
+          createdAt: true,
+          acceptTime: true,
+          pickupTime: true,
+          receiptConfirmDeadline: true,
+        },
+        orderBy: { createdAt: "asc" },
         take: 200,
       }),
-      this.prisma.errandRewardPunish.findMany({ select: { regionId: true, timeoutMinutes: true } }),
+      this.prisma.errandRewardPunish.findMany({
+        select: { regionId: true, timeoutMinutes: true },
+      }),
       this.prisma.paymentRefund.findMany({
         where: {
-          status: { in: ['failed', 'abnormal', 'closed'] },
-          payment: { is: { bizType: 'errand_order' } },
+          status: { in: ["failed", "abnormal", "closed"] },
+          payment: { is: { bizType: "errand_order" } },
         },
         select: {
-          id: true, status: true, failReason: true,
+          id: true,
+          status: true,
+          failReason: true,
           payment: { select: { bizId: true, orderNo: true } },
         },
-        orderBy: { updatedAt: 'asc' },
+        orderBy: { updatedAt: "asc" },
         take: 100,
       }),
     ]);
-    const timeoutByRegion = new Map(rewardConfigs.map(item => [item.regionId, Math.max(1, Number(item.timeoutMinutes || 30))]));
-    const candidates: Array<{ orderId: string; riderId?: string | null; eventType: string; eventLevel: string; description: string }> = [];
+    const timeoutByRegion = new Map(
+      rewardConfigs.map((item) => [
+        item.regionId,
+        Math.max(1, Number(item.timeoutMinutes || 30)),
+      ]),
+    );
+    const candidates: Array<{
+      orderId: string;
+      riderId?: string | null;
+      eventType: string;
+      eventLevel: string;
+      description: string;
+    }> = [];
 
     for (const order of orders) {
-      const timeoutMinutes = timeoutByRegion.get(order.regionId || '') || 30;
+      const timeoutMinutes = timeoutByRegion.get(order.regionId || "") || 30;
       const cutoff = now.getTime() - timeoutMinutes * 60 * 1000;
-      if (order.status === 'pending_accept' && !order.riderId && new Date(order.createdAt).getTime() <= cutoff) {
+      if (
+        order.status === "pending_accept" &&
+        !order.riderId &&
+        new Date(order.createdAt).getTime() <= cutoff
+      ) {
         candidates.push({
           orderId: order.id,
-          eventType: 'unaccepted_timeout',
-          eventLevel: 'warning',
+          eventType: "unaccepted_timeout",
+          eventLevel: "warning",
           description: `订单 ${order.orderNo} 超过${timeoutMinutes}分钟无人接单，请联系骑手或用户。`,
         });
       }
       const deliverySince = order.pickupTime || order.acceptTime;
-      if (['accepted', 'in_progress'].includes(order.status) && deliverySince && new Date(deliverySince).getTime() <= cutoff) {
-        candidates.push({
-          orderId: order.id,
-          riderId: order.riderId,
-          eventType: 'delivery_overdue',
-          eventLevel: 'error',
-          description: `订单 ${order.orderNo} 履约超过${timeoutMinutes}分钟，请核查骑手位置和配送轨迹。`,
-        });
-      }
       if (
-        order.status === 'arrived' &&
-        order.receiptConfirmDeadline &&
-        new Date(order.receiptConfirmDeadline).getTime() <= now.getTime() - 48 * 60 * 60 * 1000
+        ["accepted", "in_progress"].includes(order.status) &&
+        deliverySince &&
+        new Date(deliverySince).getTime() <= cutoff
       ) {
         candidates.push({
           orderId: order.id,
           riderId: order.riderId,
-          eventType: 'auto_receipt_hold',
-          eventLevel: 'critical',
+          eventType: "delivery_overdue",
+          eventLevel: "error",
+          description: `订单 ${order.orderNo} 履约超过${timeoutMinutes}分钟，请核查骑手位置和配送轨迹。`,
+        });
+      }
+      if (
+        order.status === "arrived" &&
+        order.receiptConfirmDeadline &&
+        new Date(order.receiptConfirmDeadline).getTime() <=
+          now.getTime() - 48 * 60 * 60 * 1000
+      ) {
+        candidates.push({
+          orderId: order.id,
+          riderId: order.riderId,
+          eventType: "auto_receipt_hold",
+          eventLevel: "critical",
           description: `订单 ${order.orderNo} 自动确认已冻结超过48小时，请处理申诉、退款或风险事件。`,
         });
       }
@@ -188,8 +262,8 @@ export class ErrandLifecycleService {
       if (!refund.payment?.bizId) continue;
       candidates.push({
         orderId: refund.payment.bizId,
-        eventType: 'refund_failed',
-        eventLevel: 'critical',
+        eventType: "refund_failed",
+        eventLevel: "critical",
         description: `订单 ${refund.payment.orderNo || refund.payment.bizId} 退款失败：${refund.failReason || refund.status}。`,
       });
     }
@@ -197,12 +271,17 @@ export class ErrandLifecycleService {
     let created = 0;
     for (const candidate of candidates) {
       const existing = await this.prisma.deliveryRiskEvent.findFirst({
-        where: { orderId: candidate.orderId, orderType: 'errand', eventType: candidate.eventType, handled: false },
+        where: {
+          orderId: candidate.orderId,
+          orderType: "errand",
+          eventType: candidate.eventType,
+          handled: false,
+        },
         select: { id: true },
       });
       if (existing) continue;
       await this.prisma.deliveryRiskEvent.create({
-        data: { ...candidate, orderType: 'errand' },
+        data: { ...candidate, orderType: "errand" },
       });
       created += 1;
     }
@@ -211,28 +290,37 @@ export class ErrandLifecycleService {
 
   async riderTransition(orderId: string, riderId: string, dto: any) {
     const status = this.normalizeRiderStatus(dto?.status);
-    if (status === 'completed') throw new BadRequestException('骑手只能标记送达，不能确认完成');
-    if (status === 'in_progress') return this.markInProgress(orderId, riderId, dto);
-    if (status === 'arrived') return this.markArrived(orderId, riderId, dto);
-    throw new BadRequestException('骑手只能更新取货或送达状态');
+    if (status === "completed")
+      throw new BadRequestException("骑手只能标记送达，不能确认完成");
+    if (status === "in_progress")
+      return this.markInProgress(orderId, riderId, dto);
+    if (status === "arrived") return this.markArrived(orderId, riderId, dto);
+    throw new BadRequestException("骑手只能更新取货或送达状态");
   }
 
   async markInProgress(orderId: string, riderId: string, evidence: any = {}) {
-    return this.transitionRiderOrder(orderId, riderId, 'accepted', 'in_progress', {
-      pickupTime: new Date(),
-    }, evidence);
+    return this.transitionRiderOrder(
+      orderId,
+      riderId,
+      "accepted",
+      "in_progress",
+      {
+        pickupTime: new Date(),
+      },
+      evidence,
+    );
   }
 
   async markArrived(orderId: string, riderId: string, evidence: any = {}) {
-    const order = await this.requireRiderOrder(orderId, riderId, 'in_progress');
+    const order = await this.requireRiderOrder(orderId, riderId, "in_progress");
     try {
       this.assertRequiredDeliveryProof(order, evidence);
     } catch (error) {
       const existingRisk = await this.prisma.deliveryRiskEvent.findFirst({
         where: {
           orderId,
-          orderType: 'errand',
-          eventType: 'delivery_evidence_rejected',
+          orderType: "errand",
+          eventType: "delivery_evidence_rejected",
           handled: false,
         },
         select: { id: true },
@@ -241,10 +329,10 @@ export class ErrandLifecycleService {
         await this.prisma.deliveryRiskEvent.create({
           data: {
             orderId,
-            orderType: 'errand',
+            orderType: "errand",
             riderId,
-            eventType: 'delivery_evidence_rejected',
-            eventLevel: 'error',
+            eventType: "delivery_evidence_rejected",
+            eventLevel: "error",
             description: `订单 ${order.orderNo || order.id} 缺少要求的送达凭证，送达操作已拦截。`,
           },
         });
@@ -252,12 +340,14 @@ export class ErrandLifecycleService {
       throw error;
     }
     const now = new Date();
-    const receiptConfirmDeadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const receiptConfirmDeadline = new Date(
+      now.getTime() + 24 * 60 * 60 * 1000,
+    );
     const updated = await this.transitionRiderOrder(
       orderId,
       riderId,
-      'in_progress',
-      'arrived',
+      "in_progress",
+      "arrived",
       {
         deliverTime: now,
         receiptConfirmDeadline,
@@ -272,60 +362,70 @@ export class ErrandLifecycleService {
   async confirmReceipt(
     orderId: string,
     userId: string,
-    source: 'user' | 'system' | 'rider' = 'user',
+    source: "user" | "system" | "rider" = "user",
     receiptCode?: string,
   ) {
-    const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
-    if (!order) throw new NotFoundException('订单不存在');
-    if (source === 'user' && order.userId !== userId) {
-      throw new BadRequestException('无权确认该订单');
+    const order = await this.prisma.errandOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) throw new NotFoundException("订单不存在");
+    if (source === "user" && order.userId !== userId) {
+      throw new BadRequestException("无权确认该订单");
     }
-    if (source === 'rider') {
-      if (order.riderId !== userId) throw new BadRequestException('无权确认该订单');
-      if (!order.receiptCode) throw new BadRequestException('该订单未生成收货码');
-      if (String(receiptCode || '').trim() !== order.receiptCode) {
-        throw new BadRequestException('收货码不正确');
+    if (source === "rider") {
+      if (order.riderId !== userId)
+        throw new BadRequestException("无权确认该订单");
+      if (!order.receiptCode)
+        throw new BadRequestException("该订单未生成收货码");
+      if (String(receiptCode || "").trim() !== order.receiptCode) {
+        throw new BadRequestException("收货码不正确");
       }
     }
-    if (order.status === 'completed' && order.receiptConfirmedAt) return order;
-    if (order.status !== 'arrived') throw new BadRequestException('订单尚未送达，不能确认收货');
-    if (['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))) {
-      throw new BadRequestException('订单退款处理中，不能确认收货');
+    if (order.status === "completed" && order.receiptConfirmedAt) return order;
+    if (order.status !== "arrived")
+      throw new BadRequestException("订单尚未送达，不能确认收货");
+    if (
+      ["refunding", "refunded"].includes(String(order.refundStatus || "none"))
+    ) {
+      throw new BadRequestException("订单退款处理中，不能确认收货");
     }
 
     const [appeal, riskEvent] = await Promise.all([
       this.prisma.orderAppeal.findFirst({
         where: {
           orderId,
-          orderType: { in: ['errand', 'errand_order'] },
-          status: { notIn: ['resolved', 'rejected', 'closed', 'cancelled', 'completed'] },
+          orderType: { in: ["errand", "errand_order"] },
+          status: {
+            notIn: ["resolved", "rejected", "closed", "cancelled", "completed"],
+          },
         },
         select: { id: true, status: true },
       }),
       this.prisma.deliveryRiskEvent.findFirst({
         where: {
           orderId,
-          orderType: 'errand',
+          orderType: "errand",
           handled: false,
-          eventLevel: { in: ['error', 'critical'] },
+          eventLevel: { in: ["error", "critical"] },
         },
         select: { id: true, eventLevel: true },
       }),
     ]);
-    if (appeal) throw new BadRequestException('订单售后处理中，暂不能确认收货');
-    if (riskEvent) throw new BadRequestException('订单存在未处理风险事件，暂不能确认收货');
+    if (appeal) throw new BadRequestException("订单售后处理中，暂不能确认收货");
+    if (riskEvent)
+      throw new BadRequestException("订单存在未处理风险事件，暂不能确认收货");
 
     const now = new Date();
-    const updated = await this.prisma.$transaction(async tx => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
           userId: order.userId,
-          status: 'arrived',
-          refundStatus: { notIn: ['refunding', 'refunded'] },
+          status: "arrived",
+          refundStatus: { notIn: ["refunding", "refunded"] },
         },
         data: {
-          status: 'completed',
+          status: "completed",
           receiptConfirmedAt: now,
           receiptConfirmedBy: source,
           completeTime: now,
@@ -333,20 +433,27 @@ export class ErrandLifecycleService {
         },
       });
       if (claimed.count !== 1) {
-        throw new BadRequestException('订单状态已变化，请刷新后重试');
+        throw new BadRequestException("订单状态已变化，请刷新后重试");
       }
 
       // 写入平台抽成金额
       try {
-        const feeConfig = await tx.bizFeeConfig.findUnique({ where: { bizType: 'errand_order' } }).catch(() => null);
+        const feeConfig = await tx.bizFeeConfig
+          .findUnique({ where: { bizType: "errand_order" } })
+          .catch(() => null);
         const rate = feeConfig?.enabled ? Number(feeConfig.rate || 0) : 0;
-        const fixedFee = feeConfig?.enabled ? Number(feeConfig.fixedFee || 0) : 0;
+        const fixedFee = feeConfig?.enabled
+          ? Number(feeConfig.fixedFee || 0)
+          : 0;
         if (rate > 0 || fixedFee > 0) {
           const payAmount = Number(order.payAmount || 0);
-          const platformFee = Math.max(0, Math.min(
-            Math.round((payAmount * rate + fixedFee) * 100) / 100,
-            payAmount,
-          ));
+          const platformFee = Math.max(
+            0,
+            Math.min(
+              Math.round((payAmount * rate + fixedFee) * 100) / 100,
+              payAmount,
+            ),
+          );
           if (platformFee > 0) {
             await tx.errandOrder.update({
               where: { id: orderId },
@@ -355,24 +462,35 @@ export class ErrandLifecycleService {
           }
         }
       } catch (e: any) {
-        this.logger && this.logger.warn(`跑腿订单写入 platformFee 失败: ${e.message}`);
+        this.logger &&
+          this.logger.warn(`跑腿订单写入 platformFee 失败: ${e.message}`);
       }
       await tx.deliveryOrderNode.create({
         data: {
           orderId,
-          orderType: 'errand',
-          nodeType: 'completed',
-          nodeLabel: source === 'system' ? '超时自动确认收货' : (source === 'rider' ? '骑手凭收货码确认收货' : '用户已确认收货'),
-          operatorId: source === 'system' ? null : userId,
+          orderType: "errand",
+          nodeType: "completed",
+          nodeLabel:
+            source === "system"
+              ? "超时自动确认收货"
+              : source === "rider"
+                ? "骑手凭收货码确认收货"
+                : "用户已确认收货",
+          operatorId: source === "system" ? null : userId,
           operatorType: source,
-          riderType: 'part_time',
-          displayMode: order.deliveryDisplayMode || 'status_nodes',
-          remark: source === 'system' ? '送达24小时后系统自动确认' : (source === 'rider' ? '骑手凭收货码完成核销' : '用户主动确认收货'),
+          riderType: "part_time",
+          displayMode: order.deliveryDisplayMode || "status_nodes",
+          remark:
+            source === "system"
+              ? "送达24小时后系统自动确认"
+              : source === "rider"
+                ? "骑手凭收货码完成核销"
+                : "用户主动确认收货",
         },
       });
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
     });
-    await this.dispatchLifecycleNotification(updated, 'errand_delivered');
+    await this.dispatchLifecycleNotification(updated, "errand_delivered");
     return updated;
   }
 
@@ -385,31 +503,34 @@ export class ErrandLifecycleService {
     evidence: any,
     existingOrder?: any,
   ) {
-    const order = existingOrder || await this.requireRiderOrder(orderId, riderId, fromStatus);
+    const order =
+      existingOrder ||
+      (await this.requireRiderOrder(orderId, riderId, fromStatus));
     const proofImages = this.proofImages(evidence);
-    const updated = await this.prisma.$transaction(async tx => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
           riderId,
           status: fromStatus,
-          refundStatus: { notIn: ['refunding', 'refunded'] },
+          refundStatus: { notIn: ["refunding", "refunded"] },
         },
         data: { status: toStatus, ...timeData },
       });
       if (claimed.count !== 1) {
-        throw new BadRequestException('订单状态已变化，请刷新后重试');
+        throw new BadRequestException("订单状态已变化，请刷新后重试");
       }
       await tx.deliveryOrderNode.create({
         data: {
           orderId,
-          orderType: 'errand',
+          orderType: "errand",
           nodeType: toStatus,
-          nodeLabel: toStatus === 'arrived' ? '骑手已送达，等待用户确认' : '骑手已取货',
+          nodeLabel:
+            toStatus === "arrived" ? "骑手已送达，等待用户确认" : "骑手已取货",
           operatorId: riderId,
-          operatorType: 'rider',
-          riderType: 'part_time',
-          displayMode: order.deliveryDisplayMode || 'status_nodes',
+          operatorType: "rider",
+          riderType: "part_time",
+          displayMode: order.deliveryDisplayMode || "status_nodes",
           lat: this.coordinate(evidence?.lat ?? evidence?.latitude),
           lng: this.coordinate(evidence?.lng ?? evidence?.longitude),
           address: evidence?.address || null,
@@ -419,25 +540,27 @@ export class ErrandLifecycleService {
       });
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
     });
-    if (toStatus === 'in_progress') {
-      await this.dispatchLifecycleNotification(updated, 'errand_picked');
+    if (toStatus === "in_progress") {
+      await this.dispatchLifecycleNotification(updated, "errand_picked");
     }
     return updated;
   }
 
   private async dispatchLifecycleNotification(
     order: any,
-    scene: 'errand_picked' | 'errand_delivered',
+    scene: "errand_picked" | "errand_delivered",
   ) {
     if (!this.notifyService || !order?.userId) return;
 
     const rider = order.riderId
-      ? await this.prisma.regionRider.findUnique({
-          where: { userId: order.riderId },
-          select: { realName: true },
-        }).catch(() => null)
+      ? await this.prisma.regionRider
+          .findUnique({
+            where: { userId: order.riderId },
+            select: { realName: true },
+          })
+          .catch(() => null)
       : null;
-    const isPicked = scene === 'errand_picked';
+    const isPicked = scene === "errand_picked";
     const occurredAt = isPicked
       ? order.pickupTime || new Date()
       : order.completeTime || new Date();
@@ -446,34 +569,34 @@ export class ErrandLifecycleService {
       await this.notifyService.createAndDispatch({
         userId: order.userId,
         regionId: order.regionId || undefined,
-        type: 'delivery',
+        type: "delivery",
         scene,
-        title: isPicked ? '骑手已取件' : '订单已完成',
+        title: isPicked ? "骑手已取件" : "订单已完成",
         content: isPicked
-          ? `您的跑腿订单 ${order.orderNo || ''} 已由骑手取件，正在配送中。`
-          : `您的跑腿订单 ${order.orderNo || ''} 已完成，感谢您的使用。`,
+          ? `您的跑腿订单 ${order.orderNo || ""} 已由骑手取件，正在配送中。`
+          : `您的跑腿订单 ${order.orderNo || ""} 已完成，感谢您的使用。`,
         data: {
           orderId: order.id,
-          orderNo: order.orderNo || '',
-          riderName: rider?.realName || '骑手',
-          pickupAddress: order.pickupAddress || '',
-          deliveryAddress: order.deliverAddress || '',
+          orderNo: order.orderNo || "",
+          riderName: rider?.realName || "骑手",
+          pickupAddress: order.pickupAddress || "",
+          deliveryAddress: order.deliverAddress || "",
           estimatedTime: this.formatWechatTime(occurredAt),
           finishedAt: this.formatWechatTime(occurredAt),
         },
-        linkType: 'page',
+        linkType: "page",
         linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
         channelMask: {
           inApp: true,
           websocket: true,
           push: false,
-          wechatSubscribe: false,
+          wechatSubscribe: true,
           officialAccount: true,
         },
       });
     } catch (error: any) {
       this.logger.warn(
-        `跑腿服务号通知失败 order=${order.id} scene=${scene}: ${error?.message || error}`,
+        `跑腿微信通知失败 order=${order.id} scene=${scene}: ${error?.message || error}`,
       );
     }
   }
@@ -481,54 +604,97 @@ export class ErrandLifecycleService {
   private formatWechatTime(value: Date | string) {
     const date = value instanceof Date ? value : new Date(value);
     const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
-    return safeDate.toLocaleString('zh-CN', {
+    return safeDate.toLocaleString("zh-CN", {
       hour12: false,
-      timeZone: 'Asia/Shanghai',
+      timeZone: "Asia/Shanghai",
     });
   }
 
-  private async requireRiderOrder(orderId: string, riderId: string, status: string) {
-    const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
-    if (!order) throw new NotFoundException('订单不存在');
-    if (order.riderId !== riderId) throw new BadRequestException('无权操作该订单');
-    if (['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))) {
-      throw new BadRequestException('订单退款处理中，不能继续配送');
+  private async requireRiderOrder(
+    orderId: string,
+    riderId: string,
+    status: string,
+  ) {
+    const order = await this.prisma.errandOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) throw new NotFoundException("订单不存在");
+    if (order.riderId !== riderId)
+      throw new BadRequestException("无权操作该订单");
+    if (
+      ["refunding", "refunded"].includes(String(order.refundStatus || "none"))
+    ) {
+      throw new BadRequestException("订单退款处理中，不能继续配送");
     }
-    if (order.status !== status) throw new BadRequestException('当前订单状态不允许这样操作');
+    if (order.status !== status)
+      throw new BadRequestException("当前订单状态不允许这样操作");
     return order;
   }
 
   private assertRequiredDeliveryProof(order: any, evidence: any) {
     const remark = this.parseRemark(order?.remark);
     const required = remark?.risk_assessment?.required_evidence;
-    if (Array.isArray(required) && required.length > 0 && this.proofImages(evidence).length === 0) {
-      throw new BadRequestException('请上传送达凭证');
+    if (
+      Array.isArray(required) &&
+      required.length > 0 &&
+      this.proofImages(evidence).length === 0
+    ) {
+      throw new BadRequestException("请上传送达凭证");
     }
   }
 
   private async releaseRiderAfterDelivery(orderId: string, riderId: string) {
-    const [activeErrandCount, activeShopCount] = await Promise.all([
+    const receiverLookup =
+      typeof (this.prisma.regionRider as any).findUnique === "function"
+        ? this.prisma.regionRider
+            .findUnique({
+              where: { userId: riderId },
+              select: { verifyStatus: true, riderType: true },
+            })
+            .catch(() => null)
+        : Promise.resolve({ verifyStatus: "approved", riderType: "part_time" });
+    const [activeErrandCount, activeShopCount, receiver] = await Promise.all([
       this.prisma.errandOrder.count({
         where: {
           id: { not: orderId },
           riderId,
-          status: { in: ['accepted', 'in_progress'] },
+          status: { in: ["accepted", "in_progress"] },
         },
       }),
-      this.prisma.order.count({ where: { riderId, status: 'SHIPPED' as any } }),
+      this.prisma.order.count({ where: { riderId, status: "SHIPPED" as any } }),
+      receiverLookup,
     ]);
-    await this.prisma.regionRider.updateMany({
-      where: { userId: riderId, verifyStatus: 'approved' },
-      data: { status: activeErrandCount + activeShopCount > 0 ? 'busy' : 'online' },
-    }).catch(() => undefined);
+    const hasActiveOrders = activeErrandCount + activeShopCount > 0;
+    if (
+      !receiver ||
+      (!["approved", "ordinary_user"].includes(receiver.verifyStatus) &&
+        receiver.riderType !== "ordinary_user")
+    ) {
+      return;
+    }
+    await this.prisma.regionRider
+      .updateMany({
+        where: { userId: riderId },
+        data: {
+          status:
+            receiver?.verifyStatus === "approved"
+              ? hasActiveOrders
+                ? "busy"
+                : "online"
+              : hasActiveOrders
+                ? "busy"
+                : "offline",
+        },
+      })
+      .catch(() => undefined);
   }
 
   private normalizeRiderStatus(value: unknown) {
-    const status = String(value || '').trim();
+    const status = String(value || "").trim();
     const map: Record<string, string> = {
-      picked_up: 'in_progress',
-      delivering: 'in_progress',
-      delivered: 'arrived',
+      picked_up: "in_progress",
+      delivering: "in_progress",
+      delivered: "arrived",
     };
     return map[status] || status;
   }
@@ -540,7 +706,7 @@ export class ErrandLifecycleService {
 
   private parseRemark(value: unknown): any {
     if (!value) return {};
-    if (typeof value === 'object') return value;
+    if (typeof value === "object") return value;
     try {
       return JSON.parse(String(value));
     } catch {
@@ -549,7 +715,7 @@ export class ErrandLifecycleService {
   }
 
   private coordinate(value: unknown) {
-    if (value === undefined || value === null || value === '') return null;
+    if (value === undefined || value === null || value === "") return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
   }

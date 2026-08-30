@@ -54,8 +54,7 @@ const steps = computed(() => campusMapWorkflowSteps({
 
 const stageText = computed(() => {
   if (!props.hasVisualBaseMap && props.featureCount === 0) return '先准备底图'
-  if (props.editorMode !== 'amap') return '清理图纸和编辑对象'
-  if (props.calibrationPointCount < 2) return '在真实地图上校准位置'
+  if (props.calibrationPointCount < 3) return '在画师图上管理地点，按需补真实坐标'
   if (!props.canPublish) return '补齐名称和关键点位'
   return '检查通过，准备发布'
 })

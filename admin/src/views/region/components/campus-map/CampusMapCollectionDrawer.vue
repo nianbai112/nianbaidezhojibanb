@@ -11,8 +11,8 @@
       <el-alert
         type="warning"
         :closable="false"
-        title="原始数据不会自动发布到校园地图"
-        description="现场轨迹和标记只进入审核区；清洗、路网审核和地图发布仍是后续独立步骤。"
+        title="现场数据先审核，再进入地图草稿"
+        description="绑定具体地点的坐标通过审核后会更新地图草稿；必须再次发布才会影响用户端。"
         show-icon
       />
 
@@ -43,7 +43,7 @@
                   <strong>{{ task.name }}</strong>
                   <el-tag size="small" :type="taskStatusType(task.status)">{{ taskStatusLabel(task.status) }}</el-tag>
                 </span>
-                <span>{{ task.assignments?.length || 0 }} 人 · {{ taskSessionCount(task) }} 次会话</span>
+                <span>{{ taskTypeLabel(task) }} · {{ task.assignments?.length || 0 }} 人 · {{ taskSessionCount(task) }} 次会话</span>
                 <small>{{ formatDate(task.updatedAt) }}</small>
               </button>
               <el-empty v-if="!tasks.length" description="还没有现场采集任务" />
@@ -62,7 +62,7 @@
                   </div>
                 </div>
                 <div class="metric-grid">
-                  <div><span>任务状态</span><strong>{{ taskStatusLabel(selectedTask.status) }}</strong></div>
+                  <div><span>任务类型</span><strong>{{ taskTypeLabel(selectedTask) }}</strong></div>
                   <div><span>采集人员</span><strong>{{ selectedTask.assignments?.length || 0 }}</strong></div>
                   <div><span>原始会话</span><strong>{{ selectedTask.sessions?.length || 0 }}</strong></div>
                   <div><span>更新时间</span><strong>{{ formatDate(selectedTask.updatedAt) }}</strong></div>
@@ -73,6 +73,13 @@
                     {{ collectorLabel(assignment.userId) }}
                   </el-tag>
                   <span v-if="!selectedTask.assignments?.length" class="muted">尚未分配采集人员</span>
+                </div>
+                <h4>指定采集地点</h4>
+                <div class="chip-row">
+                  <el-tag v-for="place in selectedTaskPlaces" :key="place.id" type="success">
+                    {{ place.title }}
+                  </el-tag>
+                  <span v-if="!selectedTaskPlaces.length" class="muted">未指定，骑手可按任务类型自由采集</span>
                 </div>
                 <h4>最近原始会话</h4>
                 <el-table :data="selectedTask.sessions || []" size="small" @row-click="openSession">
@@ -115,6 +122,15 @@
                   <div><span>轨迹点</span><strong>{{ selectedSession.points?.length || selectedSession.pointCount }}</strong></div>
                   <div><span>上传完整性</span><strong>{{ selectedSession.uploadComplete ? '完整' : '待补传' }}</strong></div>
                 </div>
+
+                <el-alert
+                  type="info"
+                  :closable="false"
+                  title="这是原始会话轨迹，不是已结束路线段对象"
+                  description="用于排查设备轨迹、上传完整性和现场标记；请到“对象审核”选择骑手已结束并提交的路线段。"
+                  show-icon
+                  class="draft-only-alert"
+                />
                 <div class="accuracy-row">
                   <span>精度分布</span>
                   <el-tag type="success">良好 {{ accuracyCounts.good }}</el-tag>
@@ -171,7 +187,7 @@
               </el-select>
               <el-button @click="loadObjects">刷新</el-button>
             </div>
-            <span class="muted">{{ objectTotal }} 个对象 · 审核决定会回传骑手端，不会直接覆盖正式校园地图</span>
+            <span class="muted">{{ objectTotal }} 个对象 · 绑定地点的坐标通过后写入地图草稿，不直接覆盖正式发布版</span>
           </div>
 
           <div class="review-layout">
@@ -203,6 +219,61 @@
                   <div><span>采集时间</span><strong>{{ formatDate(selectedObject.recordedAt) }}</strong></div>
                 </div>
 
+                <template v-if="selectedObject.objectType === 'road'">
+                  <el-alert
+                    type="info"
+                    :closable="false"
+                    title="已结束路线段对象"
+                    description="下面的橙色轨迹、采样精度、旁注和附件属于骑手已结束并提交的独立路线段；不是上方原始会话的连续轨迹。"
+                    show-icon
+                    class="draft-only-alert"
+                  />
+                  <el-alert
+                    v-if="selectedRouteDependency.visible"
+                    :type="selectedRouteDependency.type"
+                    :closable="false"
+                    :title="selectedRouteDependency.title"
+                    :description="selectedRouteDependency.description"
+                    show-icon
+                    class="draft-only-alert"
+                  />
+                  <h4>路线与定位证据</h4>
+                  <div class="object-route-preview">
+                    <svg viewBox="0 0 640 260" preserveAspectRatio="none" aria-label="骑手已结束路线段预览">
+                      <polyline v-if="selectedObjectSvgPoints" :points="selectedObjectSvgPoints" fill="none" stroke="#f97316" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+                      <circle
+                        v-for="(point, index) in selectedObjectSvgPointPairs"
+                        :key="`${point.x}-${point.y}-${index}`"
+                        :cx="point.x"
+                        :cy="point.y"
+                        r="3.5"
+                        fill="#2563eb"
+                      />
+                    </svg>
+                  </div>
+                  <div class="evidence-strip">
+                    <el-tag>{{ selectedObjectPointCount }} 个路线点</el-tag>
+                    <el-tag :type="accuracyBand(selectedObject.accuracy).key === 'good' ? 'success' : accuracyBand(selectedObject.accuracy).key === 'review' ? 'warning' : 'danger'">
+                      对象精度 {{ accuracyText(selectedObject.accuracy) }} · {{ accuracyBand(selectedObject.accuracy).label }}
+                    </el-tag>
+                    <el-tag type="info">{{ photoAttachments.length }} 张现场照片</el-tag>
+                  </div>
+                  <div class="route-quality-grid">
+                    <div><span>有效采样点</span><strong>{{ qualityValue(selectedObject.quality?.acceptedPointCount, '个') }}</strong></div>
+                    <div><span>精度中位数</span><strong>{{ qualityValue(selectedObject.quality?.medianAccuracy, 'm', 1) }}</strong></div>
+                    <div><span>最大误差</span><strong>{{ qualityValue(selectedObject.quality?.maxAccuracy, 'm', 1) }}</strong></div>
+                    <div><span>路线距离</span><strong>{{ qualityValue(selectedObject.quality?.distanceMeters, 'm', 1) }}</strong></div>
+                    <div><span>采集时长</span><strong>{{ qualityDuration(selectedObject.quality?.durationSeconds) }}</strong></div>
+                    <div><span>拒绝质量事件</span><strong>{{ qualityValue(selectedObject.quality?.rejectedQualityEventCount, '次') }}</strong></div>
+                  </div>
+                  <div v-if="selectedObjectRoadNotes.length" class="road-note-list">
+                    <div v-for="(note, index) in selectedObjectRoadNotes" :key="`${note.label}-${index}`">
+                      <span>{{ note.label }}</span><strong>{{ note.text }}</strong>
+                    </div>
+                  </div>
+                  <div v-else class="muted road-note-empty">本路线没有上传沿途旁注</div>
+                </template>
+
                 <h4>现场信息</h4>
                 <div class="object-props">
                   <div v-for="row in objectPropertiesList(selectedObject.properties)" :key="row.label">
@@ -225,6 +296,19 @@
                 </div>
                 <div v-else class="muted">没有附件照片</div>
 
+                <template v-if="selectedObject.objectType !== 'road' || selectedObjectTargetId">
+                  <h4>当前档案与骑手候选值</h4>
+                  <div class="bound-place-line">
+                    <span>绑定地点</span>
+                    <strong>{{ selectedObjectCurrentPlace.label || selectedObjectTargetId || '尚未绑定' }}</strong>
+                  </div>
+                  <el-table :data="comparisonRows" size="small" border class="comparison-table">
+                    <el-table-column prop="label" label="字段" width="120" />
+                    <el-table-column prop="current" label="当前草稿" min-width="180" show-overflow-tooltip />
+                    <el-table-column prop="candidate" label="骑手候选" min-width="180" show-overflow-tooltip />
+                  </el-table>
+                </template>
+
                 <template v-if="selectedObject.reviewStatus !== 'pending'">
                   <h4>审核结果</h4>
                   <div class="review-result">
@@ -234,12 +318,22 @@
                   </div>
                 </template>
 
-                <div class="review-actions">
+                <el-alert
+                  v-if="selectedObject.reviewStatus === 'superseded'"
+                  type="info"
+                  :closable="false"
+                  title="该对象已被新的补采结果替代"
+                  :description="selectedObject.applyResult?.supersededByObjectId ? `新对象：${selectedObject.applyResult.supersededByObjectId}。旧记录仅保留审核痕迹，不能再次作出人工决定。` : '旧记录仅保留审核痕迹，不能再次作出人工决定。'"
+                  show-icon
+                  class="draft-only-alert"
+                />
+                <div v-else class="review-actions">
                   <span>审核决定：</span>
-                  <el-button type="success" @click="openReview('approved')">通过</el-button>
+                  <el-button type="success" :disabled="selectedRouteDependency.blocked" @click="openReview('approved')">通过</el-button>
                   <el-button type="warning" @click="openReview('resample')">要求重采</el-button>
                   <el-button type="info" @click="openReview('held')">暂缓</el-button>
                   <el-button type="danger" @click="openReview('void')">作废</el-button>
+                  <small v-if="selectedObject.objectType === 'road'" class="route-threshold-note">即使点击通过，点数、精度、距离或时长不达服务端阈值仍会被拒绝；通过后只写地图草稿。</small>
                 </div>
               </template>
               <el-empty v-else description="选择左侧对象查看详情" />
@@ -258,15 +352,61 @@
             <el-option v-for="item in taskStatuses" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
+        <el-form-item label="任务类型">
+          <el-select v-model="taskForm.taskType" style="width: 100%" @change="syncTaskType">
+            <el-option v-for="item in taskTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+          <div class="form-help">地点核验用于采集坐标、地址、建设状态和现场照片；路线采集用于完整走线。</div>
+        </el-form-item>
         <el-form-item label="采集端">
           <el-input model-value="官方骑手 App" disabled />
         </el-form-item>
         <el-form-item label="采集对象">
-          <el-checkbox-group v-model="taskForm.objectTypes">
+          <el-checkbox-group v-model="taskForm.objectTypes" disabled>
             <el-checkbox v-for="item in objectTypeOptions" :key="item.value" :value="item.value">
               {{ item.label }}
             </el-checkbox>
           </el-checkbox-group>
+          <div class="form-help">采集对象由任务类型自动锁定，避免骑手提交类型与任务契约不一致。</div>
+        </el-form-item>
+        <el-form-item v-if="taskForm.taskType !== 'route_collection'" label="指定地图地点">
+          <el-select
+            v-model="taskForm.targetPlaceIds"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="可选择蓝色点位或建筑多边形；骑手端会直接显示名称"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="place in placeOptions"
+              :key="place.id"
+              :value="place.id"
+              :label="place.label"
+              :disabled="place.selectable === false"
+            >
+              <span>{{ place.label }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="taskForm.taskType !== 'place_verification'" label="指定采集路线">
+          <el-select
+            v-model="taskForm.targetFeatureIds"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="选择地图上的具体道路；骑手端会高亮显示"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="feature in featureOptions"
+              :key="feature.id"
+              :value="feature.id"
+              :label="feature.label"
+            />
+          </el-select>
         </el-form-item>
         <div class="form-grid">
           <el-form-item label="优先级">
@@ -342,17 +482,55 @@
     <el-dialog
       v-model="reviewDialogVisible"
       :title="reviewDialogTitle"
-      width="540px"
+      width="min(780px, 94vw)"
       append-to-body
     >
       <div class="review-pick">
-        <el-radio-group v-model="reviewForm.decision">
+        <el-radio-group v-model="reviewForm.decision" @change="syncReviewDecision">
           <el-radio-button v-for="item in reviewDecisionOptions" :key="item.value" :value="item.value">
             {{ item.label }}
           </el-radio-button>
         </el-radio-group>
       </div>
       <el-form label-position="top" class="review-form">
+        <template v-if="reviewForm.decision === 'approved'">
+          <el-alert
+            type="warning"
+            :closable="false"
+            title="此操作只更新地图草稿，不会直接发布"
+            :description="selectedObject?.objectType === 'road' ? '路线仍需通过服务端点数、精度、距离和时长阈值；审核成功后还要回地图工作台人工预览并发布。' : '仅勾选字段会写入地点草稿；还要回地图工作台人工预览并发布。'"
+            show-icon
+          />
+          <el-form-item label="合并到地点档案">
+            <el-select v-model="reviewForm.targetPlaceId" filterable clearable placeholder="路线可不绑定地点；地点核验必须选择" style="width: 100%">
+              <el-option v-for="place in placeOptions" :key="place.id" :label="place.label" :value="place.id" :disabled="place.selectable === false" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="选择写入草稿的字段">
+            <el-checkbox-group v-model="reviewForm.applyFields" class="apply-field-grid">
+              <el-checkbox v-for="field in applicableReviewApplyFields" :key="field.value" :value="field.value">
+                {{ field.label }}
+              </el-checkbox>
+            </el-checkbox-group>
+            <div v-if="selectedObject?.objectType !== 'road'" class="form-help">地点核验默认不采用任何候选值，请管理员对照当前档案后逐项勾选。</div>
+          </el-form-item>
+          <el-table :data="comparisonRows.filter((row) => reviewForm.applyFields.includes(row.field))" size="small" border class="comparison-table review-comparison">
+            <el-table-column prop="label" label="采用字段" width="120" />
+            <el-table-column prop="current" label="当前草稿" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="candidate" label="骑手候选" min-width="180" show-overflow-tooltip />
+          </el-table>
+          <el-form-item
+            v-if="reviewForm.applyFields.includes('media')"
+            :label="selectedObject?.objectType === 'road' ? '选择写入路线草稿 evidence 的现场照片' : '选择提升为地点正式图片的现场证据'"
+          >
+            <el-checkbox-group v-model="reviewForm.promoteAttachmentIds" class="promotion-photo-grid">
+              <el-checkbox v-for="photo in promotablePhotoAttachments" :key="photo.id" :value="String(photo.id)" class="promotion-photo-option">
+                <img :src="photo.url" alt="骑手现场证据" />
+              </el-checkbox>
+            </el-checkbox-group>
+            <div v-if="!promotablePhotoAttachments.length" class="muted">没有可提升的照片附件</div>
+          </el-form-item>
+        </template>
         <el-form-item label="审核原因（必填）">
           <el-input
             v-model="reviewForm.note"
@@ -390,22 +568,44 @@ import {
 } from '@/api/admin'
 import {
   accuracyBand,
+  buildPlaceTargetOptions,
   buildProfessionalTaskPayload,
+  buildReviewPayload,
+  defaultReviewApplyFields,
   formatSessionDuration,
   geometrySummary,
+  isImageEvidenceAttachment,
+  objectGeometryPolyline,
+  objectTypesForTaskType,
   objectPropertiesList,
   objectTypeLabel,
+  reviewComparisonRows,
+  reviewApplyFieldsForObject,
+  roadEvidenceNotes,
+  routeDependencyReviewState,
   reviewStatusLabel,
   reviewStatusType,
   REVIEW_STATUSES,
   taskSessionCount,
+  taskTypeLabel,
+  TASK_TYPES,
   toCollectorOption,
   toRawPolyline,
   toSvgPolyline,
 } from './campusMapCollectionModel.mjs'
 
-const props = defineProps<{ modelValue: boolean; regionId: string | number; regionName?: string }>()
-defineEmits<{ 'update:modelValue': [value: boolean] }>()
+const props = defineProps<{
+  modelValue: boolean
+  regionId: string | number
+  regionName?: string
+  places?: any[]
+  features?: any[]
+  hasUnsavedChanges?: boolean
+}>()
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  draftChanged: []
+}>()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -422,13 +622,19 @@ const objectTotal = ref(0)
 const selectedObject = ref<any>(null)
 const reviewDialogVisible = ref(false)
 const reviewFilters = reactive({ reviewStatus: 'pending', taskId: '', objectType: '' })
-const reviewForm = reactive({ decision: 'approved', note: '' })
+const reviewForm = reactive({
+  decision: 'approved', note: '', targetPlaceId: '',
+  applyFields: [] as string[], promoteAttachmentIds: [] as string[],
+})
 const collectorLoading = ref(false)
 const collectorOptions = ref<any[]>([])
 
 const taskForm = reactive({
   id: '', name: '', instructions: '', status: 'draft',
+  taskType: 'route_collection',
   collectorUserIds: [] as string[], objectTypes: ['road'] as string[],
+  targetPlaceIds: [] as string[],
+  targetFeatureIds: [] as string[],
   priority: 3, dueAt: '' as string | null,
   boundary: null as Record<string, unknown> | null,
 })
@@ -445,9 +651,11 @@ const taskStatuses = [
 ]
 const objectTypeOptions = [
   { value: 'road', label: '道路' }, { value: 'building', label: '建筑' },
+  { value: 'place_verification', label: '地点核验结果' },
   { value: 'entrance', label: '入口' }, { value: 'facility', label: '设施' },
   { value: 'issue', label: '异常' },
 ]
+const taskTypeOptions = TASK_TYPES
 const behaviors = [
   { value: 'info', label: '普通信息' }, { value: 'entrance', label: '入口候选' },
   { value: 'junction', label: '路口候选' }, { value: 'passability_change', label: '通行变化' },
@@ -456,11 +664,11 @@ const behaviors = [
 const targetTypeOptions = [
   ['building', '建筑'], ['entrance', '入口'], ['road', '道路'], ['road_node', '道路节点'],
   ['road_edge', '道路边'], ['gate', '校门'], ['area', '区域'], ['phase', '建设阶段'],
-  ['task', '采集任务'], ['marker', '其他标记'],
+  ['task', '采集任务'], ['marker', '其他标记'], ['place', '地点档案'],
 ].map(([value, label]) => ({ value, label }))
 const relationOptions = [
   ['belongs_to', '属于'], ['entrance_of', '入口'], ['connects', '连接'], ['affects', '影响'],
-  ['blocks', '封闭'], ['alternative_to', '替代路线'], ['references', '参考位置'],
+  ['blocks', '封闭'], ['alternative_to', '替代路线'], ['references', '参考位置'], ['verifies', '核验地点'],
 ].map(([value, label]) => ({ value, label }))
 
 const rawSvgPoints = computed(() => toSvgPolyline(toRawPolyline(selectedSession.value?.points || []), 640, 320))
@@ -469,11 +677,46 @@ const accuracyCounts = computed(() => (selectedSession.value?.points || []).redu
   return result
 }, { good: 0, review: 0, poor: 0 }))
 const reviewStatusOptions = computed(() => REVIEW_STATUSES)
-const reviewDecisionOptions = computed(() => REVIEW_STATUSES.filter((item) => item.value !== 'pending'))
-const photoAttachments = computed(() => (selectedObject.value?.attachments || []).filter((item: any) => item.kind !== 'audio'))
+const reviewDecisionOptions = computed(() => REVIEW_STATUSES.filter((item) => item.value !== 'pending' && item.decision !== false))
+const photoAttachments = computed(() => (selectedObject.value?.attachments || []).filter(isImageEvidenceAttachment))
+const promotablePhotoAttachments = computed(() => photoAttachments.value.filter((item: any) => item.id))
 const reviewDialogTitle = computed(() => {
   if (!selectedObject.value) return '审核采集对象'
   return `审核：${objectTypeLabel(selectedObject.value.objectType)} · ${objectDisplayName(selectedObject.value)}`
+})
+const placeOptions = computed(() => buildPlaceTargetOptions(props.places || []))
+const featureOptions = computed(() => (props.features || []).map((feature: any) => ({
+  id: String(feature.id || feature.featureId || ''),
+  label: String(feature.title || feature.name || feature.id || '未命名图形'),
+})).filter((feature: any) => feature.id))
+const selectedObjectTargetId = computed(() => String(
+  selectedObject.value?.properties?.targetPlaceId
+    || selectedObject.value?.targetPlaceId
+    || (Array.isArray(selectedObject.value?.bindings)
+      ? selectedObject.value.bindings.find((item: any) => item?.targetId)?.targetId
+      : '')
+    || '',
+))
+const selectedObjectCurrentPlace = computed(() =>
+  placeOptions.value.find((place: any) =>
+    place.id === selectedObjectTargetId.value || String(place.featureId || '') === selectedObjectTargetId.value,
+  ) || {},
+)
+const selectedObjectResolvedTargetId = computed(() => String(selectedObjectCurrentPlace.value.id || selectedObjectTargetId.value || ''))
+const comparisonRows = computed(() => reviewComparisonRows(selectedObjectCurrentPlace.value, selectedObject.value || {}))
+const applicableReviewApplyFields = computed(() => reviewApplyFieldsForObject(selectedObject.value || {}))
+const selectedObjectPolyline = computed(() => objectGeometryPolyline(selectedObject.value || {}))
+const selectedObjectSvgPoints = computed(() => toSvgPolyline(selectedObjectPolyline.value, 640, 260))
+const selectedObjectSvgPointPairs = computed(() => selectedObjectSvgPoints.value.split(' ').filter(Boolean).map((point) => {
+  const [x, y] = point.split(',').map(Number)
+  return { x, y }
+}).filter((_, index, points) => index % Math.max(1, Math.ceil(points.length / 120)) === 0))
+const selectedObjectPointCount = computed(() => selectedObjectPolyline.value.length)
+const selectedObjectRoadNotes = computed(() => roadEvidenceNotes(selectedObject.value || {}))
+const selectedRouteDependency = computed(() => routeDependencyReviewState(selectedObject.value || {}))
+const selectedTaskPlaces = computed(() => {
+  const ids = new Set((selectedTask.value?.targetPlaceIds || []).map(String))
+  return placeOptions.value.filter((place: any) => ids.has(place.id) || ids.has(String(place.featureId || '')))
 })
 
 watch(() => props.modelValue, (visible) => {
@@ -518,8 +761,24 @@ function objectDisplayName(item: any) {
 }
 
 function accuracyText(accuracy: any) {
+  if (accuracy === null || accuracy === undefined || accuracy === '') return '--'
   const value = Number(accuracy)
   return Number.isFinite(value) ? `${value.toFixed(1)}m` : '--'
+}
+
+function qualityValue(value: any, unit = '', precision = 0) {
+  if (value === null || value === undefined || value === '') return '--'
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '--'
+  return `${numeric.toFixed(precision)}${unit}`
+}
+
+function qualityDuration(value: any) {
+  if (value === null || value === undefined || value === '') return '--'
+  const seconds = Number(value)
+  if (!Number.isFinite(seconds) || seconds < 0) return '--'
+  const rounded = Math.round(seconds)
+  return `${Math.floor(rounded / 60)}分${rounded % 60}秒`
 }
 
 async function loadObjects() {
@@ -540,25 +799,72 @@ function selectObject(item: any) {
 }
 
 function openReview(decision: string) {
+  if (selectedObject.value?.reviewStatus === 'superseded') {
+    return ElMessage.info('该对象已被补采结果替代，只能查看历史记录')
+  }
+  if (decision === 'approved' && selectedRouteDependency.value.blocked) {
+    return ElMessage.warning(selectedRouteDependency.value.title)
+  }
   reviewForm.decision = decision
   reviewForm.note = ''
+  reviewForm.targetPlaceId = selectedObjectResolvedTargetId.value
+  reviewForm.applyFields = decision === 'approved' ? defaultReviewApplyFields(selectedObject.value || {}) : []
+  reviewForm.promoteAttachmentIds = decision === 'approved'
+    && selectedObject.value?.objectType === 'road'
+    ? promotablePhotoAttachments.value.map((item: any) => String(item.id))
+    : []
   reviewDialogVisible.value = true
+}
+
+function syncReviewDecision(decision: string | number | boolean | undefined) {
+  if (decision !== 'approved') {
+    reviewForm.applyFields = []
+    reviewForm.promoteAttachmentIds = []
+    return
+  }
+  reviewForm.applyFields = defaultReviewApplyFields(selectedObject.value || {})
+  reviewForm.promoteAttachmentIds = selectedObject.value?.objectType === 'road'
+    ? promotablePhotoAttachments.value.map((item: any) => String(item.id))
+    : []
 }
 
 async function submitReview() {
   if (!selectedObject.value) return
+  if (selectedObject.value.reviewStatus === 'superseded') return ElMessage.warning('已补采替代的旧对象不能再次审核')
+  if (reviewForm.decision === 'approved' && selectedRouteDependency.value.blocked) {
+    return ElMessage.warning(selectedRouteDependency.value.title)
+  }
   if (!reviewForm.note.trim()) return ElMessage.warning('请填写审核原因')
+  if (reviewForm.decision === 'approved' && props.hasUnsavedChanges) {
+    return ElMessage.warning('地图工作台还有未保存编辑，请先保存草稿或撤销后再审核，避免覆盖骑手合并结果')
+  }
   saving.value = true
   try {
-    await reviewCampusMapCollectionObject(props.regionId, selectedObject.value.id, {
-      decision: reviewForm.decision,
-      note: reviewForm.note.trim(),
-    })
+    const payload = buildReviewPayload(reviewForm, selectedObject.value)
+    if (payload.decision === 'approved' && selectedObject.value.objectType !== 'road' && !payload.applyFields.length) {
+      saving.value = false
+      return ElMessage.warning('请至少勾选一个要采用的地点字段')
+    }
+    if (payload.decision === 'approved' && selectedObject.value.objectType !== 'road' && payload.applyFields.length && !payload.targetPlaceId) {
+      saving.value = false
+      return ElMessage.warning('请先选择要写入的地点档案')
+    }
+    if (payload.decision === 'approved' && payload.applyFields.includes('media') && !payload.promoteAttachmentIds.length) {
+      saving.value = false
+      return ElMessage.warning('已勾选现场照片，请至少选择一张要提升的媒体证据')
+    }
+    const result: any = await reviewCampusMapCollectionObject(props.regionId, selectedObject.value.id, payload)
+    const response = result?.data || result || {}
     reviewDialogVisible.value = false
     const selectedId = selectedObject.value.id
     await loadObjects()
     selectedObject.value = objects.value.find((item) => item.id === selectedId) || null
-    ElMessage.success('审核结果已提交')
+    if (response?.draftApply?.applied) {
+      emit('draftChanged')
+      ElMessage.success('审核已写入地图草稿；工作台将重新加载，请预览后人工发布')
+    } else {
+      ElMessage.success('审核结果已提交')
+    }
   } catch (error: any) {
     if (error?.message) ElMessage.error(error.message)
   } finally {
@@ -576,17 +882,35 @@ function openTaskForm(task?: any) {
   collectorOptions.value = mergeCollectorOptions(knownOptions, collectorOptions.value)
   Object.assign(taskForm, {
     id: task?.id || '', name: task?.name || '', instructions: task?.instructions || '', status: task?.status || 'draft',
+    taskType: task?.taskType || (task?.objectTypes?.includes('road')
+      ? (task?.objectTypes?.includes('place_verification') || task?.targetPlaceIds?.length ? 'mixed' : 'route_collection')
+      : 'place_verification'),
     collectorUserIds, objectTypes: [...(task?.objectTypes || ['road'])],
+    targetPlaceIds: [...new Set((task?.targetPlaceIds || []).map((targetId: any) => {
+      const value = String(targetId)
+      const place = placeOptions.value.find((option: any) => option.id === value || String(option.featureId || '') === value)
+      return place?.id || value
+    }))],
+    targetFeatureIds: [...new Set((task?.targetFeatureIds || []).map(String).filter(Boolean))],
     priority: Number(task?.priority) || 3, dueAt: task?.dueAt || '', boundary: task?.boundary || null,
   })
   taskDialogVisible.value = true
   void searchCollectors('')
 }
 
+defineExpose({ openTaskForm })
+
+function syncTaskType(taskType: string | number | boolean | undefined) {
+  taskForm.objectTypes = objectTypesForTaskType(String(taskType || ''), taskForm.objectTypes)
+}
+
 async function saveTask() {
   const payload = buildProfessionalTaskPayload(taskForm)
   if (!payload.name) return ElMessage.warning('请输入任务名称')
   if (!payload.objectTypes.length) return ElMessage.warning('请至少选择一种采集对象')
+  if (payload.objectTypes.includes('place_verification') && !payload.targetPlaceIds.length) {
+    return ElMessage.warning('包含地点核验的任务必须指定至少一个已建档地图地点')
+  }
   if (payload.status === 'ready' && !payload.collectorUserIds.length) {
     return ElMessage.warning('待采集任务必须分配官方骑手')
   }
@@ -704,6 +1028,7 @@ function formatDate(value: string) { return value ? new Date(value).toLocaleStri
 .metric-grid span { color: #64748b; font-size: 12px; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; min-height: 32px; }
 .muted { color: #94a3b8; }
+.form-help { margin-top: 6px; color: #94a3b8; font-size: 12px; line-height: 1.55; }
 .accuracy-row { justify-content: flex-start; margin: 14px 0; }
 .review-toolbar { flex-wrap: wrap; }
 .review-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -715,11 +1040,33 @@ function formatDate(value: string) { return value ? new Date(value).toLocaleStri
 .object-props strong { font-weight: 600; word-break: break-word; }
 .photo-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .photo-thumb { width: 96px; height: 96px; border-radius: 8px; border: 1px solid #dbe3ee; cursor: zoom-in; }
+.draft-only-alert { margin: 4px 0 18px; }
+.object-route-preview { height: 260px; overflow: hidden; border: 1px solid #dbe3ee; border-radius: 12px; background: linear-gradient(135deg, #fff7ed, #eff6ff); }
+.object-route-preview svg { width: 100%; height: 100%; }
+.evidence-strip { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 18px; }
+.route-quality-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: -4px 0 18px; }
+.route-quality-grid > div { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; }
+.route-quality-grid span { color: #64748b; font-size: 12px; }
+.route-quality-grid strong { color: #0f172a; }
+.road-note-list { display: grid; gap: 8px; margin: -4px 0 18px; }
+.road-note-list > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; padding: 9px 11px; border: 1px solid #fed7aa; border-radius: 8px; background: #fff7ed; }
+.road-note-list span { color: #9a3412; font-size: 12px; }
+.road-note-list strong { color: #7c2d12; font-weight: 600; }
+.road-note-empty { margin: -4px 0 18px; }
+.bound-place-line { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px 12px; border: 1px solid #dbe3ee; border-bottom: 0; border-radius: 8px 8px 0 0; background: #fff; }
+.bound-place-line span { color: #64748b; font-size: 12px; }
+.comparison-table { margin-bottom: 18px; }
+.review-comparison { margin-top: -4px; }
+.apply-field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+.promotion-photo-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.promotion-photo-option { position: relative; height: auto; margin: 0; padding: 6px; border: 1px solid #dbe3ee; border-radius: 8px; }
+.promotion-photo-option img { display: block; width: 92px; height: 92px; object-fit: cover; border-radius: 6px; }
 .review-result { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid #dbe3ee; border-radius: 10px; background: #fff; margin-bottom: 16px; }
 .review-result p { margin: 0; color: #334155; }
 .review-result small { color: #94a3b8; }
 .review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-top: 1px solid #e2e8f0; padding-top: 14px; }
 .review-actions > span { color: #64748b; font-size: 13px; }
+.route-threshold-note { flex-basis: 100%; color: #b45309; line-height: 1.5; }
 .review-pick { margin-bottom: 16px; }
 .review-pick .el-radio-button { margin-right: 4px; }
 .review-form { margin-top: 4px; }
@@ -738,5 +1085,7 @@ function formatDate(value: string) { return value ? new Date(value).toLocaleStri
 @media (max-width: 900px) {
   .task-layout, .session-layout, .review-layout { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
+  .route-quality-grid { grid-template-columns: 1fr 1fr; }
+  .apply-field-grid { grid-template-columns: 1fr 1fr; }
 }
 </style>

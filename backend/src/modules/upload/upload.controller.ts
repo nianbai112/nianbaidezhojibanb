@@ -11,26 +11,51 @@ import {
   Req,
   HttpCode,
   HttpStatus,
-} from '@nestjs/common';
-import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiBearerAuth, ApiConsumes, ApiOperation } from '@nestjs/swagger';
-import { SkipThrottle, Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { Request } from 'express';
-import { UploadFileKind, UploadService, UploadScene } from './upload.service';
-import { PrismaService } from '../../common/services/prisma.service';
-import { JwtGuard } from '../../guards/jwt.guard';
-import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
-import { RequirePermission } from '../../decorators/require-permission.decorator';
-import { CurrentUser } from '../../decorators/current-user.decorator';
+  BadRequestException,
+} from "@nestjs/common";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+} from "@nestjs/swagger";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
+import { Request } from "express";
+import { UploadFileKind, UploadService, UploadScene } from "./upload.service";
+import { PrismaService } from "../../common/services/prisma.service";
+import { JwtGuard } from "../../guards/jwt.guard";
+import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
+import { RequirePermission } from "../../decorators/require-permission.decorator";
+import { CurrentUser } from "../../decorators/current-user.decorator";
 
-const uploadUserLimit = parseInt(process.env.UPLOAD_USER_THROTTLE_LIMIT || '180', 10);
-const uploadBatchLimit = parseInt(process.env.UPLOAD_BATCH_THROTTLE_LIMIT || '30', 10);
-const uploadVideoLimit = parseInt(process.env.UPLOAD_VIDEO_THROTTLE_LIMIT || '20', 10);
-const uploadAdminImageLimit = parseInt(process.env.UPLOAD_ADMIN_IMAGE_THROTTLE_LIMIT || '180', 10);
-const uploadAdminVideoLimit = parseInt(process.env.UPLOAD_ADMIN_VIDEO_THROTTLE_LIMIT || '20', 10);
-const uploadQrcodeLimit = parseInt(process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || '60', 10);
+const uploadUserLimit = parseInt(
+  process.env.UPLOAD_USER_THROTTLE_LIMIT || "180",
+  10,
+);
+const uploadBatchLimit = parseInt(
+  process.env.UPLOAD_BATCH_THROTTLE_LIMIT || "30",
+  10,
+);
+const uploadVideoLimit = parseInt(
+  process.env.UPLOAD_VIDEO_THROTTLE_LIMIT || "20",
+  10,
+);
+const uploadAdminImageLimit = parseInt(
+  process.env.UPLOAD_ADMIN_IMAGE_THROTTLE_LIMIT || "180",
+  10,
+);
+const uploadAdminVideoLimit = parseInt(
+  process.env.UPLOAD_ADMIN_VIDEO_THROTTLE_LIMIT || "20",
+  10,
+);
+const uploadQrcodeLimit = parseInt(
+  process.env.UPLOAD_QRCODE_THROTTLE_LIMIT || "60",
+  10,
+);
 
 const skipExceptUserUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user_batch: true,
@@ -40,6 +65,7 @@ const skipExceptUserUpload = {
   upload_qrcode: true,
 };
 const skipExceptBatchUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user: true,
@@ -49,6 +75,7 @@ const skipExceptBatchUpload = {
   upload_qrcode: true,
 };
 const skipExceptVideoUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user: true,
@@ -58,6 +85,7 @@ const skipExceptVideoUpload = {
   upload_qrcode: true,
 };
 const skipExceptAdminImageUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user: true,
@@ -67,6 +95,7 @@ const skipExceptAdminImageUpload = {
   upload_qrcode: true,
 };
 const skipExceptAdminVideoUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user: true,
@@ -76,6 +105,7 @@ const skipExceptAdminVideoUpload = {
   upload_qrcode: true,
 };
 const skipExceptQrcodeUpload = {
+  default: true,
   auth: true,
   admin_auth: true,
   upload_user: true,
@@ -85,7 +115,7 @@ const skipExceptQrcodeUpload = {
   upload_admin_video: true,
 };
 
-@ApiTags('文件上传')
+@ApiTags("文件上传")
 @Controller()
 export class UploadController {
   constructor(
@@ -94,11 +124,34 @@ export class UploadController {
   ) {}
 
   private resolveUserUploadKind(file: Express.Multer.File): UploadFileKind {
-    const mimetype = String(file?.mimetype || '').toLowerCase();
-    const ext = String(file?.originalname || '').split('.').pop()?.toLowerCase() || '';
-    if (mimetype.startsWith('audio/') || ['mp3', 'aac', 'm4a', 'amr', 'wav'].includes(ext)) return 'audio';
-    if (mimetype.startsWith('video/') || ['mp4', 'mov', 'webm'].includes(ext)) return 'video';
-    return 'image';
+    const mimetype = String(file?.mimetype || "").toLowerCase();
+    const ext =
+      String(file?.originalname || "")
+        .split(".")
+        .pop()
+        ?.toLowerCase() || "";
+    if (
+      mimetype.startsWith("audio/") ||
+      ["mp3", "aac", "m4a", "amr", "wav"].includes(ext)
+    )
+      return "audio";
+    if (mimetype.startsWith("video/") || ["mp4", "mov", "webm"].includes(ext))
+      return "video";
+    return "image";
+  }
+
+  private resolveUserUploadFolder(
+    scene: UploadScene,
+    userId: string,
+    orderId?: string,
+  ): string {
+    const folder = this.uploadService.resolveFolder(scene, userId);
+    if (scene !== "delivery-proof") return folder;
+    const safeOrderId = String(orderId || "").trim();
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(safeOrderId)) {
+      throw new BadRequestException("送达凭证必须绑定有效订单");
+    }
+    return `${folder}/orders/${safeOrderId}`;
   }
 
   // ===========================================================================
@@ -107,90 +160,133 @@ export class UploadController {
 
   /**
    * 用户上传图片/语音
-   * scene: avatar(2MB) | post(10MB) | message(20MB)
+   * scene: avatar(2MB) | post(10MB) | message(20MB) | delivery-proof(10MB)
    */
-  @Post('upload')
+  @Post("upload")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, ThrottlerGuard)
+  @UseGuards(JwtGuard)
   @SkipThrottle(skipExceptUserUpload)
   @Throttle({ upload_user: { ttl: 60000, limit: uploadUserLimit } })
   @ApiBearerAuth()
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '用户上传图片/语音' })
+  @UseInterceptors(FileInterceptor("file"))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "用户上传图片/语音" })
   async uploadImage(
     @UploadedFile() file: Express.Multer.File,
-    @CurrentUser('sub') userId: string,
-    @Body('scene') scene?: UploadScene,
+    @CurrentUser("sub") userId: string,
+    @Body("scene") scene?: UploadScene,
+    @Body("order_id") orderId?: string,
     @Req() req?: Request,
   ) {
-    // 用户只能使用 avatar / post / message 场景
+    // 用户只能使用 avatar / post / message / delivery-proof 场景
     const uploadKind = this.resolveUserUploadKind(file);
-    const safeScene = uploadKind === 'audio' || scene === 'message'
-      ? 'message'
-      : scene === 'avatar'
-        ? 'avatar'
-        : 'post';
-    const folder = this.uploadService.resolveFolder(safeScene, userId);
+    const safeScene =
+      uploadKind === "audio" || scene === "message"
+        ? "message"
+        : scene === "avatar"
+          ? "avatar"
+          : scene === "delivery-proof" && uploadKind === "image"
+            ? "delivery-proof"
+            : "post";
+    const folder = this.resolveUserUploadFolder(safeScene, userId, orderId);
     const result = await this.uploadService.upload(file, {
       type: uploadKind,
       folder,
       scene: safeScene,
     });
-    await this.uploadService.recordUpload(userId, 'user', result, safeScene, req);
+    await this.uploadService.recordUpload(
+      userId,
+      "user",
+      result,
+      safeScene,
+      req,
+      safeScene === "delivery-proof",
+    );
     return result;
   }
 
   /** 用户批量上传图片 */
-  @Post('upload/batch')
+  @Post("upload/batch")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, ThrottlerGuard)
+  @UseGuards(JwtGuard)
   @SkipThrottle(skipExceptBatchUpload)
   @Throttle({ upload_user_batch: { ttl: 60000, limit: uploadBatchLimit } })
   @ApiBearerAuth()
-  @UseInterceptors(FilesInterceptor('files', 20))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '用户批量上传图片' })
+  @UseInterceptors(FilesInterceptor("files", 20))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "用户批量上传图片" })
   async uploadBatch(
     @UploadedFiles() files: Express.Multer.File[],
-    @CurrentUser('sub') userId: string,
-    @Body('scene') scene?: UploadScene,
+    @CurrentUser("sub") userId: string,
+    @Body("scene") scene?: UploadScene,
+    @Body("order_id") orderId?: string,
     @Req() req?: Request,
   ) {
     if (!files || files.length === 0) return { urls: [] };
-    const safeScene = scene === 'avatar' ? 'avatar' : 'post';
-    const folder = this.uploadService.resolveFolder(safeScene, userId);
+    const safeScene =
+      scene === "avatar"
+        ? "avatar"
+        : scene === "delivery-proof"
+          ? "delivery-proof"
+          : "post";
+    const folder = this.resolveUserUploadFolder(safeScene, userId, orderId);
     const results = await Promise.all(
       files.map((file) =>
-        this.uploadService.upload(file, { type: 'image', folder, scene: safeScene }),
+        this.uploadService.upload(file, {
+          type: "image",
+          folder,
+          scene: safeScene,
+        }),
       ),
     );
     for (const r of results) {
-      await this.uploadService.recordUpload(userId, 'user', r, safeScene, req);
+      await this.uploadService.recordUpload(
+        userId,
+        "user",
+        r,
+        safeScene,
+        req,
+        safeScene === "delivery-proof",
+      );
     }
     return { urls: results.map((item) => item.url), files: results };
   }
 
   /** 用户上传视频 */
-  @Post('upload/upload-video-with-thumbnail')
+  @Post("upload/upload-video-with-thumbnail")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, ThrottlerGuard)
+  @UseGuards(JwtGuard)
   @SkipThrottle(skipExceptVideoUpload)
   @Throttle({ upload_video: { ttl: 60000, limit: uploadVideoLimit } })
   @ApiBearerAuth()
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '用户上传视频' })
+  @UseInterceptors(FileInterceptor("file"))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "用户上传视频" })
   async uploadVideo(
     @UploadedFile() file: Express.Multer.File,
-    @CurrentUser('sub') userId: string,
+    @CurrentUser("sub") userId: string,
     @Req() req?: Request,
   ) {
     const folder = `users/${userId}`;
-    const result = await this.uploadService.uploadVideoWithThumbnail(file, folder);
+    const result = await this.uploadService.uploadVideoWithThumbnail(
+      file,
+      folder,
+    );
     await Promise.all([
-      this.uploadService.recordUpload(userId, 'user', result.video, 'post', req),
-      this.uploadService.recordUpload(userId, 'user', result.thumbnail, 'post-thumbnail', req),
+      this.uploadService.recordUpload(
+        userId,
+        "user",
+        result.video,
+        "post",
+        req,
+      ),
+      this.uploadService.recordUpload(
+        userId,
+        "user",
+        result.thumbnail,
+        "post-thumbnail",
+        req,
+      ),
     ]);
     return {
       ...result.video,
@@ -208,89 +304,120 @@ export class UploadController {
   /**
    * 管理端上传图片（banner、广告、配置等）
    */
-  @Post('admin/upload/image')
+  @Post("admin/upload/image")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
-  @RequirePermission('upload:admin:image')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission("upload:admin:image")
   @SkipThrottle(skipExceptAdminImageUpload)
-  @Throttle({ upload_admin_image: { ttl: 60000, limit: uploadAdminImageLimit } })
+  @Throttle({
+    upload_admin_image: { ttl: 60000, limit: uploadAdminImageLimit },
+  })
   @ApiBearerAuth()
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '管理端上传图片' })
+  @UseInterceptors(FileInterceptor("file"))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "管理端上传图片" })
   async adminUploadImage(
     @UploadedFile() file: Express.Multer.File,
-    @CurrentUser('sub') adminId: string,
-    @Body('scene') scene?: string,
+    @CurrentUser("sub") adminId: string,
+    @Body("scene") scene?: string,
     @Req() req?: Request,
   ) {
-    const normalizedScene = String(scene || '').trim();
+    const normalizedScene = String(scene || "").trim();
     const safeScene = (
-      normalizedScene.startsWith('region-') || normalizedScene === 'region'
-        ? 'region'
-        : ['config', 'ad', 'marketing-popup', 'share-invite'].includes(normalizedScene)
+      normalizedScene.startsWith("region-") || normalizedScene === "region"
+        ? "region"
+        : ["config", "ad", "marketing-popup", "share-invite"].includes(
+              normalizedScene,
+            )
           ? normalizedScene
-          : 'admin'
+          : "admin"
     ) as UploadScene;
     const folder = this.uploadService.resolveFolder(safeScene, adminId);
     const result = await this.uploadService.upload(file, {
-      type: 'image',
+      type: "image",
       folder,
       scene: safeScene,
     });
-    await this.uploadService.recordUpload(adminId, 'admin', result, safeScene, req);
+    await this.uploadService.recordUpload(
+      adminId,
+      "admin",
+      result,
+      safeScene,
+      req,
+    );
     return result;
   }
 
   /** 管理端上传视频 */
-  @Post('admin/upload/video')
+  @Post("admin/upload/video")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
-  @RequirePermission('upload:admin:video')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission("upload:admin:video")
   @SkipThrottle(skipExceptAdminVideoUpload)
-  @Throttle({ upload_admin_video: { ttl: 60000, limit: uploadAdminVideoLimit } })
+  @Throttle({
+    upload_admin_video: { ttl: 60000, limit: uploadAdminVideoLimit },
+  })
   @ApiBearerAuth()
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: '管理端上传视频' })
+  @UseInterceptors(FileInterceptor("file"))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "管理端上传视频" })
   async adminUploadVideo(
     @UploadedFile() file: Express.Multer.File,
-    @CurrentUser('sub') adminId: string,
+    @CurrentUser("sub") adminId: string,
     @Req() req?: Request,
   ) {
     const folder = `admin/videos/${adminId}`;
-    const result = await this.uploadService.upload(file, { type: 'video', folder });
-    await this.uploadService.recordUpload(adminId, 'admin', result, 'admin', req);
+    const result = await this.uploadService.upload(file, {
+      type: "video",
+      folder,
+    });
+    await this.uploadService.recordUpload(
+      adminId,
+      "admin",
+      result,
+      "admin",
+      req,
+    );
     return result;
   }
 
   /** 生成小程序码（仅管理员） */
-  @Post('admin/upload/qrcode')
+  @Post("admin/upload/qrcode")
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard, ThrottlerGuard)
-  @RequirePermission('upload:admin:qrcode')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission("upload:admin:qrcode")
   @SkipThrottle(skipExceptQrcodeUpload)
   @Throttle({ upload_qrcode: { ttl: 60000, limit: uploadQrcodeLimit } })
   @ApiBearerAuth()
-  @ApiOperation({ summary: '生成微信小程序码' })
-  async generateQrcode(@Body() dto: any, @CurrentUser('sub') adminId: string, @Req() req?: Request) {
+  @ApiOperation({ summary: "生成微信小程序码" })
+  async generateQrcode(
+    @Body() dto: any,
+    @CurrentUser("sub") adminId: string,
+    @Req() req?: Request,
+  ) {
     const result = await this.uploadService.generateQrcode(dto);
-    await this.uploadService.recordUpload(adminId, 'admin', result, 'qrcode', req);
+    await this.uploadService.recordUpload(
+      adminId,
+      "admin",
+      result,
+      "qrcode",
+      req,
+    );
     return result;
   }
 
   // ============ 新后台兼容接口 ============
 
-  @Get('upload/files')
+  @Get("upload/files")
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
-  @RequirePermission('upload:admin:image')
+  @RequirePermission("upload:admin:image")
   @ApiBearerAuth()
-  @ApiOperation({ summary: '上传文件列表（新后台兼容）' })
+  @ApiOperation({ summary: "上传文件列表（新后台兼容）" })
   async listFiles(
-    @Query('page') page = '1',
-    @Query('pageSize') pageSize = '20',
-    @Query('type') type?: string,
-    @Query('keyword') keyword?: string,
+    @Query("page") page = "1",
+    @Query("pageSize") pageSize = "20",
+    @Query("type") type?: string,
+    @Query("keyword") keyword?: string,
   ) {
     const where: any = {};
     if (type) where.fileType = type;
@@ -301,7 +428,7 @@ export class UploadController {
         where,
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
       this.prisma.uploadRecord.count({ where }),
     ]);
@@ -321,15 +448,25 @@ export class UploadController {
     };
   }
 
-  @Post('upload/unlimited-qrcode')
+  @Post("upload/unlimited-qrcode")
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
-  @RequirePermission('upload:admin:qrcode')
+  @RequirePermission("upload:admin:qrcode")
   @ApiBearerAuth()
-  @ApiOperation({ summary: '生成无限小程序码（新后台兼容）' })
-  async unlimitedQrcode(@Body() dto: any, @CurrentUser('sub') adminId: string, @Req() req?: Request) {
+  @ApiOperation({ summary: "生成无限小程序码（新后台兼容）" })
+  async unlimitedQrcode(
+    @Body() dto: any,
+    @CurrentUser("sub") adminId: string,
+    @Req() req?: Request,
+  ) {
     const result = await this.uploadService.generateQrcode(dto);
-    await this.uploadService.recordUpload(adminId, 'admin', result, 'qrcode', req);
+    await this.uploadService.recordUpload(
+      adminId,
+      "admin",
+      result,
+      "qrcode",
+      req,
+    );
     return result;
   }
 }

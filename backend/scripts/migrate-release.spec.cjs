@@ -3,10 +3,42 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { migrationFiles, rowValue } = require("./migrate-release.cjs");
+const {
+  migrationFiles,
+  prismaCliPath,
+  rowValue,
+  schemaDiffState,
+} = require("./migrate-release.cjs");
+
+assert.ok(fs.existsSync(prismaCliPath()), "migration runner must resolve a hoisted Prisma CLI");
 
 assert.equal(rowValue({ COLUMN_NAME: "levelTitleId" }, "column_name"), "levelTitleId");
 assert.equal(rowValue({ column_name: "levelBenefits" }, "COLUMN_NAME"), "levelBenefits");
+
+assert.equal(schemaDiffState("").status, "PASS");
+assert.equal(
+  schemaDiffState(`-- AlterTable
+ALTER TABLE "orders" ADD COLUMN "delivery_receipt_code" TEXT;`).status,
+  "MISSING",
+);
+assert.equal(
+  schemaDiffState(`-- AddForeignKey
+ALTER TABLE "orders" ADD CONSTRAINT "orders_staff_id_fkey" FOREIGN KEY ("staff_id") REFERENCES "merchant_staffs"("id");`).status,
+  "MISSING",
+);
+assert.equal(
+  schemaDiffState(`-- DropForeignKey
+ALTER TABLE "messages" DROP CONSTRAINT "messages_ticketId_fkey";
+-- AlterTable
+ALTER TABLE "messages" ALTER COLUMN "ticketId" SET DATA TYPE TEXT;
+-- DropTable
+DROP TABLE "legacy_events";
+-- AddForeignKey
+ALTER TABLE "messages" ADD CONSTRAINT "messages_ticketId_fkey" FOREIGN KEY ("ticketId") REFERENCES "assistant_tickets"("id");
+-- RenameIndex
+ALTER INDEX "old_name" RENAME TO "new_name";`).status,
+  "WARNING",
+);
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "lingmeng-migration-check-"));
 fs.writeFileSync(path.join(temp, "b.sql"), "SELECT 2;");
@@ -65,6 +97,25 @@ for (const provider of ["postgresql", "mysql"]) {
     retireCommentLotterySql,
     /\bDELETE\s+FROM\s+(?:`|")?(?:users|posts|comments|notifications)(?:`|")?\b/i,
   );
+
+  const selfUnbanMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202608280001_self_unban_review_closure",
+  );
+  assert.ok(selfUnbanMigration, `${provider} release migrations must create self-unban review records`);
+  const selfUnbanSql = fs.readFileSync(selfUnbanMigration.file, "utf8");
+  assert.match(selfUnbanSql, /self_unban_requests/i);
+  assert.match(selfUnbanSql, /activeKey/i);
+  assert.match(selfUnbanSql, /requestNo/i);
+  assert.match(selfUnbanSql, /banVersion/i);
+  assert.doesNotMatch(selfUnbanSql, /\b(?:DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE)\b/i);
+  if (provider === "mysql") {
+    const mysqlSchema = fs.readFileSync(path.resolve(__dirname, "../prisma/schema.mysql.prisma"), "utf8");
+    const selfUnbanModel = mysqlSchema.match(/model SelfUnbanRequest \{[\s\S]*?\n\}/)?.[0] || "";
+    assert.match(selfUnbanModel, /banReason\s+String\?\s+@db\.Text/);
+    assert.match(selfUnbanModel, /adminNote\s+String\?\s+@db\.Text/);
+    assert.match(selfUnbanSql, /`banReason`\s+TEXT\s+NULL/i);
+    assert.match(selfUnbanSql, /`adminNote`\s+TEXT\s+NULL/i);
+  }
 }
 
 const disabledConversationMigration = path.resolve(
@@ -73,7 +124,7 @@ const disabledConversationMigration = path.resolve(
 );
 if (fs.existsSync(disabledConversationMigration)) {
   const sql = fs.readFileSync(disabledConversationMigration, "utf8");
-  assert.doesNotMatch(sql, /\bDELETE\s+FROM\s+(?:`|\")?conversations\b/i);
+  assert.doesNotMatch(sql, /\bDELETE\s+FROM\s+(?:`|")?conversations\b/i);
   assert.match(sql, /已停用/);
 }
 console.log("migration runner self-check passed");

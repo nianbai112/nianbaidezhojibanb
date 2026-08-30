@@ -178,7 +178,7 @@ describe('ErrandLifecycleService', () => {
         riderName: '测试骑手',
         pickupAddress: '一号取件点',
       }),
-      channelMask: expect.objectContaining({ officialAccount: true }),
+      channelMask: expect.objectContaining({ officialAccount: true, wechatSubscribe: true }),
     }));
   });
 
@@ -219,7 +219,7 @@ describe('ErrandLifecycleService', () => {
         deliveryAddress: '二号宿舍',
         finishedAt: expect.any(String),
       }),
-      channelMask: expect.objectContaining({ officialAccount: true }),
+      channelMask: expect.objectContaining({ officialAccount: true, wechatSubscribe: true }),
     }));
   });
 });

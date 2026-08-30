@@ -13,7 +13,27 @@ import { WsNativeGateway } from "../websocket/ws-native.gateway";
 import { UserSessionRevocationService } from "../websocket/user-session-revocation.service";
 import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
 
+let activePrismaMock: any;
+
 const makeTx = () => ({
+  selfUnbanRequest: {
+    findFirst: jest.fn((...args: any[]) =>
+      activePrismaMock?.selfUnbanRequest.findFirst(...args),
+    ),
+    updateMany: jest.fn((...args: any[]) =>
+      activePrismaMock?.selfUnbanRequest.updateMany(...args),
+    ),
+  },
+  user: {
+    findUnique: jest.fn((...args: any[]) =>
+      activePrismaMock?.user.findUnique(...args),
+    ),
+    update: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn((...args: any[]) =>
+      activePrismaMock?.user.updateMany(...args),
+    ),
+  },
+  auditLog: { create: jest.fn().mockResolvedValue({}) },
   withdraw: {
     update: jest.fn().mockResolvedValue({}),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -40,6 +60,7 @@ const createMockPrisma = () => ({
     findMany: jest.fn().mockResolvedValue([]),
     findUnique: jest.fn().mockResolvedValue(null),
     update: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     count: jest.fn().mockResolvedValue(0),
   },
   userMembership: { count: jest.fn().mockResolvedValue(0) },
@@ -132,6 +153,7 @@ const createMockPrisma = () => ({
   },
   auditLog: {
     create: jest.fn().mockResolvedValue({}),
+    findFirst: jest.fn().mockResolvedValue(null),
     findMany: jest.fn().mockResolvedValue([]),
     count: jest.fn().mockResolvedValue(0),
   },
@@ -232,6 +254,13 @@ const createMockPrisma = () => ({
     create: jest.fn(),
     count: jest.fn().mockResolvedValue(0),
   },
+  selfUnbanRequest: {
+    findMany: jest.fn().mockResolvedValue([]),
+    findFirst: jest.fn().mockResolvedValue(null),
+    findUnique: jest.fn().mockResolvedValue(null),
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    count: jest.fn().mockResolvedValue(0),
+  },
   merchantSettlement: {
     findMany: jest.fn().mockResolvedValue([]),
     findFirst: jest.fn().mockResolvedValue(null),
@@ -246,8 +275,12 @@ const createMockRedis = () => ({
   get: jest.fn(),
   set: jest.fn(),
   del: jest.fn().mockResolvedValue(undefined),
+  delPattern: jest.fn().mockResolvedValue(undefined),
   getLock: jest.fn().mockResolvedValue(true),
   releaseLock: jest.fn().mockResolvedValue(undefined),
+  withLock: jest.fn(
+    async (_key: string, _ttl: number, task: () => Promise<any>) => task(),
+  ),
   hset: jest.fn(),
 });
 
@@ -312,6 +345,7 @@ describe("AdminService", () => {
     }).compile();
     service = module.get<AdminService>(AdminService);
     prisma = module.get(PrismaService);
+    activePrismaMock = prisma;
     adminDataScope = module.get(AdminDataScopeService);
     redis = module.get(RedisService);
     userSessionRevocation = module.get(UserSessionRevocationService);
@@ -330,55 +364,129 @@ describe("AdminService", () => {
       };
       prisma.$transaction.mockImplementation((fn: any) => fn(tx));
 
-      await expect(service.userBalanceAdjust({ userId: "user-1", amount: 5, remark: "补偿" }, "admin-1"))
-        .resolves.toEqual({ success: true, newBalance: 15 });
+      await expect(
+        service.userBalanceAdjust(
+          { userId: "user-1", amount: 5, remark: "补偿" },
+          "admin-1",
+        ),
+      ).resolves.toEqual({ success: true, newBalance: 15 });
 
       expect(tx.wallet.updateMany).toHaveBeenCalledWith({
         where: { userId: "user-1" },
-        data: { balance: { increment: 5 }, totalIn: { increment: 5 }, totalOut: undefined },
+        data: {
+          balance: { increment: 5 },
+          totalIn: { increment: 5 },
+          totalOut: undefined,
+        },
       });
-      expect(tx.walletTransaction.create).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ balance: 15 }),
-      }));
+      expect(tx.walletTransaction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ balance: 15 }),
+        }),
+      );
     });
 
     it("uses a balance precondition for deductions", async () => {
       prisma.user.findUnique.mockResolvedValue({ id: "user-1" });
       prisma.wallet.upsert.mockResolvedValue({ userId: "user-1", balance: 2 });
       const tx = {
-        wallet: { updateMany: jest.fn().mockResolvedValue({ count: 0 }), findUnique: jest.fn() },
+        wallet: {
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          findUnique: jest.fn(),
+        },
         walletTransaction: { create: jest.fn() },
       };
       prisma.$transaction.mockImplementation((fn: any) => fn(tx));
 
-      await expect(service.userBalanceAdjust({ userId: "user-1", amount: -5, remark: "扣减" }, "admin-1"))
-        .resolves.toEqual({ code: 400, message: "余额不能为负数" });
-      expect(tx.wallet.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-        where: { userId: "user-1", balance: { gte: 5 } },
-      }));
+      await expect(
+        service.userBalanceAdjust(
+          { userId: "user-1", amount: -5, remark: "扣减" },
+          "admin-1",
+        ),
+      ).resolves.toEqual({ code: 400, message: "余额不能为负数" });
+      expect(tx.wallet.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: "user-1", balance: { gte: 5 } },
+        }),
+      );
       expect(tx.walletTransaction.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("auditPost", () => {
+    it("dispatches the post audit subscription after the audit state is committed", async () => {
+      const before = {
+        id: "post-1",
+        userId: "user-1",
+        title: "测试帖子",
+        regionId: "region-1",
+        status: "PENDING",
+        auditStatus: "pending",
+        deletedAt: null,
+        circleId: null,
+        topics: [],
+      };
+      const updated = {
+        ...before,
+        status: "PUBLISHED",
+        auditStatus: "approved",
+      };
+      const notifyService = {
+        createAndDispatch: jest.fn().mockResolvedValue({}),
+      };
+      (service as any).notifyService = notifyService;
+      prisma.post.findUnique.mockResolvedValue(before);
+      prisma.post.update.mockResolvedValue(updated);
+
+      await expect(
+        service.auditPost("post-1", { status: "approved" }, "admin-1"),
+      ).resolves.toEqual({ success: true });
+      expect(notifyService.createAndDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: "user-1",
+          scene: "post_audit_result",
+          linkValue: "/pagesB/post/post?id=post-1",
+          channelMask: { inApp: true, websocket: true, wechatSubscribe: true },
+        }),
+      );
     });
   });
 
   describe("resetAdminPassword", () => {
     it("rejects weak temporary passwords", async () => {
-      prisma.config.findUnique.mockResolvedValue({ value: { passwordMinLength: 8 } });
+      prisma.config.findUnique.mockResolvedValue({
+        value: { passwordMinLength: 8 },
+      });
 
-      await expect(service.resetAdminPassword("admin-2", { password: "admin123" }, "admin-1"))
-        .rejects.toThrow("密码");
+      await expect(
+        service.resetAdminPassword(
+          "admin-2",
+          { password: "admin123" },
+          "admin-1",
+        ),
+      ).rejects.toThrow("密码");
       expect(prisma.adminAccount.update).not.toHaveBeenCalled();
     });
 
     it("forces the target admin to change a strong temporary password and revokes refresh sessions", async () => {
-      prisma.config.findUnique.mockResolvedValue({ value: { passwordMinLength: 8 } });
+      prisma.config.findUnique.mockResolvedValue({
+        value: { passwordMinLength: 8 },
+      });
       prisma.adminAccount.update.mockResolvedValue({ id: "admin-2" });
 
-      await expect(service.resetAdminPassword("admin-2", { password: "N3w!Secure" }, "admin-1"))
-        .resolves.toEqual({ success: true });
-      expect(prisma.adminAccount.update).toHaveBeenCalledWith(expect.objectContaining({
-        where: { id: "admin-2" },
-        data: expect.objectContaining({ passwordResetRequired: true }),
-      }));
+      await expect(
+        service.resetAdminPassword(
+          "admin-2",
+          { password: "N3w!Secure" },
+          "admin-1",
+        ),
+      ).resolves.toEqual({ success: true });
+      expect(prisma.adminAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "admin-2" },
+          data: expect.objectContaining({ passwordResetRequired: true }),
+        }),
+      );
       expect(redis.del).toHaveBeenCalledWith("refresh:admin-2");
     });
   });
@@ -791,9 +899,61 @@ describe("AdminService", () => {
     });
 
     it("should unban a user", async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: "u1" });
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
       const result = await service.banUser("u1", { banned: false }, "op1");
       expect(result.success).toBe(true);
+    });
+
+    it("cancels an unpaid self-unban request before a manual unban", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.selfUnbanRequest.findFirst.mockResolvedValue({
+        id: "unban-1",
+        status: "pending_payment",
+      });
+
+      await expect(
+        service.banUser("u1", { banned: false, reason: "人工复核" }, "op1"),
+      ).resolves.toEqual({ success: true });
+
+      expect(prisma.selfUnbanRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: "unban-1", status: "pending_payment" },
+        data: expect.objectContaining({ status: "cancelled", activeKey: null }),
+      });
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: "u1", status: "BANNED", banVersion: 2 },
+        data: { status: "ACTIVE" },
+      });
+      expect(redis.withLock).toHaveBeenCalledWith(
+        "self-unban:user:u1",
+        60,
+        expect.any(Function),
+      );
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it("does not manually unban while a paid self-unban request awaits review", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.selfUnbanRequest.findFirst.mockResolvedValue({
+        id: "unban-1",
+        status: "pending_review",
+      });
+
+      await expect(
+        service.banUser("u1", { banned: false }, "op1"),
+      ).rejects.toThrow("请先审核解封申请");
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it("should throw for non-existent user", async () => {
@@ -819,6 +979,283 @@ describe("AdminService", () => {
       });
       expect(userSessionRevocation.revoke).toHaveBeenCalledWith("u1");
     });
+
+    it("cancels an unpaid request through the generic status endpoint before activation", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.selfUnbanRequest.findFirst.mockResolvedValue({
+        id: "unban-1",
+        status: "pending_payment",
+      });
+
+      await expect(
+        service.setUserStatus(
+          "u1",
+          { status: "active", reason: "人工复核" },
+          "op1",
+        ),
+      ).resolves.toMatchObject({ success: true, status: "ACTIVE" });
+      expect(prisma.selfUnbanRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "unban-1", status: "pending_payment" },
+          data: expect.objectContaining({
+            status: "cancelled",
+            activeKey: null,
+          }),
+        }),
+      );
+    });
+
+    it("blocks the generic status endpoint while a paid request awaits review", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.selfUnbanRequest.findFirst.mockResolvedValue({
+        id: "unban-1",
+        status: "pending_review",
+      });
+
+      await expect(
+        service.setUserStatus("u1", { status: "active" }, "op1"),
+      ).rejects.toThrow("请先审核解封申请");
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("self-unban review", () => {
+    it("rejects a review payload without an explicit boolean decision", async () => {
+      await expect(
+        service.reviewSelfUnbanRequest(
+          "unban-1",
+          { approved: "false" as any },
+          "op1",
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.selfUnbanRequest.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("does not let an old paid request undo a newer ban", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "pending_review",
+        banVersion: 3,
+        createdAt: new Date("2026-08-28T01:00:00.000Z"),
+        user: { id: "u1", status: "BANNED", banVersion: 3 },
+      });
+      prisma.auditLog.findFirst.mockResolvedValue({
+        createdAt: new Date("2026-08-28T02:00:00.000Z"),
+      });
+
+      await expect(
+        service.reviewSelfUnbanRequest("unban-1", { approved: true }, "op1"),
+      ).rejects.toThrow("封禁状态已变化");
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it("only restores the user after a paid request is approved", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "pending_review",
+        banVersion: 3,
+        createdAt: new Date("2026-08-28T02:00:00.000Z"),
+        user: { id: "u1", status: "BANNED", banVersion: 3 },
+      });
+      prisma.auditLog.findFirst.mockResolvedValue({
+        createdAt: new Date("2026-08-28T01:00:00.000Z"),
+      });
+      const tx = makeTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+      await expect(
+        service.reviewSelfUnbanRequest(
+          "unban-1",
+          { approved: true, reason: "复核通过" },
+          "op1",
+        ),
+      ).resolves.toMatchObject({ success: true, status: "approved" });
+
+      expect(tx.selfUnbanRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "unban-1", status: "pending_review" },
+          data: expect.objectContaining({ status: "approved" }),
+        }),
+      );
+      expect(tx.user.updateMany).toHaveBeenCalledWith({
+        where: { id: "u1", status: "BANNED", banVersion: 3 },
+        data: { status: "ACTIVE" },
+      });
+      expect(redis.delPattern).toHaveBeenCalledWith("user:profile:u1:*");
+      expect(redis.delPattern).toHaveBeenCalledWith("user:profile:v2:u1:*");
+    });
+
+    it("does not approve when a concurrent re-ban increments the durable ban version", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "pending_review",
+        banVersion: 3,
+        createdAt: new Date("2026-08-28T02:00:00.000Z"),
+        user: { id: "u1", status: "BANNED", banVersion: 4 },
+      });
+      const tx = makeTx();
+      tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+      await expect(
+        service.reviewSelfUnbanRequest("unban-1", { approved: true }, "op1"),
+      ).rejects.toThrow("封禁状态已变化");
+      expect(tx.selfUnbanRequest.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("keeps a rejected request unapprovable while its provider refund is reconciling", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "pending_review",
+        createdAt: new Date("2026-08-28T02:00:00.000Z"),
+        user: { id: "u1", status: "BANNED" },
+      });
+      const paymentService = (service as any).paymentService;
+      paymentService.refund.mockResolvedValueOnce({
+        success: true,
+        status: "processing",
+      });
+
+      await expect(
+        service.reviewSelfUnbanRequest(
+          "unban-1",
+          { approved: false, reason: "复核未通过" },
+          "op1",
+        ),
+      ).resolves.toMatchObject({ success: true, status: "refunding" });
+
+      expect(prisma.selfUnbanRequest.updateMany).toHaveBeenLastCalledWith({
+        where: { id: "unban-1", status: "rejecting" },
+        data: { status: "refunding" },
+      });
+    });
+
+    it("never restores pending review after the provider refund has started", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "pending_review",
+        createdAt: new Date("2026-08-28T02:00:00.000Z"),
+        user: { id: "u1", status: "BANNED", banVersion: 3 },
+      });
+      const paymentService = (service as any).paymentService;
+      paymentService.refund.mockResolvedValueOnce({
+        success: true,
+        status: "processing",
+      });
+      prisma.selfUnbanRequest.updateMany
+        .mockResolvedValueOnce({ count: 1 })
+        .mockRejectedValueOnce(new Error("local request transition failed"))
+        .mockResolvedValueOnce({ count: 1 });
+
+      await expect(
+        service.reviewSelfUnbanRequest("unban-1", { approved: false }, "op1"),
+      ).resolves.toMatchObject({ success: true, status: "refunding" });
+
+      const writtenStatuses = prisma.selfUnbanRequest.updateMany.mock.calls
+        .map(([call]: any[]) => call?.data?.status)
+        .filter(Boolean);
+      expect(writtenStatuses).not.toContain("pending_review");
+      expect(writtenStatuses).toContain("refunding");
+    });
+
+    it("lets an operator retry a definitively failed self-unban refund", async () => {
+      prisma.selfUnbanRequest.findUnique.mockResolvedValue({
+        id: "unban-1",
+        userId: "u1",
+        regionId: "region-1",
+        amount: 9.9,
+        status: "refund_failed",
+        adminNote: "审核未通过",
+      });
+      const paymentService = (service as any).paymentService;
+      paymentService.refund.mockResolvedValueOnce({
+        success: true,
+        status: "processing",
+      });
+
+      await expect(
+        service.retrySelfUnbanRefund("unban-1", "op1"),
+      ).resolves.toMatchObject({ success: true, status: "refunding" });
+
+      expect(paymentService.refund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bizType: "self_unban",
+          bizId: "unban-1",
+          sourceType: "self_unban_refund_retry",
+        }),
+      );
+      expect(prisma.selfUnbanRequest.updateMany).toHaveBeenLastCalledWith({
+        where: { id: "unban-1", status: "rejecting" },
+        data: { status: "refunding" },
+      });
+    });
+  });
+
+  describe("self-unban list", () => {
+    it("uses provider-neutral keyword filters for PostgreSQL and MySQL", async () => {
+      await service.selfUnbanRequests({ keyword: "UNBAN" }, "op1");
+
+      const call = prisma.selfUnbanRequest.findMany.mock.calls[0][0];
+      expect(call.where.OR).toEqual([
+        { requestNo: { contains: "UNBAN" } },
+        { user: { nickname: { contains: "UNBAN" } } },
+        { user: { phone: { contains: "UNBAN" } } },
+      ]);
+    });
+  });
+
+  describe("updateUser", () => {
+    it("routes status changes through the guarded status workflow", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.user.update.mockResolvedValue({ id: "u1", nickname: "新昵称" });
+
+      await service.updateUser(
+        "u1",
+        { nickname: "新昵称", status: "active", reason: "复核恢复" },
+        "op1",
+      );
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: "u1" },
+        data: { nickname: "新昵称" },
+      });
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: "u1", status: "BANNED", banVersion: 2 },
+        data: { status: "ACTIVE" },
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ action: "UNBAN", userId: "u1" }),
+        }),
+      );
+    });
   });
 
   describe("batchUsers", () => {
@@ -833,6 +1270,23 @@ describe("AdminService", () => {
       expect(userSessionRevocation.revoke).toHaveBeenCalledTimes(2);
       expect(userSessionRevocation.revoke).toHaveBeenCalledWith("u1");
       expect(userSessionRevocation.revoke).toHaveBeenCalledWith("u2");
+    });
+
+    it("does not bypass a paid self-unban review during batch activation", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        status: "BANNED",
+        banVersion: 2,
+      });
+      prisma.selfUnbanRequest.findFirst.mockResolvedValue({
+        id: "unban-1",
+        status: "pending_review",
+      });
+
+      await expect(
+        service.batchUsers({ ids: ["u1"], action: "active" }, "op1"),
+      ).rejects.toThrow("请先审核解封申请");
+      expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });
 
@@ -874,7 +1328,10 @@ describe("AdminService", () => {
         homeNavLayoutConfig: [{ id: "run", name: "跑腿" }],
       };
       prisma.region.findUnique.mockResolvedValue(existing);
-      prisma.region.update.mockImplementation(async ({ data }: any) => ({ ...existing, ...data }));
+      prisma.region.update.mockImplementation(async ({ data }: any) => ({
+        ...existing,
+        ...data,
+      }));
 
       await service.updateRegion("region-1", {
         homeNavDisplayConfig: {
@@ -898,7 +1355,10 @@ describe("AdminService", () => {
     });
 
     it("rejects a non-array kingkong payload before it can overwrite the region", async () => {
-      prisma.region.findUnique.mockResolvedValue({ id: "region-1", settings: {} });
+      prisma.region.findUnique.mockResolvedValue({
+        id: "region-1",
+        settings: {},
+      });
 
       await expect(
         service.updateRegion("region-1", {
@@ -1272,6 +1732,50 @@ describe("AdminService", () => {
       ).rejects.toThrow("该结算周期已生成，请刷新后查看");
     });
 
+    it("includes dorm-shop self-delivery income but excludes platform delivery income", async () => {
+      prisma.merchant.findUnique.mockResolvedValue({
+        id: "m1",
+        region: { commissionRate: 0 },
+      });
+      prisma.order.findMany.mockResolvedValue([
+        {
+          totalAmount: 14,
+          payAmount: 12,
+          subsidyAmount: 1,
+          originalFreightAmount: 2,
+          freightAmount: 2,
+          businessType: "dorm_shop",
+          deliveryMode: "self_delivery",
+          refundStatus: "none",
+        },
+        {
+          totalAmount: 14,
+          payAmount: 12,
+          subsidyAmount: 1,
+          originalFreightAmount: 2,
+          freightAmount: 2,
+          businessType: "takeaway",
+          deliveryMode: "platform_rider",
+          refundStatus: "none",
+        },
+      ]);
+
+      await service.generateMerchantSettlement(
+        {
+          merchantId: "m1",
+          startAt: "2026-07-01T00:00:00.000Z",
+          endAt: "2026-07-07T23:59:59.999Z",
+        },
+        "admin-1",
+      );
+
+      expect(prisma.merchantSettlement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ amount: 24, orderCount: 2 }),
+        }),
+      );
+    });
+
     it("hides a removed review instead of erasing the order evaluation evidence", async () => {
       prisma.review.findUnique.mockResolvedValue({
         id: "review-1",
@@ -1320,6 +1824,13 @@ describe("AdminService", () => {
   });
 
   describe("merchant business hours", () => {
+    it("accepts overnight dorm-shop hours but rejects a zero-length range", () => {
+      expect((service as any).normalizeBusinessHours("18:00-01:00")).toBe(
+        "18:00-01:00",
+      );
+      expect((service as any).normalizeBusinessHours("18:00-18:00")).toBeNull();
+    });
+
     it("keeps a compact weekly schedule valid for super-admin actions", () => {
       const weeklySchedule = JSON.stringify([
         [0, "Closed", "Closed"],

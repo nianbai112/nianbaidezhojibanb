@@ -8,7 +8,6 @@ import path from "node:path";
 import { AppModule } from "./app.module";
 import { TransformInterceptor } from "./interceptors/transform.interceptor";
 import { LoggerService } from "./common/services/logger.service";
-import { WsNativeGateway } from "./modules/websocket/ws-native.gateway";
 import {
   getMiniProgramGlobalPrefixExcludes,
   miniProgramApiCompatMiddleware,
@@ -17,28 +16,30 @@ import { mallAdminApiCompatMiddleware } from "./common/middleware/mall-admin-api
 import { resolveCorsOrigin, resolveListenHost } from "./config/setup-cors";
 
 async function bootstrap() {
+  process.env.SERVICE_ROLE ||= "api";
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     rawBody: true,
   });
+  app.enableShutdownHooks();
 
   // 微信公众号安全模式使用 XML 回调；Nest 默认只解析 JSON/urlencoded。
   // 必须在通用 body parser 之前保留 XML 字符串，供 msg_signature 验签和 AES 解密。
   app.use(
-    ['/api/wechat/official/callback', '/wechat/official/callback'],
-    express.text({ type: ['text/xml', 'application/xml'], limit: '64kb' }),
+    ["/api/wechat/official/callback", "/wechat/official/callback"],
+    express.text({ type: ["text/xml", "application/xml"], limit: "64kb" }),
   );
 
   // 校园地图清单可包含内联 GeoJSON；只为该管理端路由放宽请求体限制。
-  app.use('/admin/campus-map', express.json({ limit: '5mb' }));
+  app.use("/admin/campus-map", express.json({ limit: "5mb" }));
   // 小程序代码包素材库走 base64 上传（5MB 图片 ≈ 6.7MB base64），放宽到 10mb。
-  app.use('/admin/miniapp/code/assets', express.json({ limit: '10mb' }));
+  app.use("/admin/miniapp/code/assets", express.json({ limit: "10mb" }));
 
   // 修复：全局前缀 + 排除路径场景下 Nest 内置 JSON 解析器未覆盖排除路由，
   // 导致 @Body() 为 undefined（urlencoded 正常、application/json 失效）。
   // 显式注册 JSON/urlencoded 解析，幂等且与 Nest 默认行为一致。
-  app.use(express.json({ limit: '2mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+  app.use(express.json({ limit: "2mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
   const logger = app.get(LoggerService);
   app.useLogger(logger);
@@ -132,7 +133,10 @@ async function bootstrap() {
     } else if (pathname.startsWith("/admin/ranking/rules/")) {
       rewritten = pathname.replace("/admin/ranking/rules/", "/admin/rankings/");
     } else if (pathname.startsWith("/admin/ranking/slots/")) {
-      rewritten = pathname.replace("/admin/ranking/slots/", "/admin/recommend/slots/");
+      rewritten = pathname.replace(
+        "/admin/ranking/slots/",
+        "/admin/recommend/slots/",
+      );
     }
 
     if (rewritten !== pathname) {
@@ -171,33 +175,31 @@ async function bootstrap() {
   }
 
   // ---- 全局前缀（兼容小程序根路径 + 后台 /api 路径） ----
-	  const apiPrefix = process.env.API_PREFIX || "/api/v1";
-	  app.setGlobalPrefix(apiPrefix, {
-	    exclude: [
-	      ...getMiniProgramGlobalPrefixExcludes(),
-        // Only non-mini-program legacy routes stay here. Mini-program roots are
-        // derived from the single compatibility list above.
+  const apiPrefix = process.env.API_PREFIX || "/api/v1";
+  app.setGlobalPrefix(apiPrefix, {
+    exclude: [
+      ...getMiniProgramGlobalPrefixExcludes(),
+      // Only non-mini-program legacy routes stay here. Mini-program roots are
+      // derived from the single compatibility list above.
       "balance-recharge",
-      "balance-recharge/(.*)",
-      "api/(.*)",
+      "balance-recharge/{*path}",
+      "api/{*path}",
       "dashboard",
-      "dashboard/(.*)",
-      "admin/(.*)",
-      "mall/(.*)",
+      "dashboard/{*path}",
+      "admin/{*path}",
+      "mall/{*path}",
     ],
   });
 
   const port = process.env.PORT || 3000;
-  const host = resolveListenHost({ nodeEnv: process.env.NODE_ENV, host: process.env.HOST });
+  const host = resolveListenHost({
+    nodeEnv: process.env.NODE_ENV,
+    host: process.env.HOST,
+  });
   await app.listen(port, host);
 
-  // ---- 原生 WebSocket（给小程序用） ----
-  const wsNative = app.get(WsNativeGateway);
-  const httpServer = app.getHttpServer();
-  wsNative.attach(httpServer);
-
   logger.log(`Application is running on: http://${host}:${port}`);
-  logger.log(`Native WebSocket available at: ws://localhost:${port}/ws-native`);
+  logger.log("Realtime traffic is handled by the standalone realtime service");
   logger.log(`Environment: ${process.env.NODE_ENV || "development"}`);
 }
 bootstrap();

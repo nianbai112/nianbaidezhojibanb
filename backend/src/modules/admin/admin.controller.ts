@@ -273,6 +273,42 @@ export class AdminController {
     return this.adminService.userDetail(id);
   }
 
+  @Get("admin/self-unban-requests")
+  @RequirePermission("user:view")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "自助解封申请列表" })
+  selfUnbanRequests(
+    @Query() query: any,
+    @CurrentUser("sub") operatorId: string,
+  ) {
+    return this.adminService.selfUnbanRequests(query, operatorId);
+  }
+
+  @Put("admin/self-unban-requests/:id/review")
+  @RequirePermission("user:ban")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "审核自助解封申请" })
+  reviewSelfUnbanRequest(
+    @Param("id") id: string,
+    @Body() dto: { approved: boolean; reason?: string },
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.reviewSelfUnbanRequest(id, dto, operatorId, req.ip);
+  }
+
+  @Put("admin/self-unban-requests/:id/retry-refund")
+  @RequirePermission("user:ban")
+  @UseGuards(AdminPermissionGuard)
+  @ApiOperation({ summary: "重试自助解封退款" })
+  retrySelfUnbanRefund(
+    @Param("id") id: string,
+    @CurrentUser("sub") operatorId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminService.retrySelfUnbanRefund(id, operatorId, req.ip);
+  }
+
   @Put("admin/users/:id/ban")
   @RequirePermission("user:ban")
   @UseGuards(AdminPermissionGuard)

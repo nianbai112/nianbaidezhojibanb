@@ -289,6 +289,26 @@ export class CampusMapCollectionController {
     return this.service.startSession(taskId, this.collectorUserId(req), dto);
   }
 
+  @Post("rider-app/campus-collection/sessions/:sessionId/abandon")
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  abandonRiderSession(
+    @Param("sessionId") sessionId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.abandonSession(sessionId, this.collectorUserId(req));
+  }
+
+  @Post("campus-map/collection/sessions/:sessionId/abandon")
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  abandonSession(
+    @Param("sessionId") sessionId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.service.abandonSession(sessionId, this.collectorUserId(req));
+  }
+
   @Put("campus-map/collection/sessions/:sessionId/batches/:batchNo")
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

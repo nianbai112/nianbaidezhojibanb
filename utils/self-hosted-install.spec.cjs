@@ -59,5 +59,8 @@ test('package-layout installer generates setup secrets and uses the MySQL toolch
   const callText = fs.readFileSync(calls, 'utf8');
   assert.match(callText, /npm ci/);
   assert.match(callText, /npm run db:generate/);
+  assert.match(callText, /npm prune --omit=dev/);
+  assert.ok(callText.indexOf('npm run db:generate') < callText.indexOf('npm prune --omit=dev'));
+  assert.ok(callText.indexOf('npm prune --omit=dev') < callText.indexOf('pm2 start'));
   assert.match(callText, /pm2 start/);
 });

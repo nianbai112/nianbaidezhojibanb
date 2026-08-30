@@ -65,29 +65,6 @@ export class MiniappCodeController {
     return this.codeService.updateAppJson(body);
   }
 
-  // ==================== 页面布局写入代码包 ====================
-
-  @Get('pages/:pageType/layout')
-  @ApiOperation({ summary: '读取代码包内置页面布局（config/layout/<pageType>.json）' })
-  @RequirePermission('system:config')
-  getPageLayout(@Param('pageType') pageType: string) {
-    return this.codeService.getPageLayout(pageType);
-  }
-
-  @Put('pages/:pageType/layout')
-  @ApiOperation({ summary: '把页面布局写入代码包并重建 bundled.js（自动备份）' })
-  @RequirePermission('system:config')
-  savePageLayout(@Param('pageType') pageType: string, @Body() body: { layout: any }) {
-    return this.codeService.savePageLayout(pageType, body?.layout);
-  }
-
-  @Delete('pages/:pageType/layout')
-  @ApiOperation({ summary: '移除代码包内置页面布局（回退远程配置）' })
-  @RequirePermission('system:config')
-  removePageLayout(@Param('pageType') pageType: string) {
-    return this.codeService.removePageLayout(pageType);
-  }
-
   // ==================== 代码包素材库（static/editor） ====================
 
   @Get('assets')

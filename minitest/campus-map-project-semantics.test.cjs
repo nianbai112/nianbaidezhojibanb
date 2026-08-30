@@ -17,9 +17,9 @@ async function run() {
   }, 'area')
   assert.equal(assigned.title, '天枢楼')
   assert.equal(assigned.engineeringAlias, '1号院')
-  assert.equal(assigned.visibilityScope, 'phase1_active')
+  assert.equal(assigned.visibilityScope, 'phase1_review')
   assert.equal(assigned.geometryStatus, 'verified_polygon')
-  assert.equal(assigned.searchable, true)
+  assert.equal(assigned.searchable, false)
   assert.equal(assigned.navigable, false)
 
   const future = applyCampusProject({ id: 'poi-1', title: '候选点' }, {
@@ -36,7 +36,7 @@ async function run() {
     assigned,
     { officialNumber: 4, visibilityScope: 'phase1_review', geometryStatus: 'unmatched' },
     { officialNumber: 15, visibilityScope: 'future_reference' },
-  ]), { active: 1, review: 1, future: 1, unmatched: 1 })
+  ]), { active: 0, review: 2, future: 1, unmatched: 1 })
 
   assert.deepEqual(campusProjectStyle({ semanticType: 'building' }), {
     stroke: '#4F6272',

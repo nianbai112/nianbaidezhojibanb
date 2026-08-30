@@ -21,6 +21,8 @@ function fixture(version = '1.0.45-selfhosted.1') {
   write(root, 'backend/package.json', pkg);
   write(root, 'backend/package-lock.json', JSON.stringify({ name: 'fixture', version, lockfileVersion: 3, packages: {} }));
   write(root, 'backend/dist/src/main.js', 'console.log("ready")\n');
+  write(root, 'backend/dist/src/worker.js', 'console.log("worker ready")\n');
+  write(root, 'backend/dist/src/realtime.js', 'console.log("realtime ready")\n');
   write(root, 'backend/dist/src/app.module.js', 'exports.AppModule = class AppModule {}\n');
   write(root, 'backend/dist/src/modules/upload/upload.controller.js', 'exports.UploadController = class UploadController {}\n');
   write(root, 'backend/prisma/schema.mysql.prisma', 'datasource db { provider = "mysql" url = env("DATABASE_URL") }\n');
@@ -38,7 +40,7 @@ function fixture(version = '1.0.45-selfhosted.1') {
   write(root, 'deploy/env.backend.example', 'NODE_ENV=production\nSETUP_WIZARD=true\n');
   write(root, 'deploy/scripts/install.sh', '#!/usr/bin/env bash\nexit 0\n');
   write(root, 'deploy/scripts/update.sh', '#!/usr/bin/env bash\nexit 0\n');
-  write(root, 'deploy/ecosystem.config.cjs', 'module.exports = { apps: [{ script: "dist/src/main.js" }] };\n');
+  write(root, 'deploy/ecosystem.config.cjs', 'module.exports = { apps: [{ script: "dist/src/main.js" }, { script: "dist/src/worker.js" }, { script: "dist/src/realtime.js" }] };\n');
   write(root, 'deploy/nginx/portal-site.conf.sample', 'server { listen 80; }\n');
   write(root, '.env', 'DATABASE_URL=must-not-ship\n');
   write(root, '.decorver-token', 'must-not-ship\n');
@@ -52,6 +54,8 @@ test('builds a runtime-only archive and hashes every staged file', () => {
   assert.equal(fs.existsSync(result.archivePath), true);
   const entries = execFileSync('unzip', ['-Z1', result.archivePath], { encoding: 'utf8' });
   assert.match(entries, /backend\/dist\/src\/main\.js/);
+  assert.match(entries, /backend\/dist\/src\/worker\.js/);
+  assert.match(entries, /backend\/dist\/src\/realtime\.js/);
   assert.match(entries, /release-manifest\.json/);
   assert.match(entries, /ecosystem\.config\.cjs/);
   assert.match(entries, /backend\/scripts\/audit-official-assistant-data\.cjs/);
@@ -68,6 +72,8 @@ test('builds a runtime-only archive and hashes every staged file', () => {
   assert.equal(manifest.containsNodeModules, false);
   assert.ok(Object.keys(manifest.files).length >= 10);
   assert.match(manifest.files['backend/dist/src/main.js'], /^[a-f0-9]{64}$/);
+  assert.match(manifest.files['backend/dist/src/worker.js'], /^[a-f0-9]{64}$/);
+  assert.match(manifest.files['backend/dist/src/realtime.js'], /^[a-f0-9]{64}$/);
 });
 
 test('requires the production process configuration', () => {

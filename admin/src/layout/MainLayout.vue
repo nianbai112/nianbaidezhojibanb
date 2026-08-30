@@ -320,7 +320,7 @@ import { useNavBadges } from './useNavBadges'
 const router = useRouter()
 const route = useRoute()
 
-/** 设计器工作室全屏沉浸：content 区 padding 置 0（仅 UI 编辑器 designer 模式） */
+/** 页面控制工作室全屏沉浸：content 区 padding 置 0（仅 designer 模式） */
 const isDesignerFullBleed = computed(
   () => route.path === '/region/app-pages' && route.query.mode === 'designer',
 )

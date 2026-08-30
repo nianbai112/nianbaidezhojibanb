@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -21,6 +22,11 @@ export class OrderCenterService {
   private async shopOrderRegionWhere(operatorId?: string) {
     const scope = await this.adminDataScope.getAdminContext(operatorId);
     return scope.isSuperAdmin ? {} : { merchant: { regionId: { in: scope.regionIds } } };
+  }
+
+  private async merchantRegionWhere(operatorId?: string) {
+    const scope = await this.adminDataScope.getAdminContext(operatorId);
+    return scope.isSuperAdmin ? {} : { regionId: { in: scope.regionIds } };
   }
 
   private async assertShopOrderRegionAccess(operatorId: string | undefined, order: any) {
@@ -81,6 +87,402 @@ export class OrderCenterService {
       returned_pool: "骑手超时未取餐，订单已退回骑手池",
     };
     return map[nodeType] || "配送状态更新";
+  }
+
+  private maskPhone(value?: string | null) {
+    const phone = String(value || "").trim();
+    if (phone.length < 7) return phone;
+    return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+  }
+
+  private formatDormShopAssignment(assignment: any) {
+    if (!assignment) return null;
+    return {
+      id: assignment.id,
+      staffId: assignment.staffId || null,
+      assigneeType: assignment.assigneeType,
+      source: assignment.source,
+      status: assignment.status,
+      attemptNo: Number(assignment.attemptNo || 0),
+      acceptDeadline: assignment.acceptDeadline,
+      assignedAt: assignment.assignedAt,
+      acceptedAt: assignment.acceptedAt,
+      pickedUpAt: assignment.pickedUpAt,
+      deliveredAt: assignment.deliveredAt,
+      cancelledAt: assignment.cancelledAt,
+      cancelReason: assignment.cancelReason || "",
+      assignee: assignment.assignee
+        ? {
+            id: assignment.assignee.id,
+            nickname: assignment.assignee.nickname || "",
+            avatar: assignment.assignee.avatar || "",
+            phone: this.maskPhone(assignment.assignee.phone),
+          }
+        : null,
+    };
+  }
+
+  private dormDispatchAlertFor(order: any, now = new Date()) {
+    if (
+      order?.businessType !== "dorm_shop" ||
+      order?.status !== "SHIPPED" ||
+      ["refunding", "refunded"].includes(String(order?.refundStatus || "none"))
+    ) {
+      return null;
+    }
+    const assignment = order.shopDeliveryAssignment;
+    if (
+      assignment?.status === "pending_accept" &&
+      assignment.acceptDeadline &&
+      new Date(assignment.acceptDeadline).getTime() <= now.getTime()
+    ) {
+      return {
+        code: "staff_accept_overdue",
+        label: "配送店员接单超时",
+        suggestion: "联系店主手动改派或由店主配送",
+      };
+    }
+    if (assignment?.status === "cancelled") {
+      return {
+        code: "staff_assignment_cancelled",
+        label: "配送任务已取消",
+        suggestion: assignment.cancelReason || "联系店主重新安排配送",
+      };
+    }
+    if (
+      !assignment &&
+      order.merchant?.autoDispatchEnabled &&
+      order.readyTime
+    ) {
+      const threshold = Math.max(
+        1,
+        Number(order.merchant.autoDispatchMinutes || 5),
+      );
+      const elapsedMinutes = Math.floor(
+        (now.getTime() - new Date(order.readyTime).getTime()) / 60000,
+      );
+      if (elapsedMinutes >= threshold) {
+        return {
+          code: "staff_unassigned",
+          label: "超时未分配配送员",
+          suggestion: "检查在岗店员与并发上限，必要时联系店主手动配送",
+        };
+      }
+    }
+    return null;
+  }
+
+  async getDormShopDeliveryMerchants(query: any = {}, operatorId?: string) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const keyword = String(query.keyword || "").trim();
+    const where: any = {
+      businessType: "dorm_shop",
+      ...(await this.merchantRegionWhere(operatorId)),
+    };
+    if (query.merchantId) where.id = String(query.merchantId);
+    if (query.status) where.status = String(query.status);
+    if (keyword) {
+      where.OR = [
+        { name: { contains: keyword } },
+        { phone: { contains: keyword } },
+        { contactPerson: { contains: keyword } },
+      ];
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.merchant.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          phone: true,
+          contactPerson: true,
+          regionId: true,
+          autoDispatchEnabled: true,
+          autoDispatchMinutes: true,
+          staffAcceptSeconds: true,
+          staffMaxActiveOrders: true,
+          region: { select: { id: true, name: true } },
+          staffMembers: {
+            where: { status: { not: "removed" } },
+            select: { id: true, status: true, onDuty: true },
+          },
+          deliveryAssignments: {
+            where: {
+              status: { in: ["pending_accept", "accepted", "picked_up"] },
+            },
+            select: { id: true, status: true },
+          },
+        },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.merchant.count({ where }),
+    ]);
+    return {
+      list: rows.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        phone: this.maskPhone(row.phone),
+        contactPerson: row.contactPerson || "",
+        regionId: row.regionId,
+        regionName: row.region?.name || "",
+        policy: {
+          enabled: Boolean(row.autoDispatchEnabled),
+          minutes: Number(row.autoDispatchMinutes || 5),
+          acceptSeconds: Number(row.staffAcceptSeconds || 90),
+          maxActiveOrders: Number(row.staffMaxActiveOrders || 2),
+        },
+        staffSummary: {
+          total: row.staffMembers.length,
+          invited: row.staffMembers.filter((item: any) => item.status === "invited").length,
+          active: row.staffMembers.filter((item: any) => item.status === "active").length,
+          onDuty: row.staffMembers.filter(
+            (item: any) => item.status === "active" && item.onDuty,
+          ).length,
+        },
+        activeAssignments: row.deliveryAssignments.length,
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  async getDormShopDeliveryStaff(query: any = {}, operatorId?: string) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const keyword = String(query.keyword || "").trim();
+    const merchantScope = await this.shopOrderRegionWhere(operatorId);
+    const where: any = {
+      merchant: { businessType: "dorm_shop", ...(merchantScope.merchant || {}) },
+    };
+    if (query.merchantId) where.merchantId = String(query.merchantId);
+    if (query.status) where.status = String(query.status);
+    else where.status = { not: "removed" };
+    if (query.onDuty === "true" || query.onDuty === true) where.onDuty = true;
+    if (query.onDuty === "false" || query.onDuty === false) where.onDuty = false;
+    if (keyword) {
+      where.OR = [
+        { invitedPhone: { contains: keyword } },
+        { user: { nickname: { contains: keyword } } },
+        { user: { phone: { contains: keyword } } },
+        { merchant: { name: { contains: keyword } } },
+      ];
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.merchantStaff.findMany({
+        where,
+        include: {
+          user: { select: { id: true, nickname: true, avatar: true, phone: true } },
+          merchant: { select: { id: true, name: true, regionId: true } },
+          assignments: {
+            where: { status: { in: ["pending_accept", "accepted", "picked_up"] } },
+            select: { id: true, status: true },
+          },
+        },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.merchantStaff.count({ where }),
+    ]);
+    return {
+      list: rows.map((row: any) => ({
+        id: row.id,
+        merchantId: row.merchantId,
+        merchantName: row.merchant?.name || "",
+        userId: row.userId,
+        nickname: row.user?.nickname || "",
+        avatar: row.user?.avatar || "",
+        phone: this.maskPhone(row.user?.phone || row.invitedPhone),
+        status: row.status,
+        onDuty: Boolean(row.onDuty),
+        activeAssignments: row.assignments.length,
+        invitedAt: row.invitedAt,
+        inviteExpiresAt: row.inviteExpiresAt,
+        acceptedAt: row.acceptedAt,
+        disabledAt: row.disabledAt,
+        updatedAt: row.updatedAt,
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  async updateDormShopDeliveryStaffStatus(
+    staffId: string,
+    dto: { status?: string; reason?: string },
+    operatorId?: string,
+  ) {
+    const status = String(dto?.status || "").trim();
+    const reason = String(dto?.reason || "").trim();
+    if (!["active", "paused", "removed"].includes(status)) {
+      throw new BadRequestException("店员状态只能设为启用、暂停或移除");
+    }
+    if (status !== "active" && !reason) {
+      throw new BadRequestException("暂停或移除配送店员时必须填写原因");
+    }
+    const staff = await this.prisma.merchantStaff.findUnique({
+      where: { id: staffId },
+      include: {
+        merchant: {
+          select: {
+            id: true,
+            name: true,
+            regionId: true,
+            businessType: true,
+            userId: true,
+          },
+        },
+      },
+    });
+    if (!staff || staff.merchant?.businessType !== "dorm_shop") {
+      throw new NotFoundException("宿舍小店配送店员不存在");
+    }
+    await this.adminDataScope.assertRegionAccess(
+      operatorId,
+      staff.merchant.regionId,
+    );
+    if (staff.status === "removed") {
+      throw new BadRequestException("已移除的店员不能在后台直接恢复，请由店主重新邀请");
+    }
+    if (staff.status === "invited" && status !== "removed") {
+      throw new BadRequestException("待接受邀请不能由后台代替店员确认");
+    }
+    if (staff.status === status) {
+      return { success: true, unchanged: true, status };
+    }
+    const now = new Date();
+    const cancelledAssignmentIds = await this.prisma.$transaction(async (tx) => {
+      const assignments =
+        status === "active"
+          ? []
+          : await tx.shopDeliveryAssignment.findMany({
+              where: {
+                staffId,
+                status: { in: ["pending_accept", "accepted", "picked_up"] },
+              },
+              select: { id: true, orderId: true, status: true },
+            });
+      if (assignments.some((item: any) => item.status === "picked_up")) {
+        throw new BadRequestException(
+          "店员已取货，请先完成当前配送后再暂停或移除",
+        );
+      }
+      const updated = await tx.merchantStaff.updateMany({
+        where: { id: staffId, status: staff.status },
+        data: {
+          status,
+          onDuty: status === "active" ? staff.onDuty : false,
+          disabledAt: status === "active" ? null : now,
+        },
+      });
+      if (updated.count !== 1) {
+        throw new BadRequestException("店员状态已变化，请刷新后重试");
+      }
+      if (assignments.length) {
+        const cancelled = await tx.shopDeliveryAssignment.updateMany({
+          where: {
+            id: { in: assignments.map((item: any) => item.id) },
+            status: { in: ["pending_accept", "accepted"] },
+          },
+          data: {
+            status: "cancelled",
+            cancelledAt: now,
+            cancelReason: reason,
+          },
+        });
+        if (cancelled.count !== assignments.length) {
+          throw new BadRequestException(
+            "配送任务状态已变化，店员状态未更新，请刷新后重试",
+          );
+        }
+        for (const assignment of assignments) {
+          await tx.orderLog.create({
+            data: {
+              orderId: assignment.orderId,
+              action: "SHOP_STAFF_ADMIN_CANCEL",
+              fromStatus: "SHIPPED",
+              toStatus: "SHIPPED",
+              operatorId,
+              operatorType: "admin",
+              remark: `后台${status === "removed" ? "移除" : "暂停"}配送店员：${reason}`,
+            },
+          });
+        }
+      }
+      return assignments.map((item: any) => item.id);
+    });
+    await this.prisma.adminOperationLog
+      .create({
+        data: {
+          accountId: operatorId || "",
+          action: status === "active" ? "restore" : status,
+          module: "dorm_shop_staff",
+          targetId: staffId,
+          targetType: "merchant_staff",
+          detail: {
+            merchantId: staff.merchantId,
+            previousStatus: staff.status,
+            status,
+            reason,
+            cancelledAssignmentIds,
+          },
+        },
+      })
+      .catch(() => undefined);
+    await this.notifyService
+      ?.createAndDispatch({
+        userId: staff.userId,
+        regionId: staff.merchant.regionId || undefined,
+        type: "system",
+        scene: "dorm_shop_staff_admin_status",
+        title: status === "active" ? "配送店员资格已恢复" : "配送店员资格已变更",
+        content:
+          status === "active"
+            ? `${staff.merchant.name} 的配送店员资格已恢复。`
+            : `${staff.merchant.name} 的配送店员资格已${status === "removed" ? "移除" : "暂停"}：${reason}`,
+        data: { merchantId: staff.merchantId, staffId, status },
+        linkType: "page",
+        linkValue: "/pages/partner/role-select",
+        channelMask: { inApp: true, websocket: true, push: true },
+      })
+      .catch(() => undefined);
+    if (
+      cancelledAssignmentIds.length &&
+      staff.merchant.userId &&
+      staff.merchant.userId !== staff.userId
+    ) {
+      await this.notifyService
+        ?.createAndDispatch({
+          userId: staff.merchant.userId,
+          regionId: staff.merchant.regionId || undefined,
+          type: "delivery",
+          scene: "dorm_shop_staff_admin_assignment_cancelled",
+          title: "配送任务需要重新安排",
+          content: `平台已${status === "removed" ? "移除" : "暂停"}一名配送店员，${cancelledAssignmentIds.length} 笔未取货任务已取消分配，请及时重新调度。`,
+          data: {
+            merchantId: staff.merchantId,
+            staffId,
+            status,
+            cancelledAssignmentIds,
+          },
+          linkType: "page",
+          linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${staff.merchantId}`,
+          channelMask: { inApp: true, websocket: true, push: true },
+        })
+        .catch(() => undefined);
+    }
+    return {
+      success: true,
+      status,
+      cancelledAssignments: cancelledAssignmentIds.length,
+    };
   }
 
   async releaseUnpickedRiderOrder(orderId: string, operatorId?: string) {
@@ -151,7 +553,6 @@ export class OrderCenterService {
       keyword,
       orderType,
       status,
-      payStatus,
       userId,
       merchantId,
       businessType,
@@ -218,7 +619,28 @@ export class OrderCenterService {
             select: { id: true, nickname: true, avatar: true, phone: true },
           },
           merchant: {
-            select: { id: true, name: true, logo: true, businessType: true },
+            select: {
+              id: true,
+              name: true,
+              logo: true,
+              businessType: true,
+              autoDispatchEnabled: true,
+              autoDispatchMinutes: true,
+              staffAcceptSeconds: true,
+              staffMaxActiveOrders: true,
+            },
+          },
+          shopDeliveryAssignment: {
+            include: {
+              assignee: {
+                select: {
+                  id: true,
+                  nickname: true,
+                  avatar: true,
+                  phone: true,
+                },
+              },
+            },
           },
         },
         orderBy: { createdAt: "desc" },
@@ -235,6 +657,9 @@ export class OrderCenterService {
         ...orders.map((o) => {
           const deliveryMode = o.businessType === "dorm_shop" ? "self_delivery" : o.deliveryMode;
           const fulfillmentAlert = this.fulfillmentAlertFor({ ...o, deliveryMode });
+          const deliveryAssignment = this.formatDormShopAssignment(
+            o.shopDeliveryAssignment,
+          );
           return {
             orderId: o.id,
             id: o.id,
@@ -260,6 +685,8 @@ export class OrderCenterService {
             freightAmount: Number(o.freightAmount || 0),
             createdAt: o.createdAt,
             fulfillmentAlert,
+            deliveryAssignment,
+            dormDispatchAlert: this.dormDispatchAlertFor(o),
           };
         }),
       );
@@ -557,7 +984,11 @@ export class OrderCenterService {
     return { csv, total: result.total };
   }
 
-  async getOrderDetail(id: string, type?: string, operatorId?: string) {
+  async getOrderDetail(
+    id: string,
+    type?: string,
+    operatorId?: string,
+  ): Promise<any> {
     // 尝试从各表查找
     const normalizedType = type === "delivery" ? "order" : type;
     if (!normalizedType || normalizedType === "order") {
@@ -568,9 +999,50 @@ export class OrderCenterService {
             select: { id: true, nickname: true, avatar: true, phone: true },
           },
           merchant: {
-            select: { id: true, name: true, logo: true, phone: true, businessType: true, regionId: true },
+            select: {
+              id: true,
+              name: true,
+              logo: true,
+              phone: true,
+              businessType: true,
+              regionId: true,
+              autoDispatchEnabled: true,
+              autoDispatchMinutes: true,
+              staffAcceptSeconds: true,
+              staffMaxActiveOrders: true,
+            },
           },
           items: true,
+          shopDeliveryAssignment: {
+            include: {
+              assignee: {
+                select: {
+                  id: true,
+                  nickname: true,
+                  avatar: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+          orderLogs: {
+            where: {
+              action: {
+                in: [
+                  "SHOP_STAFF_AUTO_ASSIGN",
+                  "SHOP_DELIVERY_ASSIGN",
+                  "SHOP_STAFF_ACCEPT",
+                  "SHOP_STAFF_PICKUP",
+                  "SHOP_STAFF_ASSIGN_FAILED",
+                  "SHOP_STAFF_NO_AVAILABLE",
+                  "SHOP_STAFF_ADMIN_CANCEL",
+                  "DELIVERED_BY_CODE",
+                  "DELIVERED_BY_PHOTO",
+                ],
+              },
+            },
+            orderBy: { createdAt: "asc" },
+          },
         },
       });
       if (order) {
@@ -580,8 +1052,16 @@ export class OrderCenterService {
           this.prisma.deliveryOrderNode.findMany({ where: { orderId: id, orderType: "shop" }, orderBy: { createdAt: "asc" } }).catch(() => []),
           this.prisma.deliveryRiskEvent.findMany({ where: { orderId: id, orderType: "shop" }, orderBy: { createdAt: "desc" } }).catch(() => []),
         ]);
+        const safeOrder: Record<string, any> = { ...order };
+        delete safeOrder.deliveryReceiptCode;
+        delete safeOrder.shopDeliveryAssignment;
+        delete safeOrder.orderLogs;
+        const orderLogs = Array.isArray(order.orderLogs) ? order.orderLogs : [];
+        const deliveryMethodLog = orderLogs.find((log: any) =>
+          ["DELIVERED_BY_CODE", "DELIVERED_BY_PHOTO"].includes(log.action),
+        );
         return {
-          ...order,
+          ...safeOrder,
           orderType: order.businessType === "dorm_shop" ? "宿舍小店订单" : "外卖订单",
           businessType: order.businessType,
           deliveryMode,
@@ -589,6 +1069,28 @@ export class OrderCenterService {
           deliveryDisplayMode: this.deliveryDisplayModeForOrder(order),
           deliveryNodes,
           riskEvents,
+          deliveryAssignment: this.formatDormShopAssignment(
+            order.shopDeliveryAssignment,
+          ),
+          dormDispatchAlert: this.dormDispatchAlertFor(order),
+          dispatchEvents: orderLogs.map((log: any) => ({
+            id: log.id,
+            action: log.action,
+            operatorType: log.operatorType,
+            remark: log.remark || "",
+            createdAt: log.createdAt,
+          })),
+          receiptVerification: {
+            method:
+              deliveryMethodLog?.action === "DELIVERED_BY_CODE"
+                ? "receipt_code"
+                : deliveryMethodLog?.action === "DELIVERED_BY_PHOTO"
+                  ? "photo"
+                  : null,
+            verified: deliveryMethodLog?.action === "DELIVERED_BY_CODE",
+            attempts: Number(order.deliveryCodeAttempts || 0),
+            locked: Boolean(order.deliveryCodeLockedAt),
+          },
           merchantName: order.merchant?.name || "-",
           userName: order.user?.nickname || "-",
           amount: Number(order.payAmount || 0),

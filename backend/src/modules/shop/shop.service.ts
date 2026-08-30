@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Logger,
 } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../../common/services/prisma.service";
@@ -14,21 +15,38 @@ import {
 import { NotifyService } from "../notify/notify.service";
 import { MembershipService } from "../membership/membership.service";
 import { SystemConfigService } from "../system-config/system-config.service";
-import { PrintService } from '../print/print.service';
-import { PaymentService } from '../payment/payment.service';
+import { PrintService } from "../print/print.service";
+import { PaymentService } from "../payment/payment.service";
+import { randomInt } from "node:crypto";
 
 @Injectable()
 export class ShopService {
+  private readonly logger = new Logger(ShopService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifyService: NotifyService,
     private readonly membershipService: MembershipService,
-    private readonly redis: RedisService = { withLock: async (_key: string, _ttl: number, task: () => Promise<any>) => task(), hgetall: async () => ({}) } as unknown as RedisService,
-    private readonly systemConfigService: SystemConfigService = { amapWalkingDistance: async () => null } as unknown as SystemConfigService,
-    private readonly printService: PrintService = { enqueueAutomaticOrder: async () => ({ queued: 0 }), reprintOrder: async () => ({ success: true, queued: 0, message: '' }), prepareConnection: () => ({ connectionMode: 'merchant_owned' }) } as unknown as PrintService,
+    private readonly redis: RedisService = {
+      withLock: async (_key: string, _ttl: number, task: () => Promise<any>) =>
+        task(),
+      hgetall: async () => ({}),
+    } as unknown as RedisService,
+    private readonly systemConfigService: SystemConfigService = {
+      amapWalkingDistance: async () => null,
+    } as unknown as SystemConfigService,
+    private readonly printService: PrintService = {
+      enqueueAutomaticOrder: async () => ({ queued: 0 }),
+      reprintOrder: async () => ({ success: true, queued: 0, message: "" }),
+      prepareConnection: () => ({ connectionMode: "merchant_owned" }),
+    } as unknown as PrintService,
     private readonly paymentService: PaymentService = {
-      refund: async () => { throw new BadRequestException('支付服务未就绪'); },
-      cancelFreeShopOrder: async () => { throw new BadRequestException('支付服务未就绪'); },
+      refund: async () => {
+        throw new BadRequestException("支付服务未就绪");
+      },
+      cancelFreeShopOrder: async () => {
+        throw new BadRequestException("支付服务未就绪");
+      },
     } as unknown as PaymentService,
   ) {}
 
@@ -55,53 +73,109 @@ export class ShopService {
   }
 
   private async runCronLocked(name: string, task: () => Promise<void>) {
+    const renewingLock = (this.redis as any).withRenewingLock;
+    if (typeof renewingLock === "function") {
+      await renewingLock.call(this.redis, `shop:cron:${name}`, 55, task);
+      return;
+    }
     await this.redis.withLock(`shop:cron:${name}`, 55, task);
   }
 
+  private async withDormShopOrderLock<T>(
+    orderId: string,
+    message: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const result = await this.redis.withLock(
+      `payment:refund:order:${orderId}`,
+      30,
+      task,
+    );
+    if (result === undefined) throw new BadRequestException(message);
+    return result;
+  }
+
   private deliveryDistanceMeters(merchant: any, address: any) {
-    const raw = [merchant?.latitude, merchant?.longitude, address?.latitude, address?.longitude];
-    if (raw.some((value) => value === null || value === undefined || value === "")) return null;
+    const raw = [
+      merchant?.latitude,
+      merchant?.longitude,
+      address?.latitude,
+      address?.longitude,
+    ];
+    if (
+      raw.some((value) => value === null || value === undefined || value === "")
+    )
+      return null;
     const [lat1, lng1, lat2, lng2] = raw.map(Number);
     if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return null;
     const radians = (value: number) => (value * Math.PI) / 180;
-    const a = Math.sin((radians(lat2) - radians(lat1)) / 2) ** 2
-      + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin((radians(lng2) - radians(lng1)) / 2) ** 2;
+    const a =
+      Math.sin((radians(lat2) - radians(lat1)) / 2) ** 2 +
+      Math.cos(radians(lat1)) *
+        Math.cos(radians(lat2)) *
+        Math.sin((radians(lng2) - radians(lng1)) / 2) ** 2;
     return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
   }
 
   private async resolveDeliveryDistance(merchant: any, address: any) {
     const straightDistance = this.deliveryDistanceMeters(merchant, address);
     if (straightDistance === null) return { meters: null, source: null };
-    const roadDistance = await this.systemConfigService.amapWalkingDistance({
-      longitude: Number(merchant.longitude), latitude: Number(merchant.latitude),
-    }, {
-      longitude: Number(address.longitude), latitude: Number(address.latitude),
-    }).catch(() => null);
+    const roadDistance = await this.systemConfigService
+      .amapWalkingDistance(
+        {
+          longitude: Number(merchant.longitude),
+          latitude: Number(merchant.latitude),
+        },
+        {
+          longitude: Number(address.longitude),
+          latitude: Number(address.latitude),
+        },
+      )
+      .catch(() => null);
     // ponytail: use straight-line distance if AMap is unavailable; add retry/cache only after real request volume proves it necessary.
     return roadDistance === null
       ? { meters: straightDistance, source: "straight" }
       : { meters: roadDistance, source: "road" };
   }
 
-  private async resolveOrderDeliveryAddress(merchant: any, userId: string, dto: any) {
+  private async resolveOrderDeliveryAddress(
+    merchant: any,
+    userId: string,
+    dto: any,
+  ) {
     const addressId = String(dto.address_id || dto.addressId || "").trim();
-    const specifiedAddressId = String(dto.specified_address_id || dto.specifiedAddressId || "").trim();
+    const specifiedAddressId = String(
+      dto.specified_address_id || dto.specifiedAddressId || "",
+    ).trim();
+    if (!addressId) throw new BadRequestException("请选择收货地址");
     if (merchant.businessType !== "dorm_shop" && !specifiedAddressId)
       throw new BadRequestException("请选择支持配送的收货地址");
-    if (!addressId && !specifiedAddressId) return null;
     const address = await this.prisma.address.findFirst({
-      where: addressId
-        ? { userId, id: addressId }
-        : { userId, OR: [{ id: specifiedAddressId }, { specifiedAddressId }] },
+      where: { userId, id: addressId },
       select: {
-        id: true, regionId: true, specifiedAddressId: true, name: true, phone: true,
-        detail: true, fullAddress: true, dormitoryNumber: true, latitude: true, longitude: true,
+        id: true,
+        regionId: true,
+        specifiedAddressId: true,
+        name: true,
+        phone: true,
+        detail: true,
+        fullAddress: true,
+        dormitoryNumber: true,
+        latitude: true,
+        longitude: true,
       },
     });
     if (!address) throw new ForbiddenException("收货地址不存在或无权使用");
-    if (specifiedAddressId && address.id !== specifiedAddressId && address.specifiedAddressId !== specifiedAddressId)
+    if (
+      specifiedAddressId &&
+      address.id !== specifiedAddressId &&
+      address.specifiedAddressId !== specifiedAddressId
+    )
       throw new BadRequestException("收货地址与指定配送区域不一致");
-    if (merchant.regionId && merchant.regionId !== (address.specifiedAddressId || address.regionId))
+    if (
+      merchant.regionId &&
+      merchant.regionId !== (address.specifiedAddressId || address.regionId)
+    )
       throw new BadRequestException("收货地址不属于当前商家服务区域");
     return address;
   }
@@ -125,7 +199,9 @@ export class ShopService {
 
   @Cron("0 * * * * *")
   async notifyScheduledMerchantOrders() {
-    await this.runCronLocked("scheduled-merchant-notify", () => this.notifyScheduledMerchantOrdersUnlocked());
+    await this.runCronLocked("scheduled-merchant-notify", () =>
+      this.notifyScheduledMerchantOrdersUnlocked(),
+    );
   }
 
   private async notifyScheduledMerchantOrdersUnlocked() {
@@ -166,7 +242,9 @@ export class ShopService {
             remark: "预约订单已到履约时间，已通知商家",
           },
         });
-        await this.printService.enqueueAutomaticOrder(order.id).catch(() => undefined);
+        await this.printService
+          .enqueueAutomaticOrder(order.id)
+          .catch(() => undefined);
       } catch {
         // 通知或日志失败时下次重试，避免预约单静默漏发。
       }
@@ -175,7 +253,9 @@ export class ShopService {
 
   @Cron("0 */10 * * * *")
   async remindUnacceptedOrders() {
-    await this.runCronLocked("unaccepted-reminder", () => this.remindUnacceptedOrdersUnlocked());
+    await this.runCronLocked("unaccepted-reminder", () =>
+      this.remindUnacceptedOrdersUnlocked(),
+    );
   }
 
   /** FIN-P0-003: 商家超时未接单自动取消并全额退款（10 分钟提醒商家 → 20 分钟告知用户 → 30 分钟自动退款）。 */
@@ -194,7 +274,6 @@ export class ShopService {
         status: "PAID",
         merchantAcceptTime: null,
         refundStatus: "none",
-        businessType: { not: "dorm_shop" },
         ...this.unacceptedOrderIsOverdueAt(cutoff),
       },
       include: {
@@ -399,7 +478,9 @@ export class ShopService {
 
   @Cron("0 */10 * * * *")
   async remindUnassignedReadyOrders() {
-    await this.runCronLocked("unassigned-ready-reminder", () => this.remindUnassignedReadyOrdersUnlocked());
+    await this.runCronLocked("unassigned-ready-reminder", () =>
+      this.remindUnassignedReadyOrdersUnlocked(),
+    );
   }
 
   private async remindUnassignedReadyOrdersUnlocked() {
@@ -487,7 +568,9 @@ export class ShopService {
 
   @Cron("0 */10 * * * *")
   async remindUnpickedRiderOrders() {
-    await this.runCronLocked("unpicked-rider-reminder", () => this.remindUnpickedRiderOrdersUnlocked());
+    await this.runCronLocked("unpicked-rider-reminder", () =>
+      this.remindUnpickedRiderOrdersUnlocked(),
+    );
   }
 
   private async remindUnpickedRiderOrdersUnlocked() {
@@ -542,7 +625,9 @@ export class ShopService {
 
   @Cron("0 */10 * * * *")
   async remindOverdueRiderDeliveries() {
-    await this.runCronLocked("overdue-rider-delivery-reminder", () => this.remindOverdueRiderDeliveriesUnlocked());
+    await this.runCronLocked("overdue-rider-delivery-reminder", () =>
+      this.remindOverdueRiderDeliveriesUnlocked(),
+    );
   }
 
   private async remindOverdueRiderDeliveriesUnlocked() {
@@ -647,7 +732,9 @@ export class ShopService {
 
   @Cron("0 */10 * * * *")
   async autoCompleteDeliveredOrders() {
-    await this.runCronLocked("auto-receipt", () => this.autoCompleteDeliveredOrdersUnlocked());
+    await this.runCronLocked("auto-receipt", () =>
+      this.autoCompleteDeliveredOrdersUnlocked(),
+    );
   }
 
   private async autoCompleteDeliveredOrdersUnlocked() {
@@ -783,6 +870,9 @@ export class ShopService {
           operatorType: params.operatorType || "merchant",
           riderType: params.riderType || "merchant_self",
           displayMode: params.displayMode || "status_nodes",
+          proofImages: Array.isArray(params.proofImages)
+            ? params.proofImages
+            : undefined,
           remark: params.remark || null,
         },
       })
@@ -1240,15 +1330,30 @@ export class ShopService {
         },
       },
     });
-    if (!merchant || merchant.businessType !== "dorm_shop")
+    if (
+      !merchant ||
+      merchant.businessType !== "dorm_shop" ||
+      !["approved", "closed"].includes(merchant.status)
+    )
       throw new NotFoundException("宿舍小店不存在");
     return { ...merchant, ...this.formatMerchantForMini(merchant) };
   }
 
   async getCategoriesAndProducts(merchantId: string) {
+    const merchant = await this.prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, status: true },
+    });
+    if (!merchant || !["approved", "closed"].includes(merchant.status))
+      throw new NotFoundException("商家不存在");
     const [categories, uncategorizedProducts] = await Promise.all([
       this.prisma.category.findMany({
-        where: { isShow: true },
+        where: {
+          isShow: true,
+          type: "product",
+          status: { not: "deleted" },
+          OR: [{ merchantId: null }, { merchantId }],
+        },
         include: {
           products: {
             where: { merchantId, status: "on_sale" },
@@ -1316,6 +1421,7 @@ export class ShopService {
           type: "product",
           businessType: merchant.businessType || "takeaway",
           status: { not: "deleted" },
+          OR: [{ merchantId: null }, { merchantId }],
         },
         include: {
           products: {
@@ -1355,6 +1461,8 @@ export class ShopService {
         name: "未分类",
         category_name: "未分类",
         category_image: "",
+        merchant_id: merchantId,
+        can_edit: false,
         sort_order: 0,
         is_visible: 1,
         must_select: 0,
@@ -1419,7 +1527,11 @@ export class ShopService {
     const merchantIds = await this.resolveManageMerchantIds(merchantId, userId);
     const keyword = String(query.search_keyword || query.keyword || "").trim();
     const where: any = { merchantId: { in: merchantIds } };
-    this.applyDeliveryStatusFilter(where, String(query.status || "").trim());
+    this.applyDeliveryStatusFilter(
+      where,
+      String(query.status || "").trim(),
+      true,
+    );
     this.applyTimeRange(where, query);
     if (keyword) {
       where.OR = [
@@ -1458,6 +1570,13 @@ export class ShopService {
             },
           },
           items: true,
+          shopDeliveryAssignment: {
+            include: {
+              assignee: {
+                select: { id: true, nickname: true, avatar: true, phone: true },
+              },
+            },
+          },
         },
       }),
       this.prisma.order.count({ where }),
@@ -1490,14 +1609,1312 @@ export class ShopService {
     };
   }
 
+  async getMerchantStaff(merchantId: string, userId: string) {
+    const merchant = await this.assertMerchantOwner(merchantId, userId);
+    if (merchant.businessType !== "dorm_shop") {
+      throw new BadRequestException("配送店员只适用于宿舍小店");
+    }
+    if (!["approved", "closed"].includes(merchant.status)) {
+      throw new BadRequestException("小店审核通过后才能添加配送店员");
+    }
+    const rows = await this.prisma.merchantStaff.findMany({
+      where: { merchantId, status: { not: "removed" } },
+      orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+      include: {
+        user: {
+          select: { id: true, nickname: true, avatar: true, phone: true },
+        },
+        _count: {
+          select: {
+            assignments: {
+              where: {
+                status: { in: ["pending_accept", "accepted", "picked_up"] },
+              },
+            },
+          },
+        },
+      },
+    });
+    return {
+      staff: rows.map((row: any) => this.formatMerchantStaff(row)),
+      limit: 5,
+      max_active_orders: Number(merchant.staffMaxActiveOrders || 2),
+    };
+  }
+
+  async inviteMerchantStaff(merchantId: string, userId: string, dto: any) {
+    const merchant = await this.assertMerchantOwner(merchantId, userId);
+    if (merchant.businessType !== "dorm_shop") {
+      throw new BadRequestException("配送店员只适用于宿舍小店");
+    }
+    if (!["approved", "closed"].includes(merchant.status)) {
+      throw new BadRequestException("小店审核通过后才能添加配送店员");
+    }
+    const phone = String(dto?.phone || dto?.mobile || "")
+      .replace(/\s+/g, "")
+      .trim();
+    if (!/^1\d{10}$/.test(phone)) {
+      throw new BadRequestException("请输入已绑定小程序的 11 位手机号");
+    }
+    const accounts = await this.prisma.user.findMany({
+      where: { phone, status: { not: "DELETED" as any } },
+      select: { id: true, nickname: true, avatar: true, phone: true },
+      take: 2,
+    });
+    const account = accounts[0];
+    if (!account) {
+      throw new BadRequestException(
+        "该手机号尚未绑定小程序账号，请对方先登录小程序并绑定手机号",
+      );
+    }
+    if (accounts.length > 1) {
+      throw new BadRequestException(
+        "该手机号关联了多个历史账号，请联系平台处理后再邀请",
+      );
+    }
+    if (account.id === userId) {
+      throw new BadRequestException("店主本人无需添加为配送店员");
+    }
+    const now = new Date();
+    const inviteExpiresAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    const staff = await this.redis.withLock(
+      `shop:staff-invite:${merchantId}`,
+      10,
+      async () => {
+        const existing = await this.prisma.merchantStaff.findUnique({
+          where: { merchantId_userId: { merchantId, userId: account.id } },
+        });
+        if (!existing || existing.status === "removed") {
+          const activeCount = await this.prisma.merchantStaff.count({
+            where: {
+              merchantId,
+              status: { in: ["invited", "active", "paused"] },
+            },
+          });
+          if (activeCount >= 5) {
+            throw new BadRequestException("每个宿舍小店最多添加 5 名配送店员");
+          }
+        }
+        if (existing?.status === "active") {
+          throw new BadRequestException("该用户已经是本店配送店员");
+        }
+        return this.prisma.merchantStaff.upsert({
+          where: { merchantId_userId: { merchantId, userId: account.id } },
+          create: {
+            merchantId,
+            userId: account.id,
+            invitedById: userId,
+            invitedPhone: phone,
+            status: "invited",
+            onDuty: false,
+            invitedAt: now,
+            inviteExpiresAt,
+          },
+          update: {
+            invitedById: userId,
+            invitedPhone: phone,
+            status: "invited",
+            onDuty: false,
+            invitedAt: now,
+            inviteExpiresAt,
+            acceptedAt: null,
+            disabledAt: null,
+          },
+          include: {
+            user: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+          },
+        });
+      },
+    );
+    if (!staff) {
+      throw new BadRequestException("店员名单正在更新，请稍后重试");
+    }
+    await this.notifyService
+      .createAndDispatch({
+        userId: account.id,
+        regionId: merchant.regionId || undefined,
+        type: "order",
+        scene: "dorm_shop_staff_invite",
+        title: "宿舍小店配送邀请",
+        content: `${merchant.name} 邀请你成为配送店员，请在校园伙伴端确认。`,
+        data: { merchantId, staffId: staff.id },
+        linkType: "page",
+        linkValue: "/pages/partner/role-select",
+        channelMask: { inApp: true, websocket: true, push: true },
+      })
+      .catch(() => undefined);
+    return { success: true, staff: this.formatMerchantStaff(staff) };
+  }
+
+  async updateMerchantStaff(
+    merchantId: string,
+    staffId: string,
+    userId: string,
+    dto: any,
+  ) {
+    await this.assertMerchantOwner(merchantId, userId);
+    const staff = await this.prisma.merchantStaff.findFirst({
+      where: { id: staffId, merchantId },
+    });
+    if (!staff) throw new NotFoundException("配送店员不存在");
+    const status = String(dto?.status || "").trim();
+    if (!["active", "paused", "removed"].includes(status)) {
+      throw new BadRequestException("不支持的店员状态");
+    }
+    const updated = await this.redis.withLock(
+      `shop:staff-state:${staff.id}`,
+      10,
+      async () => {
+        const current = await this.prisma.merchantStaff.findFirst({
+          where: { id: staff.id, merchantId },
+        });
+        if (!current) throw new NotFoundException("配送店员不存在");
+        if (status === "active" && !current.acceptedAt) {
+          throw new BadRequestException("对方尚未接受邀请，不能直接启用");
+        }
+        if (status !== "active") {
+          const pickedUp = await this.prisma.shopDeliveryAssignment.count({
+            where: { staffId: current.id, status: "picked_up" },
+          });
+          if (pickedUp > 0) {
+            throw new BadRequestException(
+              "该店员有配送中的订单，送达后才能暂停或移除",
+            );
+          }
+        }
+        await this.prisma.$transaction(async (tx) => {
+          const claimed = await tx.merchantStaff.updateMany({
+            where: {
+              id: current.id,
+              status: current.status,
+              updatedAt: current.updatedAt,
+            },
+            data: {
+              status,
+              onDuty: status === "active" ? current.onDuty : false,
+              disabledAt: status === "active" ? null : new Date(),
+            },
+          });
+          if (claimed.count !== 1) {
+            throw new BadRequestException("店员状态已变化，请刷新后重试");
+          }
+          if (status !== "active") {
+            await tx.shopDeliveryAssignment.updateMany({
+              where: {
+                staffId: current.id,
+                status: { in: ["pending_accept", "accepted"] },
+              },
+              data: {
+                status: "cancelled",
+                cancelledAt: new Date(),
+                cancelReason:
+                  status === "removed" ? "店员已被移除" : "店员已被暂停",
+              },
+            });
+          }
+        });
+        return true;
+      },
+    );
+    if (!updated) {
+      throw new BadRequestException("店员状态正在更新，请稍后重试");
+    }
+    return { success: true };
+  }
+
+  async getMerchantDispatchPolicy(merchantId: string, userId: string) {
+    const merchant = await this.assertMerchantOwner(merchantId, userId);
+    if (merchant.businessType !== "dorm_shop") {
+      throw new BadRequestException("自动调度只适用于宿舍小店");
+    }
+    return this.formatMerchantDispatchPolicy(merchant);
+  }
+
+  async updateMerchantDispatchPolicy(
+    merchantId: string,
+    userId: string,
+    dto: any,
+  ) {
+    const merchant = await this.assertMerchantOwner(merchantId, userId);
+    if (merchant.businessType !== "dorm_shop") {
+      throw new BadRequestException("自动调度只适用于宿舍小店");
+    }
+    const minutes = Number(
+      dto?.auto_dispatch_minutes ??
+        dto?.autoDispatchMinutes ??
+        merchant.autoDispatchMinutes,
+    );
+    const acceptSeconds = Number(
+      dto?.staff_accept_seconds ??
+        dto?.staffAcceptSeconds ??
+        merchant.staffAcceptSeconds,
+    );
+    const maxActive = Number(
+      dto?.staff_max_active_orders ??
+        dto?.staffMaxActiveOrders ??
+        merchant.staffMaxActiveOrders,
+    );
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) {
+      throw new BadRequestException("自动分配等待时间必须为 1-30 分钟");
+    }
+    if (
+      !Number.isInteger(acceptSeconds) ||
+      acceptSeconds < 30 ||
+      acceptSeconds > 300
+    ) {
+      throw new BadRequestException("店员确认时间必须为 30-300 秒");
+    }
+    if (!Number.isInteger(maxActive) || maxActive < 1 || maxActive > 5) {
+      throw new BadRequestException("每名店员同时配送上限必须为 1-5 单");
+    }
+    const updated = await this.prisma.merchant.update({
+      where: { id: merchantId },
+      data: {
+        autoDispatchEnabled:
+          dto?.auto_dispatch_enabled ??
+          dto?.autoDispatchEnabled ??
+          merchant.autoDispatchEnabled,
+        autoDispatchMinutes: minutes,
+        staffAcceptSeconds: acceptSeconds,
+        staffMaxActiveOrders: maxActive,
+      },
+    });
+    return this.formatMerchantDispatchPolicy(updated);
+  }
+
+  async getShopStaffInvitations(userId: string) {
+    const rows = await this.prisma.merchantStaff.findMany({
+      where: {
+        userId,
+        status: "invited",
+        inviteExpiresAt: { gt: new Date() },
+      },
+      orderBy: { invitedAt: "desc" },
+      include: {
+        merchant: {
+          select: {
+            id: true,
+            name: true,
+            logo: true,
+            dormBuilding: true,
+            dormRoom: true,
+          },
+        },
+      },
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      status: row.status,
+      invited_at: row.invitedAt,
+      expires_at: row.inviteExpiresAt,
+      expired: row.inviteExpiresAt.getTime() <= Date.now(),
+      shop: {
+        id: row.merchant.id,
+        name: row.merchant.name,
+        logo: row.merchant.logo || "",
+        dorm_building: row.merchant.dormBuilding || "",
+        dorm_room: row.merchant.dormRoom || "",
+      },
+    }));
+  }
+
+  async acceptShopStaffInvitation(staffId: string, userId: string) {
+    const snapshot = await this.prisma.merchantStaff.findFirst({
+      where: { id: staffId, userId },
+      select: { id: true },
+    });
+    if (!snapshot) throw new NotFoundException("配送店员邀请不存在");
+    const accepted = await this.redis.withLock(
+      `shop:staff-state:${snapshot.id}`,
+      10,
+      async () => {
+        const staff = await this.prisma.merchantStaff.findFirst({
+          where: { id: snapshot.id, userId },
+          include: { merchant: { select: { id: true, name: true } } },
+        });
+        if (!staff) throw new NotFoundException("配送店员邀请不存在");
+        if (staff.status !== "invited") {
+          throw new BadRequestException("该邀请已经处理");
+        }
+        const now = new Date();
+        if (staff.inviteExpiresAt.getTime() <= now.getTime()) {
+          throw new BadRequestException("邀请已过期，请让店主重新邀请");
+        }
+        const claimed = await this.prisma.merchantStaff.updateMany({
+          where: {
+            id: staff.id,
+            userId,
+            status: "invited",
+            inviteExpiresAt: { gt: now },
+          },
+          data: { status: "active", acceptedAt: now, disabledAt: null },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException("邀请状态已变化，请刷新后重试");
+        }
+        return {
+          success: true,
+          merchant_id: staff.merchantId,
+          merchant_name: staff.merchant.name,
+        };
+      },
+    );
+    if (!accepted) {
+      throw new BadRequestException("邀请状态正在更新，请稍后重试");
+    }
+    return accepted;
+  }
+
+  async updateShopStaffDuty(userId: string, dto: any) {
+    const merchantId = String(dto?.merchant_id || dto?.merchantId || "").trim();
+    const snapshot = await this.prisma.merchantStaff.findFirst({
+      where: { userId, merchantId },
+      select: { id: true },
+    });
+    if (!snapshot) throw new ForbiddenException("当前账号不是该店有效配送店员");
+    const onDuty = dto?.on_duty === true || dto?.onDuty === true;
+    const updated = await this.redis.withLock(
+      `shop:staff-state:${snapshot.id}`,
+      10,
+      async () => {
+        const staff = await this.prisma.merchantStaff.findFirst({
+          where: { id: snapshot.id, userId, merchantId, status: "active" },
+        });
+        if (!staff) {
+          throw new ForbiddenException("当前账号不是该店有效配送店员");
+        }
+        const claimed = await this.prisma.merchantStaff.updateMany({
+          where: {
+            id: staff.id,
+            status: "active",
+            updatedAt: staff.updatedAt,
+          },
+          data: { onDuty },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException("店员状态已变化，请刷新后重试");
+        }
+        return { success: true, on_duty: onDuty };
+      },
+    );
+    if (!updated) {
+      throw new BadRequestException("值班状态正在更新，请稍后重试");
+    }
+    return updated;
+  }
+
+  async assignDormShopOrder(orderId: string, userId: string, dto: any = {}) {
+    return this.withDormShopOrderLock(
+      orderId,
+      "订单正在退款或调度中，请稍后重试",
+      () => this.assignDormShopOrderUnlocked(orderId, userId, dto),
+    );
+  }
+
+  private async assignDormShopOrderUnlocked(
+    orderId: string,
+    userId: string,
+    dto: any = {},
+  ) {
+    const order = await this.getOwnedMerchantOrder(orderId, userId);
+    if (order.businessType !== "dorm_shop") {
+      throw new BadRequestException("店内配送只适用于宿舍小店订单");
+    }
+    if (
+      order.status !== "SHIPPED" ||
+      !order.readyTime ||
+      this.isRefundBlocking(order.refundStatus)
+    ) {
+      throw new BadRequestException("只有已备货的宿舍小店订单才能分配配送");
+    }
+    if (order.shopDeliveryAssignment?.status === "picked_up") {
+      throw new BadRequestException("配送员已取货，送达前不能改派");
+    }
+    const staffId = String(dto?.staff_id ?? dto?.staffId ?? "").trim();
+    if (!staffId || staffId === "owner" || dto?.assignee_type === "owner") {
+      return this.saveDormShopAssignment(order, {
+        assigneeUserId: userId,
+        assigneeType: "owner",
+        staffId: null,
+        source: "manual",
+        accepted: true,
+      });
+    }
+    const staff = await this.prisma.merchantStaff.findFirst({
+      where: { id: staffId, merchantId: order.merchantId, status: "active" },
+      include: {
+        user: { select: { id: true, nickname: true, phone: true } },
+      },
+    });
+    if (!staff) throw new BadRequestException("请选择本店已启用的配送店员");
+    const assigned = await this.redis.withLock(
+      `shop:staff-state:${staff.id}`,
+      10,
+      async () => {
+        const currentStaff = await this.prisma.merchantStaff.findFirst({
+          where: {
+            id: staff.id,
+            merchantId: order.merchantId,
+            status: "active",
+          },
+        });
+        if (!currentStaff) {
+          throw new BadRequestException("店员状态已变化，请刷新后重试");
+        }
+        const activeCount = await this.prisma.shopDeliveryAssignment.count({
+          where: {
+            staffId: currentStaff.id,
+            orderId: { not: order.id },
+            status: { in: ["pending_accept", "accepted", "picked_up"] },
+          },
+        });
+        if (activeCount >= Number(order.merchant?.staffMaxActiveOrders || 2)) {
+          throw new BadRequestException(
+            "该店员当前配送任务已达上限，请选择其他人",
+          );
+        }
+        return this.saveDormShopAssignment(order, {
+          assigneeUserId: currentStaff.userId,
+          assigneeType: "staff",
+          staffId: currentStaff.id,
+          source: "manual",
+          accepted: false,
+        });
+      },
+    );
+    if (!assigned) {
+      throw new BadRequestException("店员任务正在更新，请稍后重试");
+    }
+    return assigned;
+  }
+
+  async getShopStaffAssignments(userId: string, query: any = {}) {
+    const status = String(query?.status || "active").trim();
+    const statusMap: Record<string, string[]> = {
+      active: ["pending_accept", "accepted", "picked_up"],
+      pending: ["pending_accept"],
+      delivering: ["accepted", "picked_up"],
+      completed: ["delivered"],
+      all: [
+        "pending_accept",
+        "accepted",
+        "picked_up",
+        "delivered",
+        "cancelled",
+      ],
+    };
+    const rows = await this.prisma.shopDeliveryAssignment.findMany({
+      where: {
+        assigneeUserId: userId,
+        assigneeType: "staff",
+        status: { in: statusMap[status] || statusMap.active },
+        staff: { is: { status: "active" } },
+      },
+      orderBy: { assignedAt: "desc" },
+      take: Math.min(Math.max(Number(query?.limit) || 50, 1), 100),
+      include: {
+        staff: true,
+        merchant: {
+          select: {
+            id: true,
+            name: true,
+            logo: true,
+            phone: true,
+            dormBuilding: true,
+            dormRoom: true,
+          },
+        },
+        order: {
+          include: {
+            user: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+            items: true,
+          },
+        },
+      },
+    });
+    return {
+      assignments: rows.map((row: any) => this.formatShopStaffAssignment(row)),
+    };
+  }
+
+  async acceptShopStaffAssignment(assignmentId: string, userId: string) {
+    const snapshot = await this.getOwnedShopStaffAssignment(
+      assignmentId,
+      userId,
+    );
+    return this.withDormShopOrderLock(
+      snapshot.orderId,
+      "订单正在退款或调度中，请稍后刷新",
+      () =>
+        this.acceptShopStaffAssignmentUnlocked(snapshot, assignmentId, userId),
+    );
+  }
+
+  private async acceptShopStaffAssignmentUnlocked(
+    snapshot: any,
+    assignmentId: string,
+    userId: string,
+  ) {
+    const accepted = await this.redis.withLock(
+      `shop:staff-state:${snapshot.staffId || snapshot.id}`,
+      10,
+      async () => {
+        const assignment = await this.getOwnedShopStaffAssignment(
+          assignmentId,
+          userId,
+        );
+        if (assignment.status !== "pending_accept") {
+          throw new BadRequestException("该配送任务已处理");
+        }
+        if (
+          assignment.order.status !== "SHIPPED" ||
+          this.isRefundBlocking(assignment.order.refundStatus)
+        ) {
+          throw new BadRequestException("订单已暂停配送，请刷新后查看");
+        }
+        if (
+          assignment.acceptDeadline &&
+          assignment.acceptDeadline.getTime() <= Date.now()
+        ) {
+          await this.prisma.shopDeliveryAssignment.update({
+            where: { id: assignment.id },
+            data: {
+              status: "cancelled",
+              cancelledAt: new Date(),
+              cancelReason: "配送店员确认超时",
+            },
+          });
+          throw new BadRequestException("接单时间已过，请让店主重新分配");
+        }
+        const activeCount = await this.prisma.shopDeliveryAssignment.count({
+          where: {
+            merchantId: assignment.merchantId,
+            assigneeUserId: userId,
+            status: { in: ["accepted", "picked_up"] },
+          },
+        });
+        if (activeCount >= assignment.merchant.staffMaxActiveOrders) {
+          throw new BadRequestException("当前配送任务已达上限，请完成后再接单");
+        }
+        const now = new Date();
+        const claimed = await this.prisma.shopDeliveryAssignment.updateMany({
+          where: {
+            id: assignment.id,
+            staffId: assignment.staffId,
+            assigneeUserId: userId,
+            status: "pending_accept",
+          },
+          data: { status: "accepted", acceptedAt: now },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException("配送任务状态已变化，请刷新后重试");
+        }
+        await this.prisma.orderLog.create({
+          data: {
+            orderId: assignment.orderId,
+            action: "SHOP_STAFF_ACCEPT",
+            fromStatus: "SHIPPED",
+            toStatus: "SHIPPED",
+            operatorId: userId,
+            operatorType: "merchant_staff",
+            remark: "配送店员已接单",
+          },
+        });
+        return { success: true, message: "已接单，请及时取货配送" };
+      },
+    );
+    if (!accepted) {
+      throw new BadRequestException("接单请求正在处理，请稍后刷新");
+    }
+    return accepted;
+  }
+
+  async pickupShopStaffAssignment(assignmentId: string, userId: string) {
+    const snapshot = await this.getOwnedShopStaffAssignment(
+      assignmentId,
+      userId,
+    );
+    return this.withDormShopOrderLock(
+      snapshot.orderId,
+      "订单正在退款或调度中，请稍后刷新",
+      () =>
+        this.pickupShopStaffAssignmentUnlocked(snapshot, assignmentId, userId),
+    );
+  }
+
+  private async pickupShopStaffAssignmentUnlocked(
+    snapshot: any,
+    assignmentId: string,
+    userId: string,
+  ) {
+    const pickedUp = await this.redis.withLock(
+      `shop:staff-state:${snapshot.staffId || snapshot.id}`,
+      10,
+      async () => {
+        const assignment = await this.getOwnedShopStaffAssignment(
+          assignmentId,
+          userId,
+        );
+        if (assignment.status !== "accepted") {
+          throw new BadRequestException("只有已接受的配送任务才能确认取货");
+        }
+        if (assignment.order.status !== "SHIPPED") {
+          throw new BadRequestException("订单状态已变化，请刷新后重试");
+        }
+        if (this.isRefundBlocking(assignment.order.refundStatus)) {
+          throw new BadRequestException("订单正在退款，请暂停配送");
+        }
+        const now = new Date();
+        await this.prisma.$transaction(async (tx) => {
+          const claimed = await tx.shopDeliveryAssignment.updateMany({
+            where: {
+              id: assignment.id,
+              staffId: assignment.staffId,
+              assigneeUserId: userId,
+              status: "accepted",
+            },
+            data: { status: "picked_up", pickedUpAt: now },
+          });
+          if (claimed.count !== 1) {
+            throw new BadRequestException("配送任务状态已变化，请刷新后重试");
+          }
+          const orderClaimed = await tx.order.updateMany({
+            where: {
+              id: assignment.orderId,
+              status: "SHIPPED",
+              refundStatus: { notIn: ["refunding", "refunded"] },
+            },
+            data: { pickupTime: now },
+          });
+          if (orderClaimed.count !== 1) {
+            throw new BadRequestException("订单正在退款，请暂停配送");
+          }
+          await tx.orderLog.create({
+            data: {
+              orderId: assignment.orderId,
+              action: "SHOP_STAFF_PICKUP",
+              fromStatus: "SHIPPED",
+              toStatus: "SHIPPED",
+              operatorId: userId,
+              operatorType: "merchant_staff",
+              remark: "配送店员已取货，开始配送",
+            },
+          });
+          await this.recordDeliveryNode(tx, {
+            orderId: assignment.orderId,
+            nodeType: "picked_up",
+            operatorId: userId,
+            operatorType: "merchant_staff",
+            riderType: "shop_staff",
+            displayMode: "status_nodes",
+            remark: "配送店员已取货，开始配送",
+          });
+        });
+        return true;
+      },
+    );
+    if (!pickedUp) {
+      throw new BadRequestException("取货状态正在更新，请稍后重试");
+    }
+    return { success: true, message: "已确认取货" };
+  }
+
+  async completeShopStaffAssignment(
+    assignmentId: string,
+    userId: string,
+    dto: any = {},
+  ) {
+    const assignment = await this.getOwnedShopStaffAssignment(
+      assignmentId,
+      userId,
+    );
+    return this.completeDormShopDelivery(
+      assignment.orderId,
+      userId,
+      dto,
+      "staff",
+    );
+  }
+
+  @Cron("15 * * * * *")
+  async autoDispatchDormShopOrders() {
+    await this.runCronLocked("dorm-shop-auto-dispatch", () =>
+      this.autoDispatchDormShopOrdersUnlocked(),
+    );
+  }
+
+  private async autoDispatchDormShopOrdersUnlocked() {
+    const now = new Date();
+    const orders = await this.prisma.order.findMany({
+      where: {
+        businessType: "dorm_shop",
+        status: "SHIPPED",
+        readyTime: { not: null },
+        refundStatus: { notIn: ["refunding", "refunded"] },
+        merchant: {
+          autoDispatchEnabled: true,
+          status: { in: ["approved", "closed"] },
+        },
+        OR: [
+          { shopDeliveryAssignment: { is: null } },
+          { shopDeliveryAssignment: { is: { status: "cancelled" } } },
+          {
+            shopDeliveryAssignment: {
+              is: {
+                status: "pending_accept",
+                acceptDeadline: { lte: now },
+              },
+            },
+          },
+        ],
+      },
+      orderBy: { readyTime: "asc" },
+      take: 100,
+      include: {
+        merchant: true,
+        shopDeliveryAssignment: true,
+        orderLogs: {
+          where: {
+            action: {
+              in: ["SHOP_STAFF_ASSIGN_FAILED", "SHOP_STAFF_NO_AVAILABLE"],
+            },
+          },
+          select: { id: true, action: true },
+          take: 2,
+        },
+      },
+    });
+    for (const order of orders) {
+      const readyAt = order.readyTime?.getTime() || 0;
+      if (
+        readyAt + order.merchant.autoDispatchMinutes * 60 * 1000 >
+        now.getTime()
+      ) {
+        continue;
+      }
+      try {
+        if (
+          Number(order.shopDeliveryAssignment?.attemptNo || 0) >= 3 &&
+          order.orderLogs.some(
+            (log: any) => log.action === "SHOP_STAFF_ASSIGN_FAILED",
+          )
+        ) {
+          continue;
+        }
+        if (Number(order.shopDeliveryAssignment?.attemptNo || 0) >= 3) {
+          await this.prisma.shopDeliveryAssignment.updateMany({
+            where: { orderId: order.id },
+            data: {
+              status: "cancelled",
+              cancelledAt: now,
+              cancelReason: "连续三次无人确认配送",
+            },
+          });
+          await this.prisma.orderLog.create({
+            data: {
+              orderId: order.id,
+              action: "SHOP_STAFF_ASSIGN_FAILED",
+              fromStatus: "SHIPPED",
+              toStatus: "SHIPPED",
+              operatorType: "system",
+              remark: "自动分配连续三次无人确认，已提醒店主手动调度",
+            },
+          });
+          if (order.merchant.userId) {
+            await this.notifyService
+              .createAndDispatch({
+                userId: order.merchant.userId,
+                regionId: order.merchant.regionId || undefined,
+                type: "delivery",
+                scene: "dorm_shop_dispatch_attention",
+                title: "配送任务需要手动安排",
+                content: `${order.merchant.name} 有订单连续三次无人接单，请立即手动安排配送。`,
+                data: { orderId: order.id, merchantId: order.merchantId },
+                linkType: "page",
+                linkValue: "/pages/orders/orders",
+                channelMask: { inApp: true, websocket: true, push: true },
+              })
+              .catch(() => undefined);
+          }
+          continue;
+        }
+        const staff = await this.pickAutoDispatchStaff(
+          order.merchant,
+          order.shopDeliveryAssignment?.staffId || null,
+        );
+        const fallbackStaff =
+          staff ||
+          (order.shopDeliveryAssignment?.staffId
+            ? await this.pickAutoDispatchStaff(order.merchant, null)
+            : null);
+        if (!fallbackStaff) {
+          const alreadyNotified = order.orderLogs.some(
+            (log: any) => log.action === "SHOP_STAFF_NO_AVAILABLE",
+          );
+          if (!alreadyNotified) {
+            await this.prisma.orderLog.create({
+              data: {
+                orderId: order.id,
+                action: "SHOP_STAFF_NO_AVAILABLE",
+                fromStatus: "SHIPPED",
+                toStatus: "SHIPPED",
+                operatorType: "system",
+                remark:
+                  "暂无在岗且容量可用的配送店员，已提醒店主手动配送或调度",
+              },
+            });
+            if (order.merchant.userId) {
+              await this.notifyService
+                .createAndDispatch({
+                  userId: order.merchant.userId,
+                  regionId: order.merchant.regionId || undefined,
+                  type: "delivery",
+                  scene: "dorm_shop_dispatch_attention",
+                  title: "暂无可用配送店员",
+                  content: `${order.merchant.name} 有订单等待配送，请店主手动配送或启用店员。`,
+                  data: { orderId: order.id, merchantId: order.merchantId },
+                  linkType: "page",
+                  linkValue: "/pages/orders/orders",
+                  channelMask: { inApp: true, websocket: true, push: true },
+                })
+                .catch(() => undefined);
+            }
+          }
+          continue;
+        }
+        await this.withDormShopOrderLock(
+          order.id,
+          "订单正在退款或调度中",
+          async () => {
+            const assigned = await this.redis.withLock(
+              `shop:staff-state:${fallbackStaff.id}`,
+              10,
+              async () => {
+                const currentStaff = await this.prisma.merchantStaff.findFirst({
+                  where: {
+                    id: fallbackStaff.id,
+                    merchantId: order.merchantId,
+                    status: "active",
+                    onDuty: true,
+                  },
+                });
+                if (!currentStaff) return { success: false, skipped: true };
+                const activeCount =
+                  await this.prisma.shopDeliveryAssignment.count({
+                    where: {
+                      staffId: currentStaff.id,
+                      orderId: { not: order.id },
+                      status: {
+                        in: ["pending_accept", "accepted", "picked_up"],
+                      },
+                    },
+                  });
+                if (
+                  activeCount >=
+                  Number(order.merchant?.staffMaxActiveOrders || 2)
+                ) {
+                  return { success: false, skipped: true };
+                }
+                return this.saveDormShopAssignment(order, {
+                  assigneeUserId: currentStaff.userId,
+                  assigneeType: "staff",
+                  staffId: currentStaff.id,
+                  source: "auto",
+                  accepted: false,
+                });
+              },
+            );
+            return assigned || { success: false, skipped: true };
+          },
+        );
+      } catch (error: any) {
+        // 单笔抢占或通知失败不阻塞其他小店订单，下个调度周期继续处理。
+        this.logger.warn(
+          `宿舍小店自动调度失败 orderId=${order.id}: ${error?.message || String(error)}`,
+        );
+      }
+    }
+  }
+
+  private async pickAutoDispatchStaff(
+    merchant: any,
+    excludeStaffId: string | null,
+  ) {
+    const staff = await this.prisma.merchantStaff.findMany({
+      where: {
+        merchantId: merchant.id,
+        status: "active",
+        onDuty: true,
+        ...(excludeStaffId ? { id: { not: excludeStaffId } } : {}),
+      },
+      orderBy: { updatedAt: "asc" },
+      include: { user: { select: { id: true, nickname: true } } },
+    });
+    const candidates: Array<{ row: any; active: number }> = [];
+    for (const row of staff) {
+      const active = await this.prisma.shopDeliveryAssignment.count({
+        where: {
+          staffId: row.id,
+          status: { in: ["pending_accept", "accepted", "picked_up"] },
+        },
+      });
+      if (active < merchant.staffMaxActiveOrders)
+        candidates.push({ row, active });
+    }
+    candidates.sort(
+      (left, right) =>
+        left.active - right.active ||
+        left.row.updatedAt.getTime() - right.row.updatedAt.getTime(),
+    );
+    return candidates[0]?.row || null;
+  }
+
+  private async saveDormShopAssignment(order: any, input: any) {
+    if (input.source === "auto") {
+      const currentOrder = await this.prisma.order.findUnique({
+        where: { id: order.id },
+        include: { merchant: true, shopDeliveryAssignment: true },
+      });
+      if (
+        !currentOrder ||
+        currentOrder.status !== "SHIPPED" ||
+        !currentOrder.readyTime ||
+        this.isRefundBlocking(currentOrder.refundStatus)
+      ) {
+        return {
+          success: false,
+          skipped: true,
+          message: "订单已暂停配送",
+        };
+      }
+      order = currentOrder;
+    }
+    const now = new Date();
+    const acceptDeadline = input.accepted
+      ? null
+      : new Date(
+          now.getTime() +
+            Number(order.merchant?.staffAcceptSeconds || 90) * 1000,
+        );
+    const attemptNo = Number(order.shopDeliveryAssignment?.attemptNo || 0) + 1;
+    const assignmentData = {
+      staffId: input.staffId,
+      assigneeUserId: input.assigneeUserId,
+      assigneeType: input.assigneeType,
+      source: input.source,
+      status: input.accepted ? "accepted" : "pending_accept",
+      attemptNo,
+      acceptDeadline,
+      assignedAt: now,
+      acceptedAt: input.accepted ? now : null,
+      pickedUpAt: null,
+      deliveredAt: null,
+      cancelledAt: null,
+      cancelReason: null,
+    };
+    let assignment: any;
+    if (input.source === "auto") {
+      const current = await this.prisma.shopDeliveryAssignment.findUnique({
+        where: { orderId: order.id },
+      });
+      const snapshotUpdatedAt =
+        order.shopDeliveryAssignment?.updatedAt?.getTime() || 0;
+      const currentWasChanged =
+        current && current.updatedAt.getTime() > snapshotUpdatedAt;
+      const currentStillOwned =
+        current &&
+        (current.status === "accepted" ||
+          current.status === "picked_up" ||
+          (current.status === "pending_accept" &&
+            (!current.acceptDeadline || current.acceptDeadline > now)));
+      if (currentWasChanged || currentStillOwned) {
+        return {
+          success: false,
+          skipped: true,
+          message: "配送任务已被其他调度处理",
+        };
+      }
+      if (current) {
+        const claimed = await this.prisma.shopDeliveryAssignment.updateMany({
+          where: {
+            id: current.id,
+            updatedAt: current.updatedAt,
+            status: { in: ["cancelled", "pending_accept"] },
+          },
+          data: assignmentData,
+        });
+        if (claimed.count !== 1) {
+          return {
+            success: false,
+            skipped: true,
+            message: "配送任务已被其他调度处理",
+          };
+        }
+        assignment = await this.prisma.shopDeliveryAssignment.findUnique({
+          where: { id: current.id },
+          include: {
+            assignee: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+          },
+        });
+      } else {
+        try {
+          assignment = await this.prisma.shopDeliveryAssignment.create({
+            data: {
+              orderId: order.id,
+              merchantId: order.merchantId,
+              ...assignmentData,
+            },
+            include: {
+              assignee: {
+                select: { id: true, nickname: true, avatar: true, phone: true },
+              },
+            },
+          });
+        } catch (error: any) {
+          if (error?.code === "P2002") {
+            return {
+              success: false,
+              skipped: true,
+              message: "配送任务已被其他调度处理",
+            };
+          }
+          throw error;
+        }
+      }
+    } else {
+      const current = await this.prisma.shopDeliveryAssignment.findUnique({
+        where: { orderId: order.id },
+      });
+      if (current?.status === "picked_up") {
+        throw new BadRequestException("配送员已取货，送达前不能改派");
+      }
+      const manualAssignmentData = {
+        ...assignmentData,
+        attemptNo:
+          Number(
+            current?.attemptNo || order.shopDeliveryAssignment?.attemptNo || 0,
+          ) + 1,
+      };
+      if (current) {
+        const claimed = await this.prisma.shopDeliveryAssignment.updateMany({
+          where: {
+            id: current.id,
+            updatedAt: current.updatedAt,
+            status: { in: ["cancelled", "pending_accept", "accepted"] },
+          },
+          data: manualAssignmentData,
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException("配送任务状态已变化，请刷新后重试");
+        }
+        assignment = await this.prisma.shopDeliveryAssignment.findUnique({
+          where: { id: current.id },
+          include: {
+            assignee: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+          },
+        });
+      } else {
+        try {
+          assignment = await this.prisma.shopDeliveryAssignment.create({
+            data: {
+              orderId: order.id,
+              merchantId: order.merchantId,
+              ...manualAssignmentData,
+            },
+            include: {
+              assignee: {
+                select: { id: true, nickname: true, avatar: true, phone: true },
+              },
+            },
+          });
+        } catch (error: any) {
+          if (error?.code === "P2002") {
+            throw new BadRequestException("配送任务状态已变化，请刷新后重试");
+          }
+          throw error;
+        }
+      }
+    }
+    await this.prisma.orderLog.create({
+      data: {
+        orderId: order.id,
+        action:
+          input.source === "auto"
+            ? "SHOP_STAFF_AUTO_ASSIGN"
+            : "SHOP_DELIVERY_ASSIGN",
+        fromStatus: "SHIPPED",
+        toStatus: "SHIPPED",
+        operatorId: input.source === "auto" ? null : order.merchant?.userId,
+        operatorType: input.source === "auto" ? "system" : "merchant",
+        remark:
+          input.assigneeType === "owner"
+            ? "店主选择自行配送"
+            : `${input.source === "auto" ? "系统自动" : "店主手动"}分配配送店员`,
+      },
+    });
+    if (input.assigneeType === "staff") {
+      await this.notifyService
+        .createAndDispatch({
+          userId: input.assigneeUserId,
+          regionId: order.merchant?.regionId || undefined,
+          type: "delivery",
+          scene: "dorm_shop_staff_assignment",
+          title: "新的宿舍小店配送任务",
+          content: `${order.merchant?.name || "宿舍小店"} 有一笔配送任务，请及时确认。`,
+          data: {
+            orderId: order.id,
+            merchantId: order.merchantId,
+            assignmentId: assignment.id,
+            acceptDeadline,
+          },
+          linkType: "page",
+          linkValue: "/pages/orders/orders",
+          channelMask: { inApp: true, websocket: true, push: true },
+        })
+        .catch(() => undefined);
+    }
+    return {
+      success: true,
+      message:
+        input.assigneeType === "owner"
+          ? "已安排店主配送"
+          : "已通知配送店员接单",
+      assignment: this.formatMerchantAssignment(assignment),
+    };
+  }
+
+  private async getOwnedShopStaffAssignment(
+    assignmentId: string,
+    userId: string,
+  ) {
+    const assignment = await this.prisma.shopDeliveryAssignment.findFirst({
+      where: {
+        id: assignmentId,
+        assigneeUserId: userId,
+        assigneeType: "staff",
+        staff: { is: { status: "active", userId } },
+      },
+      include: {
+        merchant: true,
+        order: true,
+      },
+    });
+    if (!assignment) throw new ForbiddenException("该配送任务不属于当前账号");
+    return assignment;
+  }
+
+  private formatMerchantAssignment(row: any) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      staff_id: row.staffId || null,
+      assignee_user_id: row.assigneeUserId,
+      assignee_type: row.assigneeType,
+      source: row.source,
+      status: row.status,
+      attempt_no: row.attemptNo,
+      accept_deadline: row.acceptDeadline,
+      assigned_at: row.assignedAt,
+      accepted_at: row.acceptedAt,
+      picked_up_at: row.pickedUpAt,
+      delivered_at: row.deliveredAt,
+      assignee: row.assignee
+        ? {
+            id: row.assignee.id,
+            nickname: row.assignee.nickname || "配送店员",
+            avatar: row.assignee.avatar || "",
+            phone: row.assignee.phone || "",
+          }
+        : null,
+    };
+  }
+
+  private formatShopStaffAssignment(row: any) {
+    const revealContact = ["accepted", "picked_up", "delivered"].includes(
+      row.status,
+    );
+    return {
+      ...this.formatMerchantAssignment(row),
+      merchant: {
+        id: row.merchant.id,
+        name: row.merchant.name,
+        logo: row.merchant.logo || "",
+        phone: row.merchant.phone || "",
+        dorm_building: row.merchant.dormBuilding || "",
+        dorm_room: row.merchant.dormRoom || "",
+      },
+      order: {
+        id: row.order.id,
+        order_no: row.order.orderNo,
+        status: row.order.status,
+        refund_status: row.order.refundStatus || "none",
+        receiver_name: revealContact ? row.order.receiverName : "接单后可见",
+        receiver_phone: revealContact ? row.order.receiverPhone : "",
+        receiver_address: revealContact
+          ? row.order.receiverAddress
+          : "接单后可见",
+        remark: revealContact ? row.order.remark || "" : "",
+        ready_time: row.order.readyTime,
+        pickup_time: row.order.pickupTime,
+        items: (row.order.items || []).map((item: any) => ({
+          name: item.productName,
+          quantity: item.quantity,
+          image: item.productImage || "",
+        })),
+      },
+    };
+  }
+
+  private formatMerchantStaff(row: any) {
+    return {
+      id: row.id,
+      merchant_id: row.merchantId,
+      user_id: row.userId,
+      nickname:
+        row.user?.nickname || `用户${String(row.invitedPhone || "").slice(-4)}`,
+      avatar: row.user?.avatar || "",
+      phone: row.user?.phone || row.invitedPhone || "",
+      role: row.role,
+      status: row.status,
+      on_duty: Boolean(row.onDuty),
+      active_orders: Number(row._count?.assignments || 0),
+      invited_at: row.invitedAt,
+      expires_at: row.inviteExpiresAt,
+      accepted_at: row.acceptedAt,
+    };
+  }
+
+  private formatMerchantDispatchPolicy(merchant: any) {
+    return {
+      merchant_id: merchant.id,
+      auto_dispatch_enabled: Boolean(merchant.autoDispatchEnabled),
+      auto_dispatch_minutes: Number(merchant.autoDispatchMinutes || 5),
+      staff_accept_seconds: Number(merchant.staffAcceptSeconds || 90),
+      staff_max_active_orders: Number(merchant.staffMaxActiveOrders || 2),
+    };
+  }
+
   async applyMerchant(userId: string, dto: any) {
     const businessType = dto.businessType || dto.business_type || "takeaway";
+    let boundDormShopPhone: string | null = null;
     if (businessType === "dorm_shop") {
-      const verified = await this.prisma.studentVerify.findUnique({
-        where: { userId },
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { phone: true },
       });
-      if (!verified || verified.status !== "APPROVED") {
-        throw new BadRequestException("宿舍小店仅支持完成学生认证的用户申请");
+      boundDormShopPhone = String(user?.phone || "").trim();
+      if (!/^1\d{10}$/.test(boundDormShopPhone)) {
+        throw new BadRequestException(
+          "请先在小程序绑定手机号，审核通过后需使用该号码登录校园伙伴端",
+        );
       }
     }
     const data = await this.buildMerchantApplicationData(
@@ -1505,6 +2922,7 @@ export class ShopService {
       businessType,
       dto,
     );
+    if (boundDormShopPhone) data.phone = boundDormShopPhone;
     const existing = await this.prisma.merchant.findFirst({
       where: { userId, businessType },
       orderBy: { createdAt: "desc" },
@@ -1621,6 +3039,38 @@ export class ShopService {
       data.regionId = this.toOptionalStringOrNull(data.regionId);
     if (data.categoryId !== undefined)
       data.categoryId = this.toOptionalStringOrNull(data.categoryId);
+    if (data.status !== undefined) {
+      const currentStatus = String(currentMerchant.status || "");
+      const nextStatus = String(data.status || "");
+      if (
+        !["approved", "closed"].includes(currentStatus) ||
+        !["approved", "closed"].includes(nextStatus)
+      ) {
+        throw new ForbiddenException("商家审核状态只能由后台修改");
+      }
+      data.status = nextStatus;
+    }
+    if (
+      data.regionId !== undefined &&
+      data.regionId !== (currentMerchant.regionId || null)
+    ) {
+      throw new ForbiddenException("商家所属区域只能由后台修改");
+    }
+    if (
+      data.categoryId !== undefined &&
+      data.categoryId !== (currentMerchant.categoryId || null)
+    ) {
+      throw new ForbiddenException("商家平台分类只能由后台修改");
+    }
+    if (
+      data.businessType !== undefined &&
+      String(data.businessType) !== String(currentMerchant.businessType)
+    ) {
+      throw new ForbiddenException("商家业务类型只能由后台修改");
+    }
+    delete data.regionId;
+    delete data.categoryId;
+    delete data.businessType;
     if (data.latitude !== undefined)
       data.latitude = this.toFloatOrNull(data.latitude);
     if (data.longitude !== undefined)
@@ -1662,6 +3112,18 @@ export class ShopService {
         data.deliveryTimeMinutes,
         30,
       );
+    if (data.businessLicenseUrl !== undefined) {
+      data.businessLicenseUrl = this.normalizeMerchantCredentialImage(
+        data.businessLicenseUrl,
+        "营业执照",
+      );
+    }
+    if (data.foodSafetyLicenseUrl !== undefined) {
+      data.foodSafetyLicenseUrl = this.normalizeMerchantCredentialImage(
+        data.foodSafetyLicenseUrl,
+        "食品许可或备案凭证",
+      );
+    }
     if (data.deliveryMode !== undefined || data.businessType !== undefined) {
       let businessTypeForMode = data.businessType;
       if (!businessTypeForMode && data.deliveryMode !== undefined) {
@@ -1693,9 +3155,6 @@ export class ShopService {
       "businessHours",
       "closedNotice",
       "status",
-      "regionId",
-      "categoryId",
-      "businessType",
       "deliveryMode",
       "deliveryFee",
       "minOrderAmount",
@@ -1847,16 +3306,30 @@ export class ShopService {
       (merchant as any).region?.commissionRate,
     );
     const merchantAmount = (order: any) => {
-      const goodsAmount = Math.max(
+      const grossAmount = Math.max(
         0,
-        this.toNumber(order.totalAmount) -
-          this.toNumber(order.originalFreightAmount ?? order.freightAmount),
+        order.payAmount === null || order.payAmount === undefined
+          ? this.toNumber(order.totalAmount)
+          : this.toNumber(order.payAmount) + this.toNumber(order.subsidyAmount),
+      );
+      const selfDelivery =
+        order.businessType === "dorm_shop" ||
+        order.deliveryMode === "self_delivery";
+      const originalFreight = this.toNumber(order.originalFreightAmount);
+      const platformDeliveryAmount = selfDelivery
+        ? 0
+        : originalFreight > 0
+          ? originalFreight
+          : this.toNumber(order.freightAmount);
+      const merchantBaseAmount = Math.max(
+        0,
+        grossAmount - platformDeliveryAmount,
       );
       const refundAmount =
         order.refundStatus === "partial"
-          ? Math.min(goodsAmount, this.toNumber(order.refundAmount))
+          ? Math.min(merchantBaseAmount, this.toNumber(order.refundAmount))
           : 0;
-      return goodsAmount - refundAmount;
+      return merchantBaseAmount - refundAmount;
     };
     const summary = (from: Date, to = now) => {
       const rows = orders.filter(
@@ -1989,12 +3462,63 @@ export class ShopService {
     };
   }
 
+  async getMerchantSettlements(merchantId: string, query: any, userId: string) {
+    await this.assertMerchantOwner(merchantId, userId);
+    const page = this.toPositiveInt(query?.page, 1);
+    const pageSize = Math.min(
+      50,
+      this.toPositiveInt(query?.pageSize ?? query?.page_size, 20),
+    );
+    const status = String(query?.status || "")
+      .trim()
+      .toLowerCase();
+    const where: any = { merchantId };
+    if (["pending", "processing", "completed", "failed"].includes(status)) {
+      where.status = status;
+    }
+    const [list, total] = await Promise.all([
+      this.prisma.merchantSettlement.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.merchantSettlement.count({ where }),
+    ]);
+    return {
+      list: list.map((settlement) => ({
+        id: settlement.id,
+        settlementNo: settlement.settlementNo,
+        amount: this.toNumber(settlement.amount),
+        platformFee: this.toNumber(settlement.platformFee),
+        netAmount:
+          this.toNumber(settlement.amount) -
+          this.toNumber(settlement.platformFee),
+        orderCount: settlement.orderCount,
+        status: settlement.status,
+        startAt: settlement.startAt,
+        endAt: settlement.endAt,
+        processedAt: settlement.processedAt,
+        transferNo: settlement.transferNo,
+        remark: settlement.remark,
+        isAdjustment: String(settlement.periodKey || "").startsWith(
+          "refund-adjustment:",
+        ),
+        createdAt: settlement.createdAt,
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
   async getCategories(query: any = {}) {
     const businessType = query.businessType || query.business_type;
     return this.prisma.category.findMany({
       where: {
         isShow: true,
         parentId: null,
+        merchantId: null,
         status: { not: "deleted" },
         ...(businessType ? { businessType } : {}),
       },
@@ -2002,6 +3526,7 @@ export class ShopService {
         children: {
           where: {
             isShow: true,
+            merchantId: null,
             status: { not: "deleted" },
             ...(businessType ? { businessType } : {}),
           },
@@ -2018,14 +3543,26 @@ export class ShopService {
   }
 
   async updateCategory(categoryId: string, userId: string, dto: any) {
-    const data = await this.normalizeCategoryPayload(dto, userId, true);
+    const category = await this.assertMerchantCategoryOwner(categoryId, userId);
+    const data = await this.normalizeCategoryPayload(
+      { ...dto, merchantId: category.merchantId },
+      userId,
+      true,
+    );
     return this.prisma.category.update({ where: { id: categoryId }, data });
   }
 
   async deleteCategory(categoryId: string, userId: string) {
-    await this.prisma.category.update({
-      where: { id: categoryId },
-      data: { status: "deleted", isShow: false },
+    await this.assertMerchantCategoryOwner(categoryId, userId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.product.updateMany({
+        where: { categoryId },
+        data: { categoryId: null },
+      });
+      await tx.category.update({
+        where: { id: categoryId },
+        data: { status: "deleted", isShow: false },
+      });
     });
     return { success: true };
   }
@@ -2048,6 +3585,37 @@ export class ShopService {
     return this.formatProductForMini(
       await this.prisma.product.update({ where: { id: productId }, data }),
     );
+  }
+
+  async saveProductWithOptions(
+    productId: string | null,
+    userId: string,
+    dto: any,
+  ) {
+    const productPayload = dto?.product || dto || {};
+    const current = productId
+      ? await this.assertProductOwner(productId, userId)
+      : null;
+    const data = await this.normalizeProductPayload(
+      productPayload,
+      userId,
+      Boolean(current),
+      current?.merchantId,
+    );
+    const skus = this.normalizeProductSkuPayload(dto?.specs);
+    if (skus.length) {
+      data.price = Math.min(...skus.map((sku) => sku.price));
+      data.stock = skus.reduce((sum, sku) => sum + sku.stock, 0);
+    }
+
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const product = current
+        ? await tx.product.update({ where: { id: current.id }, data })
+        : await tx.product.create({ data });
+      await this.syncProductSkusWithClient(tx, product.id, skus, true);
+      return product;
+    });
+    return this.formatProductForMini(saved);
   }
 
   async deleteProduct(productId: string, userId: string) {
@@ -2201,13 +3769,11 @@ export class ShopService {
         id: true,
         status: true,
         stock: true,
-        skus: skuId
-          ? {
-              where: { id: skuId },
-              select: { id: true, status: true, stock: true },
-              take: 1,
-            }
-          : false,
+        skus: {
+          where: skuId ? { id: skuId } : { status: "on_sale" },
+          select: { id: true, status: true, stock: true },
+          take: 1,
+        },
       },
     });
     if (!product) {
@@ -2218,6 +3784,9 @@ export class ShopService {
     }
     if (Number(product.stock) <= 0) {
       throw new BadRequestException("商品已售罄");
+    }
+    if (!skuId && product.skus?.length) {
+      throw new BadRequestException("请选择商品规格");
     }
     if (
       skuId &&
@@ -2501,14 +4070,23 @@ export class ShopService {
       include: { region: { select: { distanceLimit: true } } },
     });
     if (!merchant) throw new NotFoundException("商家不存在");
-    const address = await this.resolveOrderDeliveryAddress(merchant, userId, dto);
-    if (merchant.businessType === "dorm_shop") return { delivery_distance_meters: null, source: null };
+    const address = await this.resolveOrderDeliveryAddress(
+      merchant,
+      userId,
+      dto,
+    );
+    if (merchant.businessType === "dorm_shop")
+      return { delivery_distance_meters: null, source: null };
     const distance = await this.resolveDeliveryDistance(merchant, address);
     if (distance.meters === null)
-      throw new BadRequestException("该商家或收货地址缺少配送坐标，请重新选择地址或联系平台处理");
+      throw new BadRequestException(
+        "该商家或收货地址缺少配送坐标，请重新选择地址或联系平台处理",
+      );
     const distanceLimit = Number(merchant.region?.distanceLimit || 0);
     if (distanceLimit > 0 && distance.meters > distanceLimit)
-      throw new BadRequestException(`收货地址超出配送范围（${Math.ceil(distanceLimit / 1000)}km）`);
+      throw new BadRequestException(
+        `收货地址超出配送范围（${Math.ceil(distanceLimit / 1000)}km）`,
+      );
     return {
       delivery_distance_meters: distance.meters,
       source: distance.source,
@@ -2525,7 +4103,18 @@ export class ShopService {
       }),
       this.prisma.cart.findMany({
         where: { userId, product: { merchantId }, selected: true },
-        include: { product: true, sku: true },
+        include: {
+          product: {
+            include: {
+              skus: {
+                where: { status: "on_sale" },
+                select: { id: true },
+                take: 1,
+              },
+            },
+          },
+          sku: true,
+        },
       }),
     ]);
     if (!merchant) throw new NotFoundException("商家不存在");
@@ -2533,18 +4122,27 @@ export class ShopService {
       throw new BadRequestException(
         merchant.closedNotice || "商家当前未营业，暂不能下单",
       );
-    const verifiedAddress = await this.resolveOrderDeliveryAddress(merchant, userId, dto);
-    const deliveryDistance = merchant.businessType === "dorm_shop"
-      ? { meters: null, source: null }
-      : await this.resolveDeliveryDistance(merchant, verifiedAddress);
+    const verifiedAddress = await this.resolveOrderDeliveryAddress(
+      merchant,
+      userId,
+      dto,
+    );
+    const deliveryDistance =
+      merchant.businessType === "dorm_shop"
+        ? { meters: null, source: null }
+        : await this.resolveDeliveryDistance(merchant, verifiedAddress);
     const deliveryDistanceMeters = deliveryDistance.meters;
     const distanceLimit = Number(merchant.region?.distanceLimit || 0);
     if (merchant.businessType !== "dorm_shop" && distanceLimit > 0) {
       if (deliveryDistanceMeters === null) {
-        throw new BadRequestException("该商家暂未完成配送坐标配置，请联系平台处理");
+        throw new BadRequestException(
+          "该商家暂未完成配送坐标配置，请联系平台处理",
+        );
       }
       if (deliveryDistanceMeters > distanceLimit) {
-        throw new BadRequestException(`收货地址超出配送范围（${Math.ceil(distanceLimit / 1000)}km）`);
+        throw new BadRequestException(
+          `收货地址超出配送范围（${Math.ceil(distanceLimit / 1000)}km）`,
+        );
       }
     }
     const scheduledDeliveryTime =
@@ -2578,6 +4176,17 @@ export class ShopService {
     if (!this.isMerchantOpenAt(merchant.businessHours, serviceTime)) {
       throw new BadRequestException(
         `商家当前不在营业时间（${merchant.businessHours}），请调整配送时间后重试`,
+      );
+    }
+    const missingSkuItem = cartItems.find(
+      (item: any) =>
+        !item.skuId &&
+        Array.isArray(item.product?.skus) &&
+        item.product.skus.length > 0,
+    );
+    if (missingSkuItem) {
+      throw new BadRequestException(
+        `商品「${missingSkuItem.product?.name || "未知商品"}」请先选择规格`,
       );
     }
     const items = cartItems.map((item: any) => {
@@ -2855,7 +4464,9 @@ export class ShopService {
       await this.notifyMerchantForOrder({ ...order, merchant }).catch(
         () => undefined,
       );
-      await this.printService.enqueueAutomaticOrder(order.id).catch(() => undefined);
+      await this.printService
+        .enqueueAutomaticOrder(order.id)
+        .catch(() => undefined);
     }
     return {
       success: true,
@@ -2972,6 +4583,10 @@ export class ShopService {
       delivery_contact: order.receiverName,
       delivery_phone: order.receiverPhone,
       delivery_address: order.receiverAddress,
+      delivery_receipt_code:
+        order.businessType === "dorm_shop" && order.status === "SHIPPED"
+          ? order.deliveryReceiptCode || ""
+          : "",
       daily_order_number:
         String(order.orderNo || "")
           .replace(/\D/g, "")
@@ -3372,7 +4987,11 @@ export class ShopService {
         order: this.formatMerchantOrderForMini(updated),
       };
     }
-    if (order.status !== "PAID" || this.isRefundBlocking(order.refundStatus)) {
+    if (
+      order.status !== "PAID" ||
+      order.merchantAcceptTime ||
+      this.isRefundBlocking(order.refundStatus)
+    ) {
       throw new BadRequestException("只有已付款待接单的订单才能确认接单");
     }
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -3380,10 +4999,11 @@ export class ShopService {
         where: {
           id: orderId,
           status: "PAID",
+          merchantAcceptTime: null,
           refundStatus: { notIn: ["refunding", "refunded"] },
         },
         data: {
-          status: "SHIPPED" as any,
+          merchantAcceptTime: new Date(),
           acceptTime: new Date(),
           deliveryDisplayMode: "status_nodes",
         },
@@ -3395,10 +5015,10 @@ export class ShopService {
           orderId,
           action: "MERCHANT_ACCEPT",
           fromStatus: "PAID",
-          toStatus: "SHIPPED",
+          toStatus: "PAID",
           operatorId: userId,
           operatorType: "merchant",
-          remark: "店主确认接单，开始自送",
+          remark: "店主确认接单，开始备货",
         },
       });
       const row = await tx.order.findUniqueOrThrow({
@@ -3428,59 +5048,221 @@ export class ShopService {
         nodeType: "merchant_accepted",
         operatorId: userId,
         displayMode: "status_nodes",
-        remark: "店主确认接单，开始自送",
+        remark: "店主确认接单，开始备货",
       });
       return row;
     });
     await this.notifyBuyerOrderStatus(
       updated,
       "店主已接单",
-      `${updated.merchant?.name || "宿舍小店"} 已确认订单，正在准备配送`,
+      `${updated.merchant?.name || "宿舍小店"} 已确认订单，正在备货`,
     );
     return {
       success: true,
-      message: "已确认接单",
+      message: "已确认接单，请备货完成后开始配送",
       order: this.formatMerchantOrderForMini(updated),
     };
   }
 
-  async completeMerchantOrder(orderId: string, userId: string) {
-    const order = await this.getOwnedMerchantOrder(orderId, userId);
+  async completeMerchantOrder(orderId: string, userId: string, dto: any = {}) {
+    return this.completeDormShopDelivery(orderId, userId, dto, "owner");
+  }
+
+  private async completeDormShopDelivery(
+    orderId: string,
+    userId: string,
+    dto: any,
+    actorType: "owner" | "staff",
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        user: {
+          select: { id: true, nickname: true, avatar: true, phone: true },
+        },
+        merchant: {
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            logo: true,
+            address: true,
+            phone: true,
+            businessType: true,
+            deliveryMode: true,
+            regionId: true,
+          },
+        },
+        items: true,
+        shopDeliveryAssignment: true,
+      },
+    });
+    if (!order) throw new NotFoundException("订单不存在");
     if (order.businessType !== "dorm_shop") {
-      throw new BadRequestException("当前接口只处理宿舍小店店主自送订单");
+      throw new BadRequestException("当前接口只处理宿舍小店配送订单");
+    }
+    if (actorType === "owner") {
+      if (order.merchant?.userId !== userId) {
+        throw new ForbiddenException("只能处理自己小店的订单");
+      }
+    } else {
+      const assignment = order.shopDeliveryAssignment;
+      if (
+        !assignment ||
+        assignment.assigneeUserId !== userId ||
+        assignment.status !== "picked_up"
+      ) {
+        throw new ForbiddenException("该订单未取货或未分配给当前配送店员");
+      }
+      const staff = await this.prisma.merchantStaff.findFirst({
+        where: {
+          id: assignment.staffId || "__owner__",
+          userId,
+          merchantId: order.merchantId,
+          status: "active",
+        },
+      });
+      if (!staff) throw new ForbiddenException("配送店员权限已失效");
     }
     if (
       order.status !== "SHIPPED" ||
       this.isRefundBlocking(order.refundStatus)
     ) {
-      throw new BadRequestException("只有配送中的订单才能标记完成");
+      throw new BadRequestException("只有配送中的订单才能标记送达");
     }
+
+    const receiptCode = String(
+      dto?.receipt_code ?? dto?.receiptCode ?? dto?.code ?? "",
+    ).trim();
+    const useReceiptCode = Boolean(receiptCode);
+    let proofImages: string[] = [];
+    if (useReceiptCode) {
+      if (!/^\d{6}$/.test(receiptCode)) {
+        throw new BadRequestException("请输入用户提供的六位收货码");
+      }
+      if (order.deliveryCodeLockedAt || order.deliveryCodeAttempts >= 5) {
+        throw new BadRequestException(
+          "收货码错误次数过多，请改用照片送达或联系店主",
+        );
+      }
+      const reservedAttempt = await this.prisma.order.updateMany({
+        where: {
+          id: order.id,
+          status: "SHIPPED",
+          refundStatus: { notIn: ["refunding", "refunded"] },
+          deliveryCodeLockedAt: null,
+          deliveryCodeAttempts: { lt: 5 },
+        },
+        data: { deliveryCodeAttempts: { increment: 1 } },
+      });
+      if (reservedAttempt.count !== 1) {
+        throw new BadRequestException(
+          "收货码错误次数过多，请改用照片送达或联系店主",
+        );
+      }
+      if (
+        !order.deliveryReceiptCode ||
+        receiptCode !== order.deliveryReceiptCode
+      ) {
+        const attemptState = await this.prisma.order.findUniqueOrThrow({
+          where: { id: order.id },
+          select: { deliveryCodeAttempts: true },
+        });
+        const attempts = attemptState.deliveryCodeAttempts;
+        if (attempts >= 5) {
+          await this.prisma.order.updateMany({
+            where: { id: order.id, deliveryCodeLockedAt: null },
+            data: { deliveryCodeLockedAt: new Date() },
+          });
+        }
+        throw new BadRequestException(
+          attempts >= 5
+            ? "收货码错误次数过多，已暂停验证"
+            : `收货码不正确，还可尝试 ${5 - attempts} 次`,
+        );
+      }
+    } else {
+      const rawProofImages = dto?.proof_images ?? dto?.proofImages ?? [];
+      if (
+        !Array.isArray(rawProofImages) ||
+        rawProofImages.length > 3 ||
+        rawProofImages.some(
+          (url: any) =>
+            typeof url !== "string" ||
+            !/^(https?:\/\/|\/uploads\/)/.test(url.trim()),
+        )
+      ) {
+        throw new BadRequestException("送达凭证格式不正确，最多上传 3 张图片");
+      }
+      proofImages = Array.from(
+        new Set(
+          rawProofImages.map((item: string) => item.trim()).filter(Boolean),
+        ),
+      ) as string[];
+      if (!proofImages.length) {
+        throw new BadRequestException("请上传照片或输入用户提供的六位收货码");
+      }
+      await this.assertDeliveryProofUploads(orderId, userId, proofImages);
+    }
+
+    const now = new Date();
+    const nextStatus = useReceiptCode ? "COMPLETED" : "DELIVERED";
+    const operatorType = actorType === "owner" ? "merchant" : "merchant_staff";
+    const operatorLabel = actorType === "owner" ? "店主" : "配送店员";
+    const remark = useReceiptCode
+      ? `${operatorLabel}使用用户收货码完成交付`
+      : `${operatorLabel}已上传照片送达，等待用户确认收货`;
     const updated = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.order.updateMany({
         where: {
           id: orderId,
           status: "SHIPPED",
           refundStatus: { notIn: ["refunding", "refunded"] },
+          ...(useReceiptCode
+            ? {
+                deliveryReceiptCode: receiptCode,
+                deliveryCodeLockedAt: null,
+                deliveryCodeAttempts: { lte: 5 },
+              }
+            : {}),
         },
         data: {
-          status: "DELIVERED" as any,
-          deliverTime: new Date(),
+          status: nextStatus as any,
+          deliverTime: now,
+          ...(useReceiptCode ? { receiveTime: now, completeTime: now } : {}),
         },
       });
-      if (claimed.count !== 1)
+      if (claimed.count !== 1) {
         throw new BadRequestException("订单状态已变化，请刷新后重试");
+      }
+      if (order.shopDeliveryAssignment) {
+        await tx.shopDeliveryAssignment.updateMany({
+          where: { id: order.shopDeliveryAssignment.id },
+          data: { status: "delivered", deliveredAt: now },
+        });
+      }
       await tx.orderLog.create({
         data: {
           orderId,
-          action: "MERCHANT_DELIVERED",
+          action: useReceiptCode ? "DELIVERED_BY_CODE" : "DELIVERED_BY_PHOTO",
           fromStatus: "SHIPPED",
-          toStatus: "DELIVERED",
+          toStatus: nextStatus,
           operatorId: userId,
-          operatorType: "merchant",
-          remark: "店主已送达，等待用户确认收货",
+          operatorType,
+          remark,
         },
       });
-      const row = await tx.order.findUniqueOrThrow({
+      await this.recordDeliveryNode(tx, {
+        orderId,
+        nodeType: useReceiptCode ? "completed" : "merchant_delivered",
+        operatorId: userId,
+        operatorType,
+        riderType: actorType === "owner" ? "shop_owner" : "shop_staff",
+        displayMode: this.deliveryDisplayModeForOrder(order),
+        proofImages,
+        remark,
+      });
+      return tx.order.findUniqueOrThrow({
         where: { id: orderId },
         include: {
           user: {
@@ -3502,32 +5284,135 @@ export class ShopService {
           items: true,
         },
       });
-      await this.recordDeliveryNode(tx, {
-        orderId,
-        nodeType: "merchant_delivered",
-        operatorId: userId,
-        displayMode: this.deliveryDisplayModeForOrder(order),
-        remark: "店主已送达，等待用户确认收货",
-      });
-      return row;
     });
     await this.notifyBuyerOrderStatus(
       updated,
-      "订单已送达",
-      `${updated.merchant?.name || "宿舍小店"} 已送达，请确认收货`,
+      useReceiptCode ? "订单已完成" : "订单已送达",
+      useReceiptCode
+        ? `${updated.merchant?.name || "宿舍小店"} 已使用收货码完成交付`
+        : `${updated.merchant?.name || "宿舍小店"} 已送达，请确认收货`,
     );
     return {
       success: true,
-      message: "已标记送达，等待用户确认收货",
+      method: useReceiptCode ? "receipt_code" : "photo",
+      message: useReceiptCode
+        ? "收货码验证成功，订单已完成"
+        : "已标记送达，等待用户确认收货",
       order: this.formatMerchantOrderForMini(updated),
     };
+  }
+
+  private async assertDeliveryProofUploads(
+    orderId: string,
+    userId: string,
+    proofImages: string[],
+  ) {
+    const recentThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const uploads = await this.prisma.uploadRecord.findMany({
+      where: {
+        userId,
+        scene: "delivery-proof",
+        hash: {
+          contains: `users/${userId}/delivery-proofs/orders/${orderId}/`,
+        },
+        url: { in: proofImages },
+        createdAt: { gte: recentThreshold },
+      },
+      select: { url: true },
+    });
+    const ownedUrls = new Set(uploads.map((item: any) => String(item.url)));
+    if (proofImages.some((url) => !ownedUrls.has(url))) {
+      throw new BadRequestException(
+        "送达凭证必须由当前账号为本订单在两小时内上传，请重新拍照上传",
+      );
+    }
   }
 
   async readyMerchantOrder(orderId: string, userId: string) {
     const order = await this.getOwnedMerchantOrder(orderId, userId);
     this.assertFulfillmentDue(order);
     if (order.businessType === "dorm_shop") {
-      throw new BadRequestException("宿舍小店请在自配送完成后标记送达");
+      if (
+        order.status !== "PAID" ||
+        !order.merchantAcceptTime ||
+        order.readyTime ||
+        this.isRefundBlocking(order.refundStatus)
+      ) {
+        throw new BadRequestException("只有已接单备货中的订单才能开始配送");
+      }
+      const readyAt = new Date();
+      const receiptCode = String(randomInt(0, 1000000)).padStart(6, "0");
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: {
+            id: orderId,
+            status: "PAID",
+            merchantAcceptTime: { not: null },
+            readyTime: null,
+            refundStatus: { notIn: ["refunding", "refunded"] },
+          },
+          data: {
+            status: "SHIPPED" as any,
+            readyTime: readyAt,
+            deliveryReceiptCode: receiptCode,
+            deliveryCodeAttempts: 0,
+            deliveryCodeLockedAt: null,
+          },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException("订单状态已变化，请刷新后重试");
+        }
+        await tx.orderLog.create({
+          data: {
+            orderId,
+            action: "DORM_SHOP_READY",
+            fromStatus: "PAID",
+            toStatus: "SHIPPED",
+            operatorId: userId,
+            operatorType: "merchant",
+            remark: "宿舍小店备货完成，进入店内配送队列",
+          },
+        });
+        await this.recordDeliveryNode(tx, {
+          orderId,
+          nodeType: "ready_for_delivery",
+          operatorId: userId,
+          displayMode: "status_nodes",
+          remark: "备货完成，等待店主或配送店员配送",
+        });
+        return tx.order.findUniqueOrThrow({
+          where: { id: orderId },
+          include: {
+            user: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+            merchant: {
+              select: {
+                id: true,
+                userId: true,
+                name: true,
+                logo: true,
+                address: true,
+                phone: true,
+                businessType: true,
+                deliveryMode: true,
+                regionId: true,
+              },
+            },
+            items: true,
+          },
+        });
+      });
+      await this.notifyBuyerOrderStatus(
+        updated,
+        "小店已备货",
+        `${updated.merchant?.name || "宿舍小店"} 已备货，正在安排配送`,
+      );
+      return {
+        success: true,
+        message: "已进入配送队列",
+        order: this.formatMerchantOrderForMini(updated),
+      };
     }
     if (
       order.status !== "PAID" ||
@@ -3948,7 +5833,30 @@ export class ShopService {
     return merchant;
   }
 
-  private normalizePrinterPayload(dto: any, merchantId?: string, current?: any) {
+  private async assertMerchantCategoryOwner(
+    categoryId: string,
+    userId: string,
+  ) {
+    const id = this.toOptionalStringOrNull(categoryId);
+    if (!id) throw new BadRequestException("请选择分类");
+    const category = await this.prisma.category.findUnique({ where: { id } });
+    if (!category || category.status === "deleted")
+      throw new NotFoundException("分类不存在");
+    if (!category.merchantId)
+      throw new ForbiddenException("平台公共分类只能由后台管理");
+    const merchant = await this.prisma.merchant.findUnique({
+      where: { id: category.merchantId },
+    });
+    if (!merchant || merchant.userId !== userId)
+      throw new ForbiddenException("只能管理自己小店的分类");
+    return category;
+  }
+
+  private normalizePrinterPayload(
+    dto: any,
+    merchantId?: string,
+    current?: any,
+  ) {
     const data: any = {};
     const name = this.toOptionalStringOrNull(dto.printerName ?? dto.name);
     const sn = this.toOptionalStringOrNull(dto.machineCode ?? dto.sn);
@@ -3956,10 +5864,20 @@ export class ShopService {
     if (name !== null) data.name = name;
     if (sn !== null) data.sn = sn;
     if (dto.printerType !== undefined || dto.brand !== undefined) {
-      const brand = this.toOptionalStringOrNull(dto.printerType ?? dto.brand) || "feie";
-      data.brand = ['yly', 'xpyun', 'gprinter'].includes(brand) ? brand : 'feie';
+      const brand =
+        this.toOptionalStringOrNull(dto.printerType ?? dto.brand) || "feie";
+      data.brand = ["yly", "xpyun", "gprinter"].includes(brand)
+        ? brand
+        : "feie";
     }
-    Object.assign(data, this.printService.prepareConnection(data.brand || current?.brand || 'feie', dto, current));
+    Object.assign(
+      data,
+      this.printService.prepareConnection(
+        data.brand || current?.brand || "feie",
+        dto,
+        current,
+      ),
+    );
     if (dto.isEnabled !== undefined || dto.autoPrint !== undefined) {
       data.autoPrint = dto.isEnabled ?? dto.autoPrint;
     }
@@ -3975,9 +5893,11 @@ export class ShopService {
     return {
       ...safe,
       printerName: safe.name,
-      printerType: ['yly', 'xpyun', 'gprinter'].includes(safe.brand) ? safe.brand : 'feie',
+      printerType: ["yly", "xpyun", "gprinter"].includes(safe.brand)
+        ? safe.brand
+        : "feie",
       machineCode: safe.sn,
-      printerKey: '',
+      printerKey: "",
       keyConfigured: Boolean(key),
       credentialConfigured: Boolean(credentialCiphertext),
       isEnabled: safe.autoPrint,
@@ -4031,9 +5951,20 @@ export class ShopService {
             businessType: true,
             deliveryMode: true,
             regionId: true,
+            autoDispatchEnabled: true,
+            autoDispatchMinutes: true,
+            staffAcceptSeconds: true,
+            staffMaxActiveOrders: true,
           },
         },
         items: true,
+        shopDeliveryAssignment: {
+          include: {
+            assignee: {
+              select: { id: true, nickname: true, avatar: true, phone: true },
+            },
+          },
+        },
       },
     });
     if (!order) throw new NotFoundException("订单不存在");
@@ -4135,12 +6066,14 @@ export class ShopService {
     const merchantId = this.toOptionalStringOrNull(
       dto.merchant_id || dto.merchantId,
     );
+    if (!merchantId) throw new BadRequestException("请选择商家");
     const merchant = merchantId
       ? await this.assertMerchantOwner(merchantId, userId)
       : null;
     const name = this.toOptionalStringOrNull(dto.category_name ?? dto.name);
     if (!partial && !name) throw new BadRequestException("请输入分类名称");
     const data: any = {};
+    if (merchant) data.merchantId = merchant.id;
     if (name !== null) data.name = name;
     if (dto.category_image !== undefined || dto.icon !== undefined)
       data.icon = this.toOptionalStringOrNull(dto.category_image ?? dto.icon);
@@ -4187,6 +6120,19 @@ export class ShopService {
       );
       data.categoryId =
         categoryId && categoryId !== "default" ? categoryId : null;
+      if (data.categoryId && merchant) {
+        const category = await this.prisma.category.findFirst({
+          where: {
+            id: data.categoryId,
+            type: "product",
+            status: { not: "deleted" },
+            businessType: merchant.businessType || "takeaway",
+            OR: [{ merchantId: null }, { merchantId: merchant.id }],
+          },
+        });
+        if (!category)
+          throw new ForbiddenException("只能使用当前小店或平台公共分类");
+      }
     }
     const name = this.toOptionalStringOrNull(dto.product_name ?? dto.name);
     if (!partial && !name) throw new BadRequestException("请输入商品名称");
@@ -4216,10 +6162,14 @@ export class ShopService {
     }
     const originPriceValue = dto.original_price ?? dto.originPrice;
     if (originPriceValue !== undefined) {
-      data.originPrice =
-        originPriceValue === "" || originPriceValue === null
-          ? null
-          : Math.round(Number(originPriceValue) * 100) / 100;
+      if (originPriceValue === "" || originPriceValue === null) {
+        data.originPrice = null;
+      } else {
+        const originPrice = Number(originPriceValue);
+        if (!Number.isFinite(originPrice) || originPrice < 0)
+          throw new BadRequestException("商品划线价不正确");
+        data.originPrice = Math.round(originPrice * 100) / 100;
+      }
     }
     if (
       dto.total_stock !== undefined ||
@@ -4290,20 +6240,22 @@ export class ShopService {
     replace: boolean,
   ) {
     await this.assertProductOwner(productId, userId);
+    return this.syncProductSkusWithClient(
+      this.prisma,
+      productId,
+      this.normalizeProductSkuPayload(specs),
+      replace,
+    );
+  }
+
+  private normalizeProductSkuPayload(specs: any) {
     const groups = Array.isArray(specs) ? specs : [];
     if (groups.length > 1)
       throw new BadRequestException("当前仅支持一组 SKU 规格");
     const options = groups.flatMap((group: any) =>
       Array.isArray(group?.options) ? group.options : [],
     );
-    const current = await this.prisma.sKU.findMany({
-      where: { productId },
-      select: { id: true },
-    });
-    const currentIds = new Set(current.map((sku) => sku.id));
-    const keptIds = new Set<string>();
-
-    for (const option of options) {
+    const normalized = options.map((option: any) => {
       const name = String(option?.option_name || "").trim();
       const price = Number(option?.external_price);
       const stock = Number(option?.daily_stock);
@@ -4316,27 +6268,54 @@ export class ShopService {
       ) {
         throw new BadRequestException("请完整填写 SKU 名称、售价和库存");
       }
-      const data = {
-        specs: name,
+      return {
+        id: option?.id ? String(option.id) : undefined,
+        name,
         price: Math.round(price * 100) / 100,
         stock: Math.floor(stock),
+      };
+    });
+    if (new Set(normalized.map((sku) => sku.name)).size !== normalized.length) {
+      throw new BadRequestException("SKU 名称不能重复");
+    }
+    return normalized;
+  }
+
+  private async syncProductSkusWithClient(
+    client: any,
+    productId: string,
+    options: Array<{ id?: string; name: string; price: number; stock: number }>,
+    replace: boolean,
+  ) {
+    const current = await client.sKU.findMany({
+      where: { productId },
+      select: { id: true },
+    });
+    const currentIds = new Set(current.map((sku: { id: string }) => sku.id));
+    const keptIds = new Set<string>();
+
+    for (const option of options) {
+      const data = {
+        specs: option.name,
+        price: option.price,
+        stock: option.stock,
         status: "on_sale",
       };
       if (option.id && currentIds.has(String(option.id))) {
         keptIds.add(String(option.id));
-        await this.prisma.sKU.update({
+        await client.sKU.update({
           where: { id: String(option.id) },
           data,
         });
       } else {
-        const sku = await this.prisma.sKU.create({
+        const sku = await client.sKU.create({
           data: { productId, ...data },
         });
         keptIds.add(sku.id);
       }
     }
     if (replace)
-      await this.prisma.sKU.deleteMany({
+      await client.sKU.deleteMany({
         where: { productId, id: { notIn: [...keptIds] } },
       });
     return { success: true };
@@ -4507,6 +6486,8 @@ export class ShopService {
       name: category.name,
       category_name: category.name,
       category_image: category.icon || "",
+      merchant_id: category.merchantId || null,
+      can_edit: Boolean(category.merchantId),
       sort_order: category.sortOrder || 0,
       is_visible: category.isShow ? 1 : 0,
       must_select: 0,
@@ -4610,6 +6591,9 @@ export class ShopService {
             }
           : null,
       },
+      shop_delivery_assignment: this.formatMerchantAssignment(
+        order.shopDeliveryAssignment,
+      ),
       delivery_track: this.buildDeliveryTrack(order, order.deliveryNodes || []),
       payment: {
         goods_amount: itemAmount.toFixed(2),
@@ -4628,7 +6612,15 @@ export class ShopService {
       if (order.readyTime) return "ready_for_pickup";
       if (order.merchantAcceptTime) return "preparing";
     }
+    if (
+      order.status === "PAID" &&
+      order.businessType === "dorm_shop" &&
+      order.merchantAcceptTime
+    ) {
+      return "preparing";
+    }
     if (order.status === "PAID") return "awaiting_delivery";
+    if (order.status === "DELIVERED") return "delivered";
     return this.toMiniDeliveryStatus(order.status);
   }
 
@@ -4656,7 +6648,11 @@ export class ShopService {
       },
       linkType: "page",
       linkValue: `/pagesA/MerchantManagement/Order?merchant_id=${order.merchantId}`,
-      channelMask: { inApp: true, websocket: true },
+      channelMask: {
+        inApp: true,
+        websocket: true,
+        push: order.businessType === "dorm_shop",
+      },
     });
   }
 
@@ -4697,35 +6693,47 @@ export class ShopService {
     if (!regionId) return 0;
     const [riders, locations] = await Promise.all([
       this.prisma.regionRider.findMany({
-      where: {
-        regionId,
-        verifyStatus: "approved",
-        status: "online",
-        notificationStatus: { not: false },
-      },
-      select: { userId: true },
+        where: {
+          regionId,
+          verifyStatus: "approved",
+          status: "online",
+          notificationStatus: { not: false },
+        },
+        select: { userId: true },
       }),
       this.redis.hgetall("rider:location"),
     ]);
-    const merchant = order.merchant?.latitude && order.merchant?.longitude
-      ? order.merchant
-      : await this.prisma.merchant.findUnique({
-          where: { id: order.merchantId },
-          select: { latitude: true, longitude: true },
-        });
+    const merchant =
+      order.merchant?.latitude && order.merchant?.longitude
+        ? order.merchant
+        : await this.prisma.merchant.findUnique({
+            where: { id: order.merchantId },
+            select: { latitude: true, longitude: true },
+          });
     const now = Date.now();
-    const candidates = riders.map((rider: any) => {
-      try {
-        const location = JSON.parse(locations[rider.userId] || "{}");
-        const fresh = Number(location.time) > now - 10 * 60 * 1000;
-        const distance = fresh ? this.deliveryDistanceMeters(merchant, { latitude: location.lat, longitude: location.lng }) : null;
-        return { ...rider, fresh, distance };
-      } catch {
-        return { ...rider, fresh: false, distance: null };
-      }
-    }).sort((left: any, right: any) => Number(right.fresh) - Number(left.fresh)
-      || (left.distance ?? Number.MAX_SAFE_INTEGER) - (right.distance ?? Number.MAX_SAFE_INTEGER)
-      || String(left.userId).localeCompare(String(right.userId)))
+    const candidates = riders
+      .map((rider: any) => {
+        try {
+          const location = JSON.parse(locations[rider.userId] || "{}");
+          const fresh = Number(location.time) > now - 10 * 60 * 1000;
+          const distance = fresh
+            ? this.deliveryDistanceMeters(merchant, {
+                latitude: location.lat,
+                longitude: location.lng,
+              })
+            : null;
+          return { ...rider, fresh, distance };
+        } catch {
+          return { ...rider, fresh: false, distance: null };
+        }
+      })
+      .sort(
+        (left: any, right: any) =>
+          Number(right.fresh) - Number(left.fresh) ||
+          (left.distance ?? Number.MAX_SAFE_INTEGER) -
+            (right.distance ?? Number.MAX_SAFE_INTEGER) ||
+          String(left.userId).localeCompare(String(right.userId)),
+      )
       .slice(0, Math.max(1, limit));
     const results = await Promise.allSettled(
       candidates.map((rider: any) =>
@@ -4941,6 +6949,16 @@ export class ShopService {
     const logo = this.toOptionalStringOrNull(dto.logo || dto.logo_url);
     const cover =
       this.toOptionalStringOrNull(dto.cover || dto.cover_url) || logo;
+    // 学生宿舍小店由平台按账号、手机号和校园信息人工审核。
+    // 历史资质字段继续兼容普通商家，但不再作为学生小店申请门槛。
+    const businessLicenseUrl = this.normalizeMerchantCredentialImage(
+      dto.businessLicenseUrl || dto.business_license_url,
+      "经营补充材料",
+    );
+    const foodSafetyLicenseUrl = this.normalizeMerchantCredentialImage(
+      dto.foodSafetyLicenseUrl || dto.food_safety_license_url,
+      "经营补充材料",
+    );
 
     return {
       userId,
@@ -4979,12 +6997,14 @@ export class ShopService {
       categoryId,
       dormBuilding,
       dormRoom,
-      studentVerified: businessType === "dorm_shop",
+      studentVerified: false,
       latitude: this.toFloatOrNull(dto.latitude),
       longitude: this.toFloatOrNull(dto.longitude),
       businessHours,
       logo,
       cover,
+      businessLicenseUrl,
+      foodSafetyLicenseUrl,
     };
   }
 
@@ -4992,6 +7012,15 @@ export class ShopService {
     const text = this.toOptionalStringOrNull(value);
     if (!text) throw new BadRequestException(message);
     return text;
+  }
+
+  private normalizeMerchantCredentialImage(value: any, label: string) {
+    const url = this.toOptionalStringOrNull(value);
+    if (!url) return null;
+    if (url.length > 2048 || !/^(https?:\/\/|\/uploads\/)/.test(url)) {
+      throw new BadRequestException(`${label}图片地址不正确`);
+    }
+    return url;
   }
 
   private async resolveCategoryId(
@@ -5055,7 +7084,7 @@ export class ShopService {
       startMinute > 59 ||
       endMinute < 0 ||
       endMinute > 59 ||
-      start >= end
+      start === end
     ) {
       return null;
     }
@@ -5071,11 +7100,36 @@ export class ShopService {
       const today = weeklyHours.find(
         ({ day }) => day === this.weekDays[time.getDay()],
       );
-      return Boolean(
-        today &&
-        today.open !== "Closed" &&
-        this.isMerchantOpenAt(today.open + "-" + today.close, time),
+      const yesterday = weeklyHours.find(
+        ({ day }) =>
+          day === this.weekDays[(time.getDay() + this.weekDays.length - 1) % 7],
       );
+      const currentMinutes = time.getHours() * 60 + time.getMinutes();
+      const range = (entry: typeof today) => {
+        if (!entry || entry.open === "Closed" || entry.close === "Closed")
+          return null;
+        const [startHour, startMinute] = entry.open.split(":").map(Number);
+        const [endHour, endMinute] = entry.close.split(":").map(Number);
+        return {
+          start: startHour * 60 + startMinute,
+          end: endHour * 60 + endMinute,
+        };
+      };
+      const todayRange = range(today);
+      const yesterdayRange = range(yesterday);
+      const openFromToday = Boolean(
+        todayRange &&
+        (todayRange.start < todayRange.end
+          ? currentMinutes >= todayRange.start &&
+            currentMinutes < todayRange.end
+          : currentMinutes >= todayRange.start),
+      );
+      const openFromYesterday = Boolean(
+        yesterdayRange &&
+        yesterdayRange.start > yesterdayRange.end &&
+        currentMinutes < yesterdayRange.end,
+      );
+      return openFromToday || openFromYesterday;
     }
     const match = String(businessHours || "").match(
       /^(\d{1,2}):(\d{2})\s*[-~至]\s*(\d{1,2}):(\d{2})$/,
@@ -5085,7 +7139,9 @@ export class ShopService {
     const currentMinutes = time.getHours() * 60 + time.getMinutes();
     const startMinutes = Number(startHour) * 60 + Number(startMinute);
     const endMinutes = Number(endHour) * 60 + Number(endMinute);
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    return startMinutes < endMinutes
+      ? currentMinutes >= startMinutes && currentMinutes < endMinutes
+      : currentMinutes >= startMinutes || currentMinutes < endMinutes;
   }
 
   private formatProductForMini(product: any) {
@@ -5231,7 +7287,11 @@ export class ShopService {
     return where;
   }
 
-  private applyDeliveryStatusFilter(where: any, status: string) {
+  private applyDeliveryStatusFilter(
+    where: any,
+    status: string,
+    merchantView = false,
+  ) {
     if (status === "partial_refund") {
       where.refundStatus = "partial";
       return;
@@ -5249,7 +7309,9 @@ export class ShopService {
       if (status === "ready_for_pickup") where.readyTime = { not: null };
       return;
     }
-    const statuses = this.deliveryStatusesForMini(status);
+    const statuses = merchantView
+      ? this.merchantDeliveryStatusesForMini(status)
+      : this.deliveryStatusesForMini(status);
     if (!statuses?.length) return;
     if (status === "refunding" || status === "refunded") {
       where.AND = [
@@ -5306,6 +7368,11 @@ export class ShopService {
       refunded: ["REFUNDED"],
     };
     return status ? map[status] || [] : undefined;
+  }
+
+  private merchantDeliveryStatusesForMini(status: string) {
+    if (status === "completed") return ["RECEIVED", "COMPLETED"];
+    return this.deliveryStatusesForMini(status);
   }
 
   private errandStatusesForMini(status: string) {

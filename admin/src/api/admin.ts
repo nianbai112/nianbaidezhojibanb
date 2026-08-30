@@ -758,7 +758,13 @@ export async function fetchCampusMapCollectionObjects(
 export async function reviewCampusMapCollectionObject(
   regionId: string | number,
   objectId: string,
-  data: { decision: string; note: string },
+  data: {
+    decision: string
+    note: string
+    targetPlaceId?: string
+    applyFields?: Array<'location' | 'address' | 'constructionStatus' | 'serviceStatus' | 'geometry' | 'media'>
+    promoteAttachmentIds?: string[]
+  },
 ) {
   return request.patch(`/admin/campus-map/collections/${regionId}/objects/${objectId}/review`, data)
 }
@@ -773,6 +779,12 @@ export async function rotateCampusMapCollectionAccessCode(regionId: string | num
 
 export async function fetchCampusMapMarkerTemplates(regionId: string | number) {
   return request.get(`/admin/campus-map/collections/${regionId}/templates`)
+}
+
+export async function fetchActiveCampusMap(regionId: string | number) {
+  return request.get('/campus-map/active', {
+    params: { region_id: regionId, _publish_check: Date.now() },
+  })
 }
 
 export async function createCampusMapMarkerTemplate(regionId: string | number, data: any) {
@@ -845,8 +857,103 @@ export async function fetchCampusMapConverterStatus() {
   return request.get('/admin/campus-map/converter/status')
 }
 
-export async function fetchCampusMapProjectCatalog() {
-  return request.get('/admin/campus-map/project-catalog')
+function campusMapCatalogParams(regionId?: string | number, mapId?: string) {
+  if (regionId) return { regionId }
+  if (mapId) return { mapId }
+  return undefined
+}
+
+export async function fetchCampusMapProjectCatalog(regionId?: string | number, mapId?: string) {
+  return request.get('/admin/campus-map/project-catalog', {
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function upsertCampusMapProject(
+  number: number,
+  data: Record<string, any>,
+  regionId?: string | number,
+  mapId?: string,
+) {
+  return request.put(`/admin/campus-map/project-catalog/${number}`, data, {
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function deleteCampusMapProject(number: number, regionId?: string | number, mapId?: string) {
+  return request.delete(`/admin/campus-map/project-catalog/${number}`, {
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function uploadCampusMapProjectPhoto(
+  number: number,
+  file: File,
+  regionId?: string | number,
+  mapId?: string,
+) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post(`/admin/campus-map/project-catalog/${number}/photos`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function removeCampusMapProjectPhoto(
+  number: number,
+  url: string,
+  regionId?: string | number,
+  mapId?: string,
+) {
+  return request.delete(`/admin/campus-map/project-catalog/${number}/photos`, {
+    data: { url },
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function seedCampusMapProjects(regionId?: string | number, mapId?: string) {
+  return request.post('/admin/campus-map/project-catalog/seed', undefined, {
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function uploadCampusMapPlaceMedia(
+  regionId: string | number,
+  placeId: string,
+  file: File,
+  data: { mediaType?: string; caption?: string; isPublic?: boolean } = {},
+) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('mediaType', data.mediaType || 'gallery')
+  if (data.caption) formData.append('caption', data.caption)
+  formData.append('isPublic', String(data.isPublic !== false))
+  return request.post(`/admin/campus-map/${regionId}/places/${encodeURIComponent(placeId)}/media`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export async function updateCampusMapPlaceMedia(
+  regionId: string | number,
+  placeId: string,
+  mediaId: string,
+  data: { mediaType?: string; caption?: string; isPublic?: boolean; reviewStatus?: string },
+) {
+  return request.patch(
+    `/admin/campus-map/${regionId}/places/${encodeURIComponent(placeId)}/media/${encodeURIComponent(mediaId)}`,
+    data,
+  )
+}
+
+export async function deleteCampusMapPlaceMedia(
+  regionId: string | number,
+  placeId: string,
+  mediaId: string,
+) {
+  return request.delete(
+    `/admin/campus-map/${regionId}/places/${encodeURIComponent(placeId)}/media/${encodeURIComponent(mediaId)}`,
+  )
 }
 
 export async function saveCampusMapConverterConfig(data: { converterPath?: string | null }) {
@@ -1073,6 +1180,22 @@ export async function recallPrivateConversationMessage(messageId: string) {
 
 export async function fetchUserDetail(id: string) {
   return request.get(`/admin/users/${id}`)
+}
+
+export async function updateUserStatus(id: string, status: string, reason = '') {
+  return request.put(`/admin/users/${id}/status`, { status, reason })
+}
+
+export async function fetchSelfUnbanRequests(params: Record<string, any> = {}) {
+  return request.get('/admin/self-unban-requests', { params })
+}
+
+export async function reviewSelfUnbanRequest(id: string, approved: boolean, reason = '') {
+  return request.put(`/admin/self-unban-requests/${id}/review`, { approved, reason })
+}
+
+export async function retrySelfUnbanRefund(id: string) {
+  return request.put(`/admin/self-unban-requests/${id}/retry-refund`)
 }
 
 export async function setUserTags(id: string, tagIds: string[]) {

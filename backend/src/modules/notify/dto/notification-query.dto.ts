@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, IsIn } from 'class-validator';
+import { IsOptional, IsString, IsInt, IsIn, IsNotEmpty, Matches, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -18,10 +18,12 @@ export class MarkAllReadDto {
 export class SubscribeConsentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() userId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() regionId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() templateType?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() templateId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() status?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() sourceScene?: string;
+  @ApiPropertyOptional() @IsString() @IsNotEmpty()
+  @Matches(/^(takeaway_(order_status|merchant_order|rider_order)|errand_(accepted|picked|delivered)|post_(audit_result|comment)|comment_reply)$/)
+  templateType?: string;
+  @ApiPropertyOptional() @IsString() @IsNotEmpty() @MaxLength(128) templateId?: string;
+  @ApiPropertyOptional() @IsIn(['accept', 'reject', 'ban', 'unknown']) status?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(64) sourceScene?: string;
 }
 
 export class WechatMessageLogQueryDto {

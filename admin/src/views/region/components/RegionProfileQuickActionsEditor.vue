@@ -21,7 +21,7 @@
         <el-select v-model="item.permission"><el-option label="所有用户" value="all" /><el-option label="商家" value="merchant" /><el-option label="骑手" value="rider" /><el-option label="区域管理员" value="manager" /></el-select>
         <el-select v-model="item.type" placeholder="跳转方式"><el-option label="小程序内部页面" value="internal" /><el-option label="我的页内容 Tab" value="profile_tab" /></el-select>
         <el-select v-if="item.type === 'profile_tab'" v-model="item.tabIndex" placeholder="选择 Tab"><el-option label="我的发布" :value="0" /><el-option label="我的收藏" :value="1" /><el-option label="浏览记录" :value="2" /><el-option label="收到的评论" :value="3" /></el-select>
-        <el-input v-else v-model="item.path" placeholder="路径，如 /pagesA/rider/index" />
+        <el-input v-else v-model="item.path" placeholder="路径，如 /pagesA/Rider/Rider" />
         <el-switch v-model="item.enabled" active-text="显示" inactive-text="隐藏" />
         <el-button size="small" :disabled="index === 0" @click="move(index, -1)">上移</el-button>
         <el-button size="small" :disabled="index === model.items.length - 1" @click="move(index, 1)">下移</el-button>

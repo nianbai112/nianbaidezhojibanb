@@ -7,9 +7,10 @@ import { GrowthModule } from '../growth/growth.module';
 import { FinanceModule } from '../finance/finance.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { IpGeoModule } from '../ip-geo/ip-geo.module';
+import { PaymentModule } from '../payment/payment.module';
 
 @Module({
-  imports: [NotifyModule, GrowthModule, FinanceModule, WebsocketModule, IpGeoModule],
+  imports: [NotifyModule, GrowthModule, FinanceModule, WebsocketModule, IpGeoModule, PaymentModule],
   controllers: [UserController],
   providers: [UserService, UserAccessPolicyService],
   exports: [UserService],

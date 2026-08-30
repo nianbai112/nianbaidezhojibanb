@@ -24,15 +24,20 @@ export function normalizeCampusAvailability(value: any): CampusAvailability {
 export function normalizeCampusFeatureProperties(value: any): Record<string, any> {
   const properties = value && typeof value === 'object' ? { ...value } : {};
   const isFuture = properties.constructionStatus === 'under_construction'
+    || properties.constructionStatus === 'planned'
     || properties.visibilityScope === 'future_reference';
   const isActiveBuilding = properties.constructionStatus === 'built'
+    || properties.constructionStatus === 'renovating'
     || properties.visibilityScope === 'phase1_active';
+  const allowedServiceStatuses = new Set([
+    'unknown', 'open', 'limited', 'unopened', 'temporarily_closed', 'closed',
+  ]);
 
   if (isActiveBuilding || isFuture) {
-    properties.serviceStatus = properties.serviceStatus === 'unopened'
-      ? 'unopened'
+    properties.serviceStatus = allowedServiceStatuses.has(properties.serviceStatus)
+      ? properties.serviceStatus
       : 'open';
-    properties.unavailableMessage = properties.serviceStatus === 'unopened'
+    properties.unavailableMessage = properties.serviceStatus !== 'open'
       ? String(properties.unavailableMessage || '').trim().slice(0, BUILDING_MESSAGE_LIMIT)
       : '';
   }
@@ -40,7 +45,7 @@ export function normalizeCampusFeatureProperties(value: any): Record<string, any
   if (isFuture) {
     properties.searchable = false;
     properties.navigable = false;
-  } else if (isActiveBuilding && properties.serviceStatus === 'unopened') {
+  } else if (isActiveBuilding && ['unopened', 'temporarily_closed', 'closed'].includes(properties.serviceStatus)) {
     properties.searchable = true;
     properties.navigable = false;
   }

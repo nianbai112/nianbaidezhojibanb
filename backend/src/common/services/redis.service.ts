@@ -1,10 +1,10 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import Redis from 'ioredis';
+import { Inject, Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import Redis from "ioredis";
 
 @Injectable()
 export class RedisService {
-  constructor(@Inject('REDIS_CLIENT') private readonly redis: Redis) {}
+  constructor(@Inject("REDIS_CLIENT") private readonly redis: Redis) {}
 
   async get(key: string): Promise<string | null> {
     return this.redis.get(key);
@@ -23,15 +23,21 @@ export class RedisService {
   }
 
   async delPattern(pattern: string): Promise<number> {
-    let cursor = '0';
+    let cursor = "0";
     let deleted = 0;
     do {
-      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      const [nextCursor, keys] = await this.redis.scan(
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        200,
+      );
       cursor = nextCursor;
       if (keys.length > 0) {
         deleted += await this.redis.del(...keys);
       }
-    } while (cursor !== '0');
+    } while (cursor !== "0");
     return deleted;
   }
 
@@ -59,8 +65,8 @@ export class RedisService {
   }
 
   async getLock(key: string, ttlSeconds: number = 10): Promise<boolean> {
-    const result = await this.redis.set(key, '1', 'EX', ttlSeconds, 'NX');
-    return result === 'OK';
+    const result = await this.redis.set(key, "1", "EX", ttlSeconds, "NX");
+    return result === "OK";
   }
 
   async releaseLock(key: string): Promise<void> {
@@ -72,13 +78,64 @@ export class RedisService {
    * ponytail: no lock renewal; scheduled jobs are bounded to small batches and
    * should be moved to a worker queue if they can run longer than the TTL.
    */
-  async withLock<T>(key: string, ttlSeconds: number, task: () => Promise<T>): Promise<T | undefined> {
+  async withLock<T>(
+    key: string,
+    ttlSeconds: number,
+    task: () => Promise<T>,
+  ): Promise<T | undefined> {
     const token = randomUUID();
-    const locked = await this.redis.set(key, token, 'EX', ttlSeconds, 'NX');
-    if (locked !== 'OK') return undefined;
+    const locked = await this.redis.set(key, token, "EX", ttlSeconds, "NX");
+    if (locked !== "OK") return undefined;
     try {
       return await task();
     } finally {
+      await this.redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0',
+        1,
+        key,
+        token,
+      );
+    }
+  }
+
+  /**
+   * Runs a potentially long job under a token-owned Redis lease. The lease is
+   * renewed while the task is active and still expires automatically if the
+   * Worker process crashes.
+   */
+  async withRenewingLock<T>(
+    key: string,
+    ttlSeconds: number,
+    task: () => Promise<T>,
+  ): Promise<T | undefined> {
+    const token = randomUUID();
+    const locked = await this.redis.set(key, token, "EX", ttlSeconds, "NX");
+    if (locked !== "OK") return undefined;
+
+    let renewal: Promise<unknown> | undefined;
+    const renewEveryMs = Math.max(250, Math.floor((ttlSeconds * 1000) / 3));
+    const timer = setInterval(() => {
+      if (renewal) return;
+      renewal = this.redis
+        .eval(
+          'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("expire", KEYS[1], ARGV[2]) end return 0',
+          1,
+          key,
+          token,
+          ttlSeconds,
+        )
+        .catch(() => 0)
+        .finally(() => {
+          renewal = undefined;
+        });
+    }, renewEveryMs);
+    timer.unref?.();
+
+    try {
+      return await task();
+    } finally {
+      clearInterval(timer);
+      if (renewal) await renewal;
       await this.redis.eval(
         'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0',
         1,
@@ -92,7 +149,10 @@ export class RedisService {
     return this.redis.lpush(key, ...values);
   }
 
-  async brpop(key: string, timeout: number = 0): Promise<[string, string] | null> {
+  async brpop(
+    key: string,
+    timeout: number = 0,
+  ): Promise<[string, string] | null> {
     return this.redis.brpop(key, timeout);
   }
 
@@ -106,7 +166,8 @@ export class RedisService {
     value: { time: number; [name: string]: unknown },
   ): Promise<boolean> {
     const time = Number(value?.time);
-    if (!Number.isFinite(time)) throw new Error('Redis freshness value requires a finite time');
+    if (!Number.isFinite(time))
+      throw new Error("Redis freshness value requires a finite time");
     const result = await this.redis.eval(
       `local current = redis.call('HGET', KEYS[1], ARGV[1])
 if current then

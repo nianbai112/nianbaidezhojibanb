@@ -122,7 +122,7 @@ describe('Errand closure legacy safety', () => {
 describe('Errand closure acceptance flow', () => {
   it('allows exactly one rider and writes one accept node under a concurrent claim', async () => {
     const state: any = {
-      id: 'errand-1', orderNo: 'ERR-1', status: 'pending_accept', riderId: null,
+      id: 'errand-1', orderNo: 'ERR-1', userId: 'user-1', status: 'pending_accept', riderId: null,
       refundStatus: 'none', regionId: 'region-1', receiverType: 'approved_rider', type: 'pickup', tasks: [],
     };
     const nodes: any[] = [];
@@ -155,7 +155,8 @@ describe('Errand closure acceptance flow', () => {
       errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: state.id }) },
       $transaction: jest.fn((callback: any) => callback(tx)),
     };
-    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const notifyService = { createAndDispatch: jest.fn().mockResolvedValue({ id: 'notification-1' }) };
+    const service = new ErrandService(prisma, {} as any, notifyService as any, {} as any, {} as any, {} as any, {} as any);
     jest.spyOn(service as any, 'getOrderTakingPolicy').mockResolvedValue({});
     jest.spyOn(service as any, 'getRiderDispatchContext').mockResolvedValue({ activeOrdersCount: 0 });
     jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([{}]);
@@ -170,6 +171,17 @@ describe('Errand closure acceptance flow', () => {
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
     expect(nodes.filter(node => node.nodeType === 'accepted')).toHaveLength(1);
     expect(['rider-1', 'rider-2']).toContain(state.riderId);
+    expect(notifyService.createAndDispatch).toHaveBeenCalledTimes(1);
+    expect(notifyService.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      userId: state.userId,
+      scene: 'errand_accepted',
+      channelMask: expect.objectContaining({
+        inApp: true,
+        websocket: true,
+        wechatSubscribe: true,
+        officialAccount: true,
+      }),
+    }));
   });
 
   it('moves rider-arrived to user-confirmed and creates settlement eligibility', async () => {

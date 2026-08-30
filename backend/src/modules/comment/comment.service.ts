@@ -181,7 +181,7 @@ export class CommentService {
         data: { postId: params.postId, commentId: params.commentId, fromUserId: params.publicActorId ?? params.actorId },
         linkType: 'post',
         linkValue: params.postId,
-        channelMask: { inApp: true, websocket: true },
+        channelMask: { inApp: true, websocket: true, officialAccount: true },
       }, { actorId: params.actorId }).catch(() => undefined)));
   }
 
@@ -745,7 +745,7 @@ export class CommentService {
     const [post, total] = await Promise.all([
       this.prisma.post.findUnique({
         where: { id: postId },
-        select: { userId: true, regionId: true, commentCount: true, status: true, deletedAt: true },
+        select: { userId: true, regionId: true, title: true, commentCount: true, status: true, deletedAt: true },
       }),
       this.prisma.comment.count({ where: this.visibleCommentWhere({ postId }) }),
     ]);
@@ -834,10 +834,18 @@ export class CommentService {
             scene: 'comment_reply',
             title: '有人回复了你的评论',
             content: `${anonymousData.isAnonymous ? anonymousData.anonymousName : commenter?.nickname || '用户'}：${dto.content}`,
-            data: { postId, commentId: comment.id, fromUserId: anonymousData.isAnonymous ? '' : userId },
+            data: {
+              postId,
+              commentId: comment.id,
+              fromUserId: anonymousData.isAnonymous ? '' : userId,
+              fromNickname: anonymousData.isAnonymous ? anonymousData.anonymousName : commenter?.nickname || '用户',
+              contentSummary: dto.content,
+              postTitle: post.title || '校园帖子',
+              time: new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }),
+            },
             linkType: 'post',
             linkValue: postId,
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, wechatSubscribe: true, officialAccount: true },
           }, { actorId: userId });
         }
       } else {
@@ -850,10 +858,18 @@ export class CommentService {
             scene: 'post_comment',
             title: '有人评论了你的帖子',
             content: `${anonymousData.isAnonymous ? anonymousData.anonymousName : commenter?.nickname || '用户'}：${dto.content}`,
-            data: { postId, commentId: comment.id, fromUserId: anonymousData.isAnonymous ? '' : userId },
+            data: {
+              postId,
+              commentId: comment.id,
+              fromUserId: anonymousData.isAnonymous ? '' : userId,
+              fromNickname: anonymousData.isAnonymous ? anonymousData.anonymousName : commenter?.nickname || '用户',
+              contentSummary: dto.content,
+              postTitle: post.title || '校园帖子',
+              time: new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }),
+            },
             linkType: 'post',
             linkValue: postId,
-            channelMask: { inApp: true, websocket: true },
+            channelMask: { inApp: true, websocket: true, wechatSubscribe: true, officialAccount: true },
           }, { actorId: userId });
         }
       }

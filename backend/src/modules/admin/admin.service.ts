@@ -57,6 +57,84 @@ export class AdminService {
     throw new BadRequestException("不支持的用户状态");
   }
 
+  private async withSelfUnbanUserLock<T>(
+    userId: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const wrapped = await this.redis.withLock(
+      `self-unban:user:${userId}`,
+      60,
+      async () => ({ value: await task() }),
+    );
+    if (!wrapped) throw new BadRequestException("解封状态正在处理，请稍后重试");
+    return wrapped.value;
+  }
+
+  private async activateUserWithSelfUnbanGuard(
+    userId: string,
+    operatorId?: string,
+    reason?: string,
+  ) {
+    return this.withSelfUnbanUserLock(userId, () =>
+      this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true, status: true, banVersion: true },
+        });
+        if (!user) throw new NotFoundException("用户不存在");
+
+        const request = await tx.selfUnbanRequest.findFirst({
+          where: {
+            userId,
+            status: {
+              in: [
+                "pending_payment",
+                "pending_review",
+                "rejecting",
+                "refunding",
+                "refund_failed",
+              ],
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (request && request.status !== "pending_payment") {
+          throw new BadRequestException(
+            "该账号有已付款或退款中的解封申请，请先审核解封申请",
+          );
+        }
+        if (request) {
+          const cancelled = await tx.selfUnbanRequest.updateMany({
+            where: { id: request.id, status: "pending_payment" },
+            data: {
+              status: "cancelled",
+              activeKey: null,
+              adminNote: reason || "管理员手工解除封禁，未付款申请已取消",
+              reviewedBy: operatorId || null,
+              reviewedAt: new Date(),
+            },
+          });
+          if (cancelled.count !== 1) {
+            throw new BadRequestException("解封申请状态已变化，请刷新后重试");
+          }
+        }
+
+        const activated = await tx.user.updateMany({
+          where: {
+            id: userId,
+            status: user.status,
+            banVersion: user.banVersion,
+          },
+          data: { status: UserStatus.ACTIVE },
+        });
+        if (activated.count !== 1) {
+          throw new BadRequestException("账号封禁状态已变化，请刷新后重试");
+        }
+        return user;
+      }),
+    );
+  }
+
   private async revokeUserAccess(userId: string) {
     if (this.userSessionRevocation) {
       await this.userSessionRevocation.revoke(userId);
@@ -64,6 +142,15 @@ export class AdminService {
     }
     await this.redis.del(`refresh:${userId}`).catch(() => undefined);
     this.wsNative?.disconnectUser(userId);
+  }
+
+  private async clearUserStateCache(userId: string) {
+    const redis = this.redis as any;
+    if (typeof redis.delPattern !== "function") return;
+    await Promise.all([
+      redis.delPattern(`user:profile:${userId}:*`).catch(() => undefined),
+      redis.delPattern(`user:profile:v2:${userId}:*`).catch(() => undefined),
+    ]);
   }
 
   private moneyToCents(value: any) {
@@ -533,7 +620,11 @@ export class AdminService {
     if (action === "ban_user" && report.reportedId) {
       await this.prisma.user.update({
         where: { id: report.reportedId },
-        data: { status: UserStatus.BANNED, muteReason: reason },
+        data: {
+          status: UserStatus.BANNED,
+          banVersion: { increment: 1 },
+          muteReason: reason,
+        },
       });
       await this.revokeUserAccess(report.reportedId);
       effects.push("被举报用户已封禁");
@@ -2672,14 +2763,22 @@ export class AdminService {
   ) {
     const u = await this.prisma.user.findUnique({ where: { id } });
     if (!u) throw new NotFoundException("用户不存在");
-    await this.prisma.user.update({
-      where: { id },
-      data: { status: dto.banned ? "BANNED" : "ACTIVE" },
-    });
+    if (!dto.banned) {
+      await this.activateUserWithSelfUnbanGuard(id, operatorId, dto.reason);
+    } else {
+      await this.prisma.user.update({
+        where: { id },
+        data: {
+          status: "BANNED",
+          banVersion: { increment: 1 },
+        },
+      });
+    }
     // 账号不可用后必须同时撤销 refresh 和两类实时连接。
     if (dto.banned) {
       await this.revokeUserAccess(id);
     }
+    await this.clearUserStateCache(id);
     await this.logOperation(
       operatorId || "",
       dto.banned ? "ban" : "unban",
@@ -2701,6 +2800,320 @@ export class AdminService {
     return { success: true };
   }
 
+  async selfUnbanRequests(query: any = {}, operatorId?: string) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const scope = await this.adminDataScope.getAdminContext(operatorId);
+    const where: any = {};
+    const status = String(query.status || "").trim();
+    const keyword = String(query.keyword || "").trim();
+    if (status) where.status = status;
+    if (!scope.isSuperAdmin) {
+      if (!scope.regionIds.length)
+        return { list: [], total: 0, page, pageSize };
+      where.regionId = { in: scope.regionIds };
+    }
+    if (keyword) {
+      where.OR = [
+        { requestNo: { contains: keyword } },
+        { user: { nickname: { contains: keyword } } },
+        { user: { phone: { contains: keyword } } },
+      ];
+    }
+
+    const [list, total] = await Promise.all([
+      this.prisma.selfUnbanRequest.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              uid: true,
+              publicUid: true,
+              nickname: true,
+              phone: true,
+              status: true,
+            },
+          },
+          region: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.selfUnbanRequest.count({ where }),
+    ]);
+
+    return {
+      list: list.map((item: any) => ({
+        id: item.id,
+        requestNo: item.requestNo,
+        userId: item.userId,
+        uid: item.user?.publicUid || item.user?.uid || null,
+        nickname: item.user?.nickname || "",
+        phone: item.user?.phone || "",
+        userStatus: item.user?.status || "",
+        regionId: item.regionId,
+        regionName: item.region?.name || "",
+        amount: Number(item.amount || 0),
+        status: item.status,
+        paymentNo: item.paymentNo,
+        banReason: item.banReason || "",
+        adminNote: item.adminNote || "",
+        reviewedBy: item.reviewedBy,
+        reviewedAt: item.reviewedAt,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  async reviewSelfUnbanRequest(
+    id: string,
+    dto: { approved: boolean; reason?: string },
+    operatorId?: string,
+    ip?: string,
+  ) {
+    if (!dto || typeof dto.approved !== "boolean") {
+      throw new BadRequestException("approved 必须是明确的布尔值");
+    }
+    const request = await this.prisma.selfUnbanRequest.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, status: true, banVersion: true } },
+      },
+    });
+    if (!request) throw new NotFoundException("解封申请不存在");
+    await this.adminDataScope.assertRegionAccess(operatorId, request.regionId);
+    if (request.status !== "pending_review") {
+      throw new BadRequestException(`申请状态 ${request.status} 不支持审核`);
+    }
+    const note = String(dto.reason || "").trim();
+
+    if (dto.approved) {
+      if (request.user?.status !== UserStatus.BANNED) {
+        throw new BadRequestException("账号封禁状态已变化，请驳回申请并退款");
+      }
+      const latestBan = await this.prisma.auditLog.findFirst({
+        where: {
+          userId: request.userId,
+          module: "user",
+          action: AuditAction.BAN,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      if (
+        latestBan?.createdAt &&
+        request.createdAt &&
+        latestBan.createdAt > request.createdAt
+      ) {
+        throw new BadRequestException("账号封禁状态已变化，请驳回申请并退款");
+      }
+      await this.prisma.$transaction(async (tx) => {
+        const restored = await tx.user.updateMany({
+          where: {
+            id: request.userId,
+            status: UserStatus.BANNED,
+            banVersion: Number(request.banVersion || 0),
+          },
+          data: { status: UserStatus.ACTIVE },
+        });
+        if (restored.count !== 1) {
+          throw new BadRequestException("账号封禁状态已变化，请驳回申请并退款");
+        }
+        const claimed = await tx.selfUnbanRequest.updateMany({
+          where: { id, status: "pending_review" },
+          data: {
+            status: "approved",
+            activeKey: null,
+            adminNote: note || "审核通过",
+            reviewedBy: operatorId || null,
+            reviewedAt: new Date(),
+          },
+        });
+        if (claimed.count !== 1)
+          throw new BadRequestException("申请状态已变化，请刷新后重试");
+        await tx.auditLog.create({
+          data: {
+            userId: request.userId,
+            action: AuditAction.UNBAN,
+            module: "user",
+            targetId: request.userId,
+            detail: {
+              reason: note || "自助解封审核通过",
+              requestId: id,
+              operatorId,
+            },
+            ip,
+          },
+        });
+      });
+      await this.clearUserStateCache(request.userId);
+      await this.logOperation(
+        operatorId || "",
+        "unban",
+        "user",
+        request.userId,
+        "self_unban_request",
+        { requestId: id, reason: note },
+        ip,
+      );
+      return { success: true, status: "approved" };
+    }
+
+    if (!this.paymentService)
+      throw new BadRequestException("支付服务不可用，暂不能驳回");
+    const claimed = await this.prisma.selfUnbanRequest.updateMany({
+      where: { id, status: "pending_review" },
+      data: {
+        status: "rejecting",
+        adminNote: note || "审核未通过",
+        reviewedBy: operatorId || null,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1)
+      throw new BadRequestException("申请状态已变化，请刷新后重试");
+    let providerRefundStarted = false;
+    try {
+      const refund = await this.paymentService.refund({
+        bizType: "self_unban",
+        bizId: id,
+        amount: Number(request.amount),
+        reason: note || "自助解封审核未通过",
+        operatorId,
+        sourceType: "self_unban_review",
+        sourceId: id,
+      });
+      providerRefundStarted = refund?.success === true;
+      const nextStatus =
+        refund?.status === "success" ? "refunded" : "refunding";
+      await this.prisma.selfUnbanRequest.updateMany({
+        where: { id, status: "rejecting" },
+        data: { status: nextStatus },
+      });
+      await this.logOperation(
+        operatorId || "",
+        "reject",
+        "user",
+        request.userId,
+        "self_unban_request",
+        { requestId: id, reason: note, refundStatus: nextStatus },
+        ip,
+      );
+      return { success: true, status: nextStatus };
+    } catch (error) {
+      if (providerRefundStarted) {
+        await this.prisma.selfUnbanRequest
+          .updateMany({
+            where: { id, status: "rejecting" },
+            data: { status: "refunding" },
+          })
+          .catch(() => undefined);
+        await this.logOperation(
+          operatorId || "",
+          "reject",
+          "user",
+          request.userId,
+          "self_unban_request",
+          {
+            requestId: id,
+            reason: note,
+            refundStatus: "refunding",
+            reconciliationRequired: true,
+          },
+          ip,
+        ).catch(() => undefined);
+        return {
+          success: true,
+          status: "refunding",
+          reconciliationRequired: true,
+        };
+      }
+      await this.prisma.selfUnbanRequest.updateMany({
+        where: { id, status: "rejecting" },
+        data: { status: "pending_review" },
+      });
+      throw error;
+    }
+  }
+
+  async retrySelfUnbanRefund(id: string, operatorId?: string, ip?: string) {
+    if (!this.paymentService)
+      throw new BadRequestException("支付服务不可用，暂不能重试退款");
+    const request = await this.prisma.selfUnbanRequest.findUnique({
+      where: { id },
+    });
+    if (!request) throw new NotFoundException("解封申请不存在");
+    await this.adminDataScope.assertRegionAccess(operatorId, request.regionId);
+    if (request.status !== "refund_failed") {
+      throw new BadRequestException(
+        `申请状态 ${request.status} 不支持重试退款`,
+      );
+    }
+
+    const claimed = await this.prisma.selfUnbanRequest.updateMany({
+      where: { id, status: "refund_failed" },
+      data: {
+        status: "rejecting",
+        reviewedBy: operatorId || null,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1)
+      throw new BadRequestException("申请状态已变化，请刷新后重试");
+
+    let providerRefundStarted = false;
+    try {
+      const refund = await this.paymentService.refund({
+        bizType: "self_unban",
+        bizId: id,
+        amount: Number(request.amount),
+        reason: request.adminNote || "解封申请退款重试",
+        operatorId,
+        sourceType: "self_unban_refund_retry",
+        sourceId: id,
+      });
+      providerRefundStarted = refund?.success === true;
+      const nextStatus =
+        refund?.status === "success" ? "refunded" : "refunding";
+      await this.prisma.selfUnbanRequest.updateMany({
+        where: { id, status: "rejecting" },
+        data: { status: nextStatus },
+      });
+      await this.logOperation(
+        operatorId || "",
+        "retry_refund",
+        "user",
+        request.userId,
+        "self_unban_request",
+        { requestId: id, refundStatus: nextStatus },
+        ip,
+      );
+      return { success: true, status: nextStatus };
+    } catch (error) {
+      const nextStatus = providerRefundStarted ? "refunding" : "refund_failed";
+      await this.prisma.selfUnbanRequest
+        .updateMany({
+          where: { id, status: "rejecting" },
+          data: { status: nextStatus },
+        })
+        .catch(() => undefined);
+      if (providerRefundStarted) {
+        return {
+          success: true,
+          status: "refunding",
+          reconciliationRequired: true,
+        };
+      }
+      throw error;
+    }
+  }
+
   async setUserStatus(
     id: string,
     dto: { status: string; reason?: string },
@@ -2713,6 +3126,9 @@ export class AdminService {
 
     // AUD-P1-181: DELETED 状态必须同时设置 deletedAt，脱敏可公开资料
     const updateData: any = { status };
+    if (status === UserStatus.BANNED) {
+      updateData.banVersion = { increment: 1 };
+    }
     if (status === "DELETED") {
       updateData.deletedAt = new Date();
       updateData.nickname = "已注销用户";
@@ -2720,10 +3136,14 @@ export class AdminService {
       updateData.phone = null;
     }
 
-    await this.prisma.user.update({
-      where: { id },
-      data: updateData,
-    });
+    if (status === UserStatus.ACTIVE && u.status !== UserStatus.ACTIVE) {
+      await this.activateUserWithSelfUnbanGuard(id, operatorId, dto.reason);
+    } else {
+      await this.prisma.user.update({
+        where: { id },
+        data: updateData,
+      });
+    }
 
     // AUD-P1-181: DELETED 时脱敏用户档案资料
     if (status === "DELETED") {
@@ -2750,6 +3170,7 @@ export class AdminService {
     if (status !== "ACTIVE") {
       await this.revokeUserAccess(id);
     }
+    await this.clearUserStateCache(id);
     await this.logOperation(
       operatorId || "",
       "status",
@@ -2759,10 +3180,16 @@ export class AdminService {
       { status, reason: dto.reason },
       ip,
     );
+    const auditAction =
+      status === UserStatus.BANNED
+        ? AuditAction.BAN
+        : u.status === UserStatus.BANNED && status === UserStatus.ACTIVE
+          ? AuditAction.UNBAN
+          : AuditAction.UPDATE;
     await this.prisma.auditLog.create({
       data: {
         userId: id,
-        action: AuditAction.UPDATE,
+        action: auditAction,
         module: "user",
         targetId: id,
         detail: { status, reason: dto.reason, operatorId },
@@ -2910,20 +3337,27 @@ export class AdminService {
       throw new ConflictException(`区域编码「${code}」已存在，请换一个编码`);
     }
     const managerData = await this.buildRegionManagerData(dto);
-    const requestedHomeNav = dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
+    const requestedHomeNav =
+      dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
     if (requestedHomeNav !== undefined && !Array.isArray(requestedHomeNav)) {
       throw new BadRequestException("首页金刚区配置必须是数组");
     }
-    const requestedHomeNavDisplay = dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
+    const requestedHomeNavDisplay =
+      dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
     if (
       requestedHomeNavDisplay !== undefined &&
-      (!requestedHomeNavDisplay || typeof requestedHomeNavDisplay !== "object" || Array.isArray(requestedHomeNavDisplay))
+      (!requestedHomeNavDisplay ||
+        typeof requestedHomeNavDisplay !== "object" ||
+        Array.isArray(requestedHomeNavDisplay))
     ) {
       throw new BadRequestException("首页导航显示配置格式不正确");
     }
-    const initialSettings = dto.settings && typeof dto.settings === "object" && !Array.isArray(dto.settings)
-      ? { ...dto.settings }
-      : {};
+    const initialSettings =
+      dto.settings &&
+      typeof dto.settings === "object" &&
+      !Array.isArray(dto.settings)
+        ? { ...dto.settings }
+        : {};
     if (requestedHomeNavDisplay !== undefined) {
       initialSettings.homeNavDisplayConfig = requestedHomeNavDisplay;
     }
@@ -2946,7 +3380,9 @@ export class AdminService {
                 ? Boolean(dto.status)
                 : true,
           sortOrder: this.toInt(dto.sort, 0),
-          settings: Object.keys(initialSettings).length ? initialSettings : undefined,
+          settings: Object.keys(initialSettings).length
+            ? initialSettings
+            : undefined,
           ...managerData,
           // 新增字段
           logo: this.nullableString(dto.logo),
@@ -3416,18 +3852,25 @@ export class AdminService {
       data.studentOnly = Boolean(dto.studentOnly);
     if (dto.sort !== undefined) data.sortOrder = this.toInt(dto.sort, 0);
     if (dto.settings !== undefined) data.settings = dto.settings;
-    const requestedHomeNavDisplay = dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
+    const requestedHomeNavDisplay =
+      dto.homeNavDisplayConfig ?? dto.home_nav_display_config;
     if (
       requestedHomeNavDisplay !== undefined &&
-      (!requestedHomeNavDisplay || typeof requestedHomeNavDisplay !== "object" || Array.isArray(requestedHomeNavDisplay))
+      (!requestedHomeNavDisplay ||
+        typeof requestedHomeNavDisplay !== "object" ||
+        Array.isArray(requestedHomeNavDisplay))
     ) {
       throw new BadRequestException("首页导航显示配置格式不正确");
     }
     if (requestedHomeNavDisplay !== undefined) {
-      const settingsSource = data.settings !== undefined ? data.settings : exists.settings;
-      const settings = settingsSource && typeof settingsSource === "object" && !Array.isArray(settingsSource)
-        ? { ...settingsSource }
-        : {};
+      const settingsSource =
+        data.settings !== undefined ? data.settings : exists.settings;
+      const settings =
+        settingsSource &&
+        typeof settingsSource === "object" &&
+        !Array.isArray(settingsSource)
+          ? { ...settingsSource }
+          : {};
       settings.homeNavDisplayConfig = requestedHomeNavDisplay;
       data.settings = settings;
     }
@@ -3558,7 +4001,8 @@ export class AdminService {
       dto.homeNavLayoutConfig !== undefined ||
       dto.home_nav_layout_config !== undefined
     ) {
-      const homeNavLayoutConfig = dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
+      const homeNavLayoutConfig =
+        dto.homeNavLayoutConfig ?? dto.home_nav_layout_config;
       if (!Array.isArray(homeNavLayoutConfig)) {
         throw new BadRequestException("首页金刚区配置必须是数组");
       }
@@ -3709,26 +4153,34 @@ export class AdminService {
       profile_layout_items: r.profileLayoutItems ?? [],
       homeNavLayoutConfig: r.homeNavLayoutConfig ?? [],
       home_nav_layout_config: r.homeNavLayoutConfig ?? [],
-      homeNavDisplayConfig: r.settings?.homeNavDisplayConfig ?? (!Array.isArray(r.homeNavLayoutConfig) ? r.homeNavLayoutConfig : {
-        title: {
-          show: false,
-          text: "",
-          color: "#333333",
-          fontSize: 16,
-          fontWeight: "bold",
-        },
-        showLayoutSwitch: false,
-      }),
-      home_nav_display_config: r.settings?.homeNavDisplayConfig ?? (!Array.isArray(r.homeNavLayoutConfig) ? r.homeNavLayoutConfig : {
-        title: {
-          show: false,
-          text: "",
-          color: "#333333",
-          fontSize: 16,
-          fontWeight: "bold",
-        },
-        showLayoutSwitch: false,
-      }),
+      homeNavDisplayConfig:
+        r.settings?.homeNavDisplayConfig ??
+        (!Array.isArray(r.homeNavLayoutConfig)
+          ? r.homeNavLayoutConfig
+          : {
+              title: {
+                show: false,
+                text: "",
+                color: "#333333",
+                fontSize: 16,
+                fontWeight: "bold",
+              },
+              showLayoutSwitch: false,
+            }),
+      home_nav_display_config:
+        r.settings?.homeNavDisplayConfig ??
+        (!Array.isArray(r.homeNavLayoutConfig)
+          ? r.homeNavLayoutConfig
+          : {
+              title: {
+                show: false,
+                text: "",
+                color: "#333333",
+                fontSize: 16,
+                fontWeight: "bold",
+              },
+              showLayoutSwitch: false,
+            }),
     };
   }
 
@@ -4620,6 +5072,38 @@ export class AdminService {
         detail: { reason: dto.reason, operatorId },
       },
     });
+    if (this.notifyService) {
+      await this.notifyService
+        .createAndDispatch({
+          userId: updated.userId,
+          regionId: updated.regionId || undefined,
+          type: "system",
+          scene: "post_audit_result",
+          title: dto.status === "approved" ? "帖子审核通过" : "帖子审核未通过",
+          content:
+            dto.status === "approved"
+              ? "你的帖子已通过审核并发布。"
+              : `你的帖子未通过审核：${dto.reason || "请修改后重新提交"}`,
+          data: {
+            postId: updated.id,
+            postTitle: updated.title || "校园帖子",
+            auditResult: dto.status === "approved" ? "审核通过" : "审核未通过",
+            auditReason:
+              dto.reason ||
+              (dto.status === "approved"
+                ? "内容符合发布规范"
+                : "请修改后重新提交"),
+            auditTime: new Date().toLocaleString("zh-CN", {
+              hour12: false,
+              timeZone: "Asia/Shanghai",
+            }),
+          },
+          linkType: "page",
+          linkValue: `/pagesB/post/post?id=${updated.id}`,
+          channelMask: { inApp: true, websocket: true, wechatSubscribe: true },
+        })
+        .catch(() => undefined);
+    }
     return { success: true };
   }
 
@@ -5687,6 +6171,8 @@ export class AdminService {
           businessHours: m.businessHours,
           closedNotice: (m as any).closedNotice || "",
           description: m.description,
+          businessLicenseUrl: (m as any).businessLicenseUrl || "",
+          foodSafetyLicenseUrl: (m as any).foodSafetyLicenseUrl || "",
         };
       }),
       total,
@@ -5748,7 +6234,13 @@ export class AdminService {
     }
     await this.prisma.merchant.update({
       where: { id },
-      data: { status: dto.status, rejectReason: dto.remark },
+      data: {
+        status: dto.status,
+        rejectReason: dto.remark,
+        ...(dto.status === "approved" && merchant.businessType === "dorm_shop"
+          ? { studentVerified: true }
+          : {}),
+      },
     });
     await this.logOperation(
       operatorId || "",
@@ -5774,6 +6266,7 @@ export class AdminService {
         merchant.businessHours,
         "宿舍小店启用前必须先配置营业时间",
       );
+      this.assertDormShopQualifications(merchant, "宿舍小店启用前");
     }
     const notice = this.normalizeClosedNotice(closedNotice);
     if (
@@ -5805,6 +6298,10 @@ export class AdminService {
         await this.prisma.merchant.updateMany({
           where: { id: { in: dto.ids } },
           data: { status: "approved" },
+        });
+        await this.prisma.merchant.updateMany({
+          where: { id: { in: dto.ids }, businessType: "dorm_shop" },
+          data: { studentVerified: true },
         });
         break;
       case "reject":
@@ -5873,17 +6370,30 @@ export class AdminService {
       dormBuilding: dto.dormBuilding,
       dormRoom: dto.dormRoom,
       studentVerified:
-        dto.studentVerified === true || dto.studentVerified === "true",
+        businessType === "dorm_shop" && (dto.status || "pending") === "approved"
+          ? true
+          : dto.studentVerified === true || dto.studentVerified === "true",
       latitude: this.toFloatOrNull(dto.latitude),
       longitude: this.toFloatOrNull(dto.longitude),
       businessHours,
       closedNotice:
         (dto.status || "pending") === "closed" ? closedNotice : null,
       description: dto.description,
+      businessLicenseUrl: this.normalizeMerchantCredentialUrl(
+        dto.businessLicenseUrl ?? dto.business_license_url,
+        "营业执照",
+      ),
+      foodSafetyLicenseUrl: this.normalizeMerchantCredentialUrl(
+        dto.foodSafetyLicenseUrl ?? dto.food_safety_license_url,
+        "食品许可或备案凭证",
+      ),
       regionId: this.toOptionalStringOrNull(dto.regionId),
       categoryId: this.toOptionalStringOrNull(dto.categoryId),
       status: dto.status || "pending",
     };
+    if (businessType === "dorm_shop" && data.status === "approved") {
+      this.assertDormShopQualifications(data, "宿舍小店启用前");
+    }
     data.userId = await this.normalizeMerchantOwnerUserId(
       this.merchantOwnerInput(dto),
       dto.phone,
@@ -5954,11 +6464,30 @@ export class AdminService {
         dto.closedNotice ?? dto.closed_notice,
       );
     if (dto.description !== undefined) data.description = dto.description;
+    if (
+      dto.businessLicenseUrl !== undefined ||
+      dto.business_license_url !== undefined
+    )
+      data.businessLicenseUrl = this.normalizeMerchantCredentialUrl(
+        dto.businessLicenseUrl ?? dto.business_license_url,
+        "营业执照",
+      );
+    if (
+      dto.foodSafetyLicenseUrl !== undefined ||
+      dto.food_safety_license_url !== undefined
+    )
+      data.foodSafetyLicenseUrl = this.normalizeMerchantCredentialUrl(
+        dto.foodSafetyLicenseUrl ?? dto.food_safety_license_url,
+        "食品许可或备案凭证",
+      );
     if (dto.regionId !== undefined)
       data.regionId = this.toOptionalStringOrNull(dto.regionId);
     if (dto.categoryId !== undefined)
       data.categoryId = this.toOptionalStringOrNull(dto.categoryId);
     if (dto.status !== undefined) data.status = dto.status;
+    if (nextBusinessType === "dorm_shop" && data.status === "approved") {
+      data.studentVerified = true;
+    }
     if (this.hasMerchantOwnerInput(dto)) {
       data.userId = await this.normalizeMerchantOwnerUserId(
         this.merchantOwnerInput(dto),
@@ -5972,6 +6501,10 @@ export class AdminService {
       this.assertValidBusinessHours(
         data.businessHours ?? merchant.businessHours,
         "宿舍小店必须配置营业时间",
+      );
+      this.assertDormShopQualifications(
+        { ...merchant, ...data },
+        "宿舍小店启用前",
       );
     }
     const nextStatus = data.status ?? merchant.status;
@@ -7409,25 +7942,44 @@ export class AdminService {
         },
         select: {
           totalAmount: true,
+          payAmount: true,
+          subsidyAmount: true,
+          businessType: true,
+          deliveryMode: true,
+          freightAmount: true,
           originalFreightAmount: true,
           refundAmount: true,
           refundStatus: true,
         },
       });
       const amount = completedOrders.reduce((sum, order) => {
-        const goodsAmount = Math.max(
+        const grossAmount = Math.max(
           0,
-          Number(order.totalAmount || 0) -
-            Number(order.originalFreightAmount || 0),
+          order.payAmount === null || order.payAmount === undefined
+            ? Number(order.totalAmount || 0)
+            : Number(order.payAmount || 0) + Number(order.subsidyAmount || 0),
+        );
+        const selfDelivery =
+          order.businessType === "dorm_shop" ||
+          order.deliveryMode === "self_delivery";
+        const originalFreight = Number(order.originalFreightAmount || 0);
+        const platformDeliveryAmount = selfDelivery
+          ? 0
+          : originalFreight > 0
+            ? originalFreight
+            : Number(order.freightAmount || 0);
+        const merchantBaseAmount = Math.max(
+          0,
+          grossAmount - platformDeliveryAmount,
         );
         const refundedGoodsAmount =
           order.refundStatus === "partial"
             ? Math.min(
-                goodsAmount,
+                merchantBaseAmount,
                 Math.max(0, Number(order.refundAmount || 0)),
               )
             : 0;
-        return sum + goodsAmount - refundedGoodsAmount;
+        return sum + merchantBaseAmount - refundedGoodsAmount;
       }, 0);
       const commissionRate = Number(merchant.region?.commissionRate || 0);
       const platformFee = Math.round(amount * commissionRate * 100) / 100;
@@ -9415,8 +9967,11 @@ export class AdminService {
     ip?: string,
   ) {
     const password = String(dto?.password || "");
-    const securityConfig = await this.prisma.config.findUnique({ where: { key: "security" } }).catch(() => null);
-    const minLength = Number((securityConfig?.value as any)?.passwordMinLength) || 8;
+    const securityConfig = await this.prisma.config
+      .findUnique({ where: { key: "security" } })
+      .catch(() => null);
+    const minLength =
+      Number((securityConfig?.value as any)?.passwordMinLength) || 8;
     const strength = checkPasswordStrength(password, minLength);
     if (!strength.valid) throw new BadRequestException(strength.message);
     const bcrypt = await import("bcrypt");
@@ -9665,13 +10220,19 @@ export class AdminService {
     if (normalizedAction === "ban") {
       await this.prisma.user.updateMany({
         where: { id: { in: ids } },
-        data: { status: "BANNED" },
+        data: { status: "BANNED", banVersion: { increment: 1 } },
       });
     } else if (["unban", "enable", "active"].includes(normalizedAction)) {
-      await this.prisma.user.updateMany({
-        where: { id: { in: ids } },
-        data: { status: "ACTIVE" },
-      });
+      for (const id of Array.from(
+        new Set(ids.map((item: any) => String(item)).filter(Boolean)),
+      )) {
+        await this.setUserStatus(
+          id,
+          { status: "ACTIVE", reason: value?.reason || "批量恢复账号" },
+          operatorId,
+          ip,
+        );
+      }
     } else if (["disable", "inactive"].includes(normalizedAction)) {
       await this.prisma.user.updateMany({
         where: { id: { in: ids } },
@@ -9776,7 +10337,10 @@ export class AdminService {
       });
       if (updated.count !== 1) return null;
 
-      const current = await tx.wallet.findUnique({ where: { userId }, select: { balance: true } });
+      const current = await tx.wallet.findUnique({
+        where: { userId },
+        select: { balance: true },
+      });
       const balance = Number(current?.balance || 0);
       await tx.walletTransaction.create({
         data: {
@@ -10832,17 +11396,22 @@ export class AdminService {
 
   // ==================== 用户扩展 ====================
   async updateUser(id: string, dto: any, operatorId?: string, ip?: string) {
-    const { nickname, avatar, phone, status, muteEndAt, muteReason } = dto;
+    const { nickname, avatar, phone, status, muteEndAt, muteReason, reason } =
+      dto;
     const data: any = {};
     if (nickname !== undefined) data.nickname = nickname;
     if (avatar !== undefined) data.avatar = avatar;
     if (phone !== undefined) data.phone = phone;
-    if (status !== undefined) data.status = this.normalizeUserStatus(status);
     if (muteEndAt !== undefined)
       data.muteEndAt = muteEndAt ? new Date(muteEndAt) : null;
     if (muteReason !== undefined) data.muteReason = muteReason;
-    const user = await this.prisma.user.update({ where: { id }, data });
-    if (operatorId)
+
+    let user: any = null;
+    if (Object.keys(data).length > 0) {
+      user = await this.prisma.user.update({ where: { id }, data });
+      await this.clearUserStateCache(id);
+    }
+    if (operatorId && Object.keys(data).length > 0)
       await this.logOperation(
         operatorId,
         "UPDATE",
@@ -10852,6 +11421,15 @@ export class AdminService {
         dto,
         ip,
       );
+
+    // 状态变化必须经过统一入口，确保封禁原因、审计、会话撤销和缓存失效都生效。
+    if (status !== undefined) {
+      await this.setUserStatus(id, { status, reason }, operatorId, ip);
+      user = await this.prisma.user.findUnique({ where: { id } });
+    } else if (!user) {
+      user = await this.prisma.user.findUnique({ where: { id } });
+    }
+    if (!user) throw new NotFoundException("用户不存在");
     return { success: true, data: user };
   }
 
@@ -12361,7 +12939,7 @@ export class AdminService {
       startMinute > 59 ||
       endMinute < 0 ||
       endMinute > 59 ||
-      start >= end
+      start === end
     ) {
       return null;
     }
@@ -12407,6 +12985,23 @@ export class AdminService {
     }
   }
 
+  private assertDormShopQualifications(merchant: any, prefix: string) {
+    if (!merchant?.studentVerified) {
+      throw new BadRequestException(
+        `${prefix}必须由平台确认学生身份审核已通过`,
+      );
+    }
+  }
+
+  private normalizeMerchantCredentialUrl(value: any, label: string) {
+    const url = String(value || "").trim();
+    if (!url) return null;
+    if (url.length > 2048 || !/^(https?:\/\/|\/uploads\/)/.test(url)) {
+      throw new BadRequestException(`${label}图片地址不正确`);
+    }
+    return url;
+  }
+
   private normalizeClosedNotice(value?: string | null) {
     const text = String(value || "").trim();
     return text || null;
@@ -12415,7 +13010,11 @@ export class AdminService {
   private async assertBatchDormShopsReady(ids: string[]) {
     const dormShops = await this.prisma.merchant.findMany({
       where: { id: { in: ids }, businessType: "dorm_shop" },
-      select: { name: true, businessHours: true },
+      select: {
+        name: true,
+        businessHours: true,
+        studentVerified: true,
+      },
     });
     const invalid = dormShops.find(
       (item) => !this.normalizeBusinessHours(item.businessHours),

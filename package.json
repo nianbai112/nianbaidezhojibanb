@@ -13,6 +13,8 @@
     "preflight:node": "node utils/checkNodeVersion.js",
     "install:all": "npm install --workspaces",
     "dev:backend": "npm --workspace backend run start:dev",
+    "dev:worker": "npm --workspace backend run start:worker:dev",
+    "dev:realtime": "npm --workspace backend run start:realtime:dev",
     "dev:admin": "npm --workspace admin run dev",
     "dev:site": "npm --workspace site run dev",
     "build": "npm run build:backend && npm run build:admin && npm run build:site",
@@ -37,16 +39,22 @@
     "vue-eslint-parser": "9.4.3"
   },
   "overrides": {
-    "@nestjs/swagger": "11.4.5",
+    "brace-expansion": "2.1.4",
     "engine.io": "6.6.9",
     "form-data": "4.0.6",
     "rxjs": "7.8.2",
     "socket.io-adapter": "2.5.8",
+    "socket.io-parser": "4.2.7",
     "typescript": "5.7.3",
+    "ip-address": "10.7.0",
+    "nanoid": "3.3.18",
+    "tencentcloud-sdk-nodejs-common": {
+      "uuid": "11.1.1"
+    },
     "ws": "8.21.1"
   },
   "dependencies": {
     "@nestjs/platform-express": "11.1.28",
-    "monaco-editor": "^0.48.0"
+    "uuid": "11.1.1"
   }
 }

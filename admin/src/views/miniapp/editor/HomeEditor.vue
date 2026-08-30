@@ -7,9 +7,7 @@
           <el-option v-for="r in regions" :key="r.id" :label="r.name" :value="r.id" />
         </el-select>
         <span v-if="dirty.size" class="rte-dirty"><i class="rte-dirty-dot" />{{ dirty.size }} 处修改待发布</span>
-        <span v-else-if="autoSavedAt" class="rte-clean">已自动保存 {{ autoSavedAt }}</span>
         <span v-else-if="lastSaved" class="rte-clean">已是最新 · {{ lastSaved }}</span>
-        <span v-if="autoSaving" class="rte-auto">自动保存中…</span>
       </div>
       <div class="rte-right">
         <el-button :icon="Collection" @click="templateVisible = true">模板</el-button>
@@ -26,7 +24,6 @@
         <el-tooltip content="版本历史" placement="bottom">
           <el-button class="rte-history" :icon="Clock" circle @click="versionPanelVisible = true" />
         </el-tooltip>
-        <el-button :icon="MagicStick" plain @click="genDefaultLayout">生成默认布局</el-button>
         <el-button class="rte-publish" type="primary" :icon="Promotion" :disabled="!dirty.size" :loading="saving" @click="saveAll">
           保存并发布
         </el-button>
@@ -39,106 +36,8 @@
     <div class="rte-body">
       <!-- ===== 画布：真实首页编辑视图（真机画面收进「模拟器验收」弹窗） ===== -->
       <div class="rte-canvas">
-        <div class="rte-page" :class="pageDensityClass" :style="[themeStyle, pageSettingStyle]">
+        <div class="rte-page" :style="themeStyle">
           <div class="p-status"><span>9:41</span><span class="p-sig">●●●</span></div>
-
-          <!-- 自定义版块（自由搭建，发布到真实首页顶部） -->
-          <section v-if="decorBlocks.length" class="blk" :class="{ sel: editing === 'decor' }" @click="startEdit('decor')">
-            <span class="blk-tag decor">自定义版块</span>
-            <div class="blk-tools">
-              <span class="blk-tool danger" title="删除全部自定义版块" @click.stop="clearDecor">🗑</span>
-            </div>
-            <div
-              v-for="(b, i) in decorBlocks"
-              :key="b.id || i"
-              class="d-item"
-              :class="{
-                'd-dragging': dragIdx === i,
-                'd-drop-before': dragIdx > -1 && dropIdx === i && dropIdx !== dragIdx && dropIdx !== dragIdx + 1,
-                'd-drop-after': dragIdx > -1 && dropIdx === i + 1 && dropIdx !== dragIdx && dropIdx !== dragIdx + 1,
-              }"
-              :draggable="dragReady === i"
-              @dragstart="onDecorDragStart(i, $event)"
-              @dragover="onDecorDragOver(i, $event)"
-              @drop="onDecorDrop($event)"
-              @dragend="resetDecorDrag"
-              @click.stop="startEdit('decor'); decorSelected = i"
-            >
-              <span class="d-handle" title="按住上下拖动排序" @mousedown.stop="dragReady = i" @mouseup.stop="dragReady = dragIdx > -1 ? dragReady : -1">⠿</span>
-              <div v-if="b.type === 'banner'" class="d-banner">
-                <img v-if="decorFirstImage(b)" :src="resolveAsset(decorFirstImage(b))" alt="" @error="onImgError" />
-                <EmptySlot v-else icon="image" text="还没有轮播图" action-text="+ 上传图片" @action="startEdit('decor')" />
-              </div>
-              <div v-else-if="b.type === 'grid-menu'" class="campus-menu-card" style="margin: 8px 12px">
-                <div v-for="(g, gi) in (b.config.items || [])" :key="gi" class="campus-menu-item" :style="{ width: 100 / (b.config.columns || 4) + '%' }">
-                  <div class="campus-menu-icon">
-                    <img v-if="imgOk(g.icon)" class="campus-menu-img" :src="resolveAsset(g.icon)" alt="" @error="onImgError" />
-                    <MenuFallbackIcon v-else :name="g.text" :path="g.path || g.linkUrl || ''" />
-                  </div>
-                  <span class="campus-menu-title">{{ g.text }}</span>
-                </div>
-              </div>
-              <div v-else-if="b.type === 'announcement'" class="p-notice" style="margin: 8px 12px">
-                <span>📢</span><span class="p-notice-text">{{ (b.config.items || [])[0]?.text || '公告' }}</span>
-              </div>
-              <div v-else-if="b.type === 'text'" class="d-text" :style="textMockStyle(b)">{{ b.config.content }}</div>
-              <div v-else-if="b.type === 'image'" class="d-image">
-                <img v-if="imgOk(b.config.image)" :src="resolveAsset(b.config.image)" alt="" @error="onImgError" />
-                <EmptySlot v-else icon="image" text="还没有图片" action-text="+ 上传图片" @action="startEdit('decor')" />
-              </div>
-              <div v-else-if="b.type === 'button'" class="d-btn-wrap">
-                <span class="d-btn" :style="buttonMockStyle(b)">{{ b.config.text }}</span>
-              </div>
-              <div v-else-if="b.type === 'search'" class="campus-search" style="position: static; margin: 8px 12px">
-                <span class="campus-search-icon">🔍</span>
-                <span class="campus-search-placeholder">{{ b.config.placeholder || '搜索' }}</span>
-                <span class="campus-search-btn">搜索</span>
-              </div>
-              <TmagicDecorPreview v-else-if="b.type === 'tmagic-page'" :slug="b.config.slug || ''" />
-              <!-- 倒计时（画布实时倒数） -->
-              <div v-else-if="b.type === 'countdown'" class="d-countdown">
-                <span class="d-cd-title" :style="{ color: b.config.titleColor || '#1D271F' }">{{ b.config.title || '倒计时' }}</span>
-                <template v-if="!cdParts(b).invalid && !cdParts(b).expired">
-                  <div class="d-cd-boxes">
-                    <template v-if="cdParts(b).d !== '00'">
-                      <span class="d-cd-num" :style="cdNumStyle(b)">{{ cdParts(b).d }}</span><i class="d-cd-sep">天</i>
-                    </template>
-                    <span class="d-cd-num" :style="cdNumStyle(b)">{{ cdParts(b).h }}</span><i class="d-cd-sep">时</i>
-                    <span class="d-cd-num" :style="cdNumStyle(b)">{{ cdParts(b).m }}</span><i class="d-cd-sep">分</i>
-                    <span class="d-cd-num" :style="cdNumStyle(b)">{{ cdParts(b).s }}</span><i class="d-cd-sep">秒</i>
-                  </div>
-                </template>
-                <span v-else class="d-cd-end">{{ cdParts(b).invalid ? '⏱ 未设置截止时间' : '已结束' }}</span>
-              </div>
-              <!-- 优惠券 -->
-              <div v-else-if="b.type === 'coupon'" class="d-coupon" :style="{ background: b.config.bgColor || '#FF6B35', color: b.config.textColor || '#fff' }">
-                <div class="d-coupon-left">
-                  <div class="d-coupon-amount"><span class="d-coupon-symbol">¥</span><span class="d-coupon-num">{{ b.config.amount || '0' }}</span></div>
-                  <span class="d-coupon-cond">{{ b.config.condition || '无门槛' }}</span>
-                </div>
-                <span class="d-coupon-btn" :style="{ color: b.config.bgColor || '#FF6B35' }">{{ b.config.btnText || '立即领取' }}</span>
-              </div>
-              <!-- 活动横幅 -->
-              <div v-else-if="b.type === 'activity-banner'" class="d-actbanner" :style="actBannerStyle(b)">
-                <div class="d-act-title">{{ b.config.title || '活动标题' }}</div>
-                <div v-if="b.config.subtitle" class="d-act-sub">{{ b.config.subtitle }}</div>
-                <span class="d-act-btn" :style="{ color: b.config.bgColor || '#FF4D4F' }">{{ b.config.btnText || '立即参与' }}</span>
-              </div>
-              <div v-else-if="b.type === 'divider'" class="d-divider" />
-              <div v-else-if="b.type === 'module-title'" class="d-mtitle" :style="{ textAlign: b.config.align || 'left' }">
-                <span
-                  class="d-mtitle-text ie"
-                  :class="{ 'ie-on': inlineKey === `decor-title-${i}` }"
-                  :contenteditable="inlineKey === `decor-title-${i}`"
-                  @click.stop="beginInline(`decor-title-${i}`, (v: string) => { b.config.title = v }, 'decor')"
-                  @blur="commitInline"
-                  @keydown="inlineKeydown"
-                  @paste="inlinePaste"
-                >{{ b.config.title }}</span>
-                <span v-if="b.config.showMore && b.config.align !== 'center'" class="d-mtitle-more">{{ b.config.moreText || '更多' }} ›</span>
-              </div>
-            </div>
-          </section>
 
           <!-- Hero 区（结构 / class 由 sync-canvas-blocks.mjs 从 DynamicHomeContent.wxml 生成，样式经 injectRealWxss 同源注入） -->
           <section class="blk" :class="{ sel: editing === 'hero', off: !hero.enabled }" @click="startEdit('hero')">
@@ -427,63 +326,8 @@
               </div>
             </template>
 
-            <template v-else-if="editing === 'decor'">
-              <div class="pp-title">自定义版块 <span class="pp-sub">显示在首页最顶部</span></div>
-              <div class="pp-list">
-                <div v-for="(b, i) in decorBlocks" :key="b.id || i" class="pp-item" :class="{ 'pp-item-sel': decorSelected === i }" @click="decorSelected = i">
-                  <div class="pp-item-head">
-                    <b>{{ decorName(b.type) }}</b>
-                    <div class="pp-item-ops">
-                      <el-icon :class="{ dim: i === 0 }" @click.stop="moveItem(decorBlocks, i, -1, 'decor')"><Top /></el-icon>
-                      <el-icon :class="{ dim: i === decorBlocks.length - 1 }" @click.stop="moveItem(decorBlocks, i, 1, 'decor')"><Bottom /></el-icon>
-                      <el-icon class="danger" @click.stop="decorBlocks.splice(i, 1); decorSelected = -1; markDirty('decor')"><Delete /></el-icon>
-                    </div>
-                  </div>
-                  <template v-if="decorSelected === i">
-                    <el-form label-position="top">
-                      <el-form-item label="启用"><el-switch v-model="b.enabled" @change="markDirty('decor')" /></el-form-item>
-                      <el-form-item v-for="f in decorFields(b.type)" :key="f.key" :label="f.label">
-                        <FieldInput :field="f" :model="b.config" @update:model-value="markDirty('decor')" />
-                      </el-form-item>
-                    </el-form>
-                  </template>
-                </div>
-              </div>
-              <el-dropdown trigger="click" style="width: 100%" @command="addDecor">
-                <el-button size="small" style="width: 100%">+ 添加版块</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item v-for="w in decorWidgetTypes" :key="w.type" :command="w.type">{{ w.name }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-
             <template v-else>
-              <div class="pp-title">页面设置 <span class="pp-sub">未选中版块时显示</span></div>
-              <el-form label-position="top">
-                <el-form-item label="页面背景色">
-                  <div class="tp-color-row">
-                    <el-color-picker v-model="pageSettings.background" @change="markDirty('pagesettings')" />
-                    <el-input v-model="pageSettings.background" size="small" style="flex: 1" placeholder="留空跟随主题" @input="markDirty('pagesettings')" />
-                  </div>
-                </el-form-item>
-                <el-form-item :label="`全局字号缩放（${pageSettings.fontScale}%）`">
-                  <el-slider v-model="pageSettings.fontScale" :min="80" :max="120" :step="5" @change="markDirty('pagesettings')" />
-                </el-form-item>
-                <el-form-item label="Hero 区总开关">
-                  <el-switch v-model="hero.enabled" @change="markDirty('hero')" />
-                </el-form-item>
-                <el-form-item label="页面间距密度">
-                  <el-radio-group v-model="pageSettings.density" @change="markDirty('pagesettings')">
-                    <el-radio-button value="compact">紧凑</el-radio-button>
-                    <el-radio-button value="standard">标准</el-radio-button>
-                    <el-radio-button value="loose">宽松</el-radio-button>
-                  </el-radio-group>
-                </el-form-item>
-              </el-form>
-
-              <div class="pp-title" style="margin-top: 18px">页面大纲 <span class="pp-sub">当前首页的版块结构</span></div>
+              <div class="pp-title">页面大纲 <span class="pp-sub">当前首页的原生版块</span></div>
               <div class="ol-list">
                 <div
                   v-for="it in outlineItems"
@@ -543,7 +387,7 @@
           <span class="tpl-desc">{{ t.desc }}</span>
         </button>
       </div>
-      <p class="tpl-tip">应用模板会覆盖当前画布的 Hero、金刚区和自定义版块，可用「撤销」回退。</p>
+      <p class="tpl-tip">应用模板会覆盖当前画布的 Hero、金刚区和轮播配置，可用「撤销」回退。</p>
     </el-dialog>
 
     <!-- ===== 模拟器验收：真实小程序只读预览（LiveCanvas） ===== -->
@@ -570,25 +414,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Bottom, Clock, Collection, Delete, Hide, Iphone, MagicStick, Promotion, Refresh, RefreshLeft, RefreshRight, Top, View } from '@element-plus/icons-vue'
+import { Bottom, Clock, Collection, Delete, Hide, Iphone, Promotion, Refresh, RefreshLeft, RefreshRight, Top, View } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import DecorVersionPanel from '@/components/miniapp/DecorVersionPanel.vue'
 import ImageUploadBox from '@/components/common/ImageUploadBox.vue'
-import FieldInput from '@/components/layout/FieldInput.vue'
 import { compileWxss } from '@/utils/wxssCompiler'
 import { sharedGet } from '@/views/miniapp/editor/sharedGet'
 import LiveCanvas from '@/components/miniapp/LiveCanvas.vue'
-import TmagicDecorPreview from '@/views/miniapp/editor/TmagicDecorPreview.vue'
 import EmptySlot from '@/views/miniapp/editor/EmptySlot.vue'
 import MenuFallbackIcon from '@/views/miniapp/editor/MenuFallbackIcon.vue'
 import RealHeroBlock from '@/views/miniapp/editor/generated/RealHeroBlock.vue'
 import RealKingkongBlock from '@/views/miniapp/editor/generated/RealKingkongBlock.vue'
-import { pageSchemas } from '@/views/layout/layoutSchemas'
-import { regionPresetToLayout } from '@/views/layout/regionPresetToLayout'
 import { buildKingkongPayload, normalizeKingkongCollection, normalizeKingkongEntry, validateKingkongEntries } from '@/views/miniapp/editor/homeKingkongLinks.mjs'
-import type { WidgetDef, WidgetField } from '@/views/layout/layoutSchemas'
 
 // ============ 状态 ============
 const regions = ref<any[]>([])
@@ -607,8 +446,6 @@ const carousel = ref<any[]>([])
 const regionTabs = ref<any[]>([])
 const switches = ref<any>({ show_carousel: true, show_announcement: true, show_kingkong: true, show_hot_list: false, hot_featured_display: 'none' })
 const tabbarConfig = ref<any>({ type: 'bottom', color: '#8A8A8A', selectedColor: '#36A853', backgroundColor: '#ffffff', messageBadgeStyle: 'bubble', list: [] })
-const decorBlocks = ref<any[]>([])
-const decorSelected = ref(-1)
 
 const notices = ref<string[]>([])
 const hotPosts = ref<any[]>([])
@@ -780,20 +617,6 @@ function inlinePaste(e: ClipboardEvent) {
   document.execCommand('insertText', false, text)
 }
 
-// ============ 自定义版块整体删除（画布快捷条） ============
-async function clearDecor() {
-  try {
-    await ElMessageBox.confirm('将删除全部自定义版块（可撤销），确定吗？', '删除自定义版块', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-  } catch { return }
-  decorBlocks.value = []
-  decorSelected.value = -1
-  markDirty('decor')
-}
-
 // ============ 撤销 / 重做 ============
 const past = ref<string[]>([])
 const future = ref<string[]>([])
@@ -804,8 +627,7 @@ function snapshotState() {
   return JSON.stringify({
     hero: hero.value, kingkong: kingkong.value, carousel: carousel.value,
     regionTabs: regionTabs.value, switches: switches.value,
-    tabbarConfig: tabbarConfig.value, decorBlocks: decorBlocks.value,
-    pageSettings: pageSettings.value,
+    tabbarConfig: tabbarConfig.value,
   })
 }
 function applyState(json: string) {
@@ -816,13 +638,11 @@ function applyState(json: string) {
   regionTabs.value = s.regionTabs
   switches.value = s.switches
   tabbarConfig.value = s.tabbarConfig
-  decorBlocks.value = s.decorBlocks
-  if (s.pageSettings) pageSettings.value = s.pageSettings
   // contenteditable 行内编辑手改了 DOM，撤销/重做后强制退出行内态让 Vue 重渲染文本
   inlineKey.value = ''
 }
 function markAllDirty() {
-  ['hero', 'kingkong', 'carousel', 'tabs', 'switches', 'tabbar', 'decor', 'pagesettings'].forEach((k) => dirty.value.add(k))
+  ['hero', 'kingkong', 'carousel', 'tabs', 'switches', 'tabbar'].forEach((k) => dirty.value.add(k))
   dirty.value = new Set(dirty.value)
 }
 const undo = () => {
@@ -852,7 +672,7 @@ const initHistory = () => {
 const templateVisible = ref(false)
 const pageTemplates = [
   {
-    name: '标准校园首页', emoji: '🏫', desc: '配方A：金刚区 + 模块标题 + 热门',
+    name: '标准校园首页', emoji: '🏫', desc: 'Hero + 六宫格入口',
     apply() {
       hero.value = { enabled: true, title: '今天想在校园里\n干点啥？', subtitle: '发现校园美好生活', search_placeholder: '搜索校园生活', mascot_image: '' }
       kingkong.value = [
@@ -864,33 +684,20 @@ const pageTemplates = [
         { name: '跑腿', icon: '', linkType: 'internal', path: 'pages/tabbar/RunErrands/RunErrands', enabled: true },
       ]
       carousel.value = []
-      decorBlocks.value = [
-        { id: `mt_${Date.now()}_1`, type: 'module-title', enabled: true, order: 0, config: { title: '热门精选', icon: '', showMore: true, moreText: '更多', moreLink: '', align: 'left' } },
-        { id: `hot_${Date.now()}`, type: 'hot-posts', enabled: true, order: 1, config: { limit: 5 } },
-      ]
     },
   },
   {
-    name: '种草瀑布流', emoji: '🌿', desc: '配方B：轮播 + 为你推荐 + 瀑布流',
+    name: '校园种草', emoji: '🌿', desc: '种草 Hero + 精选轮播',
     apply() {
       hero.value = { enabled: true, title: '校园种草', subtitle: '发现好物与灵感', search_placeholder: '搜索', mascot_image: '' }
       carousel.value = [{ image: '', title: '精选', linkType: 'internal', path: '', enabled: true, sortOrder: 0 }]
-      decorBlocks.value = [
-        { id: `mt_${Date.now()}_2`, type: 'module-title', enabled: true, order: 0, config: { title: '为你推荐', icon: '', showMore: false, moreText: '更多', moreLink: '', align: 'left' } },
-        { id: `feed_${Date.now()}`, type: 'feed', enabled: true, order: 1, config: { style: 'waterfall' } },
-      ]
     },
   },
   {
-    name: '重互动社区', emoji: '💬', desc: '配方C：公告 + 最新讨论 + 信息流',
+    name: '校园社区', emoji: '💬', desc: '社区 Hero + 原生信息流',
     apply() {
       hero.value = { enabled: true, title: '校园广场', subtitle: '说点什么…', search_placeholder: '搜索帖子', mascot_image: '' }
       carousel.value = []
-      decorBlocks.value = [
-        { id: `ann_${Date.now()}`, type: 'announcement', enabled: true, order: 0, config: { interval: 4000, items: [{ text: '文明发言，友善交流', linkUrl: '' }] } },
-        { id: `mt_${Date.now()}_3`, type: 'module-title', enabled: true, order: 1, config: { title: '最新讨论', icon: '', showMore: true, moreText: '查看全部', moreLink: '', align: 'left' } },
-        { id: `feed_${Date.now()}_2`, type: 'feed', enabled: true, order: 2, config: { style: 'waterfall' } },
-      ]
     },
   },
 ]
@@ -909,8 +716,6 @@ const startEdit = (key: string) => { editing.value = key; panelTab.value = 'sect
 const OL_SVG = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
 const OL_ICONS = {
-  // 自定义版块：宫格 + 加号（自由搭建）
-  decor: OL_SVG('<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13.5v7M13.5 17h7"/>'),
   // Hero 区：靶心
   hero: OL_SVG('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>'),
   // 金刚区：2x2 宫格
@@ -928,7 +733,6 @@ const OL_ICONS = {
 }
 const outlineItems = computed(() => {
   const items: { key: string; name: string; icon: string; on?: boolean; toggle?: () => void }[] = []
-  items.push({ key: 'decor', name: '自定义版块', icon: OL_ICONS.decor })
   items.push({
     key: 'hero', name: 'Hero 区', icon: OL_ICONS.hero, on: hero.value.enabled,
     toggle: () => { hero.value.enabled = !hero.value.enabled; markDirty('hero') },
@@ -960,151 +764,6 @@ const moveItem = (list: any[], i: number, dir: number, key: string) => {
   markDirty(key)
 }
 
-// ============ 自定义版块（自由搭建） ============
-const homeWidgets = pageSchemas.home.widgets
-const decorWidgetTypes = homeWidgets.filter((w) => w.kind === 'content')
-const decorName = (type: string) => homeWidgets.find((w) => w.type === type)?.name || type
-const decorDef = (type: string): WidgetDef | undefined => homeWidgets.find((w) => w.type === type)
-const decorFields = (type: string): WidgetField[] => decorDef(type)?.fields || []
-const decorFirstImage = (b: any) => (b.config.images || [])[0]?.image || ''
-
-/** 从当前校区装修(carousel/金刚区/tabs/热榜)生成默认布局,填充到自定义版块,发布后写入代码包 */
-const genDefaultLayout = () => {
-  if (!region.value) { ElMessage.warning('校区数据未加载，请稍后再试'); return }
-  const layout = regionPresetToLayout(region.value, 'home')
-  if (!layout.components.length) { ElMessage.info('当前装修暂无内容可生成'); return }
-  decorBlocks.value = layout.components
-  decorSelected.value = -1
-  markDirty('decor')
-  ElMessage.success(`已生成 ${layout.components.length} 个模块，确认后点「保存并发布」即可同步到代码包`)
-}
-
-const addDecor = (type: string) => {
-  const def = decorDef(type)
-  decorBlocks.value.push({
-    id: `${type}_${Date.now()}`,
-    type,
-    enabled: true,
-    order: decorBlocks.value.length,
-    config: JSON.parse(JSON.stringify(def?.defaults || {})),
-  })
-  decorSelected.value = decorBlocks.value.length - 1
-  markDirty('decor')
-}
-
-const rpx2px = (v: number) => v / 2
-const textMockStyle = (b: any) => {
-  const c = b.config || {}
-  return {
-    fontSize: `${rpx2px(c.fontSize || 28)}px`,
-    color: c.color || '#1D271F',
-    textAlign: c.align || 'left',
-    fontWeight: c.bold ? 700 : 400,
-    padding: '4px 16px',
-  }
-}
-const buttonMockStyle = (b: any) => {
-  const c = b.config || {}
-  return {
-    background: c.background || '#36A853',
-    color: c.color || '#fff',
-    borderRadius: `${rpx2px(c.radius ?? 999)}px`,
-  }
-}
-
-// ============ decor 画布内拖拽排序（HTML5 Drag，把手按下才可拖） ============
-const dragReady = ref(-1) // 把手已按下的块索引（决定哪个块 draggable）
-const dragIdx = ref(-1)   // 正在拖动的块索引
-const dropIdx = ref(-1)   // 插入位置（0..len，i 表示插到 i 之前）
-
-function onDecorDragStart(i: number, e: DragEvent) {
-  dragIdx.value = i
-  dropIdx.value = -1
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', String(i))
-  }
-}
-function onDecorDragOver(i: number, e: DragEvent) {
-  if (dragIdx.value < 0) return
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const before = e.clientY < rect.top + rect.height / 2
-  dropIdx.value = before ? i : i + 1
-}
-function onDecorDrop(e: DragEvent) {
-  e.preventDefault()
-  const from = dragIdx.value
-  let to = dropIdx.value
-  if (from > -1 && to > -1) {
-    if (to > from) to -= 1 // 先移除后插入的索引修正
-    if (to !== from) {
-      const arr = decorBlocks.value
-      const [m] = arr.splice(from, 1)
-      arr.splice(to, 0, m)
-      decorSelected.value = to
-      markDirty('decor')
-    }
-  }
-  resetDecorDrag()
-}
-function resetDecorDrag() {
-  dragIdx.value = -1
-  dropIdx.value = -1
-  dragReady.value = -1
-}
-
-// ============ 倒计时画布实时倒数（1s 心跳驱动重渲染） ============
-const nowTick = ref(Date.now())
-let nowTimer: ReturnType<typeof setInterval> | undefined
-const pad2 = (n: number) => String(n).padStart(2, '0')
-/** 解析截止时间：兼容 'YYYY-MM-DD HH:mm' / ISO，非法返回 0 */
-function parseEndTime(str: string): number {
-  if (!str) return 0
-  const t = new Date(String(str).trim().replace(/-/g, '/').replace('T', ' ')).getTime()
-  return Number.isNaN(t) ? 0 : t
-}
-function cdParts(b: any) {
-  const end = parseEndTime(b.config?.endTime || '')
-  if (!end) return { invalid: true, expired: false, d: '00', h: '00', m: '00', s: '00' }
-  const diff = end - nowTick.value
-  if (diff <= 0) return { invalid: false, expired: true, d: '00', h: '00', m: '00', s: '00' }
-  const d = Math.floor(diff / 86400000)
-  const h = Math.floor(diff / 3600000) % 24
-  const m = Math.floor(diff / 60000) % 60
-  const s = Math.floor(diff / 1000) % 60
-  return { invalid: false, expired: false, d: pad2(d), h: pad2(h), m: pad2(m), s: pad2(s) }
-}
-const cdNumStyle = (b: any) => ({
-  background: b.config.bgColor || '#FF4D4F',
-  color: b.config.numColor || '#fff',
-})
-
-// ============ 活动横幅画布样式（背景图优先，否则渐变底） ============
-const actBannerStyle = (b: any) => {
-  const c = b.config || {}
-  const img = resolveAsset(c.background || '')
-  return {
-    background: img
-      ? `url(${img}) center / cover no-repeat`
-      : `linear-gradient(135deg, ${c.bgColor || '#FF4D4F'}, ${c.bgColor2 || '#FF9A3D'})`,
-    color: c.textColor || '#fff',
-  }
-}
-
-// ============ 页面设置（存进 layout settings，随 decor 保存链路发布） ============
-const pageSettings = ref<any>({ background: '', fontScale: 100, density: 'standard' })
-const pageDensityClass = computed(() => `d-${pageSettings.value.density || 'standard'}`)
-const pageSettingStyle = computed(() => {
-  const s: Record<string, string> = {}
-  if (pageSettings.value.background) s.background = pageSettings.value.background
-  const fs = Number(pageSettings.value.fontScale) || 100
-  if (fs !== 100) s.zoom = String(fs / 100)
-  return s
-})
-
 // ============ 数据加载 ============
 async function loadRegions() {
   const res: any = await sharedGet('/admin/regions')
@@ -1123,12 +782,11 @@ async function loadAll() {
   const rid = regionId.value
   const safe = (p: Promise<any>, fb: any) => p.catch(() => fb)
   try {
-    const [regionRes, tabbarRes, hotRes, postsRes, layoutRes] = await Promise.all([
+    const [regionRes, tabbarRes, hotRes, postsRes] = await Promise.all([
       safe(sharedGet(`/admin/regions/${rid}`), null),
       safe(sharedGet('/admin/regions/tabbar', { regionId: rid }), null),
       safe(sharedGet(`/posts/featured-hot-posts/${rid}`), null),
       safe(sharedGet(`/posts/region-posts/${rid}`, { page: 1, limit: 4 }), null),
-      safe(sharedGet(`/layout/home/${rid}`), null),
     ])
 
     region.value = regionRes?.data || regionRes
@@ -1165,18 +823,6 @@ async function loadAll() {
     if (tb?.config) tabbarConfig.value = { ...tabbarConfig.value, ...tb.config }
     else if (tb?.list) tabbarConfig.value = { ...tabbarConfig.value, ...tb }
 
-    // 自定义版块（已发布的 layout 配置）
-    const layoutCfg = layoutRes?.data?.config
-    const layoutStatus = layoutRes?.data?.status
-    decorBlocks.value = layoutStatus === 'published' && Array.isArray(layoutCfg?.components) ? layoutCfg.components : []
-    // 页面设置（随 layout settings 持久化）
-    const ps = layoutCfg?.settings || {}
-    pageSettings.value = {
-      background: ps.background || '',
-      fontScale: Number(ps.fontScale) || 100,
-      density: ['compact', 'standard', 'loose'].includes(ps.density) ? ps.density : 'standard',
-    }
-
     hotPosts.value = hotRes?.list || hotRes?.posts || hotRes?.data || []
     posts.value = postsRes?.list || postsRes?.posts || postsRes?.data || []
     notices.value = []
@@ -1197,15 +843,13 @@ const DIRTY_LABELS: Record<string, string> = {
   switches: '模块显隐',
   tabs: '分类 Tab',
   tabbar: '底部导航',
-  decor: '自定义版块',
-  pagesettings: '页面设置',
   theme: '主题',
   hotlist: '热榜',
 }
 
 // ============ 版本历史（发布安全闭环） ============
 const versionPanelVisible = ref(false)
-/** 当前完整编辑状态合集（与快照同形）：regions 字段子集 + tabbar + decor layout */
+/** 当前完整编辑状态合集：区域页面字段 + TabBar。 */
 const buildDecorSnapshot = () => {
   const carouselItems: any[] = [{
     id: 'home_hero', module_type: 'hero',
@@ -1228,10 +872,6 @@ const buildDecorSnapshot = () => {
       hot_featured_display: switches.value.hot_featured_display,
     },
     tabbarConfig: JSON.parse(JSON.stringify(tabbarConfig.value)),
-    decorLayout: {
-      components: decorBlocks.value.map((b, i) => ({ ...b, order: i })),
-      settings: { ...pageSettings.value },
-    },
   }
 }
 /** 发布成功后存一个版本快照（失败不打扰主流程） */
@@ -1246,20 +886,20 @@ async function snapshotDecorVersion(note: string) {
     console.warn('[HomeEditor] 版本快照失败：', e)
   }
 }
-/** 统一保存逻辑：auto=true 为自动保存（失败只告警不打扰），false 为手动「保存并发布」 */
-async function doSave(auto: boolean) {
+/** 保存原生页面控制项并生成可回滚快照。 */
+async function doSave() {
   if (!dirty.value.size || saving.value) return
-  if (dirty.value.has('kingkong')) {
+  const savingKeys = new Set<string>(dirty.value)
+  if (!savingKeys.size) return
+  if (savingKeys.has('kingkong')) {
     const validationError = validateKingkongEntries(kingkong.value)
     if (validationError) {
-      if (!auto) ElMessage.error(validationError)
+      ElMessage.error(validationError)
       return
     }
   }
   saving.value = true
-  if (auto) autoSaving.value = true
   // 记录本次要落库的 dirty key，成功后只清掉这些（保存期间新增的修改保留，等待下一轮）
-  const savingKeys = new Set(dirty.value)
   try {
     const rid = regionId.value
     const payload: any = {}
@@ -1297,16 +937,6 @@ async function doSave(auto: boolean) {
     if (savingKeys.has('tabbar')) {
       await request.put('/admin/regions/tabbar', { regionId: rid, config: tabbarConfig.value })
     }
-    if (savingKeys.has('decor') || savingKeys.has('pagesettings')) {
-      const layoutPayload = {
-        components: decorBlocks.value.map((b, i) => ({ ...b, order: i })),
-        settings: { ...pageSettings.value },
-      }
-      await request.put(`/admin/layout/home/${rid}`, layoutPayload)
-      await request.post(`/admin/layout/home/${rid}/publish`)
-      // 双写：同步进代码包源码（config/layout/home.json + bundled.js），下载 zip 上传后离线也生效
-      await request.put('/admin/miniapp/code/pages/home/layout', { layout: layoutPayload }).catch(() => {})
-    }
     if (savingKeys.has('theme')) {
       const vars = [...themeDirtyKeys.value].map((k) => ({ name: k, value: themeVars.value[k] }))
       await request.put('/admin/miniapp/code/theme', { vars })
@@ -1318,21 +948,13 @@ async function doSave(auto: boolean) {
     dirty.value = left
     // 保存成功后同步刷新真机画面（模拟器验收弹窗开着时用户能立刻看到变化）
     if (liveVisible.value) refreshLiveFrame()
-    if (auto) {
-      autoSavedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    } else {
-      autoSavedAt.value = ''
-      lastSaved.value = new Date().toLocaleTimeString('zh-CN')
-      ElMessage.success(savingKeys.has('decor') ? '已发布！小程序端已生效，自定义版块已同步进代码包 🎉' : '已发布！小程序端已生效 🎉')
-      // 手动发布成功后存版本快照（可在「版本历史」中一键回滚）
-      snapshotDecorVersion([...savingKeys].map((k) => DIRTY_LABELS[k] || k).join('、'))
-    }
+    lastSaved.value = new Date().toLocaleTimeString('zh-CN')
+    ElMessage.success('已发布！小程序端已生效 🎉')
+    snapshotDecorVersion([...savingKeys].map((k) => DIRTY_LABELS[k] || k).join('、'))
   } catch (e: any) {
-    if (auto) console.warn('[HomeEditor] 自动保存失败：', e?.message || e)
-    else ElMessage.error(e?.message || '保存失败')
+    ElMessage.error(e?.message || '保存失败')
   } finally {
     saving.value = false
-    autoSaving.value = false
   }
 }
 const saveAll = async () => {
@@ -1359,7 +981,7 @@ const saveAll = async () => {
       },
     )
   } catch { return }
-  doSave(false)
+  doSave()
 }
 
 // ============ 模拟器验收弹窗（真实小程序画面，见 components/miniapp/LiveCanvas） ============
@@ -1373,25 +995,11 @@ watch(liveVisible, (v) => {
 })
 
 
-// ============ 自动保存草稿（dirty 后 3 秒防抖） ============
-const autoSaving = ref(false)
-const autoSavedAt = ref('')
-let autoSaveTimer: ReturnType<typeof setTimeout> | undefined
-watch(dirty, (v) => {
-  if (!v.size) return
-  clearTimeout(autoSaveTimer)
-  autoSaveTimer = setTimeout(() => doSave(true), 3000)
-})
-onBeforeUnmount(() => {
-  clearTimeout(autoSaveTimer)
-  clearInterval(nowTimer)
-})
-
 // ============ 首次引导气泡 ============
 const ONBOARD_KEY = 'ui-editor-onboarded-v2'
 const onboardSteps = [
   { title: '画布 = 学生看到的首页', desc: '这就是学生看到的首页，点哪里改哪里。', pos: 'canvas' },
-  { title: '右侧面板调内容和样式', desc: '在这里调内容和样式，改完会自动保存草稿，不会上线。', pos: 'panel' },
+  { title: '右侧面板调内容和样式', desc: '在这里调整原生页面内容和显示开关。', pos: 'panel' },
   { title: '满意再发布', desc: '点发布学生才能看到，发布前会再跟你确认一次。', pos: 'publish' },
 ]
 const onboardStep = ref(-1)
@@ -1429,8 +1037,6 @@ async function injectRealWxss() {
 }
 
 onMounted(async () => {
-  // 倒计时画布心跳（只在有倒计时块时才有视觉开销，1s 一次很轻）
-  nowTimer = setInterval(() => { nowTick.value = Date.now() }, 1000)
   try {
     injectRealWxss()
     loadThemeVars()
@@ -1553,7 +1159,6 @@ onMounted(async () => {
 }
 .blk:hover .blk-tag, .blk.sel .blk-tag { opacity: 1; }
 .blk-tag.live { background: #16a34a; opacity: 1; }
-.blk-tag.decor { background: #15803d; opacity: 1; }
 .tabbar-blk { margin: 0; border-radius: 0 0 12px 12px; }
 
 /* hover 快捷小条（显隐 / 删除） */
@@ -1629,7 +1234,6 @@ onMounted(async () => {
 .p-banner .empty-slot { flex: 1; height: calc(100% - 16px); margin: 8px; }
 .rte-slot-wrap { display: flex; padding: 8px 12px; }
 .rte-kk-empty { padding: 6px; }
-.d-banner .empty-slot, .d-image .empty-slot { flex: 1; margin: 6px; }
 
 .p-tabbar { display: flex; border-top: 1px solid var(--bg-fill, #eef2e8); padding: 8px 0 10px; background: #fff; }
 .p-tabbar-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
@@ -1637,175 +1241,6 @@ onMounted(async () => {
 .p-tabbar-icon { font-size: 14px; }
 .p-tabbar-icon-img { width: 22px; height: 22px; object-fit: contain; }
 .p-tabbar-text { font-size: 10px; }
-
-/* 自定义版块 mock */
-.d-banner { margin: 8px 12px; height: 130px; border-radius: 12px; background: var(--bg-fill, #f0f4ec); overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.d-banner img { width: 100%; height: 100%; object-fit: cover; }
-.d-grid { margin: 10px 12px; background: #fff; border-radius: 14px; padding: 14px 0 6px; display: flex; flex-wrap: wrap; box-shadow: 0 2px 10px rgba(38, 58, 32, .08); }
-.d-text { line-height: 1.6; }
-.d-image { margin: 8px 12px; border-radius: 12px; background: var(--bg-fill, #f0f4ec); min-height: 60px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.d-image img { width: 100%; display: block; }
-.d-btn-wrap { margin: 10px 12px; }
-.d-btn { display: block; text-align: center; padding: 11px 0; font-size: 14px; font-weight: 600; }
-.d-divider { margin: 12px 16px; height: 1px; background: var(--bg-fill, #e4e9e0); }
-.d-mtitle {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 10px 16px 4px;
-}
-.d-mtitle-text {
-  font-size: 16px;
-  font-weight: 800;
-  color: var(--text-primary, #1d271f);
-  line-height: 1.4;
-}
-.d-mtitle-more { font-size: 11px; color: var(--text-tertiary, #8a9384); flex-shrink: 0; }
-
-/* ===== decor 拖拽排序 ===== */
-.d-item { position: relative; border-radius: 8px; transition: opacity .15s ease; }
-.d-item.d-dragging { opacity: .45; }
-.d-handle {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 7;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #fff;
-  border: 1px solid var(--mx-border, #e3e9f2);
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, .12);
-  color: #16a34a;
-  font-size: 11px;
-  line-height: 1;
-  cursor: grab;
-  opacity: 0;
-  transition: opacity .15s ease;
-}
-.d-item:hover .d-handle { opacity: 1; }
-.d-handle:active { cursor: grabbing; }
-/* 插入位置指示线 */
-.d-item.d-drop-before::before,
-.d-item.d-drop-after::after {
-  content: '';
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  height: 3px;
-  border-radius: 2px;
-  background: #16a34a;
-  box-shadow: 0 0 0 2px rgba(22, 163, 74, .18);
-  z-index: 8;
-  pointer-events: none;
-}
-.d-item.d-drop-before::before { top: -3px; }
-.d-item.d-drop-after::after { bottom: -3px; }
-
-/* ===== 倒计时 mock ===== */
-.d-countdown {
-  margin: 10px 12px;
-  padding: 12px 14px;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(38, 58, 32, .08);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.d-cd-title { font-size: 13px; font-weight: 700; }
-.d-cd-boxes { display: flex; align-items: center; gap: 4px; }
-.d-cd-num {
-  min-width: 24px;
-  padding: 3px 0;
-  border-radius: 5px;
-  text-align: center;
-  font-size: 12px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-.d-cd-sep { font-style: normal; font-size: 10px; color: var(--text-tertiary, #8a9384); }
-.d-cd-end { font-size: 12px; color: var(--text-tertiary, #8a9384); }
-
-/* ===== 优惠券 mock（锯齿边用两枚缺口圆点模拟） ===== */
-.d-coupon {
-  position: relative;
-  margin: 10px 12px;
-  border-radius: 12px;
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  overflow: hidden;
-}
-.d-coupon::before,
-.d-coupon::after {
-  content: '';
-  position: absolute;
-  right: 86px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--bg-page, #f4f7f1);
-}
-.d-coupon::before { top: -7px; }
-.d-coupon::after { bottom: -7px; }
-.d-coupon-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.d-coupon-amount { display: flex; align-items: baseline; }
-.d-coupon-symbol { font-size: 13px; font-weight: 700; }
-.d-coupon-num { font-size: 26px; font-weight: 800; line-height: 1; }
-.d-coupon-cond { font-size: 11px; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.d-coupon-btn {
-  flex-shrink: 0;
-  margin-right: 4px;
-  padding: 6px 14px;
-  background: #fff;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-/* ===== 活动横幅 mock ===== */
-.d-actbanner {
-  margin: 10px 12px;
-  border-radius: 14px;
-  padding: 18px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  overflow: hidden;
-}
-.d-act-title { font-size: 20px; font-weight: 900; letter-spacing: 1px; line-height: 1.3; text-shadow: 0 2px 8px rgba(0, 0, 0, .18); }
-.d-act-sub { font-size: 12px; opacity: .92; }
-.d-act-btn {
-  margin-top: 6px;
-  padding: 6px 18px;
-  background: #fff;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 800;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, .15);
-}
-
-/* ===== 页面间距密度（页面设置 → 画布即时生效） ===== */
-.rte-page.d-compact :is(.p-banner, .p-notice, .p-hot, .d-banner, .d-image, .d-btn-wrap, .d-countdown, .d-coupon, .d-actbanner, .campus-menu-card, .campus-search) {
-  margin-top: 4px !important;
-  margin-bottom: 4px !important;
-}
-.rte-page.d-compact .blk { margin-top: 0; margin-bottom: 0; }
-.rte-page.d-loose :is(.p-banner, .p-notice, .p-hot, .d-banner, .d-image, .d-btn-wrap, .d-countdown, .d-coupon, .d-actbanner, .campus-menu-card, .campus-search) {
-  margin-top: 16px !important;
-  margin-bottom: 16px !important;
-}
-.rte-page.d-loose .blk { margin-top: 6px; margin-bottom: 6px; }
 
 /* ===== 首次引导气泡 ===== */
 .ob-mask {

@@ -43,7 +43,7 @@
  *     - wx:for item：转 Vue 层 v-for（别名 / key 由 FOR_MAP 配置）；
  *     - style="{{...}}" 动态样式默认丢弃（主题变量由 .rte-page :style 提供），
  *       仅 STYLE_MAP 显式声明的保留；
- *     - xiaoyi-* / z-paging / page-renderer 等自定义组件节点丢弃（HTML 注释标记）。
+ *     - xiaoyi-* / z-paging 等自定义组件节点丢弃（HTML 注释标记）。
  *     首页：
  *     - campus-hero-title / subtitle / 搜索占位文案：追加 ie 行内编辑锚点；
  *     - 金刚区无图回退用编辑器 MenuFallbackIcon（替代真机字母 campus-menu-letter）；
@@ -304,7 +304,7 @@ function renderNode(node, indent, ctx, directive) {
     if (anchor.test(node, ctx)) return anchor.render(node, indent, ctx, directive)
   }
 
-  // ---- 自定义组件（xiaoyi-* / z-paging / page-renderer 等）：丢弃，注释标记 ----
+  // ---- 自定义组件（xiaoyi-* / z-paging 等）：丢弃，注释标记 ----
   if (!TAG_MAP[node.tag] && node.tag.includes('-')) {
     return `${pad(indent)}<!-- 省略自定义组件 <${node.tag}>（真机动态节点，见脚本头注释） -->`
   }

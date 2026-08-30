@@ -18,6 +18,83 @@ describe('OrderCenterService fulfillment alerts', () => {
     expect(prisma.deliveryOrderNode.findMany).toHaveBeenCalledWith({ where: { orderId: 'order-1', orderType: 'shop' }, orderBy: { createdAt: 'asc' } });
   });
 
+  it('never exposes the raw dorm-shop receipt code to admin order detail', async () => {
+    const prisma: any = {
+      order: { findUnique: jest.fn().mockResolvedValue({
+        id: 'order-1', orderNo: 'DORM-1', businessType: 'dorm_shop', deliveryMode: 'self_delivery',
+        status: 'COMPLETED', deliveryReceiptCode: '123456', deliveryCodeAttempts: 1, deliveryCodeLockedAt: null,
+        user: {}, merchant: {}, items: [],
+        shopDeliveryAssignment: {
+          id: 'assignment-1', assigneeType: 'staff', source: 'auto', status: 'delivered', attemptNo: 2,
+          assignee: { id: 'user-2', nickname: '店员A', phone: '13800138000' },
+        },
+        orderLogs: [{ id: 'log-1', action: 'DELIVERED_BY_CODE', operatorType: 'merchant_staff', remark: '收货码已验证', createdAt: new Date() }],
+      }) },
+      deliveryOrderNode: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new OrderCenterService(prisma, superScope);
+
+    const detail = await service.getOrderDetail('order-1', 'order');
+
+    expect(detail.deliveryReceiptCode).toBeUndefined();
+    expect(detail.receiptVerification).toEqual({ method: 'receipt_code', verified: true, attempts: 1, locked: false });
+    expect(detail.deliveryAssignment).toMatchObject({ source: 'auto', assignee: { phone: '138****8000' } });
+  });
+
+  it('blocks an admin from disabling staff after pickup', async () => {
+    const scopedAdmin: any = {
+      getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: true, regionIds: [] }),
+      assertRegionAccess: jest.fn().mockResolvedValue(undefined),
+    };
+    const prisma: any = {
+      merchantStaff: { findUnique: jest.fn().mockResolvedValue({
+        id: 'staff-1', userId: 'user-2', merchantId: 'merchant-1', status: 'active', onDuty: true,
+        merchant: { id: 'merchant-1', name: '宿舍小店', regionId: 'region-1', businessType: 'dorm_shop', userId: 'owner-1' },
+      }) },
+      $transaction: jest.fn((callback: any) => callback({
+        shopDeliveryAssignment: { findMany: jest.fn().mockResolvedValue([{ id: 'assignment-1', orderId: 'order-1', status: 'picked_up' }]) },
+        merchantStaff: { updateMany: jest.fn() },
+      })),
+    };
+    const service = new OrderCenterService(prisma, scopedAdmin);
+
+    await expect(service.updateDormShopDeliveryStaffStatus('staff-1', { status: 'paused', reason: '风险处置' }, 'admin-1'))
+      .rejects.toThrow('店员已取货');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels unpicked assignments when an admin pauses delivery staff', async () => {
+    const scopedAdmin: any = {
+      getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: true, regionIds: [] }),
+      assertRegionAccess: jest.fn().mockResolvedValue(undefined),
+    };
+    const tx: any = {
+      merchantStaff: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      shopDeliveryAssignment: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'assignment-1', orderId: 'order-1', status: 'accepted' }]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      orderLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      merchantStaff: { findUnique: jest.fn().mockResolvedValue({
+        id: 'staff-1', userId: 'user-2', merchantId: 'merchant-1', status: 'active', onDuty: true,
+        merchant: { id: 'merchant-1', name: '宿舍小店', regionId: 'region-1', businessType: 'dorm_shop', userId: 'owner-1' },
+      }) },
+      adminOperationLog: { create: jest.fn().mockResolvedValue({}) },
+      $transaction: jest.fn((callback: any) => callback(tx)),
+    };
+    const notifyService: any = { createAndDispatch: jest.fn().mockResolvedValue({}) };
+    const service = new OrderCenterService(prisma, scopedAdmin, notifyService);
+
+    await expect(service.updateDormShopDeliveryStaffStatus('staff-1', { status: 'paused', reason: '账号异常' }, 'admin-1'))
+      .resolves.toMatchObject({ success: true, status: 'paused', cancelledAssignments: 1 });
+    expect(tx.merchantStaff.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'staff-1', status: 'active' }, data: expect.objectContaining({ status: 'paused', onDuty: false }) }));
+    expect(tx.shopDeliveryAssignment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled', cancelReason: '账号异常' }) }));
+    expect(tx.orderLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'SHOP_STAFF_ADMIN_CANCEL', operatorType: 'admin' }) }));
+  });
+
   it('filters the admin delivery list to real fulfillment exceptions', async () => {
     const prisma: any = { order: { findMany: jest.fn().mockResolvedValue([]) } };
     const service = new OrderCenterService(prisma, superScope);

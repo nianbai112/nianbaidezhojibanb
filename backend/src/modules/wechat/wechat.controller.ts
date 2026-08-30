@@ -20,9 +20,16 @@ export class WechatController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取当前页面可申请的订阅消息模板' })
-  async getSubscribeTemplates(@Query('types') rawTypes?: string) {
-    const types = String(rawTypes || '').split(',').map((value) => value.trim()).filter((value) => /^takeaway_(order_status|merchant_order|rider_order)$/.test(value));
-    return { list: await this.subscribeService.listEnabledTemplates(types) };
+  async getSubscribeTemplates(
+    @CurrentUser('sub') userId: string,
+    @Query('types') rawTypes?: string,
+  ) {
+    const types = String(rawTypes || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => /^(takeaway_(order_status|merchant_order|rider_order)|errand_(accepted|picked|delivered)|post_(audit_result|comment)|comment_reply)$/.test(value));
+    if (!types.length) return { list: [] };
+    return { list: await this.subscribeService.listEnabledTemplates(types, userId) };
   }
 
   @Get('binding/status')

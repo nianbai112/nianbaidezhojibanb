@@ -697,7 +697,7 @@ export class SecondHandAdminService {
     if (action === 'ban_user' && report.reportedId) {
       await this.prisma.user.update({
         where: { id: report.reportedId },
-        data: { status: UserStatus.BANNED, muteReason: result },
+        data: { status: UserStatus.BANNED, banVersion: { increment: 1 }, muteReason: result },
       });
       await this.userSessionRevocation.revoke(report.reportedId);
       effects.push('卖家已封禁');

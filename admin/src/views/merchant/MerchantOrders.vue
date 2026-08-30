@@ -1,6 +1,6 @@
 <template>
   <div class="page-shell">
-    <PageHeader :title="isDormShopPage ? '小店订单' : '订单履约'" :subtitle="isDormShopPage ? '管理宿舍小店订单，配送由店主自送' : '聚焦待接单、配送中和履约异常订单'" icon="Tickets" />
+    <PageHeader :title="isDormShopPage ? '小店订单' : '订单履约'" :subtitle="isDormShopPage ? '管理宿舍小店订单，配送由店主或店内配送员完成' : '聚焦待接单、配送中和履约异常订单'" icon="Tickets" />
     <div class="filter-bar">
       <el-input v-model="filters.keyword" placeholder="搜索订单号/用户" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="loadData">
@@ -40,9 +40,21 @@
       <el-table-column prop="deliveryDisplayMode" label="用户可见" width="110">
         <template #default="{ row }">{{ displayModeLabel(row.deliveryDisplayMode) }}</template>
       </el-table-column>
+      <el-table-column v-if="isDormShopPage" label="配送人员" min-width="145">
+        <template #default="{ row }">{{ assignmentPersonLabel(row.deliveryAssignment) }}</template>
+      </el-table-column>
       <el-table-column prop="status" label="状态" width="100">
         <template #default="{ row }">
           <el-tag :type="statusType(row)" size="small">{{ displayStatus(row) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isDormShopPage" label="调度状态" min-width="180">
+        <template #default="{ row }">
+          <div v-if="row.dormDispatchAlert" class="dispatch-alert">
+            <el-tag type="danger" size="small">{{ row.dormDispatchAlert.label }}</el-tag>
+            <small>{{ row.dormDispatchAlert.suggestion }}</small>
+          </div>
+          <span v-else>{{ assignmentStatusLabel(row.deliveryAssignment?.status) }}</span>
         </template>
       </el-table-column>
       <el-table-column v-if="isFulfillmentAlert" label="预警原因" min-width="250">
@@ -76,6 +88,12 @@
           <el-descriptions-item label="商家">{{ detail.merchantName || detail.merchant?.name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="商品金额">¥{{ Number(detail.goodsAmount || detail.productAmount || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="配送方式">{{ deliveryModeLabel(detail.deliveryMode) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop'" label="配送人员">{{ assignmentPersonLabel(detail.deliveryAssignment) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop'" label="分派方式">{{ assignmentSourceLabel(detail.deliveryAssignment?.source) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop'" label="分派状态">{{ assignmentStatusLabel(detail.deliveryAssignment?.status) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop'" label="分派尝试">{{ detail.deliveryAssignment?.attemptNo || 0 }} 次</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop'" label="交付验证">{{ receiptVerificationLabel(detail.receiptVerification) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.businessType === 'dorm_shop' && detail.receiptVerification?.locked" label="收货码状态"><el-tag type="danger" size="small">验证已锁定</el-tag></el-descriptions-item>
           <el-descriptions-item label="用户可见">{{ displayModeLabel(detail.deliveryDisplayMode) }}</el-descriptions-item>
           <el-descriptions-item label="配送费">¥{{ Number(detail.freightAmount || detail.deliveryFee || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="实付金额">¥{{ Number(detail.payAmount || detail.amount || 0).toFixed(2) }}</el-descriptions-item>
@@ -95,6 +113,14 @@
             <template #default="{ row }">¥{{ Number(row.price || 0).toFixed(2) }}</template>
           </el-table-column>
         </el-table>
+        <div v-if="detail.dispatchEvents?.length" class="section-title">店内调度记录</div>
+        <div v-if="detail.dispatchEvents?.length" class="node-list">
+          <div v-for="event in detail.dispatchEvents" :key="event.id" class="node-row">
+            <strong>{{ dispatchActionLabel(event.action) }}</strong>
+            <span>{{ formatDate(event.createdAt) }}</span>
+            <small v-if="event.remark">{{ event.remark }}</small>
+          </div>
+        </div>
         <div v-if="deliveryNodes.length" class="section-title">配送节点</div>
         <div v-if="deliveryNodes.length" class="node-list">
           <div v-for="node in deliveryNodes" :key="node.id || `${node.nodeType}-${node.createdAt}`" class="node-row">
@@ -155,7 +181,7 @@ const route = useRoute()
 const isDormShopPage = computed(() => route.path.includes('/dorm-'))
 const businessType = computed(() => isDormShopPage.value ? 'dorm_shop' : 'takeaway')
 const deliveryModeLabel = (value?: string) => {
-  if (value === 'self_delivery') return '店主自送'
+  if (value === 'self_delivery') return isDormShopPage.value ? '小店自配送' : '商家自配送'
   if (value === 'rider_delivery') return '叫骑手配送'
   return '平台配送'
 }
@@ -164,6 +190,8 @@ const deliveryNodeLabel = (value?: string) => {
   const map: Record<string, string> = {
     merchant_accepted: '商家已接单',
     merchant_completed: '商家已送达',
+    merchant_delivered: '小店已送达',
+    picked_up: '配送店员已取货',
     accepted: '骑手已接单',
     in_progress: '骑手已取货',
     arrived: '骑手已送达',
@@ -172,6 +200,30 @@ const deliveryNodeLabel = (value?: string) => {
   }
   return map[value || ''] || '配送状态更新'
 }
+const assignmentPersonLabel = (assignment?: any) => {
+  if (!assignment) return '尚未分配'
+  if (assignment.assigneeType === 'owner') return '店主'
+  const name = assignment.assignee?.nickname || '配送店员'
+  return assignment.assignee?.phone ? `${name} ${assignment.assignee.phone}` : name
+}
+const assignmentSourceLabel = (value?: string) => ({ manual: '店主手动', auto: '系统自动' }[String(value || '')] || '未分派')
+const assignmentStatusLabel = (value?: string) => ({ pending_accept: '待店员接单', accepted: '已接单待取货', picked_up: '已取货配送中', delivered: '已送达', cancelled: '已取消待重新分配' }[String(value || '')] || '未分派')
+const receiptVerificationLabel = (verification?: any) => {
+  if (verification?.method === 'receipt_code' && verification?.verified) return '六位收货码已验证'
+  if (verification?.method === 'photo') return '照片凭证，待用户确认'
+  return verification?.attempts ? `收货码已尝试 ${verification.attempts} 次` : '未提交送达凭证'
+}
+const dispatchActionLabel = (value?: string) => ({
+  SHOP_STAFF_AUTO_ASSIGN: '系统自动分配',
+  SHOP_DELIVERY_ASSIGN: '店主手动分配',
+  SHOP_STAFF_ACCEPT: '配送店员已接单',
+  SHOP_STAFF_PICKUP: '配送店员已取货',
+  SHOP_STAFF_ASSIGN_FAILED: '自动分配失败',
+  SHOP_STAFF_NO_AVAILABLE: '暂无可用配送店员',
+  SHOP_STAFF_ADMIN_CANCEL: '后台取消配送分配',
+  DELIVERED_BY_CODE: '收货码验证送达',
+  DELIVERED_BY_PHOTO: '照片凭证送达',
+}[String(value || '')] || value || '调度更新')
 
 const loading = ref(false)
 const list = ref<any[]>([])
@@ -192,11 +244,14 @@ const nodeProofImages = (node: any) => (node?.proofImages || node?.proof_images 
 const canReleaseRider = (row: any) => row?.fulfillmentAlert?.code === 'rider_pickup_overdue'
 const fulfillmentGuide = computed(() => {
   const order = detail.value || {}
-  const alert = order.fulfillmentAlert || {}
+  const alert = (order.businessType === 'dorm_shop' ? order.dormDispatchAlert : order.fulfillmentAlert) || {}
   if (['refunding', 'refunded'].includes(String(order.refundStatus || '').toLowerCase())) {
     return { type: 'warning', title: refundStatusText(order.refundStatus), description: '退款状态优先于履约状态，请在售后处理或退款资金记录中跟进结果。' }
   }
   if (alert.label) return { type: fulfillmentAlertType(alert.code), title: alert.label, description: alert.suggestion || '请查看订单、商家与骑手信息后处理。' }
+  if (order.businessType === 'dorm_shop' && order.status === 'SHIPPED') {
+    return { type: 'primary', title: assignmentStatusLabel(order.deliveryAssignment?.status), description: `${assignmentPersonLabel(order.deliveryAssignment)}，${assignmentSourceLabel(order.deliveryAssignment?.source)}。请依据调度记录和配送节点核对履约。` }
+  }
   if (order.status === 'PENDING_PAY') return { type: 'info', title: '等待用户付款', description: '未支付订单无需人工派单或催商家接单。' }
   if (order.status === 'PAID' && !order.merchantAcceptTime) return { type: 'warning', title: '等待商家接单', description: '先联系商家确认是否营业、是否缺货；商家接单并备餐完成后才会进入骑手履约。' }
   if (order.status === 'PAID' && order.readyTime && !order.riderId) return { type: 'warning', title: '餐品已备好，等待骑手', description: '订单已具备骑手接单条件，请关注是否进入骑手池。' }
@@ -286,4 +341,6 @@ onMounted(() => { applyMerchantContext(); loadData(); loadMerchants() })
 .node-proofs :deep(.el-image) { width: 88px; height: 88px; border-radius: 6px; }
 .node-row.risk strong { color: #dc2626; }
 .alert-hint { margin-top: 5px; color: #7b8798; font-size: 12px; line-height: 18px; }
+.dispatch-alert { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.dispatch-alert small { color: #7b8798; font-size: 12px; }
 </style>

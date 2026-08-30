@@ -1,7 +1,9 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -25,6 +27,44 @@ export class OrderCenterController {
   @ApiOperation({ summary: "统一订单列表" })
   getOrders(@Query() query: any, @CurrentUser('sub') operatorId: string) {
     return this.orderCenterService.getOrders(query, operatorId);
+  }
+
+  @Get("dorm-shop/merchants")
+  @RequirePermission("merchant:view")
+  @ApiOperation({ summary: "宿舍小店配送运营概览" })
+  getDormShopDeliveryMerchants(
+    @Query() query: any,
+    @CurrentUser("sub") operatorId: string,
+  ) {
+    return this.orderCenterService.getDormShopDeliveryMerchants(
+      query,
+      operatorId,
+    );
+  }
+
+  @Get("dorm-shop/staff")
+  @RequirePermission("merchant:view")
+  @ApiOperation({ summary: "宿舍小店配送店员列表" })
+  getDormShopDeliveryStaff(
+    @Query() query: any,
+    @CurrentUser("sub") operatorId: string,
+  ) {
+    return this.orderCenterService.getDormShopDeliveryStaff(query, operatorId);
+  }
+
+  @Patch("dorm-shop/staff/:staffId/status")
+  @RequirePermission("merchant:audit")
+  @ApiOperation({ summary: "后台暂停、恢复或移除宿舍小店配送店员" })
+  updateDormShopDeliveryStaffStatus(
+    @Param("staffId") staffId: string,
+    @Body() dto: { status?: string; reason?: string },
+    @CurrentUser("sub") operatorId: string,
+  ) {
+    return this.orderCenterService.updateDormShopDeliveryStaffStatus(
+      staffId,
+      dto,
+      operatorId,
+    );
   }
 
   @Get("export")

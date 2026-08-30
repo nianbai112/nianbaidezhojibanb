@@ -93,6 +93,12 @@ function buildSelfHostedRelease({ sourceRoot, artifactRoot, outputDir, version }
   artifactRoot = path.resolve(artifactRoot || sourceRoot);
   outputDir = path.resolve(outputDir);
   assertVersions(sourceRoot, version);
+  for (const entrypoint of ['main.js', 'worker.js', 'realtime.js']) {
+    const relative = `backend/dist/src/${entrypoint}`;
+    if (!fs.existsSync(path.join(artifactRoot, relative))) {
+      throw new Error(`missing release input: ${relative}`);
+    }
+  }
 
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lingmeng-selfhost-build-'));
   const packageName = `lingmeng-selfhosted-${version}`;

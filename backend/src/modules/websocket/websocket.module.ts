@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MessageGateway } from './message.gateway';
 import { WsNativeGateway } from './ws-native.gateway';
 import { UserSessionRevocationService } from './user-session-revocation.service';
 import { PrismaModule } from '../../common/modules/prisma.module';
@@ -10,7 +9,6 @@ import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { PrivateMessagePermissionService } from '../../common/services/private-message-permission.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
-import { SystemConfigModule } from '../system-config/system-config.module';
 
 @Module({
   imports: [
@@ -24,10 +22,8 @@ import { SystemConfigModule } from '../system-config/system-config.module';
     }),
     PrismaModule,
     RedisModule,
-    SystemConfigModule,
   ],
   providers: [
-    MessageGateway,
     UserSessionRevocationService,
     {
       provide: WsNativeGateway,
@@ -44,6 +40,6 @@ import { SystemConfigModule } from '../system-config/system-config.module';
       inject: [JwtService, ConfigService, PrismaService, RedisService, PrivateMessagePermissionService, UserAccessPolicyService],
     },
   ],
-  exports: [MessageGateway, WsNativeGateway, UserSessionRevocationService],
+  exports: [WsNativeGateway, UserSessionRevocationService],
 })
 export class WebsocketModule {}

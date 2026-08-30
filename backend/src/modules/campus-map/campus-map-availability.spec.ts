@@ -46,6 +46,51 @@ describe('campus map availability', () => {
     }));
   });
 
+  it('preserves planned/renovating construction and limited/closed service states', () => {
+    expect(normalizeCampusFeatureProperties({
+      constructionStatus: 'planned',
+      visibilityScope: 'phase1_active',
+      serviceStatus: 'limited',
+      searchable: true,
+      navigable: true,
+    })).toMatchObject({
+      constructionStatus: 'planned',
+      serviceStatus: 'limited',
+      searchable: false,
+      navigable: false,
+    });
+
+    expect(normalizeCampusFeatureProperties({
+      constructionStatus: 'renovating',
+      visibilityScope: 'phase1_active',
+      serviceStatus: 'limited',
+      searchable: true,
+      navigable: true,
+    })).toMatchObject({
+      constructionStatus: 'renovating',
+      serviceStatus: 'limited',
+      searchable: true,
+      navigable: true,
+    });
+
+    for (const serviceStatus of ['closed', 'temporarily_closed']) {
+      expect(normalizeCampusFeatureProperties({
+        constructionStatus: 'renovating',
+        visibilityScope: 'phase1_active',
+        serviceStatus,
+        unavailableMessage: '临时不可用',
+        searchable: false,
+        navigable: true,
+      })).toMatchObject({
+        constructionStatus: 'renovating',
+        serviceStatus,
+        unavailableMessage: '临时不可用',
+        searchable: true,
+        navigable: false,
+      });
+    }
+  });
+
   it('rejects missing explanations and unavailable navigation', () => {
     const errors = validateCampusAvailabilityManifest({
       availability: {

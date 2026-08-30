@@ -92,7 +92,6 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/recommend', any: ['recommend:view'] },
   { prefix: '/ab-tests', any: ['abtest:view'] },
   { prefix: '/ai', any: ['ai:view'] },
-  { prefix: '/layout', any: ['layout:view', 'system:config'] },
 
   { prefix: '/system/admins', any: ['admin:view'] },
   { prefix: '/system/roles', any: ['admin:view'] },
@@ -128,7 +127,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/user/loyalty', any: ['user:view'] },
   { prefix: '/system/publishing', any: ['system:config', 'config:view', 'notification:view'] },
   { prefix: '/system/observability', any: ['system:config', 'admin:view', 'ops:view', 'message:view'] },
-  { prefix: '/region/app-pages', any: ['layout:view', 'system:config'] }
+  { prefix: '/region/app-pages', any: ['system:config'] }
 ]
 
 const LEGACY_MENU_ALIASES: Record<string, string[]> = {
@@ -179,7 +178,6 @@ const LEGACY_MENU_ALIASES: Record<string, string[]> = {
   '/user/loyalty': ['/user/growth', '/user/badges', '/user/tags'],
   '/system/publishing': ['/system/website', '/system/agreements', '/system/notification-center', '/system/mini-program-paths'],
   '/system/observability': ['/system/monitor', '/system/realtime-sessions', '/ops/jobs', '/system/operation-logs', '/system/login-logs', '/system/wechat-logs'],
-  '/region/app-pages': ['/layout/home', '/layout/message', '/layout/profile', '/layout']
 }
 
 function normalizePath(path = '') {

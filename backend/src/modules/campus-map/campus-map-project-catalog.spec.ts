@@ -5,12 +5,33 @@ import {
 } from './campus-map-project-catalog';
 
 describe('campus project catalog', () => {
-  it('contains the exact 15 built and 22 future project numbers', () => {
+  it('contains 1-38 with correct built/future split', () => {
     const built = CAMPUS_PROJECT_CATALOG.filter((item) => item.constructionStatus === 'built');
     const future = CAMPUS_PROJECT_CATALOG.filter((item) => item.constructionStatus === 'under_construction');
 
     expect(built.map((item) => item.officialNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17]);
-    expect(future.map((item) => item.officialNumber)).toEqual([14, 15, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37]);
+    expect(future.map((item) => item.officialNumber)).toEqual([14, 15, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]);
+    // 编号连续 1-38，38号北大门已包含
+    const allNumbers = CAMPUS_PROJECT_CATALOG.map((item) => item.officialNumber).sort((a, b) => a - b);
+    expect(allNumbers[0]).toBe(1);
+    expect(allNumbers[allNumbers.length - 1]).toBe(38);
+    expect(allNumbers).toHaveLength(38);
+    expect(CAMPUS_PROJECT_CATALOG.find((item) => item.officialNumber === 21)).toMatchObject({
+      officialName: '校园景云街',
+      semanticType: 'service',
+    });
+    expect(CAMPUS_PROJECT_CATALOG.find((item) => item.officialNumber === 34)).toMatchObject({
+      officialName: '学生公寓D',
+      artworkAnchorX: 1677.75,
+      artworkAnchorY: 2777.62,
+      geometryStatus: 'verified_point',
+    });
+    expect(CAMPUS_PROJECT_CATALOG.find((item) => item.officialNumber === 37)).toMatchObject({
+      officialName: '教师公寓',
+      artworkAnchorX: 1304.99,
+      artworkAnchorY: 2940.51,
+      geometryStatus: 'verified_point',
+    });
   });
 
   it('never exposes future or unmatched projects publicly', () => {

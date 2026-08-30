@@ -1,29 +1,39 @@
-import { BadRequestException, ForbiddenException, GoneException, Injectable, NotFoundException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { Interval } from '@nestjs/schedule';
-import { PrismaService } from '../../common/services/prisma.service';
-import { RedisService } from '../../common/services/redis.service';
-import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
-import { parseChatMessageContent } from '../../common/utils/chat-message.util';
-import { MessageGateway } from '../websocket/message.gateway';
-import { WsNativeGateway } from '../websocket/ws-native.gateway';
-import { NotificationChannelService } from './notification-channel.service';
-import { WechatSubscribeService } from '../wechat/wechat-subscribe.service';
-import { WechatOfficialService } from '../wechat/wechat-official.service';
-import { PushService } from '../push/push.service';
+import {
+  BadRequestException,
+  ForbiddenException,
+  GoneException,
+  Injectable,
+  NotFoundException,
+  Logger,
+  Optional,
+  Inject,
+  forwardRef,
+} from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
+import { Interval } from "@nestjs/schedule";
+import { PrismaService } from "../../common/services/prisma.service";
+import { RedisService } from "../../common/services/redis.service";
+import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
+import { parseChatMessageContent } from "../../common/utils/chat-message.util";
+import { MessageGateway } from "../websocket/message.gateway";
+import { WsNativeGateway } from "../websocket/ws-native.gateway";
+import { NotificationChannelService } from "./notification-channel.service";
+import { WechatSubscribeService } from "../wechat/wechat-subscribe.service";
+import { WechatOfficialService } from "../wechat/wechat-official.service";
+import { PushService } from "../push/push.service";
 import {
   OFFICIAL_ASSISTANT_OPENID,
   OFFICIAL_ASSISTANT_SYSTEM_ROLE,
   officialAssistantConversationScopeKey,
-} from '../../common/utils/official-assistant.util';
+} from "../../common/utils/official-assistant.util";
 import {
   CreateNotificationDto,
   AdminBroadcastDto,
-} from './dto/create-notification.dto';
+} from "./dto/create-notification.dto";
 import {
   NotificationQueryDto,
   MarkAllReadDto,
-} from './dto/notification-query.dto';
+} from "./dto/notification-query.dto";
 
 type OfficialAssistantActionInput = {
   text?: string;
@@ -53,16 +63,23 @@ type OfficialAssistantMessageInput = {
 };
 
 const INTERACTION_NOTIFICATION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const OFFICIAL_ASSISTANT_NAME = '校园小助手';
-const OFFICIAL_ASSISTANT_AVATAR = '/static/logo.png';
-const OFFICIAL_CONVERSATION_STATUSES = new Set(['pending', 'processing', 'waiting_user', 'resolved', 'rejected', 'closed']);
+const OFFICIAL_ASSISTANT_NAME = "校园小助手";
+const OFFICIAL_ASSISTANT_AVATAR = "/static/logo.png";
+const OFFICIAL_CONVERSATION_STATUSES = new Set([
+  "pending",
+  "processing",
+  "waiting_user",
+  "resolved",
+  "rejected",
+  "closed",
+]);
 const OFFICIAL_CONVERSATION_STATUS_TEXT: Record<string, string> = {
-  pending: '待处理',
-  processing: '处理中',
-  waiting_user: '待用户补充',
-  resolved: '已解决',
-  rejected: '已驳回',
-  closed: '已关闭',
+  pending: "待处理",
+  processing: "处理中",
+  waiting_user: "待用户补充",
+  resolved: "已解决",
+  rejected: "已驳回",
+  closed: "已关闭",
 };
 
 type InteractionNotificationOptions = {
@@ -74,17 +91,19 @@ type InteractionNotificationOptions = {
 @Injectable()
 export class NotifyService {
   private retryDeliveryRunning = false;
+  private pendingDeliveryRunning = false;
   private readonly logger = new Logger(NotifyService.name);
   private readonly unreadCacheTtl = 45;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    private readonly wsGateway: MessageGateway,
+    @Optional() private readonly wsGateway: MessageGateway | undefined,
     private readonly wsNative: WsNativeGateway,
     private readonly jwtService: JwtService,
     private readonly adminDataScope: AdminDataScopeService,
-    @Optional() @Inject(forwardRef(() => NotificationChannelService))
+    @Optional()
+    @Inject(forwardRef(() => NotificationChannelService))
     private readonly channelService?: NotificationChannelService,
     @Optional() private readonly wechatSubscribe?: WechatSubscribeService,
     @Optional() private readonly pushService?: PushService,
@@ -97,33 +116,37 @@ export class NotifyService {
   }
 
   private unreadCacheKey(userId: string, regionId?: string) {
-    return `notify:unread:${userId}:${regionId || 'all'}`;
+    return `notify:unread:${userId}:${regionId || "all"}`;
   }
 
   private async clearUnreadCache(userId: string) {
-    await this.redis.delPattern(`notify:unread:${userId}:*`).catch(() => undefined);
+    await this.redis
+      .delPattern(`notify:unread:${userId}:*`)
+      .catch(() => undefined);
   }
 
   private toDbNotificationType(type?: string) {
-    const key = String(type || 'SYSTEM').trim().toLowerCase();
+    const key = String(type || "SYSTEM")
+      .trim()
+      .toLowerCase();
     const map: Record<string, string> = {
-      system: 'SYSTEM',
-      admin_broadcast: 'ADMIN_BROADCAST',
-      announcement: 'ANNOUNCEMENT',
-      reply: 'REPLY',
-      comment: 'COMMENT',
-      mention: 'MENTION',
-      like: 'LIKE',
-      follow: 'FOLLOW',
-      squat: 'SQUAT',
-      message: 'MESSAGE',
-      order: 'ORDER',
-      delivery: 'DELIVERY',
-      refund: 'REFUND',
-      wallet: 'WALLET',
-      circle: 'CIRCLE',
-      certification: 'CERTIFICATION',
-      merchant: 'MERCHANT',
+      system: "SYSTEM",
+      admin_broadcast: "ADMIN_BROADCAST",
+      announcement: "ANNOUNCEMENT",
+      reply: "REPLY",
+      comment: "COMMENT",
+      mention: "MENTION",
+      like: "LIKE",
+      follow: "FOLLOW",
+      squat: "SQUAT",
+      message: "MESSAGE",
+      order: "ORDER",
+      delivery: "DELIVERY",
+      refund: "REFUND",
+      wallet: "WALLET",
+      circle: "CIRCLE",
+      certification: "CERTIFICATION",
+      merchant: "MERCHANT",
     };
     return map[key] || key.toUpperCase();
   }
@@ -133,57 +156,60 @@ export class NotifyService {
     const key = String(type).trim().toLowerCase();
     const groups: Record<string, string[]> = {
       system: [
-        'SYSTEM',
-        'ADMIN_BROADCAST',
-        'ANNOUNCEMENT',
-        'MESSAGE',
-        'CIRCLE',
-        'ORDER',
-        'DELIVERY',
-        'REFUND',
-        'WALLET',
-        'CERTIFICATION',
-        'MERCHANT',
+        "SYSTEM",
+        "ADMIN_BROADCAST",
+        "ANNOUNCEMENT",
+        "MESSAGE",
+        "CIRCLE",
+        "ORDER",
+        "DELIVERY",
+        "REFUND",
+        "WALLET",
+        "CERTIFICATION",
+        "MERCHANT",
       ],
-      comment: ['COMMENT', 'REPLY', 'MENTION'],
-      message: ['MESSAGE', 'CIRCLE'],
-      interaction: ['COMMENT', 'REPLY', 'MENTION', 'LIKE', 'FOLLOW', 'SQUAT'],
+      comment: ["COMMENT", "REPLY", "MENTION"],
+      message: ["MESSAGE", "CIRCLE"],
+      interaction: ["COMMENT", "REPLY", "MENTION", "LIKE", "FOLLOW", "SQUAT"],
     };
     return groups[key] || [this.toDbNotificationType(key)];
   }
 
   private toClientNotificationType(type?: string) {
-    const key = String(type || 'SYSTEM').toUpperCase();
-    if (key === 'ADMIN_BROADCAST' || key === 'ANNOUNCEMENT') return 'system';
-    if (key === 'REPLY') return 'reply';
-    if (key === 'MENTION') return 'comment';
-    if (key === 'CIRCLE') return 'message';
+    const key = String(type || "SYSTEM").toUpperCase();
+    if (key === "ADMIN_BROADCAST" || key === "ANNOUNCEMENT") return "system";
+    if (key === "REPLY") return "reply";
+    if (key === "MENTION") return "comment";
+    if (key === "CIRCLE") return "message";
     return key.toLowerCase();
   }
 
   private notificationPreferenceField(type?: string) {
     const key = this.toDbNotificationType(type);
-    if (key === 'LIKE') return 'notifyLike';
-    if (['COMMENT', 'REPLY', 'MENTION'].includes(key)) return 'notifyComment';
-    if (key === 'FOLLOW') return 'notifyFollow';
-    if (key === 'SQUAT') return 'notifySquat';
-    return '';
+    if (key === "LIKE") return "notifyLike";
+    if (["COMMENT", "REPLY", "MENTION"].includes(key)) return "notifyComment";
+    if (key === "FOLLOW") return "notifyFollow";
+    if (key === "SQUAT") return "notifySquat";
+    return "";
   }
 
   private getNotificationData(notification: any) {
     const data = notification?.data;
-    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
   }
 
   private pickString(...values: unknown[]) {
     for (const value of values) {
-      const text = String(value || '').trim();
+      const text = String(value || "").trim();
       if (text) return text;
     }
-    return '';
+    return "";
   }
 
-  private getInteractionActorId(dto: CreateNotificationDto, options: InteractionNotificationOptions = {}) {
+  private getInteractionActorId(
+    dto: CreateNotificationDto,
+    options: InteractionNotificationOptions = {},
+  ) {
     const data = dto.data || {};
     return this.pickString(
       options.actorId,
@@ -193,34 +219,38 @@ export class NotifyService {
       data.actor_id,
       data.senderId,
       data.sender_id,
-      dto.linkType === 'user' ? dto.linkValue : '',
+      dto.linkType === "user" ? dto.linkValue : "",
     );
   }
 
   private normalizeReviewAction(action: string) {
-    const value = String(action || '').trim().toLowerCase();
-    if (value === 'approve') {
+    const value = String(action || "")
+      .trim()
+      .toLowerCase();
+    if (value === "approve") {
       return {
-        auditStatus: 'approved',
-        postStatus: 'PUBLISHED',
-        commentStatus: 'active',
-        reason: '用户审核通过',
+        auditStatus: "approved",
+        postStatus: "PUBLISHED",
+        commentStatus: "active",
+        reason: "用户审核通过",
       };
     }
-    if (value === 'reject') {
+    if (value === "reject") {
       return {
-        auditStatus: 'rejected',
-        postStatus: 'REJECTED',
-        commentStatus: 'hidden',
-        reason: '用户审核驳回',
+        auditStatus: "rejected",
+        postStatus: "REJECTED",
+        commentStatus: "hidden",
+        reason: "用户审核驳回",
       };
     }
-    throw new BadRequestException('审核操作无效');
+    throw new BadRequestException("审核操作无效");
   }
 
   private resolveReviewTarget(notification: any) {
     const data = this.getNotificationData(notification);
-    const linkType = String(notification?.linkType || '').trim().toLowerCase();
+    const linkType = String(notification?.linkType || "")
+      .trim()
+      .toLowerCase();
     const targetType = this.pickString(
       data.reviewTargetType,
       data.review_target_type,
@@ -228,14 +258,14 @@ export class NotifyService {
       data.target_type,
       data.contentType,
       data.content_type,
-      data.commentId || data.comment_id ? 'comment' : '',
-      data.postId || data.post_id || linkType === 'post' ? 'post' : '',
-      linkType === 'comment' ? 'comment' : '',
+      data.commentId || data.comment_id ? "comment" : "",
+      data.postId || data.post_id || linkType === "post" ? "post" : "",
+      linkType === "comment" ? "comment" : "",
     ).toLowerCase();
 
-    if (targetType === 'comment') {
+    if (targetType === "comment") {
       return {
-        type: 'comment',
+        type: "comment",
         id: this.pickString(
           data.reviewTargetId,
           data.review_target_id,
@@ -243,13 +273,13 @@ export class NotifyService {
           data.comment_id,
           data.targetCommentId,
           data.target_comment_id,
-          linkType === 'comment' ? notification?.linkValue : '',
+          linkType === "comment" ? notification?.linkValue : "",
         ),
       };
     }
 
     return {
-      type: 'post',
+      type: "post",
       id: this.pickString(
         data.reviewTargetId,
         data.review_target_id,
@@ -259,25 +289,33 @@ export class NotifyService {
         data.target_post_id,
         data.targetId,
         data.target_id,
-        linkType === 'post' ? notification?.linkValue : '',
+        linkType === "post" ? notification?.linkValue : "",
       ),
     };
   }
 
   private isCountedComment(comment: any) {
-    return !!comment && !comment.deletedAt && comment.status === 'active' && comment.auditStatus === 'approved';
+    return (
+      !!comment &&
+      !comment.deletedAt &&
+      comment.status === "active" &&
+      comment.auditStatus === "approved"
+    );
   }
 
   private async updateCommentWithCounter(commentId: string, data: any) {
     return this.prisma.$transaction(async (tx) => {
       const before = await tx.comment.findUnique({ where: { id: commentId } });
-      if (!before) throw new NotFoundException('评论不存在');
+      if (!before) throw new NotFoundException("评论不存在");
       const after = await tx.comment.update({ where: { id: commentId }, data });
       const beforeCounted = this.isCountedComment(before);
       const afterCounted = this.isCountedComment(after);
       if (beforeCounted !== afterCounted) {
         if (afterCounted) {
-          await tx.post.update({ where: { id: before.postId }, data: { commentCount: { increment: 1 } } });
+          await tx.post.update({
+            where: { id: before.postId },
+            data: { commentCount: { increment: 1 } },
+          });
         } else {
           await tx.post.updateMany({
             where: { id: before.postId, commentCount: { gt: 0 } },
@@ -292,11 +330,23 @@ export class NotifyService {
   private normalizeImages(value: any): string[] {
     if (!value) return [];
     if (Array.isArray(value)) {
-      return value.map((item) => typeof item === 'string' ? item : item?.url || item?.src || item?.image || '').filter(Boolean);
+      return value
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : item?.url || item?.src || item?.image || "",
+        )
+        .filter(Boolean);
     }
-    if (typeof value === 'string') return [value].filter(Boolean);
-    if (typeof value === 'object') {
-      return this.normalizeImages(value.urls || value.images || value.list || value.image_urls || value.comment_images);
+    if (typeof value === "string") return [value].filter(Boolean);
+    if (typeof value === "object") {
+      return this.normalizeImages(
+        value.urls ||
+          value.images ||
+          value.list ||
+          value.image_urls ||
+          value.comment_images,
+      );
     }
     return [];
   }
@@ -307,9 +357,9 @@ export class NotifyService {
       id: user.id,
       uid: user.uid,
       public_uid: user.publicUid || user.uid,
-      nickname: user.nickname || '该用户未设置昵称',
-      name: user.nickname || '该用户未设置昵称',
-      avatar: user.avatar || '/static/logo.png',
+      nickname: user.nickname || "该用户未设置昵称",
+      name: user.nickname || "该用户未设置昵称",
+      avatar: user.avatar || "/static/logo.png",
       type: user.userType || 1,
     };
   }
@@ -317,11 +367,11 @@ export class NotifyService {
   private formatPost(post: any) {
     if (!post) return null;
     const firstMedia = Array.isArray(post.media) ? post.media[0] : null;
-    const firstImage = firstMedia?.thumb || firstMedia?.url || '';
+    const firstImage = firstMedia?.thumb || firstMedia?.url || "";
     return {
       id: post.id,
-      title: post.title || '',
-      content: post.content || '',
+      title: post.title || "",
+      content: post.content || "",
       user_id: post.userId,
       region_id: post.regionId,
       first_image: firstImage,
@@ -338,10 +388,13 @@ export class NotifyService {
       id: comment.id,
       comment_id: comment.id,
       post_id: comment.postId,
-      parent_id: comment.parentId || '',
+      parent_id: comment.parentId || "",
       parentId: comment.parentId || null,
-      type: String(type || '').toUpperCase() === 'REPLY' || comment.parentId ? 'reply' : 'comment',
-      content: comment.content || '',
+      type:
+        String(type || "").toUpperCase() === "REPLY" || comment.parentId
+          ? "reply"
+          : "comment",
+      content: comment.content || "",
       images,
       user_id: comment.userId,
       user: this.formatUser(comment.user),
@@ -365,16 +418,30 @@ export class NotifyService {
         userType: 4,
         systemRole: OFFICIAL_ASSISTANT_SYSTEM_ROLE,
       },
-      select: { id: true, nickname: true, avatar: true, openid: true, systemRole: true },
+      select: {
+        id: true,
+        nickname: true,
+        avatar: true,
+        openid: true,
+        systemRole: true,
+      },
     });
   }
 
-  private async findOrCreateOfficialConversation(userId: string, officialUserId: string, requestedRegionId?: string) {
+  private async findOrCreateOfficialConversation(
+    userId: string,
+    officialUserId: string,
+    requestedRegionId?: string,
+  ) {
     const profile = !requestedRegionId
-      ? await this.prisma.userProfile.findUnique({ where: { userId }, select: { regionId: true } })
+      ? await this.prisma.userProfile.findUnique({
+          where: { userId },
+          select: { regionId: true },
+        })
       : null;
     const regionId = requestedRegionId || profile?.regionId || null;
-    if (!regionId) throw new BadRequestException('请选择当前校园后再使用官方助手');
+    if (!regionId)
+      throw new BadRequestException("请选择当前校园后再使用官方助手");
     const scopeKey = officialAssistantConversationScopeKey(regionId, userId);
 
     let conversation = await this.prisma.conversation.findUnique({
@@ -383,7 +450,7 @@ export class NotifyService {
     if (!conversation) {
       conversation = await this.prisma.conversation.findFirst({
         where: {
-          type: 'private',
+          type: "private",
           regionId,
           OR: [{ scopeKey }, { scopeKey: null }],
           AND: [
@@ -391,7 +458,7 @@ export class NotifyService {
             { members: { some: { userId: officialUserId } } },
           ],
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: "asc" },
       });
     }
 
@@ -403,8 +470,10 @@ export class NotifyService {
             data: { scopeKey },
           });
         } catch (error: any) {
-          if (error?.code !== 'P2002') throw error;
-          const scoped = await this.prisma.conversation.findUnique({ where: { scopeKey } });
+          if (error?.code !== "P2002") throw error;
+          const scoped = await this.prisma.conversation.findUnique({
+            where: { scopeKey },
+          });
           if (scoped) return scoped;
           throw error;
         }
@@ -416,24 +485,32 @@ export class NotifyService {
       where: { scopeKey },
       update: {},
       create: {
-          type: 'private',
-          scopeKey,
-          regionId,
-          title: OFFICIAL_ASSISTANT_NAME,
-          avatar: OFFICIAL_ASSISTANT_AVATAR,
-          members: {
-            create: [
-              { userId },
-              { userId: officialUserId, role: 'admin', nickName: OFFICIAL_ASSISTANT_NAME },
-            ],
-          },
+        type: "private",
+        scopeKey,
+        regionId,
+        title: OFFICIAL_ASSISTANT_NAME,
+        avatar: OFFICIAL_ASSISTANT_AVATAR,
+        members: {
+          create: [
+            { userId },
+            {
+              userId: officialUserId,
+              role: "admin",
+              nickName: OFFICIAL_ASSISTANT_NAME,
+            },
+          ],
         },
+      },
     });
   }
 
   async ensureOfficialConversationForUser(userId: string, regionId?: string) {
     const official = await this.getOfficialUser();
-    const conversation = await this.findOrCreateOfficialConversation(userId, official.id, regionId);
+    const conversation = await this.findOrCreateOfficialConversation(
+      userId,
+      official.id,
+      regionId,
+    );
     return { official, conversation };
   }
 
@@ -442,51 +519,57 @@ export class NotifyService {
   }
 
   private normalizeAssistantCategory(value?: string) {
-    const key = String(value || 'campus').trim().toLowerCase();
-    if (['campus', 'system', 'service'].includes(key)) return key;
-    return 'campus';
+    const key = String(value || "campus")
+      .trim()
+      .toLowerCase();
+    if (["campus", "system", "service"].includes(key)) return key;
+    return "campus";
   }
 
   private normalizeAssistantRenderType(value?: string) {
-    const key = String(value || 'card').trim().toLowerCase();
-    return key === 'text' ? 'text' : 'card';
+    const key = String(value || "card")
+      .trim()
+      .toLowerCase();
+    return key === "text" ? "text" : "card";
   }
 
   private normalizeAssistantStatus(value?: string) {
-    const key = String(value || 'published').trim().toLowerCase();
-    if (['draft', 'published', 'offline'].includes(key)) return key;
-    return 'published';
+    const key = String(value || "published")
+      .trim()
+      .toLowerCase();
+    if (["draft", "published", "offline"].includes(key)) return key;
+    return "published";
   }
 
   private getAssistantCategoryLabel(category?: string) {
     const labels: Record<string, string> = {
-      campus: '校园通知',
-      system: '系统通知',
-      service: '官方客服',
+      campus: "校园通知",
+      system: "系统通知",
+      service: "官方客服",
     };
-    return labels[this.normalizeAssistantCategory(category)] || '校园通知';
+    return labels[this.normalizeAssistantCategory(category)] || "校园通知";
   }
 
   private normalizeAssistantActions(dto: OfficialAssistantMessageInput) {
     const rawActions = Array.isArray(dto.actions)
       ? dto.actions
-      : typeof dto.actions === 'string'
+      : typeof dto.actions === "string"
         ? this.parseJsonArray(dto.actions)
         : [];
     const actionList = rawActions
       .map((item: any) => ({
-        text: String(item?.text || '').trim(),
-        type: String(item?.type || 'miniapp').trim() || 'miniapp',
-        value: String(item?.value || '').trim(),
+        text: String(item?.text || "").trim(),
+        type: String(item?.type || "miniapp").trim() || "miniapp",
+        value: String(item?.value || "").trim(),
       }))
       .filter((item) => item.text && item.value);
 
-    const actionText = String(dto.actionText || '').trim();
-    const actionValue = String(dto.actionValue || '').trim();
+    const actionText = String(dto.actionText || "").trim();
+    const actionValue = String(dto.actionValue || "").trim();
     if (actionText && actionValue) {
       actionList.push({
         text: actionText,
-        type: String(dto.actionType || 'miniapp').trim() || 'miniapp',
+        type: String(dto.actionType || "miniapp").trim() || "miniapp",
         value: actionValue,
       });
     }
@@ -504,43 +587,46 @@ export class NotifyService {
 
   private parseAssistantPublishedAt(value: unknown, status: string) {
     if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-    if (typeof value === 'string' && value.trim()) {
+    if (typeof value === "string" && value.trim()) {
       const date = new Date(value);
       if (!Number.isNaN(date.getTime())) return date;
     }
-    return status === 'published' ? new Date() : null;
+    return status === "published" ? new Date() : null;
   }
 
   private formatOfficialAssistantMessage(item: any) {
     const category = this.normalizeAssistantCategory(item?.category);
     return {
       id: item.id,
-      regionId: item.regionId || '',
+      regionId: item.regionId || "",
       category,
       categoryLabel: this.getAssistantCategoryLabel(category),
       renderType: this.normalizeAssistantRenderType(item.renderType),
       title: item.title,
       content: item.content,
-      summary: item.summary || '',
-      imageUrl: item.imageUrl || '',
-      iconUrl: item.iconUrl || '',
+      summary: item.summary || "",
+      imageUrl: item.imageUrl || "",
+      iconUrl: item.iconUrl || "",
       tagText: item.tagText || this.getAssistantCategoryLabel(category),
       tagType: item.tagType || category,
-      status: item.status || 'published',
+      status: item.status || "published",
       priority: item.priority || 0,
       actions: Array.isArray(item.actions) ? item.actions : [],
       extra: item.extra || {},
-      publishedAt: item.publishedAt?.toISOString?.() || item.publishedAt || '',
-      createdAt: item.createdAt?.toISOString?.() || item.createdAt || '',
-      updatedAt: item.updatedAt?.toISOString?.() || item.updatedAt || '',
+      publishedAt: item.publishedAt?.toISOString?.() || item.publishedAt || "",
+      createdAt: item.createdAt?.toISOString?.() || item.createdAt || "",
+      updatedAt: item.updatedAt?.toISOString?.() || item.updatedAt || "",
     };
   }
 
-  async createOfficialAssistantMessage(adminId: string, dto: OfficialAssistantMessageInput) {
-    const title = String(dto.title || '').trim();
-    const content = String(dto.content || '').trim();
-    if (!title) throw new BadRequestException('请填写标题');
-    if (!content) throw new BadRequestException('请填写内容');
+  async createOfficialAssistantMessage(
+    adminId: string,
+    dto: OfficialAssistantMessageInput,
+  ) {
+    const title = String(dto.title || "").trim();
+    const content = String(dto.content || "").trim();
+    if (!title) throw new BadRequestException("请填写标题");
+    if (!content) throw new BadRequestException("请填写内容");
     const status = this.normalizeAssistantStatus(dto.status);
     const category = this.normalizeAssistantCategory(dto.category);
     const renderType = this.normalizeAssistantRenderType(dto.renderType);
@@ -553,11 +639,13 @@ export class NotifyService {
         renderType,
         title,
         content,
-        summary: String(dto.summary || '').trim() || null,
-        imageUrl: String(dto.imageUrl || '').trim() || null,
-        iconUrl: String(dto.iconUrl || '').trim() || null,
-        tagText: String(dto.tagText || '').trim() || this.getAssistantCategoryLabel(category),
-        tagType: String(dto.tagType || '').trim() || category,
+        summary: String(dto.summary || "").trim() || null,
+        imageUrl: String(dto.imageUrl || "").trim() || null,
+        iconUrl: String(dto.iconUrl || "").trim() || null,
+        tagText:
+          String(dto.tagText || "").trim() ||
+          this.getAssistantCategoryLabel(category),
+        tagType: String(dto.tagType || "").trim() || category,
         status,
         priority: this.toPositiveInt(dto.priority, 0),
         actions: actions as any,
@@ -582,9 +670,11 @@ export class NotifyService {
     if (query.regionId) {
       where.OR = [{ regionId: query.regionId }, { regionId: null }];
     }
-    if (query.category) where.category = this.normalizeAssistantCategory(query.category);
-    if (query.status) where.status = this.normalizeAssistantStatus(query.status);
-    const keyword = String(query.keyword || '').trim();
+    if (query.category)
+      where.category = this.normalizeAssistantCategory(query.category);
+    if (query.status)
+      where.status = this.normalizeAssistantStatus(query.status);
+    const keyword = String(query.keyword || "").trim();
     if (keyword) {
       where.OR = [
         { title: { contains: keyword } },
@@ -597,7 +687,11 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: [{ priority: 'desc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
+        orderBy: [
+          { priority: "desc" },
+          { publishedAt: "desc" },
+          { createdAt: "desc" },
+        ],
       }),
       this.prisma.officialAssistantMessage.count({ where }),
     ]);
@@ -610,38 +704,57 @@ export class NotifyService {
     };
   }
 
-  async updateOfficialAssistantMessage(id: string, dto: OfficialAssistantMessageInput) {
+  async updateOfficialAssistantMessage(
+    id: string,
+    dto: OfficialAssistantMessageInput,
+  ) {
     const data: any = {};
     if (dto.regionId !== undefined) data.regionId = dto.regionId || null;
-    if (dto.category !== undefined) data.category = this.normalizeAssistantCategory(dto.category);
-    if (dto.renderType !== undefined) data.renderType = this.normalizeAssistantRenderType(dto.renderType);
+    if (dto.category !== undefined)
+      data.category = this.normalizeAssistantCategory(dto.category);
+    if (dto.renderType !== undefined)
+      data.renderType = this.normalizeAssistantRenderType(dto.renderType);
     if (dto.title !== undefined) {
-      const title = String(dto.title || '').trim();
-      if (!title) throw new BadRequestException('请填写标题');
+      const title = String(dto.title || "").trim();
+      if (!title) throw new BadRequestException("请填写标题");
       data.title = title;
     }
     if (dto.content !== undefined) {
-      const content = String(dto.content || '').trim();
-      if (!content) throw new BadRequestException('请填写内容');
+      const content = String(dto.content || "").trim();
+      if (!content) throw new BadRequestException("请填写内容");
       data.content = content;
     }
-    if (dto.summary !== undefined) data.summary = String(dto.summary || '').trim() || null;
-    if (dto.imageUrl !== undefined) data.imageUrl = String(dto.imageUrl || '').trim() || null;
-    if (dto.iconUrl !== undefined) data.iconUrl = String(dto.iconUrl || '').trim() || null;
-    if (dto.tagText !== undefined) data.tagText = String(dto.tagText || '').trim() || null;
-    if (dto.tagType !== undefined) data.tagType = String(dto.tagType || '').trim() || null;
-    if (dto.priority !== undefined) data.priority = this.toPositiveInt(dto.priority, 0);
-    if (dto.actions !== undefined || dto.actionText !== undefined || dto.actionValue !== undefined) {
+    if (dto.summary !== undefined)
+      data.summary = String(dto.summary || "").trim() || null;
+    if (dto.imageUrl !== undefined)
+      data.imageUrl = String(dto.imageUrl || "").trim() || null;
+    if (dto.iconUrl !== undefined)
+      data.iconUrl = String(dto.iconUrl || "").trim() || null;
+    if (dto.tagText !== undefined)
+      data.tagText = String(dto.tagText || "").trim() || null;
+    if (dto.tagType !== undefined)
+      data.tagType = String(dto.tagType || "").trim() || null;
+    if (dto.priority !== undefined)
+      data.priority = this.toPositiveInt(dto.priority, 0);
+    if (
+      dto.actions !== undefined ||
+      dto.actionText !== undefined ||
+      dto.actionValue !== undefined
+    ) {
       data.actions = this.normalizeAssistantActions(dto) as any;
     }
     if (dto.extra !== undefined) data.extra = dto.extra as any;
     if (dto.status !== undefined) {
       const status = this.normalizeAssistantStatus(dto.status);
       data.status = status;
-      if (status === 'published' && !dto.publishedAt) data.publishedAt = new Date();
+      if (status === "published" && !dto.publishedAt)
+        data.publishedAt = new Date();
     }
     if (dto.publishedAt !== undefined) {
-      data.publishedAt = this.parseAssistantPublishedAt(dto.publishedAt, data.status || dto.status || 'draft');
+      data.publishedAt = this.parseAssistantPublishedAt(
+        dto.publishedAt,
+        data.status || dto.status || "draft",
+      );
     }
     return this.prisma.officialAssistantMessage.update({ where: { id }, data });
   }
@@ -651,16 +764,20 @@ export class NotifyService {
     return { success: true };
   }
 
-  async getOfficialAssistantTimeline(userId: string, query: {
-    regionId?: string;
-    category?: string;
-    page?: number;
-    pageSize?: number;
-  }) {
+  async getOfficialAssistantTimeline(
+    userId: string,
+    query: {
+      regionId?: string;
+      category?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ) {
     const page = this.toPositiveInt(query.page, 1);
     const pageSize = this.toPositiveInt(query.pageSize, 20);
-    const where: any = { status: 'published' };
-    if (query.category) where.category = this.normalizeAssistantCategory(query.category);
+    const where: any = { status: "published" };
+    if (query.category)
+      where.category = this.normalizeAssistantCategory(query.category);
     if (query.regionId) {
       where.OR = [{ regionId: query.regionId }, { regionId: null }];
     } else {
@@ -672,21 +789,25 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: [{ priority: 'desc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
+        orderBy: [
+          { priority: "desc" },
+          { publishedAt: "desc" },
+          { createdAt: "desc" },
+        ],
       }),
       this.prisma.officialAssistantMessage.count({ where }),
     ]);
 
     return {
       assistant: {
-        name: '校园小助手',
-        subtitle: '校园通知 · 系统消息 · 官方客服',
+        name: "校园小助手",
+        subtitle: "校园通知 · 系统消息 · 官方客服",
         avatar: OFFICIAL_ASSISTANT_AVATAR,
         official: true,
       },
       welcome: {
-        title: '欢迎来到念白校园',
-        content: '有新消息会告诉你！',
+        title: "欢迎来到念白校园",
+        content: "有新消息会告诉你！",
       },
       list: items.map((item) => this.formatOfficialAssistantMessage(item)),
       total,
@@ -706,7 +827,9 @@ export class NotifyService {
     options: InteractionNotificationOptions = {},
   ) {
     const actorId = this.getInteractionActorId(dto, options);
-    const cooldownMs = Number(options.cooldownMs ?? INTERACTION_NOTIFICATION_COOLDOWN_MS);
+    const cooldownMs = Number(
+      options.cooldownMs ?? INTERACTION_NOTIFICATION_COOLDOWN_MS,
+    );
 
     if (!actorId || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
       return this.createAndDispatch(dto);
@@ -725,18 +848,21 @@ export class NotifyService {
     const recent = await this.prisma.notification.findMany({
       where,
       select: { id: true, data: true, createdAt: true, isRead: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: 50,
     });
-    const existing = recent.find((item: any) => this.pickString(
-      this.getNotificationData(item).fromUserId,
-      this.getNotificationData(item).from_user_id,
-      this.getNotificationData(item).actorId,
-      this.getNotificationData(item).actor_id,
-      this.getNotificationData(item).senderId,
-      this.getNotificationData(item).sender_id,
-      dto.linkType === 'user' ? dto.linkValue : '',
-    ) === actorId);
+    const existing = recent.find(
+      (item: any) =>
+        this.pickString(
+          this.getNotificationData(item).fromUserId,
+          this.getNotificationData(item).from_user_id,
+          this.getNotificationData(item).actorId,
+          this.getNotificationData(item).actor_id,
+          this.getNotificationData(item).senderId,
+          this.getNotificationData(item).sender_id,
+          dto.linkType === "user" ? dto.linkValue : "",
+        ) === actorId,
+    );
 
     if (existing) {
       return { ...existing, deduped: true };
@@ -745,14 +871,21 @@ export class NotifyService {
     return this.createAndDispatch(dto);
   }
 
-  private async deliverNotificationChannels(notification: any, channelMask: any) {
-    const report: Record<string, any> = { inApp: { status: 'success' } };
-    const unreadSummary = await this.getUnreadSummary(notification.userId, notification.regionId);
+  private async deliverNotificationChannels(
+    notification: any,
+    channelMask: any,
+    options: { allowImplicitWechatSubscribe?: boolean } = {},
+  ) {
+    const report: Record<string, any> = { inApp: { status: "success" } };
+    const unreadSummary = await this.getUnreadSummary(
+      notification.userId,
+      notification.regionId,
+    );
 
     if (channelMask.websocket) {
       const pushPayload = {
-        event: 'notification',
-        type: 'notification',
+        event: "notification",
+        type: "notification",
         data: {
           id: notification.id,
           type: this.toClientNotificationType(notification.type),
@@ -765,11 +898,17 @@ export class NotifyService {
           createdAt: notification.createdAt?.toISOString(),
         },
       };
-      const unreadPayload = { event: 'unreadSummary', data: unreadSummary };
+      const unreadPayload = { event: "unreadSummary", data: unreadSummary };
       const errors: string[] = [];
       try {
-        this.wsGateway.pushNotification(notification.userId, pushPayload);
-        this.wsGateway.pushNotification(notification.userId, unreadPayload);
+        await this.wsGateway?.pushNotification(
+          notification.userId,
+          pushPayload,
+        );
+        await this.wsGateway?.pushNotification(
+          notification.userId,
+          unreadPayload,
+        );
       } catch (error: any) {
         errors.push(`socket.io: ${error.message}`);
       }
@@ -779,26 +918,28 @@ export class NotifyService {
       } catch (error: any) {
         errors.push(`native: ${error.message}`);
       }
-      report.websocket = errors.length >= 2
-        ? { status: 'failed', error: errors.join('; ') }
-        : { status: 'success', warning: errors.join('; ') || undefined };
+      report.websocket =
+        errors.length >= 2
+          ? { status: "failed", error: errors.join("; ") }
+          : { status: "success", warning: errors.join("; ") || undefined };
     } else {
-      report.websocket = { status: 'skipped' };
+      report.websocket = { status: "skipped" };
     }
 
     if (channelMask.push && this.pushService) {
       try {
         const devices = await this.prisma.userPushDevice.findMany({
           where: { userId: notification.userId },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: { updatedAt: "desc" },
           take: 5,
         });
         let pushed = 0;
         for (const device of devices) {
           const ok = await this.pushService.sendToClient(device.clientId, {
-            title: notification.title || '新通知',
-            content: notification.content || '',
+            title: notification.title || "新通知",
+            content: notification.content || "",
             data: {
+              ...(notification.data || {}),
               id: notification.id,
               scene: notification.scene,
               type: this.toClientNotificationType(notification.type),
@@ -808,17 +949,20 @@ export class NotifyService {
           });
           if (ok) pushed += 1;
         }
-        report.push = { status: pushed > 0 ? 'success' : 'skipped' };
+        report.push = { status: pushed > 0 ? "success" : "skipped" };
       } catch (error: any) {
-        report.push = { status: 'failed', error: error?.message || 'push error' };
+        report.push = {
+          status: "failed",
+          error: error?.message || "push error",
+        };
       }
     } else {
-      report.push = { status: 'skipped' };
+      report.push = { status: "skipped" };
     }
 
     if (channelMask.email && this.channelService) {
       try {
-        const enabled = await this.channelService.isChannelEnabled('email');
+        const enabled = await this.channelService.isChannelEnabled("email");
         const profile = enabled
           ? await this.prisma.userProfile.findUnique({
               where: { userId: notification.userId },
@@ -826,19 +970,26 @@ export class NotifyService {
             })
           : null;
         if (profile?.email) {
-          await this.channelService.sendEmail(profile.email, notification.title, notification.content);
-          report.email = { status: 'success' };
+          await this.channelService.sendEmail(
+            profile.email,
+            notification.title,
+            notification.content,
+          );
+          report.email = { status: "success" };
         } else {
-          report.email = { status: 'skipped', reason: enabled ? 'no_recipient' : 'disabled' };
+          report.email = {
+            status: "skipped",
+            reason: enabled ? "no_recipient" : "disabled",
+          };
         }
       } catch (error: any) {
-        report.email = { status: 'failed', error: error.message };
+        report.email = { status: "failed", error: error.message };
       }
     }
 
     if (channelMask.sms && this.channelService) {
       try {
-        const enabled = await this.channelService.isChannelEnabled('sms');
+        const enabled = await this.channelService.isChannelEnabled("sms");
         const user = enabled
           ? await this.prisma.user.findUnique({
               where: { id: notification.userId },
@@ -850,60 +1001,137 @@ export class NotifyService {
             user.phone,
             `${notification.title}: ${notification.content}`.slice(0, 200),
           );
-          report.sms = { status: 'success' };
+          report.sms = { status: "success" };
         } else {
-          report.sms = { status: 'skipped', reason: enabled ? 'no_recipient' : 'disabled' };
+          report.sms = {
+            status: "skipped",
+            reason: enabled ? "no_recipient" : "disabled",
+          };
         }
       } catch (error: any) {
-        report.sms = { status: 'failed', error: error.message };
+        report.sms = { status: "failed", error: error.message };
       }
     }
 
-    const takeawayTemplate = this.takeawayTemplateType(notification.scene);
-    if ((channelMask.wechatSubscribe || takeawayTemplate) && this.wechatSubscribe) {
+    const miniProgramTemplate = this.miniProgramTemplateType(
+      notification.scene,
+    );
+    const wechatPage = this.wechatNotificationPage(notification);
+    const allowImplicitWechatSubscribe =
+      options.allowImplicitWechatSubscribe !== false;
+    if (
+      (channelMask.wechatSubscribe ||
+        (allowImplicitWechatSubscribe && miniProgramTemplate)) &&
+      this.wechatSubscribe
+    ) {
       const sent = await this.wechatSubscribe.sendSubscribeMessage({
         userId: notification.userId,
-        templateType: takeawayTemplate || notification.scene || this.toDbNotificationType(notification.type).toLowerCase(),
-        page: notification.linkValue || undefined,
-        data: { ...(notification.data || {}), title: notification.title, content: notification.content },
-      });
-      report.wechatSubscribe = sent.success ? { status: 'success' } : { status: 'skipped', reason: sent.error };
-    } else if (channelMask.wechatSubscribe) {
-      report.wechatSubscribe = { status: 'skipped', reason: 'wechat_subscribe_service_unavailable' };
-    }
-
-    if (this.wechatOfficial) {
-      const sent = await this.wechatOfficial.sendNotificationTemplate({
-        userId: notification.userId,
-        scene: notification.scene,
-        page: notification.linkValue || undefined,
+        templateType:
+          miniProgramTemplate ||
+          notification.scene ||
+          this.toDbNotificationType(notification.type).toLowerCase(),
+        page: wechatPage || undefined,
         data: {
           ...(notification.data || {}),
           title: notification.title,
           content: notification.content,
         },
       });
-      if (sent.error !== 'unsupported_scene') {
+      report.wechatSubscribe = sent.success
+        ? { status: "success" }
+        : { status: "skipped", reason: sent.error };
+    } else if (channelMask.wechatSubscribe) {
+      report.wechatSubscribe = {
+        status: "skipped",
+        reason: "wechat_subscribe_service_unavailable",
+      };
+    }
+
+    if (channelMask.officialAccount && this.wechatOfficial) {
+      const sent = await this.wechatOfficial.sendNotificationTemplate({
+        userId: notification.userId,
+        scene: notification.scene,
+        page: wechatPage || undefined,
+        data: {
+          ...(notification.data || {}),
+          title: notification.title,
+          content: notification.content,
+        },
+      });
+      if (sent.error !== "unsupported_scene") {
         report.officialAccount = sent.success
-          ? { status: 'success', templateType: sent.templateType }
-          : { status: 'skipped', reason: sent.error, templateType: sent.templateType };
+          ? { status: "success", templateType: sent.templateType }
+          : {
+              status: "skipped",
+              reason: sent.error,
+              templateType: sent.templateType,
+            };
       }
     } else if (channelMask.officialAccount) {
-      report.officialAccount = { status: 'skipped', reason: 'wechat_official_service_unavailable' };
+      report.officialAccount = {
+        status: "skipped",
+        reason: "wechat_official_service_unavailable",
+      };
     }
 
     const statuses = Object.values(report).map((item: any) => item.status);
-    const deliveryStatus = statuses.includes('failed') ? 'partial' : 'delivered';
+    const deliveryStatus = statuses.includes("failed")
+      ? "partial"
+      : "delivered";
     return { report, deliveryStatus };
   }
 
   private takeawayTemplateType(scene?: string | null) {
-    const value = String(scene || '');
-    if (value === 'shop_order_ready') return 'takeaway_rider_order';
-    if (!value.startsWith('takeaway_')) return '';
-    if (['takeaway_pickup_reminder', 'takeaway_delivery_reminder'].includes(value)) return 'takeaway_rider_order';
-    if (['takeaway_accept_reminder', 'takeaway_rider_status'].includes(value)) return 'takeaway_merchant_order';
-    return 'takeaway_order_status';
+    const value = String(scene || "")
+      .trim()
+      .toLowerCase();
+    if (value === "dorm_shop_order_status") return "takeaway_order_status";
+    if (
+      [
+        "shop_order_ready",
+        "new_errand_order",
+        "takeaway_pickup_reminder",
+        "takeaway_delivery_reminder",
+        "takeaway_rider_assignment_released",
+      ].includes(value)
+    ) {
+      return "takeaway_rider_order";
+    }
+    if (
+      [
+        "new_takeaway_order",
+        "new_dorm_shop_order",
+        "takeaway_accept_reminder",
+        "takeaway_rider_status",
+      ].includes(value) ||
+      value.endsWith("_merchant")
+    ) {
+      return "takeaway_merchant_order";
+    }
+    if (!value.startsWith("takeaway_")) return "";
+    return "takeaway_order_status";
+  }
+
+  private miniProgramTemplateType(scene?: string | null) {
+    const value = String(scene || "")
+      .trim()
+      .toLowerCase();
+    const takeawayTemplate = this.takeawayTemplateType(value);
+    if (takeawayTemplate) return takeawayTemplate;
+    if (value === "post_audit_result") return "post_audit_result";
+    if (value === "post_comment") return "post_comment";
+    if (value === "comment_reply") return "comment_reply";
+    return "";
+  }
+
+  private wechatNotificationPage(notification: any) {
+    const linkValue = String(notification?.linkValue || "").trim();
+    if (!linkValue) return "";
+    if (linkValue.startsWith("/")) return linkValue;
+    if (String(notification?.linkType || "").toLowerCase() === "post") {
+      return `/pagesB/post/post?id=${encodeURIComponent(linkValue)}`;
+    }
+    return "";
   }
 
   async createAndDispatch(dto: CreateNotificationDto) {
@@ -914,7 +1142,7 @@ export class NotifyService {
         select: { [preferenceField]: true },
       } as any);
       if (settings?.[preferenceField] === false) {
-        return { skipped: true, reason: 'user_notification_preference' } as any;
+        return { skipped: true, reason: "user_notification_preference" } as any;
       }
     }
 
@@ -927,7 +1155,11 @@ export class NotifyService {
       ...dto.channelMask,
     };
     const channelMask = this.channelService
-      ? await this.channelService.resolveChannelMask(defaultChannelMask, this.toDbNotificationType(dto.type), dto.scene)
+      ? await this.channelService.resolveChannelMask(
+          defaultChannelMask,
+          this.toDbNotificationType(dto.type),
+          dto.scene,
+        )
       : defaultChannelMask;
 
     // 1. 站内通知入库（必须成功）
@@ -946,20 +1178,102 @@ export class NotifyService {
       },
     });
 
-    // 2. 清理未读缓存并分发外部渠道
+    // 2. 站内消息立即可见；外部渠道由独立 Worker 持久消费。
     await this.clearUnreadCache(dto.userId);
-    const delivery = await this.deliverNotificationChannels(notification, channelMask);
-    await this.prisma.notification.update({
-      where: { id: notification.id },
-      data: {
-        deliveryStatus: delivery.deliveryStatus,
-        deliveryReport: delivery.report,
-        deliveryAttempts: { increment: 1 },
-        lastDeliveryAt: new Date(),
-      },
-    });
+    return {
+      ...notification,
+      deliveryStatus: notification.deliveryStatus || "pending",
+      deliveryAttempts: notification.deliveryAttempts || 0,
+      queued: true,
+    };
+  }
 
-    return { ...notification, ...delivery, deliveryAttempts: 1 };
+  @Interval(2_000)
+  async dispatchPendingNotifications() {
+    if (this.pendingDeliveryRunning) return { processed: 0 };
+    this.pendingDeliveryRunning = true;
+    try {
+      const lock = (this.redis as any).withRenewingLock || this.redis.withLock;
+      return (
+        (await lock.call(
+          this.redis,
+          "notify:dispatch-pending",
+          30,
+          async () => {
+            // 进程可能在第三方已受理后中断。转成 partial 后沿用现有延迟重试，
+            // 避免立即形成高频重复推送。
+            await this.prisma.notification.updateMany({
+              where: {
+                deliveryStatus: "processing",
+                updatedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+              },
+              data: { deliveryStatus: "partial" },
+            });
+
+            const pending = await this.prisma.notification.findMany({
+              where: { deliveryStatus: "pending" },
+              orderBy: { createdAt: "asc" },
+              take: 50,
+            });
+            let processed = 0;
+            for (const notification of pending) {
+              const claimedAt = new Date();
+              const claimed = await this.prisma.notification.updateMany({
+                where: { id: notification.id, deliveryStatus: "pending" },
+                data: {
+                  deliveryStatus: "processing",
+                  deliveryAttempts: { increment: 1 },
+                  lastDeliveryAt: claimedAt,
+                },
+              });
+              if (claimed.count !== 1) continue;
+
+              try {
+                const channelMask = (notification.channelMask || {
+                  inApp: true,
+                  websocket: true,
+                }) as any;
+                const delivery = await this.deliverNotificationChannels(
+                  notification,
+                  channelMask,
+                );
+                await this.prisma.notification.update({
+                  where: { id: notification.id },
+                  data: {
+                    deliveryStatus: delivery.deliveryStatus,
+                    deliveryReport: delivery.report,
+                    lastDeliveryAt: claimedAt,
+                  },
+                });
+              } catch (error: any) {
+                await this.prisma.notification.update({
+                  where: { id: notification.id },
+                  data: {
+                    deliveryStatus: "partial",
+                    deliveryReport: {
+                      worker: {
+                        status: "failed",
+                        error: String(
+                          error?.message || "delivery_failed",
+                        ).slice(0, 500),
+                      },
+                    },
+                    lastDeliveryAt: claimedAt,
+                  },
+                });
+                this.logger.warn(
+                  `通知 Worker 投递失败 ${notification.id}: ${error?.message || error}`,
+                );
+              }
+              processed += 1;
+            }
+            return { processed };
+          },
+        )) || { processed: 0 }
+      );
+    } finally {
+      this.pendingDeliveryRunning = false;
+    }
   }
 
   // ===========================================================================
@@ -971,13 +1285,12 @@ export class NotifyService {
     const pageSize = this.toPositiveInt(query.pageSize, 20);
     const where: any = { userId, hiddenAt: null };
     const typeFilter = this.getNotificationTypeFilter(query.type);
-    if (typeFilter) where.type = typeFilter.length === 1 ? typeFilter[0] : { in: typeFilter };
-    if (['1', 'true'].includes(String(query.unreadOnly || '').toLowerCase())) where.isRead = false;
+    if (typeFilter)
+      where.type = typeFilter.length === 1 ? typeFilter[0] : { in: typeFilter };
+    if (["1", "true"].includes(String(query.unreadOnly || "").toLowerCase()))
+      where.isRead = false;
     if (query.regionId) {
-      where.OR = [
-        { regionId: query.regionId },
-        { regionId: null },
-      ];
+      where.OR = [{ regionId: query.regionId }, { regionId: null }];
     }
 
     const [items, total, unreadCount] = await Promise.all([
@@ -985,7 +1298,7 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
       this.prisma.notification.count({ where }),
       this.prisma.notification.count({ where: { ...where, isRead: false } }),
@@ -997,9 +1310,24 @@ export class NotifyService {
 
     items.forEach((item: any) => {
       const data = this.getNotificationData(item);
-      const fromUserId = this.pickString(data.fromUserId, data.from_user_id, data.actorId, data.senderId, item.linkType === 'user' ? item.linkValue : '');
-      const postId = this.pickString(data.postId, data.post_id, data.targetPostId, item.linkType === 'post' ? item.linkValue : '');
-      const commentId = this.pickString(data.commentId, data.comment_id, data.targetCommentId);
+      const fromUserId = this.pickString(
+        data.fromUserId,
+        data.from_user_id,
+        data.actorId,
+        data.senderId,
+        item.linkType === "user" ? item.linkValue : "",
+      );
+      const postId = this.pickString(
+        data.postId,
+        data.post_id,
+        data.targetPostId,
+        item.linkType === "post" ? item.linkValue : "",
+      );
+      const commentId = this.pickString(
+        data.commentId,
+        data.comment_id,
+        data.targetCommentId,
+      );
       if (fromUserId) fromUserIds.add(fromUserId);
       if (postId) postIds.add(postId);
       if (commentId) commentIds.add(commentId);
@@ -1009,7 +1337,14 @@ export class NotifyService {
       fromUserIds.size
         ? this.prisma.user.findMany({
             where: { id: { in: [...fromUserIds] } },
-            select: { id: true, uid: true, publicUid: true, nickname: true, avatar: true, userType: true },
+            select: {
+              id: true,
+              uid: true,
+              publicUid: true,
+              nickname: true,
+              avatar: true,
+              userType: true,
+            },
           })
         : [],
       postIds.size
@@ -1022,7 +1357,11 @@ export class NotifyService {
               title: true,
               content: true,
               createdAt: true,
-              media: { orderBy: { sortOrder: 'asc' }, take: 1, select: { url: true, thumb: true, type: true } },
+              media: {
+                orderBy: { sortOrder: "asc" },
+                take: 1,
+                select: { url: true, thumb: true, type: true },
+              },
             },
           })
         : [],
@@ -1037,7 +1376,16 @@ export class NotifyService {
               content: true,
               images: true,
               createdAt: true,
-              user: { select: { id: true, uid: true, publicUid: true, nickname: true, avatar: true, userType: true } },
+              user: {
+                select: {
+                  id: true,
+                  uid: true,
+                  publicUid: true,
+                  nickname: true,
+                  avatar: true,
+                  userType: true,
+                },
+              },
             },
           })
         : [],
@@ -1050,19 +1398,35 @@ export class NotifyService {
     const formatted = items.map((n: any) => {
       const data = this.getNotificationData(n);
       const clientType = this.toClientNotificationType(n.type);
-      const fromUserId = this.pickString(data.fromUserId, data.from_user_id, data.actorId, data.senderId, n.linkType === 'user' ? n.linkValue : '');
-      const postId = this.pickString(data.postId, data.post_id, data.targetPostId, n.linkType === 'post' ? n.linkValue : '');
-      const commentId = this.pickString(data.commentId, data.comment_id, data.targetCommentId);
+      const fromUserId = this.pickString(
+        data.fromUserId,
+        data.from_user_id,
+        data.actorId,
+        data.senderId,
+        n.linkType === "user" ? n.linkValue : "",
+      );
+      const postId = this.pickString(
+        data.postId,
+        data.post_id,
+        data.targetPostId,
+        n.linkType === "post" ? n.linkValue : "",
+      );
+      const commentId = this.pickString(
+        data.commentId,
+        data.comment_id,
+        data.targetCommentId,
+      );
       const otherUser = this.formatUser(userMap.get(fromUserId));
       const post = this.formatPost(postMap.get(postId));
       const comment = this.formatComment(commentMap.get(commentId), n.type);
-      const targetStatus = commentId && !comment
-        ? 'comment_deleted'
-        : postId && !post
-          ? 'post_deleted'
-          : fromUserId && !otherUser
-            ? 'user_unavailable'
-            : 'available';
+      const targetStatus =
+        commentId && !comment
+          ? "comment_deleted"
+          : postId && !post
+            ? "post_deleted"
+            : fromUserId && !otherUser
+              ? "user_unavailable"
+              : "available";
       return {
         id: n.id,
         notification_id: n.id,
@@ -1090,7 +1454,7 @@ export class NotifyService {
         comment_id: commentId,
         from_user_id: fromUserId,
         target_status: targetStatus,
-        target_available: targetStatus === 'available',
+        target_available: targetStatus === "available",
       };
     });
 
@@ -1116,19 +1480,13 @@ export class NotifyService {
 
     const where: any = { userId, isRead: false, hiddenAt: null };
     if (regionId) {
-      where.OR = [
-        { regionId },
-        { regionId: null },
-      ];
+      where.OR = [{ regionId }, { regionId: null }];
     }
 
     const chatWhere: any = { userId, unreadCount: { gt: 0 } };
     if (regionId) {
       chatWhere.conversation = {
-        OR: [
-          { regionId },
-          { regionId: null },
-        ],
+        OR: [{ regionId }, { regionId: null }],
       };
     }
 
@@ -1169,14 +1527,14 @@ export class NotifyService {
     for (const n of notifications) {
       const key = this.toClientNotificationType(n.type);
       if (key in counts) counts[key]++;
-      else if (key === 'wallet') counts.system++;
+      else if (key === "wallet") counts.system++;
     }
 
     let chatUnread = 0;
     for (const member of chatMembers) {
       const unread = member.unreadCount || 0;
       chatUnread += unread;
-      if (member.conversation?.type === 'group') {
+      if (member.conversation?.type === "group") {
         counts.groupChat += unread;
       } else {
         counts.privateChat += unread;
@@ -1185,11 +1543,12 @@ export class NotifyService {
 
     counts.message += chatUnread;
     const notificationUnread = notifications.length;
-    counts.interaction = counts.comment
-      + counts.reply
-      + counts.like
-      + counts.follow
-      + counts.squat;
+    counts.interaction =
+      counts.comment +
+      counts.reply +
+      counts.like +
+      counts.follow +
+      counts.squat;
     counts.systemChat = notificationUnread - counts.interaction + chatUnread;
     const total = counts.systemChat + counts.interaction;
 
@@ -1201,7 +1560,9 @@ export class NotifyService {
       chatUnread,
       unreadCounts: counts,
     };
-    await this.redis.setJson(cacheKey, result, this.unreadCacheTtl).catch(() => undefined);
+    await this.redis
+      .setJson(cacheKey, result, this.unreadCacheTtl)
+      .catch(() => undefined);
     return result;
   }
 
@@ -1214,7 +1575,7 @@ export class NotifyService {
       where: { id: notificationId },
     });
     if (!notification || notification.userId !== userId) {
-      throw new NotFoundException('通知不存在');
+      throw new NotFoundException("通知不存在");
     }
     if (!notification.isRead) {
       await this.prisma.notification.update({
@@ -1230,7 +1591,9 @@ export class NotifyService {
     const where: any = { userId, isRead: false, hiddenAt: null };
     if (query.type) {
       const typeFilter = this.getNotificationTypeFilter(query.type);
-      if (typeFilter) where.type = typeFilter.length === 1 ? typeFilter[0] : { in: typeFilter };
+      if (typeFilter)
+        where.type =
+          typeFilter.length === 1 ? typeFilter[0] : { in: typeFilter };
     }
     if (query.regionId) {
       where.OR = [{ regionId: query.regionId }, { regionId: null }];
@@ -1245,17 +1608,30 @@ export class NotifyService {
     return { success: true, affected: result.count };
   }
 
-  async batchAction(userId: string, rawIds?: string[], action?: 'read' | 'hide') {
-    const ids = [...new Set((Array.isArray(rawIds) ? rawIds : []).map(String).filter(Boolean))];
-    if (!ids.length || ids.length > 100 || !['read', 'hide'].includes(String(action))) {
-      throw new BadRequestException('请选择 1-100 条通知并指定有效操作');
+  async batchAction(
+    userId: string,
+    rawIds?: string[],
+    action?: "read" | "hide",
+  ) {
+    const ids = [
+      ...new Set(
+        (Array.isArray(rawIds) ? rawIds : []).map(String).filter(Boolean),
+      ),
+    ];
+    if (
+      !ids.length ||
+      ids.length > 100 ||
+      !["read", "hide"].includes(String(action))
+    ) {
+      throw new BadRequestException("请选择 1-100 条通知并指定有效操作");
     }
     const now = new Date();
     const result = await this.prisma.notification.updateMany({
       where: { id: { in: ids }, userId, hiddenAt: null },
-      data: action === 'hide'
-        ? { hiddenAt: now, isRead: true, readAt: now }
-        : { isRead: true, readAt: now },
+      data:
+        action === "hide"
+          ? { hiddenAt: now, isRead: true, readAt: now }
+          : { isRead: true, readAt: now },
     });
     await this.clearUnreadCache(userId);
     return { success: true, affected: result.count };
@@ -1265,42 +1641,75 @@ export class NotifyService {
     const notification = await this.prisma.notification.findUnique({
       where: { id: notificationId },
     });
-    if (!notification) throw new NotFoundException('通知不存在');
+    if (!notification) throw new NotFoundException("通知不存在");
     if (operatorId) {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
-      if (accessibleUserIds !== null && !accessibleUserIds.includes(notification.userId)) {
-        throw new ForbiddenException('无权操作该区域通知');
+      if (
+        accessibleUserIds !== null &&
+        !accessibleUserIds.includes(notification.userId)
+      ) {
+        throw new ForbiddenException("无权操作该区域通知");
       }
     }
-    if (String(notification.deliveryStatus || '').toLowerCase() === 'retired') {
-      return { success: true, notification, message: '该通知已退役，不再重试投递' };
+    if (String(notification.deliveryStatus || "").toLowerCase() === "retired") {
+      return {
+        success: true,
+        notification,
+        message: "该通知已退役，不再重试投递",
+      };
     }
-    const channelMask = (notification.channelMask || { inApp: true, websocket: true }) as any;
-    const previousReport = (notification.deliveryReport || {}) as Record<string, any>;
-    const failedChannels = ['websocket', 'email', 'sms'].filter(
-      channel => previousReport[channel]?.status === 'failed',
-    );
+    const channelMask = (notification.channelMask || {
+      inApp: true,
+      websocket: true,
+    }) as any;
+    const previousReport = (notification.deliveryReport || {}) as Record<
+      string,
+      any
+    >;
+    const failedChannels = [
+      "websocket",
+      "push",
+      "email",
+      "sms",
+      "wechatSubscribe",
+      "officialAccount",
+    ].filter((channel) => previousReport[channel]?.status === "failed");
     if (Object.keys(previousReport).length && !failedChannels.length) {
-      return { success: true, notification, message: '没有需要重试的失败渠道' };
+      return { success: true, notification, message: "没有需要重试的失败渠道" };
     }
     const retryMask = Object.keys(previousReport).length
       ? {
           inApp: true,
-          websocket: failedChannels.includes('websocket'),
-          email: failedChannels.includes('email'),
-          sms: failedChannels.includes('sms'),
-          wechatSubscribe: false,
-          officialAccount: false,
+          websocket: failedChannels.includes("websocket"),
+          push: failedChannels.includes("push"),
+          email: failedChannels.includes("email"),
+          sms: failedChannels.includes("sms"),
+          wechatSubscribe: failedChannels.includes("wechatSubscribe"),
+          officialAccount: failedChannels.includes("officialAccount"),
         }
       : channelMask;
-    const delivery = await this.deliverNotificationChannels(notification, retryMask);
+    // 失败渠道重试必须严格遵循 retryMask。首次投递可根据业务场景隐式选择小程序模板，
+    // 但不能在仅重试 Push/WebSocket 时再次消耗一次性微信订阅授权。
+    const delivery = await this.deliverNotificationChannels(
+      notification,
+      retryMask,
+      {
+        allowImplicitWechatSubscribe: !Object.keys(previousReport).length,
+      },
+    );
     const mergedReport = { ...previousReport };
-    (failedChannels.length ? failedChannels : Object.keys(delivery.report)).forEach(channel => {
-      if (delivery.report[channel]) mergedReport[channel] = delivery.report[channel];
+    (failedChannels.length
+      ? failedChannels
+      : Object.keys(delivery.report)
+    ).forEach((channel) => {
+      if (delivery.report[channel])
+        mergedReport[channel] = delivery.report[channel];
     });
     const deliveryStatus = Object.values(mergedReport).some(
-      (item: any) => item?.status === 'failed',
-    ) ? 'partial' : 'delivered';
+      (item: any) => item?.status === "failed",
+    )
+      ? "partial"
+      : "delivered";
     const updated = await this.prisma.notification.update({
       where: { id: notificationId },
       data: {
@@ -1318,28 +1727,34 @@ export class NotifyService {
     if (this.retryDeliveryRunning) return { processed: 0 };
     this.retryDeliveryRunning = true;
     try {
-      return (await this.redis.withLock('notify:retry-failed-deliveries', 55, async () => {
-        const notifications = await this.prisma.notification.findMany({
-        where: {
-          deliveryStatus: 'partial',
-          deliveryAttempts: { lt: 3 },
-          lastDeliveryAt: { lt: new Date(Date.now() - 5 * 60_000) },
-        },
-        select: { id: true },
-        orderBy: { lastDeliveryAt: 'asc' },
-        take: 50,
-      });
-        let processed = 0;
-        for (const notification of notifications) {
-          try {
-            await this.retryNotificationDelivery(notification.id);
-            processed += 1;
-          } catch (error: any) {
-            this.logger.warn(`通知自动重试失败 ${notification.id}: ${error.message}`);
+      return (
+        (await (
+          (this.redis as any).withRenewingLock || this.redis.withLock
+        ).call(this.redis, "notify:retry-failed-deliveries", 55, async () => {
+          const notifications = await this.prisma.notification.findMany({
+            where: {
+              deliveryStatus: "partial",
+              deliveryAttempts: { lt: 3 },
+              lastDeliveryAt: { lt: new Date(Date.now() - 5 * 60_000) },
+            },
+            select: { id: true },
+            orderBy: { lastDeliveryAt: "asc" },
+            take: 50,
+          });
+          let processed = 0;
+          for (const notification of notifications) {
+            try {
+              await this.retryNotificationDelivery(notification.id);
+              processed += 1;
+            } catch (error: any) {
+              this.logger.warn(
+                `通知自动重试失败 ${notification.id}: ${error.message}`,
+              );
+            }
           }
-        }
-        return { processed };
-      })) || { processed: 0 };
+          return { processed };
+        })) || { processed: 0 }
+      );
     } finally {
       this.retryDeliveryRunning = false;
     }
@@ -1358,11 +1773,15 @@ export class NotifyService {
     return { success: true };
   }
 
-  async reviewNotification(userId: string, notificationId: string, action: string) {
+  async reviewNotification(
+    userId: string,
+    notificationId: string,
+    action: string,
+  ) {
     void userId;
     void notificationId;
     void action;
-    throw new GoneException('通知确认不能审核内容，请使用后台专用审核流程');
+    throw new GoneException("通知确认不能审核内容，请使用后台专用审核流程");
   }
 
   // ===========================================================================
@@ -1376,24 +1795,28 @@ export class NotifyService {
     const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
     if (query.userId) {
       const userId = String(query.userId);
-      where.userId = accessibleUserIds === null || accessibleUserIds.includes(userId) ? userId : { in: [] };
+      where.userId =
+        accessibleUserIds === null || accessibleUserIds.includes(userId)
+          ? userId
+          : { in: [] };
     } else if (accessibleUserIds !== null) {
       where.userId = { in: accessibleUserIds };
     }
     if (query.regionId) where.regionId = String(query.regionId);
     if (query.type) where.type = this.toDbNotificationType(query.type) as any;
-    if (query.readStatus === 'read') where.isRead = true;
-    if (query.readStatus === 'unread') where.isRead = false;
-    if (query.hiddenStatus === 'hidden') where.hiddenAt = { not: null };
-    if (query.hiddenStatus === 'visible') where.hiddenAt = null;
-    if (query.deliveryStatus) where.deliveryStatus = String(query.deliveryStatus);
+    if (query.readStatus === "read") where.isRead = true;
+    if (query.readStatus === "unread") where.isRead = false;
+    if (query.hiddenStatus === "hidden") where.hiddenAt = { not: null };
+    if (query.hiddenStatus === "visible") where.hiddenAt = null;
+    if (query.deliveryStatus)
+      where.deliveryStatus = String(query.deliveryStatus);
     const [list, total] = await Promise.all([
       this.prisma.notification.findMany({
         where,
         include: { user: { select: { id: true, nickname: true } } },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
       this.prisma.notification.count({ where }),
     ]);
@@ -1401,31 +1824,48 @@ export class NotifyService {
   }
 
   async adminBroadcast(adminId: string, dto: AdminBroadcastDto) {
-    const targetUserId = String(dto.userId || '').trim();
-    const targetRegionId = String(dto.regionId || '').trim();
-    const targetType = dto.targetType || (targetUserId ? 'user' : targetRegionId ? 'region' : 'all');
-    if (targetUserId && targetRegionId) throw new BadRequestException('单用户通知不能同时指定区域');
-    if (targetType === 'user' && !targetUserId) throw new BadRequestException('请选择接收用户');
-    if (targetType === 'region' && !targetRegionId) throw new BadRequestException('请选择接收区域');
-    if (targetType === 'all' && (targetUserId || targetRegionId)) throw new BadRequestException('全员通知不能指定用户或区域');
-    if (targetType !== 'user' && targetUserId) throw new BadRequestException('接收目标与 userId 不一致');
-    if (targetType !== 'region' && targetRegionId) throw new BadRequestException('接收目标与 regionId 不一致');
+    const targetUserId = String(dto.userId || "").trim();
+    const targetRegionId = String(dto.regionId || "").trim();
+    const targetType =
+      dto.targetType ||
+      (targetUserId ? "user" : targetRegionId ? "region" : "all");
+    if (targetUserId && targetRegionId)
+      throw new BadRequestException("单用户通知不能同时指定区域");
+    if (targetType === "user" && !targetUserId)
+      throw new BadRequestException("请选择接收用户");
+    if (targetType === "region" && !targetRegionId)
+      throw new BadRequestException("请选择接收区域");
+    if (targetType === "all" && (targetUserId || targetRegionId))
+      throw new BadRequestException("全员通知不能指定用户或区域");
+    if (targetType !== "user" && targetUserId)
+      throw new BadRequestException("接收目标与 userId 不一致");
+    if (targetType !== "region" && targetRegionId)
+      throw new BadRequestException("接收目标与 regionId 不一致");
 
     const accessibleUserIds = await this.getAccessibleUserIds(adminId);
     if (targetUserId) {
-      if (accessibleUserIds !== null && !accessibleUserIds.includes(targetUserId)) {
-        throw new ForbiddenException('无权向该用户发送通知');
+      if (
+        accessibleUserIds !== null &&
+        !accessibleUserIds.includes(targetUserId)
+      ) {
+        throw new ForbiddenException("无权向该用户发送通知");
       }
       const [user, profile] = await Promise.all([
-        this.prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } }),
-        this.prisma.userProfile.findUnique({ where: { userId: targetUserId }, select: { regionId: true } }),
+        this.prisma.user.findUnique({
+          where: { id: targetUserId },
+          select: { id: true },
+        }),
+        this.prisma.userProfile.findUnique({
+          where: { userId: targetUserId },
+          select: { regionId: true },
+        }),
       ]);
-      if (!user) throw new NotFoundException('接收用户不存在');
+      if (!user) throw new NotFoundException("接收用户不存在");
       const notification = await this.createAndDispatch({
         userId: targetUserId,
         regionId: profile?.regionId || undefined,
-        type: 'ADMIN_BROADCAST',
-        scene: 'admin_broadcast',
+        type: "ADMIN_BROADCAST",
+        scene: "admin_broadcast",
         title: dto.title,
         content: dto.content,
         data: dto.data || { operatorId: adminId },
@@ -1435,7 +1875,7 @@ export class NotifyService {
       });
       return {
         success: true,
-        targetType: 'user',
+        targetType: "user",
         createdCount: 1,
         notificationId: (notification as any).id || null,
       };
@@ -1450,17 +1890,27 @@ export class NotifyService {
       ...dto.channelMask,
     };
     const channelMask = this.channelService
-      ? await this.channelService.resolveChannelMask(defaultChannelMask, 'ADMIN_BROADCAST', 'admin_broadcast')
+      ? await this.channelService.resolveChannelMask(
+          defaultChannelMask,
+          "ADMIN_BROADCAST",
+          "admin_broadcast",
+        )
       : defaultChannelMask;
 
     let userIds: string[] = [];
     if (targetRegionId) {
-      await this.adminDataScope.assertRegionAccess(adminId, targetRegionId, '无权向该区域发送通知');
+      await this.adminDataScope.assertRegionAccess(
+        adminId,
+        targetRegionId,
+        "无权向该区域发送通知",
+      );
       // AUD-P1-022: 使用 regionId 精确匹配（此前错误使用 region 名称字段查询）
       const profiles = await this.prisma.userProfile.findMany({
         where: {
           regionId: targetRegionId,
-          ...(accessibleUserIds === null ? {} : { userId: { in: accessibleUserIds } }),
+          ...(accessibleUserIds === null
+            ? {}
+            : { userId: { in: accessibleUserIds } }),
         },
         select: { userId: true },
       });
@@ -1481,20 +1931,22 @@ export class NotifyService {
     const data = userIds.map((userId) => ({
       userId,
       regionId: targetRegionId || null,
-      type: 'ADMIN_BROADCAST' as any,
-      scene: 'admin_broadcast',
+      type: "ADMIN_BROADCAST" as any,
+      scene: "admin_broadcast",
       title: dto.title,
       content: dto.content,
       data: dto.data || { operatorId: adminId },
       linkType: dto.linkType || null,
       linkValue: dto.linkValue || null,
       channelMask: channelMask as any,
-      deliveryStatus: 'delivered',
+      deliveryStatus: "delivered",
       deliveryReport: {
-        inApp: { status: 'success' },
-        websocket: channelMask.websocket ? { status: 'attempted' } : { status: 'skipped' },
+        inApp: { status: "success" },
+        websocket: channelMask.websocket
+          ? { status: "attempted" }
+          : { status: "skipped" },
         ...(channelMask.wechatSubscribe
-          ? { wechat: { status: 'queued', detail: 'see_wechat_message_logs' } }
+          ? { wechat: { status: "queued", detail: "see_wechat_message_logs" } }
           : {}),
       },
       deliveryAttempts: 1,
@@ -1507,10 +1959,10 @@ export class NotifyService {
     // 实时推送给在线用户（Socket.IO + 原生 WebSocket）
     if (channelMask.websocket) {
       const pushPayload = {
-        event: 'notification',
-        type: 'notification',
+        event: "notification",
+        type: "notification",
         data: {
-          type: 'system',
+          type: "system",
           title: dto.title,
           content: dto.content,
           linkType: dto.linkType,
@@ -1521,7 +1973,7 @@ export class NotifyService {
 
       for (const userId of userIds) {
         try {
-          this.wsGateway.pushNotification(userId, pushPayload);
+          await this.wsGateway?.pushNotification(userId, pushPayload);
         } catch {
           // 推送失败不影响主流程
         }
@@ -1574,16 +2026,19 @@ export class NotifyService {
   // 微信发送日志
   // ===========================================================================
 
-  async getWechatMessageLogs(query: {
-    userId?: string;
-    platformType?: string;
-    templateType?: string;
-    status?: string;
-    startDate?: string;
-    endDate?: string;
-    page?: number;
-    pageSize?: number;
-  }, operatorId?: string) {
+  async getWechatMessageLogs(
+    query: {
+      userId?: string;
+      platformType?: string;
+      templateType?: string;
+      status?: string;
+      startDate?: string;
+      endDate?: string;
+      page?: number;
+      pageSize?: number;
+    },
+    operatorId?: string,
+  ) {
     const page = this.toPositiveInt(query.page, 1);
     const pageSize = this.toPositiveInt(query.pageSize, 20);
     const where: any = {};
@@ -1609,7 +2064,7 @@ export class NotifyService {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
       if (accessibleUserIds !== null) {
         where.userId = where.userId
-          ? { in: accessibleUserIds.filter(id => id === where.userId) }
+          ? { in: accessibleUserIds.filter((id) => id === where.userId) }
           : { in: accessibleUserIds };
       }
     }
@@ -1619,16 +2074,16 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
       this.prisma.wechatMessageLog.count({ where }),
     ]);
 
     // 脱敏处理
-    const maskedList = list.map(item => ({
+    const maskedList = list.map((item) => ({
       ...item,
       openid: this.maskOpenid(item.openid),
-      payload: item.payload ? '[已隐藏]' : null,
+      payload: item.payload ? "[已隐藏]" : null,
     }));
 
     return { list: maskedList, total, page, pageSize };
@@ -1638,15 +2093,19 @@ export class NotifyService {
     const log = await this.prisma.wechatMessageLog.findUnique({
       where: { id: logId },
     });
-    if (!log) throw new NotFoundException('日志不存在');
-    if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
-    if (log.platformType === 'official' && this.wechatOfficial) {
+    if (!log) throw new NotFoundException("日志不存在");
+    if (log.status === "success")
+      return { success: true, message: "该消息已发送成功" };
+    if (log.platformType === "official" && this.wechatOfficial) {
       return this.wechatOfficial.retryTemplateMessage(logId);
     }
-    if (['miniprogram', 'miniapp'].includes(log.platformType) && this.wechatSubscribe) {
+    if (
+      ["miniprogram", "miniapp"].includes(log.platformType) &&
+      this.wechatSubscribe
+    ) {
       return this.wechatSubscribe.retryMessage(logId);
     }
-    throw new BadRequestException('对应的微信发送服务不可用');
+    throw new BadRequestException("对应的微信发送服务不可用");
   }
 
   // ===========================================================================
@@ -1672,101 +2131,180 @@ export class NotifyService {
 
     const where: any = {};
     if (query.platform) where.platform = query.platform;
-    if (query.online === 'true') where.online = true;
-    if (query.online === 'false') where.online = false;
+    if (query.online === "true") where.online = true;
+    if (query.online === "false") where.online = false;
 
-    const [list, total, onlineCount, adminOnlineCount, miniappOnlineCount, riderAppOnlineCount] = await Promise.all([
+    const [
+      list,
+      total,
+      onlineCount,
+      adminOnlineCount,
+      miniappOnlineCount,
+      riderAppOnlineCount,
+    ] = await Promise.all([
       this.prisma.realtimeSession.findMany({
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { lastSeenAt: 'desc' },
+        orderBy: { lastSeenAt: "desc" },
       }),
       this.prisma.realtimeSession.count({ where }),
       this.prisma.realtimeSession.count({ where: { online: true } }),
-      this.prisma.realtimeSession.count({ where: { online: true, platform: 'admin' } }),
-      this.prisma.realtimeSession.count({ where: { online: true, platform: 'miniapp' } }),
-      this.prisma.realtimeSession.count({ where: { online: true, platform: 'rider_app' } }),
+      this.prisma.realtimeSession.count({
+        where: { online: true, platform: "admin" },
+      }),
+      this.prisma.realtimeSession.count({
+        where: { online: true, platform: "miniapp" },
+      }),
+      this.prisma.realtimeSession.count({
+        where: { online: true, platform: "rider_app" },
+      }),
     ]);
 
-    const userIds = Array.from(new Set(list.map((item) => item.userId).filter(Boolean))) as string[];
-    const adminIds = Array.from(new Set(list.map((item) => item.adminId).filter(Boolean))) as string[];
+    const userIds = Array.from(
+      new Set(list.map((item) => item.userId).filter(Boolean)),
+    ) as string[];
+    const adminIds = Array.from(
+      new Set(list.map((item) => item.adminId).filter(Boolean)),
+    ) as string[];
+    const targetIds = Array.from(
+      new Set(list.map((item) => item.userId || item.adminId).filter(Boolean)),
+    ) as string[];
+    const [socketStates, socketCountEntries] = await Promise.all([
+      Promise.all(
+        list.map((item) =>
+          this.redis
+            .getJson(`lm:ws:native:socket:${item.socketId}`)
+            .catch(() => null),
+        ),
+      ),
+      Promise.all(
+        targetIds.map(async (targetId) => {
+          const sockets = await this.redis
+            .hgetall(`lm:ws:native:user:${targetId}`)
+            .catch(() => ({}));
+          return [targetId, Object.keys(sockets).length] as const;
+        }),
+      ),
+    ]);
+    const liveSocketCountMap = new Map(socketCountEntries);
     const [users, admins, riders] = await Promise.all([
       userIds.length
         ? this.prisma.user.findMany({
-          where: { id: { in: userIds } },
-          select: { id: true, nickname: true, avatar: true, phone: true, openid: true, userType: true },
-        })
+            where: { id: { in: userIds } },
+            select: {
+              id: true,
+              nickname: true,
+              avatar: true,
+              phone: true,
+              openid: true,
+              userType: true,
+            },
+          })
         : Promise.resolve([]),
       adminIds.length
         ? this.prisma.adminAccount.findMany({
-          where: { id: { in: adminIds } },
-          select: { id: true, username: true, realName: true, avatar: true, phone: true, email: true },
-        })
+            where: { id: { in: adminIds } },
+            select: {
+              id: true,
+              username: true,
+              realName: true,
+              avatar: true,
+              phone: true,
+              email: true,
+            },
+          })
         : Promise.resolve([]),
       userIds.length
         ? this.prisma.regionRider.findMany({
-          where: { userId: { in: userIds } },
-          select: {
-            userId: true, realName: true, phone: true, regionId: true,
-            status: true, verifyStatus: true, riderType: true,
-          },
-        })
+            where: { userId: { in: userIds } },
+            select: {
+              userId: true,
+              realName: true,
+              phone: true,
+              regionId: true,
+              status: true,
+              verifyStatus: true,
+              riderType: true,
+            },
+          })
         : Promise.resolve([]),
     ]);
     const userMap = new Map(users.map((item) => [item.id, item]));
     const adminMap = new Map(admins.map((item) => [item.id, item]));
     const riderMap = new Map(riders.map((item) => [item.userId, item]));
-    const regionIds = Array.from(new Set(riders.map((item) => item.regionId).filter(Boolean))) as string[];
+    const regionIds = Array.from(
+      new Set(riders.map((item) => item.regionId).filter(Boolean)),
+    ) as string[];
     const regions = regionIds.length
-      ? await this.prisma.region.findMany({ where: { id: { in: regionIds } }, select: { id: true, name: true } })
+      ? await this.prisma.region.findMany({
+          where: { id: { in: regionIds } },
+          select: { id: true, name: true },
+        })
       : [];
     const regionMap = new Map(regions.map((item) => [item.id, item.name]));
 
     return {
-      list: list.map((item) => {
+      list: list.map((item, index) => {
         const user = item.userId ? userMap.get(item.userId) : null;
         const admin = item.adminId ? adminMap.get(item.adminId) : null;
         const rider = item.userId ? riderMap.get(item.userId) : null;
-        const targetId = item.userId || item.adminId || '';
+        const targetId = item.userId || item.adminId || "";
         return {
           ...item,
-          socketLive: this.wsNative.isSocketLive(item.socketId),
-          liveSocketCount: targetId ? this.wsNative.getLiveSocketCount(targetId) : 0,
+          socketLive: Boolean(socketStates[index]),
+          liveSocketCount: targetId ? liveSocketCountMap.get(targetId) || 0 : 0,
           rider: rider
             ? {
-              realName: rider.realName,
-              phone: this.maskPhone(rider.phone),
-              regionId: rider.regionId,
-              regionName: regionMap.get(rider.regionId) || '',
-              status: rider.status,
-              verifyStatus: rider.verifyStatus,
-              riderType: rider.riderType,
-            }
+                realName: rider.realName,
+                phone: this.maskPhone(rider.phone),
+                regionId: rider.regionId,
+                regionName: regionMap.get(rider.regionId) || "",
+                status: rider.status,
+                verifyStatus: rider.verifyStatus,
+                riderType: rider.riderType,
+              }
             : null,
           actor: user
             ? {
-              id: user.id,
-              name: item.platform === 'rider_app' ? (rider?.realName || user.nickname || '未命名骑手') : (user.nickname || '未命名用户'),
-              avatar: user.avatar || '',
-              subtitle: rider?.phone ? this.maskPhone(rider.phone) : user.phone ? this.maskPhone(user.phone) : '',
-              type: item.platform === 'rider_app' ? '官方骑手' : user.userType === 4 ? '机器人用户' : '小程序用户',
-            }
+                id: user.id,
+                name:
+                  item.platform === "rider_app"
+                    ? rider?.realName || user.nickname || "未命名骑手"
+                    : user.nickname || "未命名用户",
+                avatar: user.avatar || "",
+                subtitle: rider?.phone
+                  ? this.maskPhone(rider.phone)
+                  : user.phone
+                    ? this.maskPhone(user.phone)
+                    : "",
+                type:
+                  item.platform === "rider_app"
+                    ? "官方骑手"
+                    : user.userType === 4
+                      ? "机器人用户"
+                      : "小程序用户",
+              }
             : admin
               ? {
-                id: admin.id,
-                name: admin.realName || admin.username,
-                avatar: admin.avatar || '',
-                subtitle: admin.phone ? this.maskPhone(admin.phone) : '',
-                type: '后台管理员',
-              }
+                  id: admin.id,
+                  name: admin.realName || admin.username,
+                  avatar: admin.avatar || "",
+                  subtitle: admin.phone ? this.maskPhone(admin.phone) : "",
+                  type: "后台管理员",
+                }
               : {
-                id: targetId,
-                name: targetId || '未知连接',
-                avatar: '',
-                subtitle: '',
-                type: item.platform === 'admin' ? '后台管理员' : item.platform === 'rider_app' ? '官方骑手' : '小程序用户',
-              },
+                  id: targetId,
+                  name: targetId || "未知连接",
+                  avatar: "",
+                  subtitle: "",
+                  type:
+                    item.platform === "admin"
+                      ? "后台管理员"
+                      : item.platform === "rider_app"
+                        ? "官方骑手"
+                        : "小程序用户",
+                },
         };
       }),
       total,
@@ -1783,48 +2321,62 @@ export class NotifyService {
 
   private async countRedisKeys(pattern: string) {
     const client = this.redis.getClient();
-    let cursor = '0';
+    let cursor = "0";
     let count = 0;
     do {
-      const [nextCursor, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        200,
+      );
       cursor = nextCursor;
       count += keys.length;
-    } while (cursor !== '0');
+    } while (cursor !== "0");
     return count;
   }
 
   async getRealtimeStatus() {
-    const localConnections = this.wsNative.getOnlineCount();
-    const localUsers = this.wsNative.getOnlineUserIds().length;
     const pushChannel = this.wsNative.getPushChannel();
-    const instanceId = this.wsNative.getInstanceId();
-    const dbOnlineCount = await this.prisma.realtimeSession.count({ where: { online: true } });
+    const publisherInstanceId = this.wsNative.getInstanceId();
+    const dbOnlineCount = await this.prisma.realtimeSession.count({
+      where: { online: true },
+    });
 
     let redisOk = false;
-    let redisMessage = 'Redis 未连接';
+    let redisMessage = "Redis 未连接";
     let redisOnlineSockets = 0;
     let redisOnlineUsers = 0;
+    let realtimeHeartbeat: any = null;
     try {
       await this.redis.getClient().ping();
       redisOk = true;
-      redisMessage = 'Redis 连接正常';
-      [redisOnlineSockets, redisOnlineUsers] = await Promise.all([
-        this.countRedisKeys('lm:ws:native:socket:*'),
-        this.countRedisKeys('lm:ws:native:user:*'),
-      ]);
+      redisMessage = "Redis 连接正常";
+      [redisOnlineSockets, redisOnlineUsers, realtimeHeartbeat] =
+        await Promise.all([
+          this.countRedisKeys("lm:ws:native:socket:*"),
+          this.countRedisKeys("lm:ws:native:user:*"),
+          this.redis.getJson("lm:service:realtime:heartbeat"),
+        ]);
     } catch (err: any) {
-      redisMessage = err?.message || 'Redis 连接失败';
+      redisMessage = err?.message || "Redis 连接失败";
     }
 
     return {
       websocket: {
         enabled: true,
-        nativePath: '/ws-native',
-        publicPath: '/api/ws-native',
-        localConnections,
-        localUsers,
+        serviceRole: "realtime",
+        servicePort: Number(process.env.REALTIME_PORT || 3001),
+        nativePath: "/ws-native",
+        publicPath: "/api/ws-native",
+        localConnections:
+          Number(realtimeHeartbeat?.connections) || redisOnlineSockets,
+        localUsers: Number(realtimeHeartbeat?.users) || redisOnlineUsers,
         dbOnlineCount,
-        instanceId,
+        instanceId: realtimeHeartbeat?.instanceId || "offline",
+        heartbeatAt: realtimeHeartbeat?.updatedAt || null,
+        publisherInstanceId,
       },
       redis: {
         ok: redisOk,
@@ -1832,18 +2384,19 @@ export class NotifyService {
         onlineSockets: redisOnlineSockets,
         onlineUsers: redisOnlineUsers,
         pushChannel,
-        onlineSocketKeyPattern: 'lm:ws:native:socket:*',
-        onlineUserKeyPattern: 'lm:ws:native:user:*',
+        onlineSocketKeyPattern: "lm:ws:native:socket:*",
+        onlineUserKeyPattern: "lm:ws:native:user:*",
       },
       nginx: {
-        expectedApiWebSocketPath: '/api/ws-native',
-        backendNativePath: '/ws-native',
-        note: '客户只需要配置 https://域名/api；Nginx 需将 /api/ws-native 转发到后端 /ws-native。',
+        expectedApiWebSocketPath: "/api/ws-native",
+        backendNativePath: "/ws-native",
+        realtimeUpstream: "http://127.0.0.1:3001",
+        note: "客户只需要配置 https://域名/api；Nginx 需将 /api/ws-native 转发到 Realtime:3001/ws-native。",
       },
       limits: {
-        connect: '同一 IP 60 秒最多 60 次连接',
-        send: '普通用户 10 秒最多 20 条消息，管理员 10 秒最多 60 条',
-        operation: '订阅/进群/退群等操作 10 秒最多 80 次',
+        connect: "同一 IP 60 秒最多 60 次连接",
+        send: "普通用户 10 秒最多 20 条消息，管理员 10 秒最多 60 条",
+        operation: "订阅/进群/退群等操作 10 秒最多 80 次",
         maxMessageLength: 5000,
       },
       checkedAt: new Date().toISOString(),
@@ -1855,15 +2408,15 @@ export class NotifyService {
       {
         sub: adminId,
         isAdmin: true,
-        purpose: 'realtime-ws-probe',
+        purpose: "realtime-ws-probe",
       },
-      { expiresIn: '2m' },
+      { expiresIn: "2m" },
     );
     return {
       token,
       expiresIn: 120,
-      publicPath: '/api/ws-native',
-      nativePath: '/ws-native',
+      publicPath: "/api/ws-native",
+      nativePath: "/ws-native",
     };
   }
 
@@ -1871,18 +2424,26 @@ export class NotifyService {
     if (operatorId) {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
       if (accessibleUserIds !== null && !accessibleUserIds.includes(userId)) {
-        throw new ForbiddenException('无权向该区域用户发送消息');
+        throw new ForbiddenException("无权向该区域用户发送消息");
       }
     }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true },
     });
-    if (!user) throw new NotFoundException('用户不存在');
+    if (!user) throw new NotFoundException("用户不存在");
 
     const official = await this.getOfficialUser();
-    const conversation = await this.findOrCreateOfficialConversation(userId, official.id);
-    const result = await this.replyOfficialConversation(conversation.id, message, undefined, operatorId);
+    const conversation = await this.findOrCreateOfficialConversation(
+      userId,
+      official.id,
+    );
+    const result = await this.replyOfficialConversation(
+      conversation.id,
+      message,
+      undefined,
+      operatorId,
+    );
     return {
       ...result,
       officialUserId: official.id,
@@ -1890,39 +2451,58 @@ export class NotifyService {
     };
   }
 
-  private async assertOfficialConversationAccess(conversationId: string, officialUserId: string, operatorId: string) {
+  private async assertOfficialConversationAccess(
+    conversationId: string,
+    officialUserId: string,
+    operatorId: string,
+  ) {
     const member = await this.prisma.conversationMember.findFirst({
       where: {
         conversationId,
         userId: { not: officialUserId },
-        conversation: { type: 'private', members: { some: { userId: officialUserId } } },
+        conversation: {
+          type: "private",
+          members: { some: { userId: officialUserId } },
+        },
       },
       select: { userId: true },
     });
-    if (!member) throw new NotFoundException('官方会话不存在');
+    if (!member) throw new NotFoundException("官方会话不存在");
     const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
-    if (accessibleUserIds !== null && !accessibleUserIds.includes(member.userId)) {
-      throw new ForbiddenException('无权访问该区域官方会话');
+    if (
+      accessibleUserIds !== null &&
+      !accessibleUserIds.includes(member.userId)
+    ) {
+      throw new ForbiddenException("无权访问该区域官方会话");
     }
   }
 
-  async getOfficialConversations(operatorId: string, query: { keyword?: string; status?: string; page?: number; pageSize?: number }) {
+  async getOfficialConversations(
+    operatorId: string,
+    query: {
+      keyword?: string;
+      status?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ) {
     const official = await this.getOfficialUser();
     const page = this.toPositiveInt(query.page, 1);
     const pageSize = this.toPositiveInt(query.pageSize, 20);
     const where: any = {
-      type: 'private',
-      AND: [
-        { members: { some: { userId: official.id } } },
-      ],
+      type: "private",
+      AND: [{ members: { some: { userId: official.id } } }],
     };
     const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
     if (accessibleUserIds !== null) {
-      where.AND.push({ members: { some: { userId: { in: accessibleUserIds } } } });
+      where.AND.push({
+        members: { some: { userId: { in: accessibleUserIds } } },
+      });
     }
-    const keyword = String(query.keyword || '').trim();
-    const status = String(query.status || '').trim();
-    if (OFFICIAL_CONVERSATION_STATUSES.has(status)) where.serviceStatus = status;
+    const keyword = String(query.keyword || "").trim();
+    const status = String(query.status || "").trim();
+    if (OFFICIAL_CONVERSATION_STATUSES.has(status))
+      where.serviceStatus = status;
     if (keyword) {
       where.AND.push({
         members: {
@@ -1946,13 +2526,22 @@ export class NotifyService {
         include: {
           members: {
             include: {
-              user: { select: { id: true, nickname: true, avatar: true, phone: true, openid: true, userType: true } },
+              user: {
+                select: {
+                  id: true,
+                  nickname: true,
+                  avatar: true,
+                  phone: true,
+                  openid: true,
+                  userType: true,
+                },
+              },
             },
           },
         },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { lastMsgTime: 'desc' },
+        orderBy: { lastMsgTime: "desc" },
       }),
       this.prisma.conversation.count({ where }),
     ]);
@@ -1961,68 +2550,107 @@ export class NotifyService {
     const tickets = conversationIds.length
       ? await (this.prisma as any).assistantTicket.findMany({
           where: { conversationId: { in: conversationIds } },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: { updatedAt: "desc" },
         })
       : [];
     const latestTicketByConversation = new Map<string, any>();
     tickets.forEach((ticket: any) => {
-      if (ticket.conversationId && !latestTicketByConversation.has(ticket.conversationId)) {
+      if (
+        ticket.conversationId &&
+        !latestTicketByConversation.has(ticket.conversationId)
+      ) {
         latestTicketByConversation.set(ticket.conversationId, ticket);
       }
     });
     const list = items.map((conversation) => {
-      const officialMember = conversation.members.find((member) => member.userId === official.id);
-      const otherMember = conversation.members.find((member) => member.userId !== official.id);
+      const officialMember = conversation.members.find(
+        (member) => member.userId === official.id,
+      );
+      const otherMember = conversation.members.find(
+        (member) => member.userId !== official.id,
+      );
       const user = otherMember?.user;
       const ticket = latestTicketByConversation.get(conversation.id) || null;
       return {
         id: conversation.id,
         conversationId: conversation.id,
-        userId: user?.id || '',
+        userId: user?.id || "",
         user: user
           ? {
-            id: user.id,
-            name: user.nickname || user.phone || user.openid || '未命名用户',
-            avatar: user.avatar || '',
-            subtitle: user.phone || user.openid || '',
-            type: user.userType === 4 ? '机器人用户' : '小程序用户',
-          }
+              id: user.id,
+              name: user.nickname || user.phone || user.openid || "未命名用户",
+              avatar: user.avatar || "",
+              subtitle: user.phone || user.openid || "",
+              type: user.userType === 4 ? "机器人用户" : "小程序用户",
+            }
           : null,
-        lastMessage: parseChatMessageContent(conversation.lastMessage || '').previewText,
-        rawLastMessage: conversation.lastMessage || '',
-        lastMsgTime: conversation.lastMsgTime?.toISOString?.() || conversation.updatedAt?.toISOString?.(),
+        lastMessage: parseChatMessageContent(conversation.lastMessage || "")
+          .previewText,
+        rawLastMessage: conversation.lastMessage || "",
+        lastMsgTime:
+          conversation.lastMsgTime?.toISOString?.() ||
+          conversation.updatedAt?.toISOString?.(),
         unreadCount: officialMember?.unreadCount || 0,
         blocked: conversation.isBlocked,
-        serviceStatus: conversation.serviceStatus || 'pending',
-        serviceHandlerId: conversation.serviceHandlerId || '',
-        serviceHandledAt: conversation.serviceHandledAt?.toISOString?.() || null,
-        ticket: ticket ? { id: ticket.id, ticketNo: ticket.ticketNo, title: parseChatMessageContent(ticket.content || '').previewText.slice(0, 24), category: ticket.category || 'other', status: ticket.status } : null,
+        serviceStatus: conversation.serviceStatus || "pending",
+        serviceHandlerId: conversation.serviceHandlerId || "",
+        serviceHandledAt:
+          conversation.serviceHandledAt?.toISOString?.() || null,
+        ticket: ticket
+          ? {
+              id: ticket.id,
+              ticketNo: ticket.ticketNo,
+              title: parseChatMessageContent(
+                ticket.content || "",
+              ).previewText.slice(0, 24),
+              category: ticket.category || "other",
+              status: ticket.status,
+            }
+          : null,
       };
     });
 
     return { list, total, page, pageSize, official };
   }
 
-  async getOfficialConversationMessages(conversationId: string, query: { page?: number; pageSize?: number }, operatorId?: string) {
+  async getOfficialConversationMessages(
+    conversationId: string,
+    query: { page?: number; pageSize?: number },
+    operatorId?: string,
+  ) {
     const official = await this.getOfficialUser();
-    if (operatorId) await this.assertOfficialConversationAccess(conversationId, official.id, operatorId);
+    if (operatorId)
+      await this.assertOfficialConversationAccess(
+        conversationId,
+        official.id,
+        operatorId,
+      );
     const page = this.toPositiveInt(query.page, 1);
     const pageSize = this.toPositiveInt(query.pageSize, 30);
     const conversation = await this.prisma.conversation.findFirst({
       where: {
         id: conversationId,
-        type: 'private',
+        type: "private",
         members: { some: { userId: official.id } },
       },
       include: {
         members: {
           include: {
-            user: { select: { id: true, nickname: true, avatar: true, phone: true, openid: true, userType: true } },
+            user: {
+              select: {
+                id: true,
+                nickname: true,
+                avatar: true,
+                phone: true,
+                openid: true,
+                userType: true,
+              },
+            },
           },
         },
       },
     });
-    if (!conversation) throw new NotFoundException('官方会话不存在');
+    if (!conversation) throw new NotFoundException("官方会话不存在");
     await this.prisma.conversationMember.updateMany({
       where: { conversationId, userId: official.id },
       data: { unreadCount: 0 },
@@ -2030,25 +2658,35 @@ export class NotifyService {
     const [items, total] = await Promise.all([
       this.prisma.message.findMany({
         where: { conversationId, isRecalled: false },
-        include: { sender: { select: { id: true, nickname: true, avatar: true, userType: true } } },
+        include: {
+          sender: {
+            select: { id: true, nickname: true, avatar: true, userType: true },
+          },
+        },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
-      this.prisma.message.count({ where: { conversationId, isRecalled: false } }),
+      this.prisma.message.count({
+        where: { conversationId, isRecalled: false },
+      }),
     ]);
-    const userMember = conversation.members.find((member) => member.userId !== official.id);
+    const userMember = conversation.members.find(
+      (member) => member.userId !== official.id,
+    );
     const messages = items.reverse().map((message) => {
       const parsed = parseChatMessageContent(message.content, message.type);
       return {
         id: message.id,
-        clientMessageId: message.clientMessageId || '',
-        client_message_id: message.clientMessageId || '',
-        ticketId: message.ticketId || '',
-        ticket_id: message.ticketId || '',
+        clientMessageId: message.clientMessageId || "",
+        client_message_id: message.clientMessageId || "",
+        ticketId: message.ticketId || "",
+        ticket_id: message.ticketId || "",
         senderId: message.senderId,
-        senderName: message.sender.nickname || (message.senderId === official.id ? OFFICIAL_ASSISTANT_NAME : '用户'),
-        senderAvatar: message.sender.avatar || '',
+        senderName:
+          message.sender.nickname ||
+          (message.senderId === official.id ? OFFICIAL_ASSISTANT_NAME : "用户"),
+        senderAvatar: message.sender.avatar || "",
         isOfficial: message.senderId === official.id,
         content: parsed.previewText,
         rawContent: message.content,
@@ -2056,8 +2694,8 @@ export class NotifyService {
         renderType: parsed.renderType,
         typeLabel: parsed.typeLabel,
         previewText: parsed.previewText,
-        mediaUrl: parsed.mediaUrl || '',
-        posterUrl: parsed.posterUrl || '',
+        mediaUrl: parsed.mediaUrl || "",
+        posterUrl: parsed.posterUrl || "",
         duration: parsed.duration,
         location: parsed.location || null,
         file: parsed.file || null,
@@ -2074,11 +2712,15 @@ export class NotifyService {
       pageSize,
       user: userMember?.user
         ? {
-          id: userMember.user.id,
-          name: userMember.user.nickname || userMember.user.phone || userMember.user.openid || '未命名用户',
-          avatar: userMember.user.avatar || '',
-          subtitle: userMember.user.phone || userMember.user.openid || '',
-        }
+            id: userMember.user.id,
+            name:
+              userMember.user.nickname ||
+              userMember.user.phone ||
+              userMember.user.openid ||
+              "未命名用户",
+            avatar: userMember.user.avatar || "",
+            subtitle: userMember.user.phone || userMember.user.openid || "",
+          }
         : null,
       official,
     };
@@ -2093,40 +2735,55 @@ export class NotifyService {
     ticketStatus?: string,
   ) {
     const official = await this.getOfficialUser();
-    if (operatorId) await this.assertOfficialConversationAccess(conversationId, official.id, operatorId);
-    const message = String(content || '').trim();
-    if (!message) throw new BadRequestException('消息内容不能为空');
+    if (operatorId)
+      await this.assertOfficialConversationAccess(
+        conversationId,
+        official.id,
+        operatorId,
+      );
+    const message = String(content || "").trim();
+    if (!message) throw new BadRequestException("消息内容不能为空");
     const conversation = await this.prisma.conversation.findFirst({
       where: {
         id: conversationId,
-        type: 'private',
+        type: "private",
         members: { some: { userId: official.id } },
       },
       include: { members: true },
     });
-    if (!conversation) throw new NotFoundException('官方会话不存在');
-    if (conversation.isBlocked) throw new BadRequestException('该会话已被禁用');
-    const receiver = conversation.members.find((member) => member.userId !== official.id);
-    if (!receiver) throw new BadRequestException('会话缺少接收用户');
+    if (!conversation) throw new NotFoundException("官方会话不存在");
+    if (conversation.isBlocked) throw new BadRequestException("该会话已被禁用");
+    const receiver = conversation.members.find(
+      (member) => member.userId !== official.id,
+    );
+    if (!receiver) throw new BadRequestException("会话缺少接收用户");
 
-    const explicitTicketId = String(ticketId || '').trim();
+    const explicitTicketId = String(ticketId || "").trim();
     const linkedTicket = explicitTicketId
       ? await (this.prisma as any).assistantTicket.findFirst({
           where: { id: explicitTicketId, userId: receiver.userId },
         })
       : null;
     if (explicitTicketId && !linkedTicket) {
-      throw new NotFoundException('指定的咨询工单不存在或不属于当前会话用户');
+      throw new NotFoundException("指定的咨询工单不存在或不属于当前会话用户");
     }
-    if (linkedTicket?.conversationId && linkedTicket.conversationId !== conversationId) {
-      throw new BadRequestException('指定的咨询工单不属于当前官方会话');
+    if (
+      linkedTicket?.conversationId &&
+      linkedTicket.conversationId !== conversationId
+    ) {
+      throw new BadRequestException("指定的咨询工单不属于当前官方会话");
     }
     if (linkedTicket && linkedTicket.regionId !== conversation.regionId) {
-      throw new BadRequestException('指定的咨询工单不属于当前校园');
+      throw new BadRequestException("指定的咨询工单不属于当前校园");
     }
-    const normalizedTicketStatus = String(ticketStatus || '').trim();
-    if (normalizedTicketStatus && !['pending', 'processing', 'waiting_user', 'resolved', 'closed'].includes(normalizedTicketStatus)) {
-      throw new BadRequestException('无效的咨询工单状态');
+    const normalizedTicketStatus = String(ticketStatus || "").trim();
+    if (
+      normalizedTicketStatus &&
+      !["pending", "processing", "waiting_user", "resolved", "closed"].includes(
+        normalizedTicketStatus,
+      )
+    ) {
+      throw new BadRequestException("无效的咨询工单状态");
     }
 
     const saved = await this.prisma.$transaction(async (tx: any) => {
@@ -2135,7 +2792,7 @@ export class NotifyService {
           conversationId,
           senderId: official.id,
           ticketId: linkedTicket?.id || null,
-          type: 'TEXT',
+          type: "TEXT",
           content: message,
         },
       });
@@ -2145,7 +2802,13 @@ export class NotifyService {
           data: {
             lastMessage: message,
             lastMsgTime: persisted.createdAt,
-            ...(handlerId ? { serviceStatus: 'processing', serviceHandlerId: handlerId, serviceHandledAt: null } : {}),
+            ...(handlerId
+              ? {
+                  serviceStatus: "processing",
+                  serviceHandlerId: handlerId,
+                  serviceHandledAt: null,
+                }
+              : {}),
           },
         }),
         tx.conversationMember.updateMany({
@@ -2158,7 +2821,7 @@ export class NotifyService {
           data: {
             ticketId: linkedTicket.id,
             messageId: persisted.id,
-            senderType: 'admin',
+            senderType: "admin",
             senderId: handlerId || official.id,
             content: message,
           },
@@ -2170,8 +2833,13 @@ export class NotifyService {
             latestReply: message,
             unreadForUser: true,
             ...(normalizedTicketStatus
-              ? { status: normalizedTicketStatus, ...(handlerId ? { handlerId } : {}) }
-              : handlerId ? { status: 'processing', handlerId } : {}),
+              ? {
+                  status: normalizedTicketStatus,
+                  ...(handlerId ? { handlerId } : {}),
+                }
+              : handlerId
+                ? { status: "processing", handlerId }
+                : {}),
           },
         });
       }
@@ -2179,28 +2847,42 @@ export class NotifyService {
     });
     await this.clearUnreadCache(receiver.userId);
     const unreadSummary = await this.getUnreadSummary(receiver.userId);
-    const unreadPayload = { event: 'unreadSummary', type: 'unreadSummary', data: unreadSummary };
+    const unreadPayload = {
+      event: "unreadSummary",
+      type: "unreadSummary",
+      data: unreadSummary,
+    };
     const deliveredCount = this.wsNative.pushToUser(receiver.userId, {
-      event: 'message',
-      type: 'message',
+      event: "message",
+      type: "message",
       conversationId,
       messageId: saved.id,
       senderId: official.id,
       receiverId: receiver.userId,
       message,
-      messageType: 'text',
+      messageType: "text",
       sender_avatar: official.avatar,
       sender_nickname: official.nickname,
       timestamp: saved.createdAt.toISOString(),
     });
-    this.wsGateway.pushNotification(receiver.userId, unreadPayload);
+    await this.wsGateway?.pushNotification(receiver.userId, unreadPayload);
     this.wsNative.pushToUser(receiver.userId, unreadPayload);
+    const realtimeQueued =
+      typeof (this.wsNative as any).isAttached === "function"
+        ? !this.wsNative.isAttached()
+        : false;
     return {
       success: true,
       messageId: saved.id,
       assistantTicketId: linkedTicket?.id || null,
       deliveredCount,
-      message: deliveredCount > 0 ? '官方回复已发送' : '官方回复已保存，用户当前离线',
+      realtimeQueued,
+      message:
+        deliveredCount > 0
+          ? "官方回复已发送"
+          : realtimeQueued
+            ? "官方回复已进入实时推送通道"
+            : "官方回复已保存，用户当前离线",
     };
   }
 
@@ -2211,17 +2893,21 @@ export class NotifyService {
     content?: string,
     ticketId?: string,
   ) {
-    const normalizedStatus = String(status || '').trim();
+    const normalizedStatus = String(status || "").trim();
     if (!OFFICIAL_CONVERSATION_STATUSES.has(normalizedStatus)) {
-      throw new BadRequestException('无效的咨询状态');
+      throw new BadRequestException("无效的咨询状态");
     }
     const statusText = OFFICIAL_CONVERSATION_STATUS_TEXT[normalizedStatus];
-    const resolution = String(content || '').trim();
-    if (['waiting_user', 'resolved', 'rejected'].includes(normalizedStatus) && !resolution) {
-      throw new BadRequestException('请填写给用户的处理说明后再更新状态');
+    const resolution = String(content || "").trim();
+    if (
+      ["waiting_user", "resolved", "rejected"].includes(normalizedStatus) &&
+      !resolution
+    ) {
+      throw new BadRequestException("请填写给用户的处理说明后再更新状态");
     }
-    const explicitTicketId = String(ticketId || '').trim();
-    const ticketStatus = normalizedStatus === 'rejected' ? 'closed' : normalizedStatus;
+    const explicitTicketId = String(ticketId || "").trim();
+    const ticketStatus =
+      normalizedStatus === "rejected" ? "closed" : normalizedStatus;
     await this.replyOfficialConversation(
       conversationId,
       resolution || `你的咨询状态已更新为：${statusText}`,
@@ -2235,10 +2921,17 @@ export class NotifyService {
       data: {
         serviceStatus: normalizedStatus,
         serviceHandlerId: handlerId,
-        serviceHandledAt: ['resolved', 'rejected'].includes(normalizedStatus) ? new Date() : null,
+        serviceHandledAt: ["resolved", "rejected"].includes(normalizedStatus)
+          ? new Date()
+          : null,
       },
     });
-    return { success: true, status: normalizedStatus, statusText, conversation: updated };
+    return {
+      success: true,
+      status: normalizedStatus,
+      statusText,
+      conversation: updated,
+    };
   }
 
   // ===========================================================================
@@ -2258,7 +2951,9 @@ export class NotifyService {
       }
     }
 
-    const externalScope = scopeWhere.userId ? { userId: scopeWhere.userId } : {};
+    const externalScope = scopeWhere.userId
+      ? { userId: scopeWhere.userId }
+      : {};
     const [
       total,
       todayNotifications,
@@ -2272,15 +2967,41 @@ export class NotifyService {
       onlineCount,
     ] = await Promise.all([
       this.prisma.notification.count({ where: scopeWhere }),
-      this.prisma.notification.count({ where: { ...scopeWhere, createdAt: { gte: today } } }),
-      this.prisma.notification.count({ where: { ...scopeWhere, isRead: false, hiddenAt: null } }),
-      this.prisma.notification.count({ where: { ...scopeWhere, hiddenAt: { not: null } } }),
-      this.prisma.notification.count({ where: { ...scopeWhere, deliveryStatus: 'partial' } }),
-      this.prisma.notification.count({ where: { ...scopeWhere, deliveryStatus: 'pending' } }),
-      this.prisma.notification.count({ where: { ...scopeWhere, deliveryStatus: 'partial', deliveryAttempts: { gte: 3 } } }),
-      this.prisma.wechatMessageLog.count({ where: { ...externalScope, status: 'success', sentAt: { gte: today } } }),
-      this.prisma.wechatMessageLog.count({ where: { ...externalScope, status: 'failed', createdAt: { gte: today } } }),
-      this.prisma.realtimeSession.count({ where: { ...externalScope, online: true } }),
+      this.prisma.notification.count({
+        where: { ...scopeWhere, createdAt: { gte: today } },
+      }),
+      this.prisma.notification.count({
+        where: { ...scopeWhere, isRead: false, hiddenAt: null },
+      }),
+      this.prisma.notification.count({
+        where: { ...scopeWhere, hiddenAt: { not: null } },
+      }),
+      this.prisma.notification.count({
+        where: { ...scopeWhere, deliveryStatus: "partial" },
+      }),
+      this.prisma.notification.count({
+        where: { ...scopeWhere, deliveryStatus: "pending" },
+      }),
+      this.prisma.notification.count({
+        where: {
+          ...scopeWhere,
+          deliveryStatus: "partial",
+          deliveryAttempts: { gte: 3 },
+        },
+      }),
+      this.prisma.wechatMessageLog.count({
+        where: { ...externalScope, status: "success", sentAt: { gte: today } },
+      }),
+      this.prisma.wechatMessageLog.count({
+        where: {
+          ...externalScope,
+          status: "failed",
+          createdAt: { gte: today },
+        },
+      }),
+      this.prisma.realtimeSession.count({
+        where: { ...externalScope, online: true },
+      }),
     ]);
 
     return {
@@ -2324,7 +3045,7 @@ export class NotifyService {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
       if (accessibleUserIds !== null) {
         where.userId = where.userId
-          ? { in: accessibleUserIds.filter(id => id === where.userId) }
+          ? { in: accessibleUserIds.filter((id) => id === where.userId) }
           : { in: accessibleUserIds };
       }
     }
@@ -2334,13 +3055,13 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { updatedAt: "desc" },
       }),
       this.prisma.wechatSubscribeConsent.count({ where }),
     ]);
 
     // AUD-P1-171: 脱敏处理
-    const maskedList = list.map(item => ({
+    const maskedList = list.map((item) => ({
       ...item,
       templateId: this.maskString(item.templateId),
     }));
@@ -2372,7 +3093,7 @@ export class NotifyService {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
       if (accessibleUserIds !== null) {
         where.userId = where.userId
-          ? { in: accessibleUserIds.filter(id => id === where.userId) }
+          ? { in: accessibleUserIds.filter((id) => id === where.userId) }
           : { in: accessibleUserIds };
       }
     }
@@ -2382,13 +3103,13 @@ export class NotifyService {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { updatedAt: "desc" },
       }),
       this.prisma.wechatOfficialBinding.count({ where }),
     ]);
 
     // AUD-P1-171: OpenID/UnionID 脱敏
-    const maskedList = list.map(item => ({
+    const maskedList = list.map((item) => ({
       ...item,
       officialOpenid: this.maskOpenid(item.officialOpenid),
       unionid: item.unionid ? this.maskOpenid(item.unionid) : null,
@@ -2398,14 +3119,19 @@ export class NotifyService {
   }
 
   async deleteOfficialBinding(id: string, operatorId?: string, ip?: string) {
-    const binding = await this.prisma.wechatOfficialBinding.findUnique({ where: { id } });
-    if (!binding) throw new NotFoundException('绑定记录不存在');
+    const binding = await this.prisma.wechatOfficialBinding.findUnique({
+      where: { id },
+    });
+    if (!binding) throw new NotFoundException("绑定记录不存在");
 
     // AUD-P1-171: 检查管理员是否有权限操作该绑定
     if (operatorId) {
       const accessibleUserIds = await this.getAccessibleUserIds(operatorId);
-      if (accessibleUserIds !== null && !accessibleUserIds.includes(binding.userId)) {
-        throw new BadRequestException('无权操作该用户的绑定');
+      if (
+        accessibleUserIds !== null &&
+        !accessibleUserIds.includes(binding.userId)
+      ) {
+        throw new BadRequestException("无权操作该用户的绑定");
       }
     }
 
@@ -2413,20 +3139,22 @@ export class NotifyService {
 
     // AUD-P1-171: 写操作日志
     if (operatorId) {
-      await this.prisma.adminOperationLog.create({
-        data: {
-          accountId: operatorId,
-          action: 'UNBIND_WECHAT',
-          module: 'notification',
-          targetId: id,
-          targetType: 'wechat_official_binding',
-          detail: {
-            userId: binding.userId,
-            openid: this.maskOpenid(binding.officialOpenid),
+      await this.prisma.adminOperationLog
+        .create({
+          data: {
+            accountId: operatorId,
+            action: "UNBIND_WECHAT",
+            module: "notification",
+            targetId: id,
+            targetType: "wechat_official_binding",
+            detail: {
+              userId: binding.userId,
+              openid: this.maskOpenid(binding.officialOpenid),
+            },
+            ip: ip || null,
           },
-          ip: ip || null,
-        },
-      }).catch(() => {});
+        })
+        .catch(() => {});
     }
 
     return { success: true };
@@ -2436,7 +3164,9 @@ export class NotifyService {
    * AUD-P1-171: 获取管理员可访问的用户 ID 列表
    * 返回 null 表示超级管理员，可访问所有用户
    */
-  private async getAccessibleUserIds(operatorId: string): Promise<string[] | null> {
+  private async getAccessibleUserIds(
+    operatorId: string,
+  ): Promise<string[] | null> {
     try {
       const ctx = await this.adminDataScope.getAdminContext(operatorId);
 
@@ -2456,7 +3186,7 @@ export class NotifyService {
         select: { id: true },
       });
 
-      return users.map(u => u.id);
+      return users.map((u) => u.id);
     } catch {
       return [];
     }
@@ -2466,27 +3196,27 @@ export class NotifyService {
    * AUD-P1-171: OpenID 脱敏
    */
   private maskOpenid(openid: string | null): string {
-    if (!openid) return '';
-    if (openid.length <= 8) return '***';
-    return openid.slice(0, 4) + '****' + openid.slice(-4);
+    if (!openid) return "";
+    if (openid.length <= 8) return "***";
+    return openid.slice(0, 4) + "****" + openid.slice(-4);
   }
 
   /**
    * AUD-P1-171: 通用字符串脱敏
    */
   private maskString(value: string | null): string {
-    if (!value) return '';
-    if (value.length <= 6) return '***';
-    return value.slice(0, 3) + '***' + value.slice(-3);
+    if (!value) return "";
+    if (value.length <= 6) return "***";
+    return value.slice(0, 3) + "***" + value.slice(-3);
   }
 
   /**
    * 手机号脱敏
    */
   private maskPhone(phone: string | null): string {
-    if (!phone) return '';
-    if (phone.length < 7) return '***';
-    return phone.slice(0, 3) + '****' + phone.slice(-4);
+    if (!phone) return "";
+    if (phone.length < 7) return "***";
+    return phone.slice(0, 3) + "****" + phone.slice(-4);
   }
 
   // ===========================================================================

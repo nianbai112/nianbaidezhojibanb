@@ -28,32 +28,22 @@
       <div v-show="activePage === 'profile'" class="ds-realedit">
         <ProfileEditor />
       </div>
-      <!-- 容器页：暂无真实页面编辑器，用拖拽布局（v-show 保留状态） -->
-      <LayoutBuilder v-show="activePage === 'containers'" page-type="containers" hide-page-tabs />
-      <!-- 活动页：活动页工厂（模板化创建；tmagic 编辑器降级为厂内高级模式） -->
-      <ActivityStudio v-if="tmagicVisited" v-show="activePage === 'tmagic'" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { House, Grid, Bell, User, MagicStick } from '@element-plus/icons-vue'
-import LayoutBuilder from '@/components/layout/LayoutBuilder.vue'
+import { House, Bell, User } from '@element-plus/icons-vue'
 import HomeEditor from '@/views/miniapp/editor/HomeEditor.vue'
 import MessageEditor from '@/views/miniapp/editor/MessageEditor.vue'
 import ProfileEditor from '@/views/miniapp/editor/ProfileEditor.vue'
 
-// 活动页工厂体积较大（高级模式内含 tmagic/monaco），按需加载
-const ActivityStudio = defineAsyncComponent(() => import('@/views/miniapp/ActivityStudio.vue'))
-
 const pages = [
   { label: '首页', value: 'home', icon: House },
-  { label: '容器页', value: 'containers', icon: Grid },
   { label: '消息页', value: 'message', icon: Bell },
   { label: '我的页', value: 'profile', icon: User },
-  { label: '活动页', value: 'tmagic', icon: MagicStick },
 ] as const
 
 type PageKey = (typeof pages)[number]['value']
@@ -64,22 +54,19 @@ const router = useRouter()
 const isPageKey = (v: unknown): v is PageKey => pages.some((p) => p.value === v)
 
 const activePage = ref<PageKey>(isPageKey(route.query.page) ? route.query.page : 'home')
-const tmagicVisited = ref(activePage.value === 'tmagic')
 
 function switchPage(p: PageKey) {
   if (p === activePage.value) return
   activePage.value = p
-  if (p === 'tmagic') tmagicVisited.value = true
   if (route.query.page !== p) router.replace({ query: { ...route.query, page: p } })
 }
 
-// 外部 query 变化（如旧 mode=tmagic 兼容跳转）同步页签
+// 外部 query 变化时同步页签
 watch(
   () => route.query.page,
   (v) => {
     if (isPageKey(v) && v !== activePage.value) {
       activePage.value = v
-      if (v === 'tmagic') tmagicVisited.value = true
     }
   },
 )
@@ -158,14 +145,6 @@ watch(
   /* 必须是 flex 列容器：否则子级 flex:1 失效，编辑器会被内容撑出视口、面板无法滚动 */
   display: flex;
   flex-direction: column;
-}
-
-/* LayoutBuilder：铺满桌面，背景交给工作室的点阵桌面 */
-.ds-desktop :deep(.wb) {
-  height: 100%;
-  min-height: 0;
-  background: transparent;
-  padding: 0 var(--ds-space-3, 12px) var(--ds-space-3, 12px);
 }
 
 /* 真实页面编辑器：宽敞透气——外层留白、面板间隔、圆角分区 */
@@ -249,75 +228,4 @@ watch(
   height: 100%;
 }
 
-/* tmagic 编辑器：铺满桌面，外壳卡片深色化 */
-.ds-desktop :deep(.tmagic-page-editor) {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-3, 12px);
-  padding: 0 var(--ds-space-3, 12px) var(--ds-space-3, 12px);
-}
-.ds-desktop :deep(.tmagic-toolbar) {
-  /* L2 面板岛 */
-  background: rgba(20, 23, 28, 0.92);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--ds-line, rgba(255, 255, 255, 0.06));
-  border-radius: var(--ds-radius-card, 10px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-}
-.ds-desktop :deep(.tmagic-toolbar .toolbar-label),
-.ds-desktop :deep(.tmagic-toolbar .toolbar-tip) {
-  color: var(--ds-ink-dim, #9CA3AF);
-}
-.ds-desktop :deep(.tmagic-toolbar .toolbar-tip code) {
-  background: var(--ds-line, rgba(255, 255, 255, 0.06));
-  color: var(--ds-ink, #E7EAEE);
-}
-.ds-desktop :deep(.tmagic-canvas) {
-  flex: 1;
-  height: auto;
-  min-height: 0;
-  border-radius: var(--ds-radius-card, 10px);
-}
-
-/* tmagic 舞台：手机框暗示，让 375px 画布在桌面中一眼可辨 */
-.ds-desktop :deep(.m-editor-stage) {
-  border-radius: var(--ds-radius-phone, 24px);
-  box-shadow: 0 0 0 10px var(--ds-raised, #1C2026), 0 24px 64px rgba(0, 0, 0, 0.5);
-}
-
-/* tmagic 编辑器内部 chrome 深色适配（舞台纸张保持白色）：L2 岛 + L3 控件 */
-.ds-desktop :deep(.m-editor-nav-menu),
-.ds-desktop :deep(.m-editor-layout-left),
-.ds-desktop :deep(.m-editor-framework-left),
-.ds-desktop :deep(.m-editor-layer-panel),
-.ds-desktop :deep(.magic-editor-content-menu) {
-  background: var(--ds-island, #14171C);
-  color: var(--ds-ink, #E7EAEE);
-  border-color: var(--ds-line, rgba(255, 255, 255, 0.06));
-}
-.ds-desktop :deep(.m-editor-page-bar),
-.ds-desktop :deep(.m-editor-page-bar-item),
-.ds-desktop :deep(.m-editor-page-bar-item-icon),
-.ds-desktop :deep(.m-editor-page-bar-search) {
-  background: var(--ds-raised, #1C2026);
-  color: #c9ced6;
-  border-color: var(--ds-line, rgba(255, 255, 255, 0.06));
-}
-.ds-desktop :deep(.m-editor-layout-left) :is(.el-tree, .el-tree-node__content, .el-input__wrapper),
-.ds-desktop :deep(.m-editor-framework-left) :is(.el-tree, .el-tree-node__content, .el-input__wrapper) {
-  background: transparent;
-  color: #c9ced6;
-}
-.ds-desktop :deep(.m-editor-layout-left) :is(h1, h2, h3, h4, span, div, p),
-.ds-desktop :deep(.m-editor-framework-left) :is(h1, h2, h3, h4, span, div, p) {
-  color: #c9ced6;
-}
-.ds-desktop :deep(.m-editor-layout-left .el-input__inner),
-.ds-desktop :deep(.m-editor-framework-left .el-input__inner) {
-  color: var(--ds-ink, #E7EAEE);
-}
-.ds-desktop :deep(.m-editor-resizer) {
-  background: var(--ds-line, rgba(255, 255, 255, 0.06));
-}
 </style>

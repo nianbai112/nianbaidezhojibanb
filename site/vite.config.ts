@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
@@ -10,15 +10,26 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
+      "/api/ws-native": {
+        target: "ws://localhost:3001",
+        ws: true,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        rewrite: (path) => path.replace(/^\/api\/ws-native/, "/ws-native"),
       },
-      '/uploads': {
-        target: 'http://localhost:3000',
+      "/socket.io": {
+        target: "ws://localhost:3001",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+      "/uploads": {
+        target: "http://localhost:3000",
         changeOrigin: true,
       },
     },
   },
-})
+});

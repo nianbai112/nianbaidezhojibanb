@@ -16,13 +16,9 @@
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
-    "@tmagic/core": "1.5.6",
-    "@tmagic/editor": "1.5.6",
-    "@tmagic/schema": "1.5.6",
     "axios": "^1.18.1",
     "echarts": "^6.1.0",
     "element-plus": "^2.10.7",
-    "monaco-editor": "^0.48.0",
     "ol": "^10.9.0",
     "pinia": "^2.3.0",
     "qrcode": "^1.5.4",

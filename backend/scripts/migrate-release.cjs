@@ -44,9 +44,16 @@ function rowValue(row, key) {
   return found ? row[found] : undefined;
 }
 
+function prismaCliPath() {
+  try {
+    return require.resolve("prisma/build/index.js", { paths: [root] });
+  } catch {
+    throw new Error("缺少 Prisma CLI，无法执行数据库迁移");
+  }
+}
+
 function prismaCli(args, options = {}) {
-  const cli = path.join(root, "node_modules", "prisma", "build", "index.js");
-  if (!fs.existsSync(cli)) throw new Error("缺少 Prisma CLI，无法执行数据库迁移");
+  const cli = prismaCliPath();
   const result = childProcess.spawnSync(process.execPath, [cli, ...args], {
     cwd: root,
     env: process.env,
@@ -124,6 +131,30 @@ async function databaseIsEmpty(prisma, provider) {
   return Number(rowValue(rows[0], "table_count") || 0) === 0;
 }
 
+function schemaDiffState(output) {
+  const diff = String(output || "").trim();
+  if (!diff) return { status: "PASS", detail: "数据库结构与当前版本一致" };
+
+  const droppedConstraints = new Set(
+    [...diff.matchAll(/DROP CONSTRAINT\s+[`"]?([^`";\s]+)[`"]?/gi)].map((match) => match[1]),
+  );
+  const addedConstraints = [
+    ...diff.matchAll(/ADD CONSTRAINT\s+[`"]?([^`";\s]+)[`"]?/gi),
+  ].map((match) => match[1]);
+  const hasUnpairedConstraint = addedConstraints.some(
+    (constraint) => !droppedConstraints.has(constraint),
+  );
+  const hasRequiredAddition =
+    /^CREATE\s+TABLE\b/im.test(diff) ||
+    /^CREATE\s+(?:UNIQUE\s+)?INDEX\b/im.test(diff) ||
+    /^ALTER\s+TABLE\b[^;]*\bADD\s+(?:COLUMN\s+)?(?!CONSTRAINT\b)/im.test(diff) ||
+    hasUnpairedConstraint;
+
+  return hasRequiredAddition
+    ? { status: "MISSING", detail: "仍存在未由发布迁移覆盖的必需表、字段、索引或约束" }
+    : { status: "WARNING", detail: "必需结构已齐全；仅存在安全保留的历史对象或非增量类型/索引差异" };
+}
+
 function schemaVerification(provider) {
   const schema = path.join(root, "prisma", `schema.${provider}.prisma`);
   if (!fs.existsSync(schema)) return { status: "UNAVAILABLE", detail: `缺少 ${path.basename(schema)}` };
@@ -135,13 +166,7 @@ function schemaVerification(provider) {
       "--script",
       "--exit-code",
     ], { capture: true, timeout: 2 * 60 * 1000, allowedCodes: [2] });
-    const additions = /^(-- (CreateTable|AlterTable|CreateIndex|AddForeignKey)|ALTER TABLE .* ADD|CREATE (TABLE|INDEX))/m.test(output);
-    const retained = /^(-- Drop(Table|Index)|DROP (TABLE|INDEX))/m.test(output);
-    return additions
-      ? { status: "MISSING", detail: "仍存在未由发布迁移覆盖的必需结构" }
-      : retained
-        ? { status: "WARNING", detail: "必需结构已齐全；历史表或旧索引按安全策略保留" }
-        : { status: "PASS", detail: "数据库结构与当前版本一致" };
+    return schemaDiffState(output);
   } catch (error) {
     return { status: "UNAVAILABLE", detail: String(error.message || error).slice(0, 500) };
   }
@@ -216,4 +241,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { migrationFiles, rowValue };
+module.exports = { migrationFiles, prismaCliPath, rowValue, schemaDiffState };
