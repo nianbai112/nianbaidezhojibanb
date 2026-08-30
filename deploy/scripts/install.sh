@@ -140,10 +140,13 @@ fi
 # Prisma CLI and build/test tooling are needed above, but not by the running service.
 npm prune --omit=dev --no-audit --no-fund
 
+realtime_instances="$(read_env REALTIME_INSTANCES)"
+realtime_instances="${realtime_instances:-1}"
 APP_ROOT="$APP_ROOT" \
 PM2_NAME="$PM2_NAME" \
 PM2_WORKER_NAME="$PM2_WORKER_NAME" \
 PM2_REALTIME_NAME="$PM2_REALTIME_NAME" \
+REALTIME_INSTANCES="$realtime_instances" \
 pm2 startOrReload "$APP_ROOT/ecosystem.config.cjs" --update-env
 pm2 save
 

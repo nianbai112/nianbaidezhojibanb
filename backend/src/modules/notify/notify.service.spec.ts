@@ -84,6 +84,15 @@ const createPrismaMock = () => {
 const createService = (
   prisma: ReturnType<typeof createPrismaMock>,
   channelService?: any,
+  wsNative: any = {
+    pushToUser: jest.fn(),
+    pushToUserReliable: jest
+      .fn()
+      .mockResolvedValue({ localSent: 0, subscribers: 1 }),
+    isSocketLive: jest.fn().mockReturnValue(false),
+    getLiveSocketCount: jest.fn().mockReturnValue(0),
+  },
+  wsGateway: any = { pushNotification: jest.fn() },
 ) =>
   new NotifyService(
     prisma as any,
@@ -96,12 +105,8 @@ const createService = (
         (_key: string, _ttl: number, task: () => Promise<any>) => task(),
       ),
     } as any,
-    { pushNotification: jest.fn() } as any,
-    {
-      pushToUser: jest.fn(),
-      isSocketLive: jest.fn().mockReturnValue(false),
-      getLiveSocketCount: jest.fn().mockReturnValue(0),
-    } as any,
+    wsGateway as any,
+    wsNative as any,
     {} as any,
     {
       getAdminContext: jest
@@ -855,6 +860,43 @@ describe("NotifyService.createAndDispatchInteraction", () => {
 });
 
 describe("NotifyService.createAndDispatch notification channels", () => {
+  it("marks native WebSocket delivery failed when no Realtime subscriber accepts it", async () => {
+    const prisma = createPrismaMock();
+    const wsNative = {
+      pushToUserReliable: jest
+        .fn()
+        .mockResolvedValue({ localSent: 0, subscribers: 0 }),
+    };
+    const service = createService(prisma, undefined, wsNative, null);
+
+    const delivery = await (service as any).deliverNotificationChannels(
+      {
+        id: "notice-offline-realtime",
+        userId: "user-1",
+        type: "ORDER",
+        title: "订单更新",
+        content: "订单状态发生变化",
+        data: {},
+        createdAt: new Date(),
+      },
+      { websocket: true, push: false },
+    );
+
+    expect(delivery.deliveryStatus).toBe("partial");
+    expect(delivery.report.websocket).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        transports: {
+          socketIo: {
+            status: "skipped",
+            reason: "compatibility_gateway_not_loaded",
+          },
+          native: { status: "failed", error: "no_realtime_subscriber" },
+        },
+      }),
+    );
+  });
+
   it("delivers an enabled order notice by email when the caller omits email from the mask", async () => {
     const prisma = createPrismaMock();
     const queuedNotification = {

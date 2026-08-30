@@ -1,6 +1,14 @@
-import { WsNativeGateway } from "./ws-native.gateway";
+import { isNativeWebSocketPath, WsNativeGateway } from "./ws-native.gateway";
 
 describe("WsNativeGateway account lifecycle", () => {
+  it("only claims the native WebSocket upgrade path", () => {
+    expect(isNativeWebSocketPath("/ws-native?token=test", "localhost")).toBe(
+      true,
+    );
+    expect(isNativeWebSocketPath("/socket.io/?EIO=4", "localhost")).toBe(false);
+    expect(isNativeWebSocketPath("not a valid url", "bad host")).toBe(false);
+  });
+
   const createGateway = (userAccess: any) =>
     new WsNativeGateway(
       {} as any,

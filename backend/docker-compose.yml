@@ -6,15 +6,19 @@
 #   1. Ensure .env is populated with production values (see .env.example)
 #   2. Build images:       docker compose build
 #   3. Start services:      docker compose up -d
-#   4. Run DB migrations:   docker compose run --rm migration
-#   5. Check health:        docker compose ps
-#   6. View logs:           docker compose logs -f app
+#      (migration runs once and must complete before API/Worker/Realtime start)
+#   4. Check health:        docker compose ps
+#   5. View logs:           docker compose logs -f app
 #
 # Updating after code changes:
-#   1. docker compose build app
-#   2. docker compose up -d app
-#   3. docker compose run --rm migration   (if schema.prisma changed)
+#   1. docker compose build
+#   2. docker compose up -d
 #
+# Keep one shared env-file declaration for every service. Values containing `$`
+# must be single-quoted because Compose also loads this file for interpolation.
+x-backend-env-file: &backend-env-file
+  - .env
+
 # =============================================================================
 
 services:
@@ -25,12 +29,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: lingmeng-app
     restart: unless-stopped
     ports:
       - "3000:3000"
-    env_file:
-      - .env
+    env_file: *backend-env-file
     environment:
       SERVICE_ROLE: api
     depends_on:
@@ -38,11 +40,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     networks:
       - lingmeng-network
     # Health check at the compose level (in addition to Dockerfile HEALTHCHECK)
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz/services"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/healthz/services",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -55,11 +67,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: lingmeng-worker
     restart: unless-stopped
     command: ["node", "dist/src/worker.js"]
-    env_file:
-      - .env
+    env_file: *backend-env-file
     environment:
       SERVICE_ROLE: worker
     depends_on:
@@ -67,6 +77,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     networks:
       - lingmeng-network
     healthcheck:
@@ -79,13 +91,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: lingmeng-realtime
     restart: unless-stopped
     command: ["node", "dist/src/realtime.js"]
     ports:
       - "3001:3001"
-    env_file:
-      - .env
+    env_file: *backend-env-file
     environment:
       SERVICE_ROLE: realtime
       REALTIME_HOST: 0.0.0.0
@@ -95,10 +105,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     networks:
       - lingmeng-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3001/healthz",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -107,28 +127,33 @@ services:
   # ---------------------------------------------------------------------------
   # Database Migrations (one-shot service — runs `prisma migrate deploy`)
   #
-  # Usage:
-  #   docker compose run --rm migration
-  #
-  # This applies pending migrations and exits. Run this BEFORE starting the
-  # app for the first time, and after any schema.prisma change.
+  # This applies pending migrations and exits. API/Worker/Realtime wait for it
+  # to complete successfully before they start.
   # ---------------------------------------------------------------------------
   migration:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder   # use the builder stage (has devDeps + prisma CLI)
+      target: builder # use the builder stage (has devDeps + prisma CLI)
     container_name: lingmeng-migration
-    env_file:
-      - .env
-    command: sh -c "npx prisma migrate deploy"
+    env_file: *backend-env-file
+    command:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$DATABASE_URL" ]; then
+          npx prisma migrate deploy;
+        elif [ "$$DB_IS_INSTALLED" = "1" ]; then
+          echo "DATABASE_URL is required for an installed deployment" >&2;
+          exit 1;
+        else
+          echo "DATABASE_URL is empty; migration is deferred to the setup wizard";
+        fi
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - lingmeng-network
-    profiles:
-      - manual    # not started by default — run explicitly with --rm
 
   # ---------------------------------------------------------------------------
   # PostgreSQL 15
@@ -145,19 +170,22 @@ services:
     # ports:
     #   - "127.0.0.1:5432:5432"
 
-    env_file:
-      - .env
+    env_file: *backend-env-file
     environment:
       # POSTGRES_PASSWORD is read directly from env_file to avoid a second
       # Compose interpolation pass for passwords containing `$`.
-      POSTGRES_USER:     ${POSTGRES_USER:-lingmeng}
-      POSTGRES_DB:       ${POSTGRES_DB:-lingmeng_db}
+      POSTGRES_USER: ${POSTGRES_USER:-lingmeng}
+      POSTGRES_DB: ${POSTGRES_DB:-lingmeng_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - lingmeng-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lingmeng} -d ${POSTGRES_DB:-lingmeng_db}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-lingmeng} -d ${POSTGRES_DB:-lingmeng_db}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -177,8 +205,7 @@ services:
     # ports:
     #   - "127.0.0.1:6379:6379"
 
-    env_file:
-      - .env
+    env_file: *backend-env-file
     # Require a password for Redis connections (AUTH)
     # If REDIS_PASSWORD is not set in .env, Redis runs without a password.
     # You MUST set REDIS_PASSWORD in production.
@@ -195,7 +222,11 @@ services:
     networks:
       - lingmeng-network
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      test:
+        [
+          "CMD-SHELL",
+          'if [ -n "$$REDIS_PASSWORD" ]; then redis-cli -a "$$REDIS_PASSWORD" ping; else redis-cli ping; fi',
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

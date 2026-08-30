@@ -8,7 +8,6 @@ import { LoggerModule } from "./common/modules/logger.module";
 import { PrismaModule } from "./common/modules/prisma.module";
 import { RedisModule } from "./common/modules/redis.module";
 import { AnalyticsModule } from "./modules/analytics/analytics.module";
-import { AuthModule } from "./modules/auth/auth.module";
 import { ErrandModule } from "./modules/errand/errand.module";
 import { NotifyModule } from "./modules/notify/notify.module";
 import { PrintModule } from "./modules/print/print.module";
@@ -27,7 +26,6 @@ import { WorkerHeartbeatService } from "./worker-heartbeat.service";
     PrismaModule,
     RedisModule,
     LoggerModule,
-    AuthModule,
     AnalyticsModule,
     NotifyModule,
     PrintModule,

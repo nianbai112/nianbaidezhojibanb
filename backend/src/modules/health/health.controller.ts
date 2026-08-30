@@ -7,15 +7,10 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { SkipThrottle } from "@nestjs/throttler";
-import { RedisService } from "../../common/services/redis.service";
-
-type ServiceHeartbeat = {
-  service?: string;
-  instanceId?: string;
-  mode?: string;
-  ready?: boolean;
-  updatedAt?: string;
-};
+import {
+  ServiceHeartbeat,
+  ServiceHeartbeatStore,
+} from "../../common/services/service-heartbeat.store";
 
 /**
  * HealthController — 公开只读健康检查端点
@@ -30,7 +25,7 @@ type ServiceHeartbeat = {
 @Controller()
 export class HealthController {
   constructor(
-    private readonly redis: RedisService,
+    private readonly heartbeats: ServiceHeartbeatStore,
     private readonly config: ConfigService,
   ) {}
 
@@ -57,12 +52,12 @@ export class HealthController {
       };
     }
 
-    let worker: ServiceHeartbeat | null;
-    let realtime: ServiceHeartbeat | null;
+    let worker: ServiceHeartbeat[];
+    let realtime: ServiceHeartbeat[];
     try {
       [worker, realtime] = await Promise.all([
-        this.redis.getJson<ServiceHeartbeat>("lm:service:worker:heartbeat"),
-        this.redis.getJson<ServiceHeartbeat>("lm:service:realtime:heartbeat"),
+        this.heartbeats.list("worker"),
+        this.heartbeats.list("realtime"),
       ]);
     } catch {
       throw new ServiceUnavailableException({
@@ -75,8 +70,8 @@ export class HealthController {
     }
     const services = {
       api: { status: "up" },
-      worker: this.toServiceStatus(worker, "runtime"),
-      realtime: this.toServiceStatus(realtime, "runtime"),
+      worker: this.toServiceGroupStatus(worker, "runtime"),
+      realtime: this.toServiceGroupStatus(realtime, "runtime"),
     };
     const ready =
       services.worker.status === "up" && services.realtime.status === "up";
@@ -87,6 +82,31 @@ export class HealthController {
     };
     if (!ready) throw new ServiceUnavailableException(body);
     return body;
+  }
+
+  private toServiceGroupStatus(
+    heartbeats: ServiceHeartbeat[],
+    requiredMode?: string,
+  ) {
+    const instances = heartbeats.map((heartbeat) =>
+      this.toServiceStatus(heartbeat, requiredMode),
+    );
+    const readyInstances = instances.filter(
+      (instance) => instance.status === "up",
+    ).length;
+    const ready = instances.length > 0 && readyInstances === instances.length;
+    const latest = [...instances].sort((left, right) =>
+      String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")),
+    )[0];
+    return {
+      status: ready ? "up" : "down",
+      ready,
+      totalInstances: instances.length,
+      readyInstances,
+      mode: latest?.mode || null,
+      updatedAt: latest?.updatedAt || null,
+      instances,
+    };
   }
 
   private toServiceStatus(
@@ -102,6 +122,7 @@ export class HealthController {
       (!requiredMode || heartbeat?.mode === requiredMode);
     return {
       status: ready ? "up" : "down",
+      instanceId: heartbeat?.instanceId || null,
       mode: heartbeat?.mode || null,
       ready: heartbeat?.ready === true,
       updatedAt,

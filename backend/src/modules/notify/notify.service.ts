@@ -899,29 +899,70 @@ export class NotifyService {
         },
       };
       const unreadPayload = { event: "unreadSummary", data: unreadSummary };
-      const errors: string[] = [];
-      try {
-        await this.wsGateway?.pushNotification(
-          notification.userId,
-          pushPayload,
-        );
-        await this.wsGateway?.pushNotification(
-          notification.userId,
-          unreadPayload,
-        );
-      } catch (error: any) {
-        errors.push(`socket.io: ${error.message}`);
+      const transports: Record<string, any> = {};
+      if (this.wsGateway) {
+        try {
+          await this.wsGateway.pushNotification(
+            notification.userId,
+            pushPayload,
+          );
+          await this.wsGateway.pushNotification(
+            notification.userId,
+            unreadPayload,
+          );
+          transports.socketIo = { status: "success" };
+        } catch (error: any) {
+          transports.socketIo = {
+            status: "failed",
+            error: error?.message || "socket.io push error",
+          };
+        }
+      } else {
+        transports.socketIo = {
+          status: "skipped",
+          reason: "compatibility_gateway_not_loaded",
+        };
       }
       try {
-        this.wsNative.pushToUser(notification.userId, pushPayload);
-        this.wsNative.pushToUser(notification.userId, unreadPayload);
+        const results = await Promise.all([
+          this.wsNative.pushToUserReliable(
+            notification.userId,
+            pushPayload,
+          ),
+          this.wsNative.pushToUserReliable(
+            notification.userId,
+            unreadPayload,
+          ),
+        ]);
+        const accepted = results.every(
+          (result) => result.localSent > 0 || result.subscribers > 0,
+        );
+        transports.native = accepted
+          ? {
+              status: "success",
+              localSent: results.reduce(
+                (sum, result) => sum + result.localSent,
+                0,
+              ),
+              subscribers: Math.max(
+                ...results.map((result) => result.subscribers),
+              ),
+            }
+          : { status: "failed", error: "no_realtime_subscriber" };
       } catch (error: any) {
-        errors.push(`native: ${error.message}`);
+        transports.native = {
+          status: "failed",
+          error: error?.message || "native push error",
+        };
       }
-      report.websocket =
-        errors.length >= 2
-          ? { status: "failed", error: errors.join("; ") }
-          : { status: "success", warning: errors.join("; ") || undefined };
+      report.websocket = {
+        status: transports.native.status,
+        transports,
+        warning:
+          transports.socketIo.status === "failed"
+            ? transports.socketIo.error
+            : undefined,
+      };
     } else {
       report.websocket = { status: "skipped" };
     }

@@ -1,14 +1,14 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
-import { RedisService } from "./common/services/redis.service";
+import { ServiceHeartbeatStore } from "./common/services/service-heartbeat.store";
 
 @Injectable()
-export class WorkerHeartbeatService implements OnModuleInit {
+export class WorkerHeartbeatService implements OnModuleInit, OnModuleDestroy {
   private readonly instanceId = `${process.pid}-${Date.now()}`;
 
   constructor(
-    private readonly redis: RedisService,
+    private readonly heartbeats: ServiceHeartbeatStore,
     private readonly config: ConfigService,
   ) {}
 
@@ -19,18 +19,16 @@ export class WorkerHeartbeatService implements OnModuleInit {
   @Interval(15_000)
   async heartbeat() {
     if (this.isSetupWizardMode()) return;
-    await this.redis.setJson(
-      "lm:service:worker:heartbeat",
-      {
-        service: "worker",
-        instanceId: this.instanceId,
-        pid: process.pid,
-        mode: "runtime",
-        ready: true,
-        updatedAt: new Date().toISOString(),
-      },
-      45,
-    );
+    await this.heartbeats.publish("worker", this.instanceId, {
+      pid: process.pid,
+      mode: "runtime",
+      ready: true,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async onModuleDestroy() {
+    await this.heartbeats.remove("worker", this.instanceId);
   }
 
   private isSetupWizardMode() {

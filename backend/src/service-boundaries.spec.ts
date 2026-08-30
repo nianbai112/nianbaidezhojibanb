@@ -10,6 +10,7 @@ describe("service process boundaries", () => {
 
     expect(apiModule).not.toContain("ScheduleModule.forRoot()");
     expect(workerModule).toContain("ScheduleModule.forRoot()");
+    expect(workerModule).not.toContain("AuthModule");
   });
 
   it("attaches native WebSocket only in the realtime process", () => {
@@ -25,8 +26,20 @@ describe("service process boundaries", () => {
       path.resolve(__dirname, "../../deploy/ecosystem.config.cjs"),
     );
 
-    expect(ecosystem).toContain("'dist/src/main.js'");
-    expect(ecosystem).toContain("'dist/src/worker.js'");
-    expect(ecosystem).toContain("'dist/src/realtime.js'");
+    expect(ecosystem).toContain("dist/src/main.js");
+    expect(ecosystem).toContain("dist/src/worker.js");
+    expect(ecosystem).toContain("dist/src/realtime.js");
+    expect(ecosystem).toContain("process.env.REALTIME_INSTANCES");
+    expect(ecosystem).toContain('realtimeInstances > 1 ? "cluster" : "fork"');
+  });
+
+  it("waits for database migration before starting Docker services", () => {
+    const compose = read(path.resolve(__dirname, "../docker-compose.yml"));
+
+    expect(
+      compose.match(/condition: service_completed_successfully/g),
+    ).toHaveLength(3);
+    expect(compose).not.toContain("profiles:\n      - manual");
+    expect(compose).not.toContain("container_name: lingmeng-realtime");
   });
 });

@@ -139,6 +139,31 @@ describe('RiderAiAdvisoryService fulfillment suggestions', () => {
     jest.restoreAllMocks();
   });
 
+  it('serializes AI analysis across Worker instances with a renewing Redis lock', async () => {
+    const configRows: Record<string, any> = {};
+    const prisma: any = {
+      config: {
+        findUnique: jest.fn(({ where }) => Promise.resolve(configRows[where.key] || null)),
+        upsert: jest.fn(({ where, create, update }) => {
+          configRows[where.key] = { key: where.key, value: update?.value || create?.value };
+          return Promise.resolve(configRows[where.key]);
+        }),
+      },
+    };
+    const redis = {
+      withRenewingLock: jest.fn((_key, _ttl, task) => task()),
+    };
+    const service = new RiderAiAdvisoryService(prisma, redis as any);
+
+    await service.runAnalysis({ fulfillment_metrics: { overall: {} } }, 'scheduled');
+
+    expect(redis.withRenewingLock).toHaveBeenCalledWith(
+      'analytics:rider-ai-analysis',
+      15 * 60,
+      expect.any(Function),
+    );
+  });
+
   it('generates suggestions from low acceptance, timeout, cancel and incident rates', async () => {
     const configRows: Record<string, any> = {};
     const prisma: any = {

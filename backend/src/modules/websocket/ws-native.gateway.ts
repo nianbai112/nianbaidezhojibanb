@@ -29,6 +29,17 @@ const SESSION_TOUCH_BATCH_SIZE = 500;
 const STALE_SESSION_AFTER_MS = NATIVE_PONG_TIMEOUT_MS * 2;
 const STALE_SESSION_CLEANUP_INTERVAL_MS = 60000;
 
+export function isNativeWebSocketPath(requestUrl?: string, host?: string) {
+  try {
+    return (
+      new URL(requestUrl || "/", `http://${host || "localhost"}`).pathname ===
+      "/ws-native"
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface NativeClient {
   ws: WebSocket;
   userId: string;
@@ -56,6 +67,8 @@ export class WsNativeGateway implements OnApplicationShutdown {
   private readonly controlChannel = "lm:ws:realtime:control";
   private redisSubscriber?: ReturnType<RedisService["getClient"]>;
   private redisPushSubscribed = false;
+  private httpServer?: Server;
+  private upgradeHandler?: (request: any, socket: any, head: Buffer) => void;
 
   constructor(
     private readonly jwtService: JwtService,
@@ -79,7 +92,15 @@ export class WsNativeGateway implements OnApplicationShutdown {
       );
     }
 
-    this.wss = new WebSocketServer({ server, path: "/ws-native" });
+    this.wss = new WebSocketServer({ noServer: true });
+    this.httpServer = server;
+    this.upgradeHandler = (request, socket, head) => {
+      if (!isNativeWebSocketPath(request.url, request.headers.host)) return;
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        this.wss.emit("connection", ws, request);
+      });
+    };
+    server.on("upgrade", this.upgradeHandler);
 
     this.wss.on("connection", (ws, req) => {
       this.handleConnection(ws, req);
@@ -149,6 +170,11 @@ export class WsNativeGateway implements OnApplicationShutdown {
       this.redisSubscriber.disconnect();
       this.redisSubscriber = undefined;
       this.redisPushSubscribed = false;
+    }
+    if (this.httpServer && this.upgradeHandler) {
+      this.httpServer.off("upgrade", this.upgradeHandler);
+      this.httpServer = undefined;
+      this.upgradeHandler = undefined;
     }
     if (this.wss) {
       this.wss.close(() => {
@@ -1053,7 +1079,19 @@ export class WsNativeGateway implements OnApplicationShutdown {
     targetId: string | null,
     payload: any,
   ) {
-    if (this.isSetupWizardMode()) return;
+    void this.publishRedisPushRequired(targetType, targetId, payload).catch(
+      (err) => {
+        this.logger.warn(`Native WS Redis publish failed: ${err.message}`);
+      },
+    );
+  }
+
+  private async publishRedisPushRequired(
+    targetType: "user" | "group" | "region" | "broadcast",
+    targetId: string | null,
+    payload: any,
+  ) {
+    if (this.isSetupWizardMode()) return 0;
     const message = JSON.stringify({
       targetType,
       targetId,
@@ -1061,12 +1099,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       originInstanceId: this.instanceId,
       createdAt: new Date().toISOString(),
     });
-    this.redis
-      .getClient()
-      .publish(this.pushChannel, message)
-      .catch((err) => {
-        this.logger.warn(`Native WS Redis publish failed: ${err.message}`);
-      });
+    return this.redis.getClient().publish(this.pushChannel, message);
   }
 
   private toMessageType(type?: string, content?: string) {
@@ -1794,6 +1827,16 @@ export class WsNativeGateway implements OnApplicationShutdown {
     const sent = this.pushToUserLocal(userId, payload);
     this.publishRedisPush("user", userId, payload);
     return sent;
+  }
+
+  async pushToUserReliable(userId: string, payload: any) {
+    const localSent = this.pushToUserLocal(userId, payload);
+    const subscribers = await this.publishRedisPushRequired(
+      "user",
+      userId,
+      payload,
+    );
+    return { localSent, subscribers };
   }
 
   private pushToRegionLocal(regionId: string, payload: any) {
