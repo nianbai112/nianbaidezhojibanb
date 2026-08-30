@@ -150,6 +150,7 @@ export function defaultReviewApplyFields(object = {}) {
       && object.attachments.some(isImageEvidenceAttachment)
     return ['geometry', ...(hasPhotoEvidence ? ['media'] : [])]
   }
+  if (object.objectType === 'place_verification') return ['location']
   return []
 }
 

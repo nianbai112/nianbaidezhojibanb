@@ -902,7 +902,7 @@ describe("CampusMapCollectionService", () => {
     prisma.campusMapCollectionObject.count.mockResolvedValue(0);
     const service = new CampusMapCollectionService(prisma as any);
 
-    await service.reviewCollectionObject(
+    const result: any = await service.reviewCollectionObject(
       "region-1",
       "object-1",
       { decision: "approved", note: "现场定位精度合格", applyFields: ["location", "entrance"] },
@@ -918,6 +918,27 @@ describe("CampusMapCollectionService", () => {
       }),
     });
     const manifest = prisma.campusMapDraft.updateMany.mock.calls[0][0].data.manifest;
+    expect(manifest.positioning).toMatchObject({
+      enabled: false,
+      coordinateType: "gcj02",
+      calibrationPoints: [{
+        id: "place-calibration-place-library",
+        mapX: 1200,
+        mapY: 900,
+        longitude: 106.5,
+        latitude: 29.6,
+        source: "approved_place_verification",
+        sourcePlaceId: "place-library",
+        sourceCollectionObjectId: "object-1",
+      }],
+    });
+    expect(result.draftApply.calibration).toMatchObject({
+      applied: true,
+      action: "created",
+      pointCount: 1,
+      remainingPointCount: 2,
+      ready: false,
+    });
     expect(manifest.layers[0].inlineData.features[0].properties).toMatchObject({
       longitude: 106.5,
       latitude: 29.6,
@@ -942,6 +963,74 @@ describe("CampusMapCollectionService", () => {
       }),
     });
     expect(prisma.campusMapPlaceMedia.upsert).not.toHaveBeenCalled();
+  });
+
+  it("enables image positioning when the third approved place creates non-collinear calibration", async () => {
+    const prisma = makeTransactional();
+    const evidence: any = {
+      ...makePlaceVerificationEvidence("place-third"),
+      id: "object-third",
+    };
+    const place: any = {
+      id: "place-third",
+      officialName: "北门",
+      artworkAnchorX: 300,
+      artworkAnchorY: 900,
+      geometryStatus: "verified_point",
+      coordinateStatus: "verified",
+      longitude: 106.5,
+      latitude: 29.6,
+      media: [],
+      entrances: [],
+    };
+    prisma.campusMap.findUnique.mockResolvedValue({
+      id: "map-1",
+      draft: {
+        id: "draft-1",
+        revision: 8,
+        manifest: {
+          coordinateSystem: { type: "image", unit: "pixel" },
+          positioning: {
+            enabled: false,
+            calibrationPoints: [
+              { id: "manual-1", mapX: 100, mapY: 100, longitude: 106.49, latitude: 29.59 },
+              { id: "manual-2", mapX: 900, mapY: 100, longitude: 106.51, latitude: 29.59 },
+            ],
+          },
+          layers: [{
+            id: "operator_pois",
+            inlineData: { features: [{
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [300, 900] },
+              properties: { id: "place-third" },
+            }] },
+          }],
+        },
+      },
+    });
+    prisma.campusMapProject.findFirst.mockResolvedValue(place);
+    prisma.campusMapProject.update.mockResolvedValue(place);
+    prisma.campusMapProject.findUnique.mockResolvedValue(place);
+    const service = new CampusMapCollectionService(prisma as any);
+
+    const result = await (service as any).applyApprovedObject(
+      prisma,
+      "region-1",
+      evidence,
+      { targetPlaceId: "place-third", applyFields: ["location"], promoteAttachmentIds: [] },
+      "admin-1",
+      new Date("2026-08-26T02:00:00.000Z"),
+    );
+
+    const manifest = prisma.campusMapDraft.updateMany.mock.calls[0][0].data.manifest;
+    expect(manifest.positioning.enabled).toBe(true);
+    expect(manifest.positioning.calibrationPoints).toHaveLength(3);
+    expect(result.calibration).toMatchObject({
+      applied: true,
+      pointCount: 3,
+      remainingPointCount: 0,
+      ready: true,
+    });
   });
 
   it("does not silently replace the primary entrance when an admin selects location only", async () => {

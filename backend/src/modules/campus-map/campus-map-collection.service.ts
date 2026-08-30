@@ -36,6 +36,7 @@ const ACCESS_CODE_TTL_MS = 30 * 60 * 1000;
 const PLACE_PHOTO_SESSION_TOLERANCE_MS = 2 * 60 * 1000;
 const MAX_PLACE_PHOTO_ACCURACY_METERS = 20;
 const MAX_PLACE_PHOTO_DISTANCE_METERS = 20;
+const PLACE_CALIBRATION_APPLY_VERSION = 1;
 
 type CampusPlaceTarget = {
   id: string;
@@ -195,6 +196,48 @@ function isValidLngLat(longitude: unknown, latitude: unknown) {
   return Number.isFinite(lng) && Number.isFinite(lat)
     && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90
     && !(lng === 0 && lat === 0);
+}
+
+function finiteNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function hasNonCollinearPairs(
+  points: Array<Record<string, any>>,
+  xKey: string,
+  yKey: string,
+  tolerance: number,
+) {
+  for (let first = 0; first < points.length - 2; first += 1) {
+    for (let second = first + 1; second < points.length - 1; second += 1) {
+      for (let third = second + 1; third < points.length; third += 1) {
+        const a = points[first];
+        const b = points[second];
+        const c = points[third];
+        const twiceArea = (Number(b[xKey]) - Number(a[xKey])) * (Number(c[yKey]) - Number(a[yKey]))
+          - (Number(c[xKey]) - Number(a[xKey])) * (Number(b[yKey]) - Number(a[yKey]));
+        if (Number.isFinite(twiceArea) && Math.abs(twiceArea) > tolerance) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function calibrationPointsReady(points: Array<Record<string, any>>) {
+  const valid = points.map((point) => ({
+    mapX: finiteNumber(point?.mapX ?? point?.x),
+    mapY: finiteNumber(point?.mapY ?? point?.y),
+    longitude: finiteNumber(point?.longitude ?? point?.lng),
+    latitude: finiteNumber(point?.latitude ?? point?.lat),
+  })).filter((point) =>
+    point.mapX !== null
+    && point.mapY !== null
+    && isValidLngLat(point.longitude, point.latitude)) as Array<Record<string, any>>;
+  return valid.length >= 3
+    && hasNonCollinearPairs(valid, "mapX", "mapY", 1e-10)
+    && hasNonCollinearPairs(valid, "longitude", "latitude", 1e-12);
 }
 
 function canonicalJson(value: any): any {
@@ -2512,6 +2555,9 @@ export class CampusMapCollectionService {
     const fingerprint = createHash("sha256").update(JSON.stringify({
       objectId: object.id,
       objectType: object.objectType,
+      ...(object.objectType === "place_verification"
+        ? { placeCalibrationApplyVersion: PLACE_CALIBRATION_APPLY_VERSION }
+        : {}),
       geometry: object.geometry,
       properties,
       applyFields: [...applyFields].sort(),
@@ -3126,6 +3172,18 @@ export class CampusMapCollectionService {
           if (projected && feature.geometry?.type === "Point") feature.geometry.coordinates = [projected.x, projected.y];
         }
       }
+      if (object.objectType === "place_verification"
+        && placeVerification
+        && applyFields.includes("location")) {
+        audit.calibration = this.mergeApprovedPlaceCalibrationPoint(
+          manifest,
+          updatedPlace || place,
+          feature,
+          object,
+          placeVerification,
+          reviewedAt,
+        );
+      }
       const catalog = Array.isArray(manifest.placeCatalog) ? manifest.placeCatalog : [];
       const snapshot = this.placeSnapshot(updatedPlace);
       const snapshotIndex = catalog.findIndex((item: any) => String(item?.id) === place.id);
@@ -3179,6 +3237,116 @@ export class CampusMapCollectionService {
         || String(properties.id || "") === String(place.id)
         || Number(properties.officialNumber) === Number(place.officialNumber);
     });
+  }
+
+  private mergeApprovedPlaceCalibrationPoint(
+    manifest: any,
+    place: any,
+    feature: any,
+    object: any,
+    verification: PlaceVerificationResult,
+    reviewedAt: Date,
+  ) {
+    if (isNativeGcj02Manifest(manifest)) {
+      return { applied: false, reason: "native_gcj02_not_required" };
+    }
+    const directX = finiteNumber(place?.artworkAnchorX);
+    const directY = finiteNumber(place?.artworkAnchorY);
+    let mapX = directX;
+    let mapY = directY;
+    if (mapX === null || mapY === null) {
+      const geometry = feature?.geometry;
+      if (geometry?.type === "Point" && Array.isArray(geometry.coordinates)) {
+        mapX = finiteNumber(geometry.coordinates[0]);
+        mapY = finiteNumber(geometry.coordinates[1]);
+      } else if (geometry?.type === "Polygon" && Array.isArray(geometry.coordinates?.[0])) {
+        const ring = geometry.coordinates[0]
+          .map((coordinate: unknown) => Array.isArray(coordinate)
+            ? [finiteNumber(coordinate[0]), finiteNumber(coordinate[1])]
+            : [null, null])
+          .filter((coordinate: Array<number | null>) => coordinate[0] !== null && coordinate[1] !== null);
+        const uniqueRing = ring.length > 1
+          && ring[0][0] === ring[ring.length - 1][0]
+          && ring[0][1] === ring[ring.length - 1][1]
+          ? ring.slice(0, -1)
+          : ring;
+        if (uniqueRing.length >= 3) {
+          mapX = uniqueRing.reduce((sum, coordinate) => sum + Number(coordinate[0]), 0) / uniqueRing.length;
+          mapY = uniqueRing.reduce((sum, coordinate) => sum + Number(coordinate[1]), 0) / uniqueRing.length;
+        }
+      }
+    }
+    if (mapX === null || mapY === null) {
+      return {
+        applied: false,
+        reason: "artwork_anchor_missing",
+        placeId: String(place?.id || ""),
+      };
+    }
+
+    const positioning = manifest.positioning
+      && typeof manifest.positioning === "object"
+      && !Array.isArray(manifest.positioning)
+      ? { ...manifest.positioning }
+      : {};
+    const calibrationPoints = Array.isArray(positioning.calibrationPoints)
+      ? positioning.calibrationPoints.map((point: any) => ({ ...point }))
+      : [];
+    const placeId = String(place?.id || "").trim();
+    const stableId = `place-calibration-${placeId || String(object.id)}`;
+    const sameAnchor = (point: any) => {
+      const x = finiteNumber(point?.mapX ?? point?.x);
+      const y = finiteNumber(point?.mapY ?? point?.y);
+      return x !== null && y !== null
+        && Math.abs(x - Number(mapX)) <= 1e-6
+        && Math.abs(y - Number(mapY)) <= 1e-6;
+    };
+    const existingIndex = calibrationPoints.findIndex((point: any) =>
+      String(point?.id || "") === stableId
+      || (placeId && String(point?.sourcePlaceId || "") === placeId)
+      || sameAnchor(point));
+    const existing = existingIndex >= 0 ? calibrationPoints[existingIndex] : {};
+    const point = {
+      ...existing,
+      id: stableId,
+      title: String(existing.title || `采集校准 · ${place?.displayName || place?.officialName || place?.title || placeId || "地点"}`),
+      longitude: verification.acceptedLongitude,
+      latitude: verification.acceptedLatitude,
+      mapX: Number(mapX),
+      mapY: Number(mapY),
+      source: "approved_place_verification",
+      sourcePlaceId: placeId || undefined,
+      sourceCollectionObjectId: String(object.id),
+      accuracy: verification.acceptedAccuracy,
+      collectedAt: verification.acceptedRecordedAt.toISOString(),
+      reviewedAt: reviewedAt.toISOString(),
+    };
+    if (existingIndex >= 0) calibrationPoints[existingIndex] = point;
+    else calibrationPoints.push(point);
+    const ready = calibrationPointsReady(calibrationPoints);
+    const validPointCount = calibrationPoints.filter((item: any) =>
+      finiteNumber(item?.mapX ?? item?.x) !== null
+      && finiteNumber(item?.mapY ?? item?.y) !== null
+      && isValidLngLat(item?.longitude ?? item?.lng, item?.latitude ?? item?.lat)).length;
+    manifest.positioning = {
+      ...positioning,
+      enabled: ready,
+      coordinateType: "gcj02",
+      permissionPurpose: String(positioning.permissionPurpose
+        || "用于在校园地图中显示你所在的位置，并计算到目标地点的距离"),
+      calibrationPoints,
+    };
+    return {
+      applied: true,
+      action: existingIndex >= 0 ? "updated" : "created",
+      pointId: point.id,
+      placeId: placeId || null,
+      pointCount: validPointCount,
+      requiredPointCount: 3,
+      remainingPointCount: Math.max(0, 3 - validPointCount),
+      ready,
+      source: "approved_place_verification",
+    };
   }
 
   private placeSnapshot(place: any) {

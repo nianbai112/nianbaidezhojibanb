@@ -791,9 +791,9 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       label: '定位校准',
       status: calibrationReadyForProjection.value ? 'pass' : 'error',
       message: calibrationReadyForProjection.value
-        ? `已配置 ${calibratedPointCount.value} 个分散校准点（建议 6–8 个）`
+        ? `已配置 ${calibratedPointCount.value} 个分散校准点，其中 ${collectedCalibrationPointCount.value} 个来自已审核地点采集`
         : calibratedPointCount.value < 3
-          ? '至少需要 3 个非共线校准点，否则骑手参考底图和路线合并不可用'
+          ? `已有 ${calibratedPointCount.value} 个；再审核 ${Math.max(0, 3 - calibratedPointCount.value)} 个分散地点并采用真实位置即可自动补齐`
           : '校准点过于共线，请把控制点分散到校园四周；建议配置 6–8 个',
     })
   } else {
@@ -894,11 +894,58 @@ function isPublishedArtworkCalibrationPlace(place: any) {
   return hasExplicitAnchor || hasBuiltInAnchor
 }
 
+function synchronizeCollectedCalibrationPoints() {
+  if (sourceCoordinateMode.value === 'amap') return 0
+  let changedCount = 0
+  projectCatalog.value.forEach((place) => {
+    if (String(place?.coordinateStatus || '') !== 'verified') return
+    const longitude = Number(place?.longitude)
+    const latitude = Number(place?.latitude)
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)
+      || longitude < 70 || longitude > 140 || latitude <= 0 || latitude > 60) return
+    const anchor = artworkAnchorFor(place)
+    if (!anchor) return
+    const placeId = catalogPlaceId(place, currentRegionId())
+    if (!placeId) return
+    const stableId = `place-calibration-${placeId}`
+    const existingIndex = calibrationPoints.value.findIndex((point) => {
+      if (point.id === stableId) return true
+      const [mapX, mapY] = toMapCoordinate(point)
+      return Math.abs(mapX - anchor[0]) <= 0.01 && Math.abs(mapY - anchor[1]) <= 0.01
+    })
+    const current = existingIndex >= 0 ? calibrationPoints.value[existingIndex] : null
+    const candidate: CalibrationPoint = {
+      id: stableId,
+      title: current?.title || `采集校准 · ${String(place.displayName || place.officialName || place.title || placeId)}`,
+      longitude,
+      latitude,
+      xRatio: clampRatio(anchor[0] / Math.max(Number(form.mapWidth) || 1200, 100)),
+      yRatio: clampRatio(1 - anchor[1] / Math.max(Number(form.mapHeight) || 800, 100)),
+    }
+    const unchanged = current
+      && current.id === candidate.id
+      && current.title === candidate.title
+      && Math.abs(Number(current.longitude) - candidate.longitude) <= 1e-10
+      && Math.abs(Number(current.latitude) - candidate.latitude) <= 1e-10
+      && Math.abs(Number(current.xRatio) - candidate.xRatio) <= 1e-10
+      && Math.abs(Number(current.yRatio) - candidate.yRatio) <= 1e-10
+    if (unchanged) return
+    if (existingIndex >= 0) calibrationPoints.value[existingIndex] = candidate
+    else calibrationPoints.value.push(candidate)
+    changedCount += 1
+  })
+  return changedCount
+}
+
 const validCalibrationPoints = computed(() => calibrationPoints.value.filter((point) =>
   Number.isFinite(Number(point.longitude)) && Number.isFinite(Number(point.latitude)),
 ))
 const calibratedPointCount = computed(() => validCalibrationPoints.value.length)
-const calibrationReadyForProjection = computed(() => calibratedPointCount.value >= 3 && hasNonCollinearCalibration(validCalibrationPoints.value))
+const collectedCalibrationPointCount = computed(() => calibrationPoints.value
+  .filter((point) => String(point.id || '').startsWith('place-calibration-')).length)
+const calibrationReadyForProjection = computed(() => calibratedPointCount.value >= 3
+  && hasNonCollinearCalibration(validCalibrationPoints.value)
+  && hasNonCollinearGpsPoints(validCalibrationPoints.value))
 const unnamedObjectCount = computed(() => [
   ...pois.value.map((item) => item.title),
   ...areas.value.map((item) => item.title),
@@ -965,9 +1012,9 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
       order: 4,
       label: '定位校准',
       message: calibrationReady
-        ? '小程序定位可投射到地图（图片/矢量底图建议 6–8 个分散控制点）'
+        ? `小程序定位可投射到地图，已复用 ${collectedCalibrationPointCount.value} 个地点采集点`
         : calibratedPointCount.value < 3
-          ? `还需要 ${Math.max(0, 3 - calibratedPointCount.value)} 个非共线校准点；否则骑手参考底图和路线合并不可用`
+          ? `还需审核 ${Math.max(0, 3 - calibratedPointCount.value)} 个分散地点并采用真实位置；审核后自动加入校准`
           : '校准点过于共线，请把控制点分散到校园四周',
       status: calibrationReady ? 'pass' : 'warning',
       action: calibrationReady ? '' : 'calibration',
@@ -1025,7 +1072,7 @@ const assistantWarnings = computed(() => {
     const missing = keyPlaceCoverage.value.filter((item) => item.important && !item.done).map((item) => item.label)
     warnings.push(`核心地点缺少：${missing.join('、')}。`)
   }
-  if (editorMode.value === 'image' && !calibrationReadyForProjection.value) warnings.push('需要至少 3 个非共线校准点；否则骑手参考底图和路线合并不可用。建议在校园四周分散配置 6–8 个。')
+  if (editorMode.value === 'image' && !calibrationReadyForProjection.value) warnings.push('请在校园不同方位完成至少 3 个地点核验，并在审核中采用“真实位置”；系统会自动生成校准点。手工校准仅用于补充或修正。')
   if (pois.value.length > 80) warnings.push('点位较多，建议隐藏低频点或按分类展示，避免小程序地图拥挤。')
   if (draftAreaPoints.value.length || draftRoutePoints.value.length) warnings.push('还有未完成的区域或路线草稿，发布前请完成或清空。')
   if (activeImportJob.value?.status === 'needs_converter') warnings.push('DWG 自动转换缺少 ODA 转换器，建议上传 DXF 或安装转换器。')
@@ -3069,6 +3116,12 @@ async function loadMap() {
     else livePublication.verified = false
     await loadProjectCatalog(true)
     synchronizeCatalogArtworkPois()
+    await nextTick()
+    const restoredCalibrationCount = synchronizeCollectedCalibrationPoints()
+    if (restoredCalibrationCount > 0) {
+      hasUnsavedChanges.value = true
+      ElMessage.info(`已从历史地点核验中恢复 ${restoredCalibrationCount} 个校准点，请保存地图草稿`)
+    }
   } catch (error: any) {
     ElMessage.error(error?.message || '校园地图加载失败')
   } finally {

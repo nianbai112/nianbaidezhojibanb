@@ -237,14 +237,14 @@ test('shows superseded resamples as read-only history instead of a review decisi
   assert.deepEqual(superseded, { value: 'superseded', label: '已补采替代', type: 'info', decision: false })
 })
 
-test('requires administrators to opt in each place verification field', () => {
+test('defaults strong place verification to location so it can feed map calibration', () => {
   assert.deepEqual(defaultReviewApplyFields({
     objectType: 'place_verification',
     longitude: 108.755214,
     latitude: 30.977782,
     properties: { addressDescription: '候选地址', constructionStatus: 'built' },
     attachments: [{ id: 'photo-1' }],
-  }), [])
+  }), ['location'])
 })
 
 test('compares current place values against rider candidates field by field', () => {

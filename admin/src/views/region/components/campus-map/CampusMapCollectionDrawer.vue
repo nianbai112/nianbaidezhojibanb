@@ -498,7 +498,7 @@
             type="warning"
             :closable="false"
             title="此操作只更新地图草稿，不会直接发布"
-            :description="selectedObject?.objectType === 'road' ? '路线仍需通过服务端点数、精度、距离和时长阈值；审核成功后还要回地图工作台人工预览并发布。' : '仅勾选字段会写入地点草稿；还要回地图工作台人工预览并发布。'"
+            :description="selectedObject?.objectType === 'road' ? '路线仍需通过服务端点数、精度、距离和时长阈值；审核成功后还要回地图工作台人工预览并发布。' : '地点核验采用“真实位置”后，会同时复用该地点的图面锚点自动生成校准点；仍需回地图工作台预览并发布。'"
             show-icon
           />
           <el-form-item label="合并到地点档案">
@@ -512,7 +512,8 @@
                 {{ field.label }}
               </el-checkbox>
             </el-checkbox-group>
-            <div v-if="selectedObject?.objectType !== 'road'" class="form-help">地点核验默认不采用任何候选值，请管理员对照当前档案后逐项勾选。</div>
+            <div v-if="selectedObject?.objectType === 'place_verification'" class="form-help">“真实位置”默认勾选：服务端会复核 5 次站定采样，并把通过的坐标与该地点图面锚点组成校准点；其他字段仍由管理员逐项决定。</div>
+            <div v-else-if="selectedObject?.objectType !== 'road'" class="form-help">请管理员对照当前档案后逐项勾选要采用的候选值。</div>
           </el-form-item>
           <el-table :data="comparisonRows.filter((row) => reviewForm.applyFields.includes(row.field))" size="small" border class="comparison-table review-comparison">
             <el-table-column prop="label" label="采用字段" width="120" />
@@ -861,7 +862,16 @@ async function submitReview() {
     selectedObject.value = objects.value.find((item) => item.id === selectedId) || null
     if (response?.draftApply?.applied) {
       emit('draftChanged')
-      ElMessage.success('审核已写入地图草稿；工作台将重新加载，请预览后人工发布')
+      const calibration = response?.draftApply?.calibration
+      if (calibration?.applied) {
+        ElMessage.success(calibration.ready
+          ? `审核已写入草稿，并生成第 ${calibration.pointCount} 个分散校准点；定位投影已可用`
+          : `审核已写入草稿，并生成校准点；当前 ${calibration.pointCount} 个，还需 ${calibration.remainingPointCount} 个分散地点`)
+      } else if (calibration?.reason === 'artwork_anchor_missing') {
+        ElMessage.warning('真实位置已写入，但该地点尚未绑定图面锚点，暂未生成校准点')
+      } else {
+        ElMessage.success('审核已写入地图草稿；工作台将重新加载，请预览后人工发布')
+      }
     } else {
       ElMessage.success('审核结果已提交')
     }
