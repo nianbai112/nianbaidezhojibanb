@@ -3,7 +3,42 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+
+function startHealthServer() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        `
+          const http = require('node:http');
+          const server = http.createServer((_request, response) => {
+            response.statusCode = 200;
+            response.end('ok');
+          });
+          server.listen(0, '127.0.0.1', () => {
+            process.stdout.write(String(server.address().port) + '\\n');
+          });
+          process.on('SIGTERM', () => server.close(() => process.exit(0)));
+        `,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('temporary health server did not start'));
+    }, 5000);
+    child.stdout.once('data', (chunk) => {
+      clearTimeout(timer);
+      resolve({ child, port: Number(String(chunk).trim()) });
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
 
 function write(file, content, mode) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -11,7 +46,8 @@ function write(file, content, mode) {
   if (mode) fs.chmodSync(file, mode);
 }
 
-test('package-layout installer generates setup secrets and uses the MySQL toolchain', () => {
+test('package-layout installer generates setup secrets and uses the MySQL toolchain', async () => {
+  const healthServer = await startHealthServer();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lingmeng-install-package-'));
   const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lingmeng-install-target-'));
   const fakeBin = path.join(root, 'fake-bin');
@@ -27,7 +63,7 @@ test('package-layout installer generates setup secrets and uses the MySQL toolch
   write(path.join(root, 'ecosystem.config.cjs'), 'module.exports = { apps: [] }\n');
   write(
     path.join(root, '.env.example'),
-    'NODE_ENV=production\nDB_PROVIDER=mysql\nDATABASE_URL=\nSETUP_WIZARD=true\nJWT_SECRET=\nADMIN_JWT_SECRET=\n',
+    `NODE_ENV=production\nDB_PROVIDER=mysql\nDATABASE_URL=\nSETUP_WIZARD=true\nPORT=${healthServer.port}\nREALTIME_PORT=${healthServer.port}\nJWT_SECRET=\nADMIN_JWT_SECRET=\n`,
   );
 
   for (const command of ['npm', 'mysql', 'redis-cli', 'nginx']) {
@@ -39,28 +75,32 @@ test('package-layout installer generates setup secrets and uses the MySQL toolch
     0o755,
   );
 
-  const result = spawnSync('/bin/bash', [path.join(root, 'install.sh')], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      APP_ROOT: appRoot,
-      PATH: `${fakeBin}:${process.env.PATH}`,
-    },
-  });
+  try {
+    const result = spawnSync('/bin/bash', [path.join(root, 'install.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        APP_ROOT: appRoot,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
 
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  const envText = fs.readFileSync(path.join(appRoot, 'backend/.env'), 'utf8');
-  assert.match(envText, /^SETUP_TOKEN=[a-f0-9]{48}$/m);
-  assert.match(envText, /^JWT_SECRET=[a-f0-9]{96}$/m);
-  assert.match(envText, /^ADMIN_JWT_SECRET=[a-f0-9]{96}$/m);
-  assert.equal(fs.existsSync(path.join(appRoot, 'backend/dist/src/main.js')), true);
-  assert.equal(fs.statSync(appRoot).mode & 0o777, 0o755);
-  assert.equal(fs.statSync(path.join(appRoot, 'admin/dist')).mode & 0o777, 0o755);
-  const callText = fs.readFileSync(calls, 'utf8');
-  assert.match(callText, /npm ci/);
-  assert.match(callText, /npm run db:generate/);
-  assert.match(callText, /npm prune --omit=dev/);
-  assert.ok(callText.indexOf('npm run db:generate') < callText.indexOf('npm prune --omit=dev'));
-  assert.ok(callText.indexOf('npm prune --omit=dev') < callText.indexOf('pm2 start'));
-  assert.match(callText, /pm2 start/);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const envText = fs.readFileSync(path.join(appRoot, 'backend/.env'), 'utf8');
+    assert.match(envText, /^SETUP_TOKEN=[a-f0-9]{48}$/m);
+    assert.match(envText, /^JWT_SECRET=[a-f0-9]{96}$/m);
+    assert.match(envText, /^ADMIN_JWT_SECRET=[a-f0-9]{96}$/m);
+    assert.equal(fs.existsSync(path.join(appRoot, 'backend/dist/src/main.js')), true);
+    assert.equal(fs.statSync(appRoot).mode & 0o777, 0o755);
+    assert.equal(fs.statSync(path.join(appRoot, 'admin/dist')).mode & 0o777, 0o755);
+    const callText = fs.readFileSync(calls, 'utf8');
+    assert.match(callText, /npm ci/);
+    assert.match(callText, /npm run db:generate/);
+    assert.match(callText, /npm prune --omit=dev/);
+    assert.ok(callText.indexOf('npm run db:generate') < callText.indexOf('npm prune --omit=dev'));
+    assert.ok(callText.indexOf('npm prune --omit=dev') < callText.indexOf('pm2 start'));
+    assert.match(callText, /pm2 start/);
+  } finally {
+    healthServer.child.kill();
+  }
 });

@@ -322,8 +322,10 @@ module.exports = {
   normalizeRoute,
   routeMatches,
   parseDecoratorArgs,
+  extractBackendRoutes,
   extractMiniProgramRootPrefixes,
   findMissingRootCompatibility,
   findMethodNear,
   compatibleFrontendPaths,
+  findBackendRoute,
 };
