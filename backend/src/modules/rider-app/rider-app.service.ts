@@ -30,10 +30,12 @@ export class RiderAppService {
   ) {
     const login = await this.authService.phoneLogin(dto, ip, ua, {
       preferApprovedOfficialRider: true,
+      strictPartnerIdentity: true,
+      sessionScope: "partner_app",
     });
     return {
       ...login,
-      ...(await this.buildSession(login.id)),
+      ...(await this.buildSession(login.id, true)),
     };
   }
 
@@ -45,6 +47,7 @@ export class RiderAppService {
     const login = await this.authService.phoneLogin(dto, ip, ua, {
       preferApprovedOfficialRider: true,
       strictPartnerIdentity: true,
+      sessionScope: "partner_app",
     });
     return {
       ...login,
@@ -59,7 +62,7 @@ export class RiderAppService {
   }
 
   getSession(userId: string) {
-    return this.buildSession(userId);
+    return this.buildSession(userId, true);
   }
 
   getPartnerSession(userId: string) {
@@ -68,33 +71,63 @@ export class RiderAppService {
 
   async getOrders(userId: string, query: any) {
     await this.requireOfficialRider(userId);
-    return this.errandService.getDeliveryOrdersList(userId, query);
+    return this.withoutReceiptCodes(
+      await this.errandService.getDeliveryOrdersList(userId, query),
+    );
   }
 
   async getOrderDetail(userId: string, orderId: string) {
     await this.requireOfficialRider(userId);
-    return this.errandService.getRiderDeliveryOrderDetail(orderId, userId);
+    return this.withoutReceiptCodes(
+      await this.errandService.getRiderDeliveryOrderDetail(orderId, userId),
+    );
   }
 
   async acceptOrder(userId: string, orderId: string) {
     await this.requireOfficialRider(userId);
-    return this.errandService.acceptOrder(orderId, userId);
+    return this.withoutReceiptCodes(
+      await this.errandService.acceptOrder(orderId, userId),
+    );
   }
 
   async updateOrderStatus(userId: string, orderId: string, dto: any) {
     await this.requireOfficialRider(userId);
-    return this.errandService.updateRiderStatus(orderId, userId, dto);
+    return this.withoutReceiptCodes(
+      await this.errandService.updateRiderStatus(orderId, userId, dto),
+    );
   }
 
   async confirmOrderByCode(userId: string, orderId: string, code: string) {
     await this.requireOfficialRider(userId);
     const receiptCode = String(code || "").trim();
     if (!receiptCode) throw new BadRequestException("请输入收货码");
-    return this.errandService.confirmReceiptByCode(
-      orderId,
-      userId,
-      receiptCode,
+    return this.withoutReceiptCodes(
+      await this.errandService.confirmReceiptByCode(
+        orderId,
+        userId,
+        receiptCode,
+      ),
     );
+  }
+
+  private withoutReceiptCodes<T>(value: T): T {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.withoutReceiptCodes(item)) as T;
+    }
+    if (!value || typeof value !== "object" || value instanceof Date) {
+      return value;
+    }
+    const blocked = new Set([
+      "receipt_code",
+      "receiptcode",
+      "delivery_receipt_code",
+      "deliveryreceiptcode",
+    ]);
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !blocked.has(key.toLowerCase()))
+        .map(([key, item]) => [key, this.withoutReceiptCodes(item)]),
+    ) as T;
   }
 
   async updateLocation(userId: string, dto: any) {
@@ -103,11 +136,16 @@ export class RiderAppService {
       this.prisma.errandOrder.count({
         where: {
           riderId: userId,
-          status: { in: ["accepted", "in_progress", "arrived"] },
+          status: { in: ["accepted", "in_progress"] },
+          refundStatus: { notIn: ["refunding", "refunded"] },
         },
       }),
       this.prisma.order.count({
-        where: { riderId: userId, status: "SHIPPED" as any },
+        where: {
+          riderId: userId,
+          status: "SHIPPED" as any,
+          refundStatus: { notIn: ["refunding", "refunded"] },
+        },
       }),
     ]);
     if (activeErrands + activeShopOrders === 0) {
@@ -134,21 +172,100 @@ export class RiderAppService {
     const orderCutoff = new Date(now - maxAgeHours * 60 * 60 * 1000);
     const [assignedErrands, assignedShopOrders] = await Promise.all([
       this.prisma.errandOrder.findMany({
-        where: { riderId: userId, updatedAt: { gte: orderCutoff } },
-        select: { id: true },
+        where: {
+          riderId: userId,
+          OR: [
+            {
+              status: { in: ["accepted", "in_progress"] },
+              refundStatus: { notIn: ["refunding", "refunded"] },
+            },
+            { updatedAt: { gte: orderCutoff } },
+          ],
+        },
+        select: {
+          id: true,
+          status: true,
+          refundStatus: true,
+          deliverTime: true,
+          completeTime: true,
+          cancelTime: true,
+          updatedAt: true,
+        },
       }),
       this.prisma.order.findMany({
-        where: { riderId: userId, updatedAt: { gte: orderCutoff } },
-        select: { id: true },
+        where: {
+          riderId: userId,
+          OR: [
+            {
+              status: "SHIPPED" as any,
+              refundStatus: { notIn: ["refunding", "refunded"] },
+            },
+            { updatedAt: { gte: orderCutoff } },
+          ],
+        },
+        select: {
+          id: true,
+          status: true,
+          refundStatus: true,
+          deliverTime: true,
+          receiveTime: true,
+          completeTime: true,
+          cancelTime: true,
+          updatedAt: true,
+        },
       }),
     ]);
     if (assignedErrands.length + assignedShopOrders.length === 0) {
       throw new BadRequestException("没有可补传的配送订单");
     }
-    const orderTypes = new Map<string, string>([
-      ...assignedErrands.map((order) => [order.id, "errand"] as const),
-      ...assignedShopOrders.map((order) => [order.id, "shop"] as const),
-    ]);
+    type AssignedOrderContext = {
+      orderType: "errand" | "shop";
+      active: boolean;
+      terminalAt: Date | null;
+    };
+    const orderContexts = new Map<string, AssignedOrderContext>();
+    for (const order of assignedErrands) {
+      const status = String(order.status || "").toLowerCase();
+      const refundStatus = String(order.refundStatus || "none").toLowerCase();
+      const refundBlocked = ["refunding", "refunded"].includes(refundStatus);
+      const active = !refundBlocked && ["accepted", "in_progress"].includes(status);
+      const terminalAt = refundBlocked
+        ? null
+        : status === "arrived"
+          ? order.deliverTime
+          : status === "completed"
+            ? order.deliverTime || order.completeTime
+            : ["cancelled", "refunded"].includes(status)
+              ? order.cancelTime
+              : null;
+      orderContexts.set(order.id, {
+        orderType: "errand",
+        active,
+        terminalAt: terminalAt ? new Date(terminalAt) : null,
+      });
+    }
+    for (const order of assignedShopOrders) {
+      const status = String(order.status || "").toUpperCase();
+      const refundStatus = String(order.refundStatus || "none").toLowerCase();
+      const refundBlocked = ["refunding", "refunded"].includes(refundStatus);
+      const active = !refundBlocked && status === "SHIPPED";
+      const terminalAt = refundBlocked
+        ? null
+        : status === "DELIVERED"
+        ? order.deliverTime
+        : status === "RECEIVED"
+          ? order.deliverTime || order.receiveTime
+          : status === "COMPLETED"
+            ? order.deliverTime || order.receiveTime || order.completeTime
+            : ["CANCELLED", "REFUNDED"].includes(status)
+              ? order.cancelTime
+              : null;
+      orderContexts.set(order.id, {
+        orderType: "shop",
+        active,
+        terminalAt: terminalAt ? new Date(terminalAt) : null,
+      });
+    }
     type TrackInput = {
       clientId: string;
       riderId: string;
@@ -161,77 +278,138 @@ export class RiderAppService {
       heading: number | null;
       recordedAt: Date;
     };
-    const tracks: TrackInput[] = source.map((item: any): TrackInput => {
-      const clientId = String(item?.client_id ?? item?.clientId ?? "").trim();
-      if (!clientId || clientId.length > 128)
-        throw new BadRequestException("定位点编号无效");
-      const lat = Number(item?.lat ?? item?.latitude);
-      const lng = Number(item?.lng ?? item?.longitude);
-      if (
-        !Number.isFinite(lat) ||
-        !Number.isFinite(lng) ||
-        lat < -90 ||
-        lat > 90 ||
-        lng < -180 ||
-        lng > 180
-      ) {
-        throw new BadRequestException("定位坐标无效");
-      }
-      const recordedAt = new Date(
-        String(item?.recorded_at ?? item?.recordedAt ?? ""),
-      );
-      const recordedTime = recordedAt.getTime();
-      if (!Number.isFinite(recordedTime))
-        throw new BadRequestException("定位采集时间无效");
-      if (recordedTime > now + 5 * 60 * 1000)
-        throw new BadRequestException("定位采集时间不能晚于服务器时间");
-      if (recordedTime < now - maxAgeHours * 60 * 60 * 1000) {
-        throw new BadRequestException(
-          `定位点超过补传时效（${maxAgeHours} 小时）`,
+    type ValidatedTrack = TrackInput & { refreshLiveLocation: boolean };
+    const validatedTracks: ValidatedTrack[] = source.map(
+      (item: any): ValidatedTrack => {
+        const clientId = String(
+          item?.client_id ?? item?.clientId ?? "",
+        ).trim();
+        if (!clientId || clientId.length > 128)
+          throw new BadRequestException("定位点编号无效");
+        const lat = Number(item?.lat ?? item?.latitude);
+        const lng = Number(item?.lng ?? item?.longitude);
+        if (
+          !Number.isFinite(lat) ||
+          !Number.isFinite(lng) ||
+          lat < -90 ||
+          lat > 90 ||
+          lng < -180 ||
+          lng > 180
+        ) {
+          throw new BadRequestException("定位坐标无效");
+        }
+        const recordedAt = new Date(
+          String(item?.recorded_at ?? item?.recordedAt ?? ""),
         );
-      }
-      const orderId =
-        String(item?.order_id ?? item?.orderId ?? "").trim() || null;
-      if (orderId && !orderTypes.has(orderId)) {
-        throw new BadRequestException(
-          "定位点订单不属于当前骑手或已超过补传时效",
-        );
-      }
-      const optionalNumber = (value: unknown) => {
-        if (value === undefined || value === null || value === "") return null;
-        const number = Number(value);
-        return Number.isFinite(number) ? number : null;
-      };
-      return {
-        clientId,
-        riderId: userId,
-        orderId,
-        orderType: orderId ? orderTypes.get(orderId) || null : null,
-        lat,
-        lng,
-        accuracy: optionalNumber(item?.accuracy),
-        speed: optionalNumber(item?.speed),
-        heading: optionalNumber(item?.heading),
-        recordedAt,
-      };
-    });
+        const recordedTime = recordedAt.getTime();
+        if (!Number.isFinite(recordedTime))
+          throw new BadRequestException("定位采集时间无效");
+        if (recordedTime > now + 5 * 60 * 1000)
+          throw new BadRequestException("定位采集时间不能晚于服务器时间");
+        if (recordedTime < now - maxAgeHours * 60 * 60 * 1000) {
+          throw new BadRequestException(
+            `定位点超过补传时效（${maxAgeHours} 小时）`,
+          );
+        }
+        const orderId =
+          String(item?.order_id ?? item?.orderId ?? "").trim() || null;
+        if (!orderId) {
+          throw new BadRequestException("定位点必须绑定当前配送订单");
+        }
+        const orderContext = orderId ? orderContexts.get(orderId) : null;
+        if (orderId && !orderContext) {
+          throw new BadRequestException(
+            "定位点订单不属于当前骑手或已超过补传时效",
+          );
+        }
+        if (orderContext && !orderContext.active) {
+          if (!orderContext.terminalAt) {
+            throw new BadRequestException("当前订单状态不允许补传定位");
+          }
+          if (recordedTime > orderContext.terminalAt.getTime()) {
+            throw new BadRequestException("终态后的定位点不能补传");
+          }
+        }
+        const optionalNumber = (value: unknown) => {
+          if (value === undefined || value === null || value === "") return null;
+          const number = Number(value);
+          return Number.isFinite(number) ? number : null;
+        };
+        return {
+          clientId,
+          riderId: userId,
+          orderId,
+          orderType: orderContext?.orderType || null,
+          lat,
+          lng,
+          accuracy: optionalNumber(item?.accuracy),
+          speed: optionalNumber(item?.speed),
+          heading: optionalNumber(item?.heading),
+          recordedAt,
+          refreshLiveLocation: orderContext?.active === true,
+        };
+      },
+    );
+
+    const tracks: TrackInput[] = validatedTracks.map((point) => ({
+      clientId: point.clientId,
+      riderId: point.riderId,
+      orderId: point.orderId,
+      orderType: point.orderType,
+      lat: point.lat,
+      lng: point.lng,
+      accuracy: point.accuracy,
+      speed: point.speed,
+      heading: point.heading,
+      recordedAt: point.recordedAt,
+    }));
 
     const result = await this.prisma.riderLocationTrack.createMany({
       data: tracks,
       skipDuplicates: true,
     });
-    const newest = tracks.reduce((latest, point) =>
-      point.recordedAt >= latest.recordedAt ? point : latest,
+    const liveTracks = validatedTracks.filter(
+      (point) => point.refreshLiveLocation,
     );
-    await this.errandService.updateLocationIfNewer(
-      userId,
-      { lat: newest.lat, lng: newest.lng },
-      newest.recordedAt,
-    );
+    let liveLocationUpdated = false;
+    if (liveTracks.length) {
+      const newest = liveTracks.reduce((latest, point) =>
+        point.recordedAt >= latest.recordedAt ? point : latest,
+      );
+      const stillActive = newest.orderType === "errand"
+        ? await this.prisma.errandOrder.findFirst({
+          where: {
+            id: newest.orderId || "__never__",
+            riderId: userId,
+            status: { in: ["accepted", "in_progress"] },
+            refundStatus: { notIn: ["refunding", "refunded"] },
+          },
+          select: { id: true },
+        })
+        : await this.prisma.order.findFirst({
+          where: {
+            id: newest.orderId || "__never__",
+            riderId: userId,
+            status: "SHIPPED" as any,
+            refundStatus: { notIn: ["refunding", "refunded"] },
+          },
+          select: { id: true },
+        });
+      if (stillActive) {
+        const updated = await this.errandService.updateLocationIfNewer(
+          userId,
+          { lat: newest.lat, lng: newest.lng },
+          newest.recordedAt,
+          { orderId: newest.orderId, orderType: newest.orderType },
+        );
+        liveLocationUpdated = updated?.updated !== false;
+      }
+    }
     return {
       success: true,
       inserted: result.count,
       accepted_client_ids: tracks.map((point) => point.clientId),
+      live_location_updated: liveLocationUpdated,
     };
   }
 
@@ -348,10 +526,28 @@ export class RiderAppService {
     return Math.round((Number(value) || 0) * 100) / 100;
   }
 
-  private dayStart(date: Date): Date {
-    const value = new Date(date);
-    value.setHours(0, 0, 0, 0);
-    return value;
+  private shanghaiDateParts(date: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const read = (type: string) =>
+      parts.find((part) => part.type === type)?.value || "";
+    return { year: read("year"), month: read("month"), day: read("day") };
+  }
+
+  private shanghaiDayStart(date: Date): Date {
+    const parts = this.shanghaiDateParts(date);
+    return new Date(
+      `${parts.year}-${parts.month}-${parts.day}T00:00:00.000+08:00`,
+    );
+  }
+
+  private shanghaiMonthStart(date: Date): Date {
+    const parts = this.shanghaiDateParts(date);
+    return new Date(`${parts.year}-${parts.month}-01T00:00:00.000+08:00`);
   }
 
   /**
@@ -374,6 +570,10 @@ export class RiderAppService {
           refundStatus: { notIn: ["refunding", "refunded"] },
           receiptConfirmedAt: { not: null },
           settlementEligibleAt: { gte: start, lte: end },
+          OR: [
+            { settlementHold: { is: null } },
+            { settlementHold: { is: { status: "released" } } },
+          ],
         },
         select: {
           id: true,
@@ -387,11 +587,17 @@ export class RiderAppService {
       this.prisma.order.findMany({
         where: {
           riderId: userId,
-          status: { in: ["DELIVERED", "RECEIVED", "COMPLETED"] },
           refundStatus: { notIn: ["refunding", "refunded"] },
           OR: [
-            { deliverTime: { gte: start, lte: end } },
-            { deliverTime: null, completeTime: { gte: start, lte: end } },
+            {
+              status: "COMPLETED",
+              completeTime: { gte: start, lte: end },
+            },
+            // 显式兼容旧版已确认收货但状态停留在 RECEIVED 的历史单。
+            {
+              status: "RECEIVED",
+              receiveTime: { gte: start, lte: end },
+            },
           ],
           deliveryMode: { in: ["platform_rider", "rider_delivery"] },
           businessType: { not: "dorm_shop" },
@@ -402,12 +608,16 @@ export class RiderAppService {
           freightAmount: true,
           originalFreightAmount: true,
           deliverTime: true,
+          receiveTime: true,
           completeTime: true,
         },
       }),
       excludeCovered
         ? this.prisma.riderSettlementItem.findMany({
-            where: { riderId: userId },
+            where: {
+              riderId: userId,
+              settlement: { status: { not: "REJECTED" } },
+            },
             select: { orderType: true, orderId: true },
           })
         : Promise.resolve([]),
@@ -482,7 +692,8 @@ export class RiderAppService {
         orderNo: order.orderNo || order.id,
         title: "配送订单",
         amount,
-        completeTime: order.deliverTime || order.completeTime || new Date(),
+        completeTime:
+          order.completeTime || order.receiveTime || order.deliverTime || new Date(),
       });
     }
 
@@ -512,9 +723,9 @@ export class RiderAppService {
   async getRiderIncomeOverview(userId: string) {
     await this.requireOfficialRider(userId);
     const now = new Date();
-    const todayStart = this.dayStart(now);
+    const todayStart = this.shanghaiDayStart(now);
     const tomorrow = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthStart = this.shanghaiMonthStart(now);
 
     const [
       wallet,
@@ -523,6 +734,7 @@ export class RiderAppService {
       unsettledEarnings,
       pendingSettlements,
       pendingWithdrawals,
+      settlementHolds,
     ] = await Promise.all([
       this.prisma.wallet.findUnique({ where: { userId } }),
       this.computeRiderEarnings(userId, todayStart, tomorrow, false),
@@ -535,6 +747,14 @@ export class RiderAppService {
       this.prisma.withdraw.aggregate({
         where: { userId, status: { in: ["PENDING", "PROCESSING"] } },
         _sum: { amount: true },
+      }),
+      this.prisma.errandSettlementHold.findMany({
+        where: { riderId: userId, status: "holding" },
+        select: {
+          releaseAt: true,
+          order: { select: { price: true, tip: true, status: true } },
+        },
+        orderBy: { releaseAt: "asc" },
       }),
     ]);
 
@@ -549,15 +769,31 @@ export class RiderAppService {
         sum(unsettledEarnings) +
           this.toNumber((pendingSettlements as any)._sum?.payableAmount),
       ),
+      held_settlement: this.round2(
+        settlementHolds
+          .filter(item => item.order.status === "completed")
+          .reduce(
+            (total, item) => total + this.toNumber(item.order.price) + this.toNumber(item.order.tip),
+            0,
+          ),
+      ),
+      next_release_at: settlementHolds.find(item => !!item.releaseAt)?.releaseAt || null,
       withdrawing: this.round2(
         this.toNumber((pendingWithdrawals as any)._sum?.amount),
       ),
+      settlement_rule:
+        "普通订单确认收货后入账；营销优惠订单先冻结48小时并复核关联账号，退款、申诉或风险未解决时不可提现。",
     };
   }
 
   async getRiderIncomeTransactions(userId: string, query: any = {}) {
     await this.requireOfficialRider(userId);
-    return this.financeService.transactions(userId, query);
+    const normalized: any = {
+      page: Math.max(1, Number(query.page) || 1),
+      pageSize: Math.min(50, Math.max(1, Number(query.pageSize) || 20)),
+    };
+    if (query.type) normalized.type = query.type;
+    return this.financeService.transactions(userId, normalized);
   }
 
   async getRiderSettlements(userId: string, query: any = {}) {
@@ -639,8 +875,7 @@ export class RiderAppService {
     deliveryRows.forEach((row) => orderNoMap.set(row.id, row.orderNo));
 
     const orders = items.map((item) => {
-      const originalAmount =
-        this.toNumber(item.deliveryFeeAmount) + this.toNumber(item.tipAmount);
+      const originalAmount = this.toNumber(item.payableAmount);
       const reversalAmount = this.toNumber(item.reversalAmount);
       const netAmount = this.toNumber(item.payableAmount) - reversalAmount;
       return {
@@ -838,7 +1073,7 @@ export class RiderAppService {
     return session;
   }
 
-  private async buildSession(userId: string) {
+  private async buildSession(userId: string, includeOrderStats = false) {
     const [user, rider] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -855,12 +1090,17 @@ export class RiderAppService {
       };
     }
 
-    const region = rider?.regionId
-      ? await this.prisma.region.findUnique({
-          where: { id: rider.regionId },
-          select: { name: true },
-        })
-      : null;
+    const [region, orderStats] = await Promise.all([
+      rider?.regionId
+        ? this.prisma.region.findUnique({
+            where: { id: rider.regionId },
+            select: { name: true },
+          })
+        : null,
+      includeOrderStats && rider
+        ? this.errandService.getOrderStats(userId).catch(() => null)
+        : null,
+    ]);
     let message = "";
     if (!rider) {
       message = "尚未申请成为骑手，请先在小程序提交骑手申请";
@@ -895,8 +1135,8 @@ export class RiderAppService {
             is_official: rider.riderType === "official",
             rating: rider.rating,
             balance: Number(rider.balance || 0),
-            total_orders: rider.totalOrders,
-            today_orders: rider.todayOrders,
+            total_orders: orderStats?.total_orders ?? orderStats?.total ?? rider.totalOrders,
+            today_orders: orderStats?.today_orders ?? orderStats?.today ?? rider.todayOrders,
           }
         : null,
     };
@@ -904,7 +1144,7 @@ export class RiderAppService {
 
   private async buildPartnerSession(userId: string) {
     const [riderSession, merchants, memberships] = await Promise.all([
-      this.buildSession(userId),
+      this.buildSession(userId, true),
       this.prisma.merchant.findMany({
         where: { userId, businessType: "dorm_shop" },
         orderBy: { createdAt: "asc" },

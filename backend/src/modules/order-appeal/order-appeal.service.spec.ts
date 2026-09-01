@@ -21,7 +21,7 @@ const createPrisma = () => ({
   paymentRefund: { findFirst: jest.fn() },
   wallet: { upsert: jest.fn() },
   walletTransaction: { create: jest.fn() },
-  riderSettlementItem: { findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+  riderSettlementItem: { findFirst: jest.fn(), update: jest.fn(), findMany: jest.fn() },
   riderSettlement: { update: jest.fn() },
   riderLiability: { upsert: jest.fn() },
 });
@@ -300,7 +300,7 @@ describe("OrderAppealService", () => {
       id: "appeal-1", appealNo: "AP1", orderType: "errand", orderId: "errand-1",
       userId: "user-1", regionId: "region-1", status: "processing",
     });
-    prisma.riderSettlementItem.findUnique.mockResolvedValue({
+    prisma.riderSettlementItem.findFirst.mockResolvedValue({
       id: "item-1", settlementId: "settlement-1", riderId: "rider-1", payableAmount: 8,
       settlement: { id: "settlement-1", status: "PENDING" },
     });

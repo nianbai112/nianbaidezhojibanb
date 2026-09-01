@@ -65,6 +65,9 @@ test('package-layout installer generates setup secrets and uses the MySQL toolch
     path.join(root, '.env.example'),
     `NODE_ENV=production\nDB_PROVIDER=mysql\nDATABASE_URL=\nSETUP_WIZARD=true\nPORT=${healthServer.port}\nREALTIME_PORT=${healthServer.port}\nJWT_SECRET=\nADMIN_JWT_SECRET=\n`,
   );
+  write(path.join(appRoot, 'backend/certs/private.pem'), 'private certificate fixture\n', 0o600);
+  write(path.join(appRoot, 'backend/certificates/platform.pem'), 'platform certificate fixture\n', 0o600);
+  write(path.join(appRoot, 'backend/secrets/provider.key'), 'provider key fixture\n', 0o600);
 
   for (const command of ['npm', 'mysql', 'redis-cli', 'nginx']) {
     write(path.join(fakeBin, command), `#!/usr/bin/env bash\necho "${command} $*" >> "${calls}"\nexit 0\n`, 0o755);
@@ -91,6 +94,9 @@ test('package-layout installer generates setup secrets and uses the MySQL toolch
     assert.match(envText, /^JWT_SECRET=[a-f0-9]{96}$/m);
     assert.match(envText, /^ADMIN_JWT_SECRET=[a-f0-9]{96}$/m);
     assert.equal(fs.existsSync(path.join(appRoot, 'backend/dist/src/main.js')), true);
+    assert.equal(fs.readFileSync(path.join(appRoot, 'backend/certs/private.pem'), 'utf8'), 'private certificate fixture\n');
+    assert.equal(fs.readFileSync(path.join(appRoot, 'backend/certificates/platform.pem'), 'utf8'), 'platform certificate fixture\n');
+    assert.equal(fs.readFileSync(path.join(appRoot, 'backend/secrets/provider.key'), 'utf8'), 'provider key fixture\n');
     assert.equal(fs.statSync(appRoot).mode & 0o777, 0o755);
     assert.equal(fs.statSync(path.join(appRoot, 'admin/dist')).mode & 0o777, 0o755);
     const callText = fs.readFileSync(calls, 'utf8');

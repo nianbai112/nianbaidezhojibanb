@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { WechatTokenService } from './wechat-token.service';
 import axios from 'axios';
+import { getManagedWechatTemplateContract } from './wechat-template-contracts';
 
 @Injectable()
 export class WechatSubscribeService {
@@ -89,19 +90,24 @@ export class WechatSubscribeService {
       }
 
       // 4. 构建发送数据
-      const fieldMapping = (template.fieldMapping || {}) as Record<string, string>;
+      const managedContract = getManagedWechatTemplateContract('miniprogram', templateType);
+      const fieldMapping = (managedContract?.fieldMapping || template.fieldMapping || {}) as Record<string, string>;
       const normalizedData = this.normalizeNotificationData(data);
       const templateData: Record<string, any> = {};
-      const missingFields: string[] = [];
       for (const [templateKey, dataKey] of Object.entries(fieldMapping)) {
         const value = this.normalizeTemplateValue(templateKey, normalizedData[dataKey]);
-        if (!value) missingFields.push(templateKey);
-        else templateData[templateKey] = { value };
+        if (value) templateData[templateKey] = { value };
       }
-      if (!Object.keys(fieldMapping).length || missingFields.length) {
+      const missingRequiredFields = (managedContract?.requiredTemplateKeys || [])
+        .filter((templateKey) => !templateData[templateKey]);
+      const mappingInvalid = !Object.keys(fieldMapping).length
+        || (managedContract ? missingRequiredFields.length > 0 : !Object.keys(templateData).length);
+      if (mappingInvalid) {
         const errorMessage = !Object.keys(fieldMapping).length
           ? '模板字段映射未配置'
-          : `模板字段缺少业务数据: ${missingFields.join(', ')}`;
+          : managedContract
+            ? `模板字段缺少业务数据: ${missingRequiredFields.join(', ')}`
+            : '模板字段映射为空或业务数据缺失';
         await this.writeLog({
           userId, openid: user.openid, platformType: 'miniprogram', templateType,
           templateId: template.templateId, page, data: normalizedData,
@@ -112,7 +118,7 @@ export class WechatSubscribeService {
 
       // 5. 发送
       const accessToken = await this.tokenService.getMiniappAccessToken();
-      const targetPage = page || template.pageTemplate || template.defaultPage || '';
+      const targetPage = page || managedContract?.defaultPage || template.pageTemplate || template.defaultPage || '';
 
       const result = await axios.post(
         `https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=${accessToken}`,

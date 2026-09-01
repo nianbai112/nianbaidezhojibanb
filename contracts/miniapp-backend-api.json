@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-08-30T07:12:45.969Z",
+  "generatedAt": "2026-08-30T12:37:46.560Z",
   "roots": {
     "miniappRoot": "/Users/nianbaidediannao/Desktop/前端文件",
     "backendRoot": "/Users/nianbaidediannao/Desktop/后端后台本地测试版/backend"
   },
   "stats": {
     "miniappRequests": 441,
-    "backendRoutes": 2068,
+    "backendRoutes": 2070,
     "matchedMiniappRequests": 441,
     "unmatchedMiniappRequests": 0,
     "unmatchedNonAdminBackendRoutes": 608
@@ -1349,19 +1349,19 @@
       "method": "GET",
       "path": "/healthz",
       "file": "backend/src/modules/health/health.controller.ts",
-      "line": 37
+      "line": 32
     },
     {
       "method": "GET",
       "path": "/healthz",
       "file": "backend/src/realtime-health.controller.ts",
-      "line": 16
+      "line": 18
     },
     {
       "method": "GET",
       "path": "/healthz/services",
       "file": "backend/src/modules/health/health.controller.ts",
-      "line": 47
+      "line": 42
     },
     {
       "method": "GET",
@@ -2117,13 +2117,13 @@
       "method": "GET",
       "path": "/rider-app/campus-collection/tasks",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 249
+      "line": 261
     },
     {
       "method": "GET",
       "path": "/rider-app/campus-collection/tasks/:taskId",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 256
+      "line": 268
     },
     {
       "method": "GET",
@@ -3071,7 +3071,7 @@
       "method": "POST",
       "path": "/campus-map/collection/sessions/:sessionId/abandon",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 302
+      "line": 314
     },
     {
       "method": "POST",
@@ -3299,19 +3299,19 @@
       "method": "POST",
       "path": "/rider-app/campus-collection/sessions/:sessionId/abandon",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 292
+      "line": 304
     },
     {
       "method": "POST",
       "path": "/rider-app/campus-collection/sessions/:sessionId/objects",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 340
+      "line": 352
     },
     {
       "method": "POST",
       "path": "/rider-app/campus-collection/tasks/:taskId/sessions",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 266
+      "line": 278
     },
     {
       "method": "POST",
@@ -5606,7 +5606,7 @@
         "method": "GET",
         "path": "/campus-map/collection/context",
         "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-        "line": 236
+        "line": 248
       }
     },
     {
@@ -8126,7 +8126,7 @@
         "method": "POST",
         "path": "/campus-map/collection/sessions/:sessionId/finish",
         "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-        "line": 355
+        "line": 367
       }
     },
     {
@@ -8140,7 +8140,7 @@
         "method": "POST",
         "path": "/campus-map/collection/sessions/:sessionId/markers",
         "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-        "line": 329
+        "line": 341
       }
     },
     {
@@ -8154,7 +8154,7 @@
         "method": "POST",
         "path": "/campus-map/collection/tasks/:taskId/sessions",
         "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-        "line": 281
+        "line": 293
       }
     },
     {
@@ -9498,7 +9498,7 @@
         "method": "PUT",
         "path": "/campus-map/collection/sessions/:sessionId/batches/:batchNo",
         "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-        "line": 312
+        "line": 324
       }
     },
     {
@@ -9903,37 +9903,37 @@
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 414
+      "line": 428
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId/imports/:jobId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 404
+      "line": 418
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 197
+      "line": 211
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId/places/:placeId/media/:mediaId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 240
+      "line": 254
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/project-catalog/:number",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 97
+      "line": 111
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/project-catalog/:number/photos",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 131
+      "line": 145
     },
     {
       "method": "DELETE",
@@ -11139,37 +11139,37 @@
       "method": "GET",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 277
+      "line": 291
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/imports",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 374
+      "line": 388
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/imports/:jobId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 384
+      "line": 398
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/places",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 161
+      "line": 175
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 179
+      "line": 193
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/versions",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 330
+      "line": 344
     },
     {
       "method": "GET",
@@ -11193,13 +11193,13 @@
       "method": "GET",
       "path": "/admin/campus-map/collections/:regionId/templates",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 197
+      "line": 209
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/converter/status",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 249
+      "line": 263
     },
     {
       "method": "GET",
@@ -11211,7 +11211,7 @@
       "method": "GET",
       "path": "/admin/campus-map/statuses",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 267
+      "line": 281
     },
     {
       "method": "GET",
@@ -14811,7 +14811,7 @@
       "method": "GET",
       "path": "/campus-map/collection/context",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 236
+      "line": 248
     },
     {
       "method": "GET",
@@ -15465,19 +15465,19 @@
       "method": "GET",
       "path": "/healthz",
       "file": "backend/src/modules/health/health.controller.ts",
-      "line": 37
+      "line": 32
     },
     {
       "method": "GET",
       "path": "/healthz",
       "file": "backend/src/realtime-health.controller.ts",
-      "line": 16
+      "line": 18
     },
     {
       "method": "GET",
       "path": "/healthz/services",
       "file": "backend/src/modules/health/health.controller.ts",
-      "line": 47
+      "line": 42
     },
     {
       "method": "GET",
@@ -16539,13 +16539,13 @@
       "method": "GET",
       "path": "/rider-app/campus-collection/tasks",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 249
+      "line": 261
     },
     {
       "method": "GET",
       "path": "/rider-app/campus-collection/tasks/:taskId",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 256
+      "line": 268
     },
     {
       "method": "GET",
@@ -17121,7 +17121,7 @@
       "method": "PATCH",
       "path": "/admin/campus-map/:regionId/places/:placeId/media/:mediaId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 231
+      "line": 245
     },
     {
       "method": "PATCH",
@@ -17133,13 +17133,13 @@
       "method": "PATCH",
       "path": "/admin/campus-map/collections/:regionId/tasks/:taskId",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 150
+      "line": 162
     },
     {
       "method": "PATCH",
       "path": "/admin/campus-map/collections/:regionId/templates/:templateId",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 222
+      "line": 234
     },
     {
       "method": "PATCH",
@@ -17709,37 +17709,43 @@
       "method": "POST",
       "path": "/admin/campus-map/:regionId/imports",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 359
+      "line": 373
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/imports/:jobId/retry",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 394
+      "line": 408
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/places",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 170
+      "line": 184
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/places/:placeId/media",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 206
+      "line": 220
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/publish",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 316
+      "line": 330
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/versions/:versionId/rollback",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 345
+      "line": 359
+    },
+    {
+      "method": "POST",
+      "path": "/admin/campus-map/collections/:regionId/calibrations/sync",
+      "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
+      "line": 150
     },
     {
       "method": "POST",
@@ -17751,25 +17757,31 @@
       "method": "POST",
       "path": "/admin/campus-map/collections/:regionId/tasks/:taskId/access-code",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 164
+      "line": 176
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/collections/:regionId/templates",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 209
+      "line": 221
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/project-catalog/:number/photos",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 112
+      "line": 126
+    },
+    {
+      "method": "POST",
+      "path": "/admin/campus-map/project-catalog/release-batch/prepare",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 81
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/project-catalog/seed",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 147
+      "line": 161
     },
     {
       "method": "POST",
@@ -19455,25 +19467,25 @@
       "method": "POST",
       "path": "/campus-map/collection/sessions/:sessionId/abandon",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 302
+      "line": 314
     },
     {
       "method": "POST",
       "path": "/campus-map/collection/sessions/:sessionId/finish",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 355
+      "line": 367
     },
     {
       "method": "POST",
       "path": "/campus-map/collection/sessions/:sessionId/markers",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 329
+      "line": 341
     },
     {
       "method": "POST",
       "path": "/campus-map/collection/tasks/:taskId/sessions",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 281
+      "line": 293
     },
     {
       "method": "POST",
@@ -20109,19 +20121,19 @@
       "method": "POST",
       "path": "/rider-app/campus-collection/sessions/:sessionId/abandon",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 292
+      "line": 304
     },
     {
       "method": "POST",
       "path": "/rider-app/campus-collection/sessions/:sessionId/objects",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 340
+      "line": 352
     },
     {
       "method": "POST",
       "path": "/rider-app/campus-collection/tasks/:taskId/sessions",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 266
+      "line": 278
     },
     {
       "method": "POST",
@@ -20619,31 +20631,31 @@
       "method": "PUT",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 287
+      "line": 301
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/:regionId/draft",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 297
+      "line": 311
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 188
+      "line": 202
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/converter",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 258
+      "line": 272
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/project-catalog/:number",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 81
+      "line": 95
     },
     {
       "method": "PUT",
@@ -21933,7 +21945,7 @@
       "method": "PUT",
       "path": "/campus-map/collection/sessions/:sessionId/batches/:batchNo",
       "file": "backend/src/modules/campus-map/campus-map-collection.controller.ts",
-      "line": 312
+      "line": 324
     },
     {
       "method": "PUT",

@@ -2807,6 +2807,28 @@ describe("ShopService SKU checkout bridge", () => {
     );
   });
 
+  it("closes a fresh official-rider location after a shop order is completed", () => {
+    const { service } = createService();
+    const track = (service as any).buildDeliveryTrack({
+      status: "COMPLETED",
+      deliveryMode: "platform_rider",
+      deliveryDisplayMode: "live_map",
+      rider: {
+        riderType: "official",
+        lat: 30.1,
+        lng: 120.1,
+        locationUpdatedAt: new Date(),
+      },
+    });
+
+    expect(track).toEqual(expect.objectContaining({
+      can_show_live_map: false,
+      current_location: null,
+      location_stale: false,
+      estimated_arrival_text: "订单已完成，骑手定位已关闭",
+    }));
+  });
+
   it("makes buyer receipt a completed order with a completion timestamp", async () => {
     const { prisma, service } = createService();
     const order = {
@@ -2871,6 +2893,90 @@ describe("ShopService SKU checkout bridge", () => {
       expect.objectContaining({
         userId: "merchant-user",
         scene: "shop_order_received_merchant",
+      }),
+    );
+  });
+
+  it("credits a platform rider delivery fee when the buyer confirms receipt", async () => {
+    const { prisma, service } = createService();
+    const order = {
+      id: "delivery-order-1",
+      orderNo: "ORD-RIDER-1",
+      userId: "user-1",
+      merchantId: "merchant-1",
+      riderId: "rider-1",
+      deliveryMode: "platform_rider",
+      businessType: "takeaway",
+      freightAmount: 2,
+      originalFreightAmount: 3,
+      status: "DELIVERED",
+      refundStatus: "none",
+      items: [],
+      merchant: { userId: "merchant-user", regionId: "region-1" },
+    };
+    const tx: any = {
+      order: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          ...order,
+          status: "COMPLETED",
+          completeTime: new Date(),
+          reviews: [],
+        }),
+      },
+      orderLog: { create: jest.fn() },
+      deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
+      orderAppeal: { findFirst: jest.fn().mockResolvedValue(null) },
+      deliveryRiskEvent: { findFirst: jest.fn().mockResolvedValue(null) },
+      subsidyLedger: { findMany: jest.fn().mockResolvedValue([{ amount: 2 }]) },
+      riderSettlementItem: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: "item-1" }),
+      },
+      riderLiability: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
+      riderSettlement: {
+        upsert: jest.fn().mockResolvedValue({ id: "settlement-1" }),
+      },
+      wallet: { upsert: jest.fn().mockResolvedValue({ balance: 4 }) },
+      walletTransaction: { create: jest.fn().mockResolvedValue({}) },
+    };
+    prisma.order.findUnique.mockResolvedValue(order);
+    (prisma as any).$transaction = jest.fn((callback: any) => callback(tx));
+    (service as any).notifyService = {
+      createAndDispatch: jest.fn().mockResolvedValue({}),
+    };
+
+    await service.updateOrderStatus("delivery-order-1", "user-1", {
+      status: "received",
+    });
+
+    // paid freight 2 + rider subsidy 2 exceeds the original freight 3.
+    expect(tx.riderSettlement.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          riderId: "rider-1",
+          deliveryFeeTotal: 4,
+          payableAmount: 4,
+          paidAmount: 4,
+          status: "PAID",
+        }),
+      }),
+    );
+    expect(tx.riderSettlementItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderType: "delivery_order",
+        orderId: "delivery-order-1",
+        deliveryFeeAmount: 4,
+        payableAmount: 4,
+      }),
+    });
+    expect(tx.wallet.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "rider-1" },
+        update: expect.objectContaining({ balance: { increment: 4 } }),
       }),
     );
   });

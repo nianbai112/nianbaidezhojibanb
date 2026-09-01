@@ -116,6 +116,156 @@ for (const provider of ["postgresql", "mysql"]) {
     assert.match(selfUnbanSql, /`banReason`\s+TEXT\s+NULL/i);
     assert.match(selfUnbanSql, /`adminNote`\s+TEXT\s+NULL/i);
   }
+
+  const dormShopDeliveryMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202608290002_dorm_shop_delivery_staff",
+  );
+  assert.ok(dormShopDeliveryMigration, `${provider} release migrations must add dorm-shop delivery staff records`);
+  const dormShopDeliverySql = fs.readFileSync(dormShopDeliveryMigration.file, "utf8");
+  assert.match(dormShopDeliverySql, /merchant_staffs/i);
+  assert.match(dormShopDeliverySql, /shop_delivery_assignments/i);
+  assert.match(dormShopDeliverySql, /delivery_receipt_code/i);
+  assert.doesNotMatch(
+    dormShopDeliverySql,
+    /\b(?:DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE)\b/i,
+  );
+  if (provider === "mysql") {
+    assert.match(dormShopDeliverySql, /information_schema\.columns/i);
+    assert.match(dormShopDeliverySql, /PREPARE\s+lingmeng_stmt/i);
+    assert.doesNotMatch(dormShopDeliverySql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+    const mysqlIdentifiers = [...dormShopDeliverySql.matchAll(/`([^`]+)`/g)].map(
+      (match) => match[1],
+    );
+    assert.deepEqual(
+      mysqlIdentifiers.filter((identifier) => Buffer.byteLength(identifier, "utf8") > 64),
+      [],
+      "MySQL migration identifiers must not exceed the 64-byte limit",
+    );
+  } else {
+    assert.match(dormShopDeliverySql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  }
+
+  const wechatDeliveryReceiptMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202608300003_wechat_template_delivery_receipt",
+  );
+  assert.ok(
+    wechatDeliveryReceiptMigration,
+    `${provider} release migrations must add the WeChat delivery receipt id`,
+  );
+  const wechatDeliveryReceiptSql = fs.readFileSync(wechatDeliveryReceiptMigration.file, "utf8");
+  assert.match(wechatDeliveryReceiptSql, /wechat_message_logs/i);
+  assert.match(wechatDeliveryReceiptSql, /wechatMsgId/);
+  assert.match(wechatDeliveryReceiptSql, /CREATE\s+UNIQUE\s+INDEX/i);
+  assert.doesNotMatch(
+    wechatDeliveryReceiptSql,
+    /\b(?:DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE)\b/i,
+  );
+  if (provider === "mysql") {
+    assert.match(wechatDeliveryReceiptSql, /information_schema\.columns/i);
+    assert.match(wechatDeliveryReceiptSql, /information_schema\.statistics/i);
+    assert.match(
+      wechatDeliveryReceiptSql,
+      /column_name\s*=\s*'wechatMsgId'[\s\S]*?ALTER TABLE [`]wechat_message_logs[`] ADD COLUMN [`]wechatMsgId[`]/i,
+    );
+    assert.match(
+      wechatDeliveryReceiptSql,
+      /index_name\s*=\s*'wechat_message_logs_wechatMsgId_key'[\s\S]*?CREATE UNIQUE INDEX [`]wechat_message_logs_wechatMsgId_key[`]/i,
+    );
+    assert.match(wechatDeliveryReceiptSql, /PREPARE\s+lingmeng_stmt/i);
+    assert.doesNotMatch(wechatDeliveryReceiptSql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  } else {
+    assert.match(wechatDeliveryReceiptSql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+    assert.match(wechatDeliveryReceiptSql, /CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS/i);
+  }
+
+  const notificationPreferenceMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202608300004_notification_preference_modes",
+  );
+  assert.ok(
+    notificationPreferenceMigration,
+    `${provider} release migrations must add notification preference modes`,
+  );
+  const notificationPreferenceSql = fs.readFileSync(notificationPreferenceMigration.file, "utf8");
+  const modeBackfills = [
+    ["notifyLikeMode", "notifyLike", "reduced"],
+    ["notifyCommentMode", "notifyComment", "instant"],
+    ["notifyReplyMode", "notifyComment", "instant"],
+    ["notifyMentionMode", "notifyComment", "instant"],
+    ["notifyFollowMode", "notifyFollow", "inbox"],
+    ["notifySquatMode", "notifySquat", "inbox"],
+  ];
+  for (const [column, legacyColumn, defaultValue] of modeBackfills) {
+    assert.match(
+      notificationPreferenceSql,
+      new RegExp(`SET [\\x60"]${column}[\\x60"] = [\\s\\S]*?[\\x60"]${legacyColumn}[\\x60"][\\s\\S]*?WHERE [\\x60"]${column}[\\x60"] IS NULL`, "i"),
+      `${provider} must backfill only NULL ${column} values from ${legacyColumn}`,
+    );
+    if (provider === "mysql") {
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`column_name = '${column}'[\\s\\S]*?ADD COLUMN [\\x60]${column}[\\x60] VARCHAR\\(191\\) NULL`, "i"),
+        `MySQL must independently guard nullable creation of ${column}`,
+      );
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`MODIFY COLUMN [\\x60]${column}[\\x60] VARCHAR\\(191\\) NOT NULL DEFAULT '${defaultValue}'`, "i"),
+      );
+    } else {
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`ADD COLUMN IF NOT EXISTS "${column}" TEXT(?:,|;)`, "i"),
+        `PostgreSQL must create ${column} as nullable before its legacy backfill`,
+      );
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`ALTER COLUMN "${column}" SET DEFAULT '${defaultValue}'[\\s\\S]*?ALTER COLUMN "${column}" SET NOT NULL`, "i"),
+      );
+    }
+  }
+  for (const column of ["notifyOfficialAccount", "notifyInteractionBadge"]) {
+    assert.match(
+      notificationPreferenceSql,
+      new RegExp(`SET [\\x60"]${column}[\\x60"] = true\\s+WHERE [\\x60"]${column}[\\x60"] IS NULL`, "i"),
+      `${provider} must backfill only NULL ${column} values`,
+    );
+    if (provider === "mysql") {
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`column_name = '${column}'[\\s\\S]*?ADD COLUMN [\\x60]${column}[\\x60] BOOLEAN NULL`, "i"),
+        `MySQL must independently guard nullable creation of ${column}`,
+      );
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`MODIFY COLUMN [\\x60]${column}[\\x60] BOOLEAN NOT NULL DEFAULT true`, "i"),
+      );
+    } else {
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`ADD COLUMN IF NOT EXISTS "${column}" BOOLEAN(?:,|;)`, "i"),
+        `PostgreSQL must create ${column} as nullable before its default backfill`,
+      );
+      assert.match(
+        notificationPreferenceSql,
+        new RegExp(`ALTER COLUMN "${column}" SET DEFAULT true[\\s\\S]*?ALTER COLUMN "${column}" SET NOT NULL`, "i"),
+      );
+    }
+  }
+  assert.doesNotMatch(
+    notificationPreferenceSql,
+    /[`"]notify(?:System|Order)[`"]\s*=/i,
+    `${provider} migration must preserve existing system and order notification preferences`,
+  );
+  assert.doesNotMatch(
+    notificationPreferenceSql,
+    /\b(?:DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN)|TRUNCATE\s+TABLE)\b/i,
+  );
+  if (provider === "mysql") {
+    assert.match(notificationPreferenceSql, /information_schema\.columns/i);
+    assert.match(notificationPreferenceSql, /PREPARE\s+lingmeng_stmt/i);
+    assert.doesNotMatch(notificationPreferenceSql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  } else {
+    assert.match(notificationPreferenceSql, /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  }
 }
 
 const disabledConversationMigration = path.resolve(

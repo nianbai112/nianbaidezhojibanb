@@ -2,10 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
+  APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE,
   buildPlaceTargetOptions,
   buildProfessionalTaskPayload,
   buildReviewPayload,
+  calibrationEvidenceMetadata,
   defaultReviewApplyFields,
+  isApprovedPlaceVerificationCoordinate,
+  isRiderCollectedCalibrationPoint,
   isImageEvidenceAttachment,
   objectGeometryPolyline,
   objectTypesForTaskType,
@@ -24,9 +28,68 @@ test('round-trips server-controlled rider route metadata through the visual edit
   assert.match(painter, /sourceProperties\?: Record<string, any>/)
   assert.match(painter, /\.\.\.\(route\.sourceProperties \|\| \{\}\)/)
   assert.match(painter, /sourceProperties: \{ \.\.\.properties \}/)
-  assert.match(painter, /synchronizeCollectedCalibrationPoints\(\)/)
+})
+
+test('restores calibration only from explicitly approved place-verification coordinates', () => {
+  const base = {
+    coordinateStatus: 'verified',
+    longitude: 106.5,
+    latitude: 29.6,
+  }
+  assert.equal(isApprovedPlaceVerificationCoordinate(base), false)
+  assert.equal(isApprovedPlaceVerificationCoordinate({
+    ...base,
+    coordinateSource: 'rider_app_approved',
+  }), false)
+  assert.equal(isApprovedPlaceVerificationCoordinate({
+    ...base,
+    coordinateSource: APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE,
+  }), true)
+  assert.equal(isApprovedPlaceVerificationCoordinate({
+    ...base,
+    longitude: 0,
+    coordinateSource: APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE,
+  }), false)
+
+  const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
+  assert.match(painter, /if \(!isApprovedPlaceVerificationCoordinate\(place\)\) return/)
   assert.match(painter, /place-calibration-\$\{placeId\}/)
-  assert.match(painter, /已从历史地点核验中恢复/)
+})
+
+test('round-trips approved calibration evidence metadata through draft editing', () => {
+  assert.deepEqual(calibrationEvidenceMetadata({
+    source: 'approved_place_verification',
+    sourcePlaceId: 'place-library',
+    sourceCollectionObjectId: 'object-1',
+    accuracy: '3.2',
+    collectedAt: '2026-08-26T01:00:12.000Z',
+    reviewedAt: '2026-08-26T02:00:00.000Z',
+    ignored: 'do-not-persist',
+  }), {
+    source: 'approved_place_verification',
+    sourcePlaceId: 'place-library',
+    sourceCollectionObjectId: 'object-1',
+    collectedAt: '2026-08-26T01:00:12.000Z',
+    reviewedAt: '2026-08-26T02:00:00.000Z',
+    accuracy: 3.2,
+  })
+
+  const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
+  assert.equal((painter.match(/\.\.\.calibrationEvidenceMetadata\(point\)/g) || []).length, 3)
+})
+
+test('makes approved rider positions the primary calibration action in the inspector', () => {
+  assert.equal(isRiderCollectedCalibrationPoint({ source: 'approved_place_verification' }), true)
+  assert.equal(isRiderCollectedCalibrationPoint({ id: 'place-calibration-place-1' }), true)
+  assert.equal(isRiderCollectedCalibrationPoint({ id: 'calibration_manual_1' }), false)
+
+  const inspector = readFileSync(new URL('./CampusMapInspector.vue', import.meta.url), 'utf8')
+  const header = readFileSync(new URL('./CampusMapWorkbenchHeader.vue', import.meta.url), 'utf8')
+  const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
+  assert.match(inspector, /同步已审核骑手位置/)
+  assert.match(inspector, /骑手已审核位置/)
+  assert.match(header, /手工补充校准/)
+  assert.match(painter, /synchronizeApprovedCampusMapCalibrations/)
 })
 
 test('maps an official rider row to the user id required by task assignments', () => {

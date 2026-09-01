@@ -16,6 +16,7 @@
       :draft-saving="draftSaving"
       @select-stage="handleReleaseStage"
       @run-action="handleReleaseAction"
+      @run-issue="handleReleaseIssue"
       @operation="handleOperationsCommand"
     />
 
@@ -35,6 +36,7 @@
           :has-vector-base-map="hasVectorBaseMap"
           :has-visual-base-map="hasVisualBaseMap"
           :calibration-point-count="calibratedPointCount"
+          :calibration-required="sourceCoordinateMode !== 'amap'"
           :feature-count="drawableFeatureCount"
           :can-publish="publishReadiness.canPublish"
           @update:model-value="setToolMode"
@@ -104,8 +106,16 @@
           :areas="areas"
           :routes="routes"
           :calibration-points="calibrationPoints"
+          :calibrated-point-count="calibratedPointCount"
+          :collected-calibration-point-count="collectedCalibrationPointCount"
+          :calibration-ready="sourceCoordinateMode === 'amap' || calibrationReadyForProjection"
+          :calibration-required="sourceCoordinateMode !== 'amap'"
+          :calibration-syncing="calibrationSyncing"
+          :project-state-saving="projectStateSaving"
           :format-lng-lat="formatLngLat"
           :active-version="workflow.activeVersion"
+          :published-place-count="livePublication.publicPlaceCount"
+          :publication-verified="livePublication.verified"
           :has-unsaved-changes="hasUnsavedChanges"
           :release-cockpit="releaseCockpit"
           :release-stage="releaseStage"
@@ -119,10 +129,13 @@
           @remove-area="removeArea"
           @remove-route="removeRoute"
           @remove-calibration="removeCalibration"
+          @sync-rider-calibrations="synchronizeApprovedRiderCalibrations"
+          @add-manual-calibration="addCalibrationAtRatio(0.5, 0.5)"
           @select-layer-item="selectLayerItem"
           @remove-photo="handleRemovePhoto"
           @photo-added="handlePhotoAdded"
           @project-updated="handleProjectUpdated"
+          @save-project-state="saveSelectedProjectState"
           @media-changed="loadProjectCatalog(true)"
           @collect-place="openPlaceCollectionTask"
           @collect-route="openRouteCollectionTask"
@@ -280,8 +293,10 @@ import {
   fetchRegionCampusMapImports,
   fetchRegionCampusMap,
   publishRegionCampusMapDraft,
+  prepareCampusMapVerifiedReleaseBatch,
   retryRegionCampusMapImport,
   saveRegionCampusMapDraft,
+  synchronizeApprovedCampusMapCalibrations,
   upsertCampusMapProject,
   uploadRegionCampusMapImport,
 } from '@/api/admin'
@@ -289,15 +304,23 @@ import {
   campusMapPublicationSnapshot,
   verifyCampusMapPublication,
 } from './campus-map/campusMapPublishVerification.mjs'
-import { buildCampusReleaseCockpit } from './campus-map/campusMapReleaseModel.mjs'
+import { buildCampusReleaseCockpit, buildReleasePlaceBatch } from './campus-map/campusMapReleaseModel.mjs'
+import {
+  calibrationEvidenceMetadata,
+  isApprovedPlaceVerificationCoordinate,
+  isRiderCollectedCalibrationPoint,
+} from './campus-map/campusMapCollectionModel.mjs'
 import {
   applyCampusProject,
   catalogPlaceId,
   createCampusProjectCatalogLoader,
   campusProjectCounts,
+  findCampusProjectArtworkFeature,
   normalizeImportedAreaProject,
   normalizeImportedPoiProject,
+  persistedCampusMapItems,
   pickCampusProjectMetadata,
+  resolveCampusProjectFeatureState,
 } from './campus-map/campusProjectModel.mjs'
 import {
   normalizeBuildingAvailability,
@@ -346,6 +369,7 @@ type PoiItem = RatioPoint & CampusProjectFields & BuildingAvailabilityFields & {
   icon?: string
   color?: string
   sourceLayer?: string
+  catalogPreviewOnly?: boolean
 }
 type AreaItem = CampusProjectFields & BuildingAvailabilityFields & {
   id: string
@@ -358,6 +382,7 @@ type AreaItem = CampusProjectFields & BuildingAvailabilityFields & {
   points: RatioPoint[]
 }
 type RouteItem = Omit<AreaItem, keyof BuildingAvailabilityFields> & {
+  public?: boolean
   // 路线审核写入的服务端证据必须经后台加载/保存往返后仍然存在。
   // 最终可信性由后端再次对账 approved 采集对象，前端这里只负责不丢字段。
   sourceProperties?: Record<string, any>
@@ -367,6 +392,12 @@ type CalibrationPoint = RatioPoint & {
   title: string
   longitude: number
   latitude: number
+  source?: string
+  sourcePlaceId?: string
+  sourceCollectionObjectId?: string
+  accuracy?: number
+  collectedAt?: string
+  reviewedAt?: string
 }
 type AmapSearchResult = {
   id: string
@@ -393,7 +424,7 @@ type PreviewShape = {
   points: string
 }
 type EditableKind = 'poi' | 'area' | 'route' | 'calibration'
-type ReleaseAction = 'catalog' | 'collection' | 'save' | 'quality' | 'publish'
+type ReleaseAction = 'catalog' | 'prepareBatch' | 'collection' | 'save' | 'quality' | 'publish'
 type ReleaseStageKey = 'binding' | 'verification' | 'candidate' | 'version' | 'online'
 type SelectedEditableItem = {
   kind: EditableKind
@@ -540,6 +571,7 @@ const assistantDrawerVisible = ref(false)
 const versionDrawerVisible = ref(false)
 const collectionDrawerVisible = ref(false)
 const catalogDrawerVisible = ref(false)
+const calibrationSyncing = ref(false)
 const hasUnsavedChanges = ref(false)
 const previewOpened = ref(false)
 const poiCategory = ref('building')
@@ -556,6 +588,7 @@ const importJobs = ref<CampusMapImportJob[]>([])
 const activeImportJob = ref<CampusMapImportJob | null>(null)
 const converterStatus = ref<CampusMapConverterStatus | null>(null)
 const projectCatalog = ref<any[]>([])
+const projectStateSaving = ref(false)
 const collectionDrawerRef = ref<InstanceType<typeof CampusMapCollectionDrawer> | null>(null)
 const fetchProjectCatalogOnce = createCampusProjectCatalogLoader(fetchCampusMapProjectCatalog)
 let projectCatalogLoadSeq = 0
@@ -722,7 +755,10 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
     },
   ]
 
-  const projectItems = [...pois.value, ...areas.value]
+  // 地点档案负责建设、核验和发布状态；地图对象只补充几何与锚点。
+  // 发布检查与整改队列因此使用同一批 canonical places，不会按点/面重复计数。
+  const projectItems = buildReleasePlaceBatch(projectCatalog.value, [...pois.value, ...areas.value])
+  const releaseProjectItems = projectItems.filter((item) => item.visibilityScope === 'phase1_active')
   const projectCounts = campusProjectCounts(projectItems)
   const projectNumbers = projectItems
     .map((item) => Number(item.officialNumber))
@@ -731,7 +767,7 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   const futureVisible = projectItems.filter((item) => item.constructionStatus === 'under_construction'
     && (item.visibilityScope !== 'future_reference' || item.searchable || item.navigable))
   const unmatchedActive = projectItems.filter((item) => item.visibilityScope === 'phase1_active' && item.geometryStatus === 'unmatched')
-  const unavailableWithoutMessage = projectItems.filter((item) => item.serviceStatus === 'unopened'
+  const unavailableWithoutMessage = releaseProjectItems.filter((item) => item.serviceStatus === 'unopened'
     && !String(item.unavailableMessage || '').trim())
   const approvedRiderRouteCount = routes.value.filter((route) =>
     String(route.sourceProperties?.collectionSource || '') === 'rider_app_approved').length
@@ -746,11 +782,11 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   const projectErrors = duplicateNumbers.length + futureVisible.length + unmatchedActive.length
   checks.push({
     key: 'campus-projects',
-    label: '一期项目',
+    label: '滚动发布范围',
     status: projectErrors ? 'error' : projectCounts.review ? 'warning' : 'pass',
     message: projectErrors
       ? `重复编号 ${duplicateNumbers.length}，未来暴露 ${futureVisible.length}，活动层未匹配 ${unmatchedActive.length}`
-      : `活动 ${projectCounts.active}，待确认 ${projectCounts.review}，未来参考 ${projectCounts.future}，未匹配 ${projectCounts.unmatched}`,
+      : `本次上线 ${projectCounts.active}，后续采集 ${projectCounts.review}，未来参考 ${projectCounts.future}，未匹配 ${projectCounts.unmatched}`,
   })
   checks.push({
     key: 'building-availability',
@@ -769,13 +805,16 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       : '至少将 1 个已绑定矢量图的地点设为“已发布 + 一期可见”',
   })
   if (approvedRiderRouteCount > 0) {
+    const nativeGcj02Route = sourceCoordinateMode.value === 'amap'
     checks.push({
       key: 'illustrated-navigation-calibration',
-      label: '矢量图导航校准',
-      status: illustratedNavigationReady ? 'pass' : 'error',
-      message: illustratedNavigationReady
-        ? `${illustratedCalibrationPlaces.length} 个已发布地点可把骑手路线投射到用户矢量图`
-        : '发布骑手导航路线前，至少要有 3 个分散地点同时具备已核验坐标和矢量图锚点',
+      label: nativeGcj02Route ? '路线真实坐标' : '矢量图导航校准',
+      status: nativeGcj02Route || illustratedNavigationReady ? 'pass' : 'error',
+      message: nativeGcj02Route
+        ? `${approvedRiderRouteCount} 条骑手审核路线使用 GCJ-02 真实轨迹，无需三点校准`
+        : illustratedNavigationReady
+          ? `${illustratedCalibrationPlaces.length} 个已发布地点可把骑手路线投射到用户矢量图`
+          : '发布骑手导航路线前，至少要有 3 个分散地点同时具备已核验坐标和矢量图锚点',
     })
   }
 
@@ -786,16 +825,23 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       status: hasVisualBaseMap.value ? 'pass' : 'error',
       message: hasVectorBaseMap.value ? 'CAD 图纸已转为矢量底图' : form.imageUrl ? '已上传底图' : '图片模式必须上传校园底图或导入 CAD',
     })
-    checks.push({
-      key: 'positioning',
-      label: '定位校准',
-      status: calibrationReadyForProjection.value ? 'pass' : 'error',
-      message: calibrationReadyForProjection.value
-        ? `已配置 ${calibratedPointCount.value} 个分散校准点，其中 ${collectedCalibrationPointCount.value} 个来自已审核地点采集`
-        : calibratedPointCount.value < 3
-          ? `已有 ${calibratedPointCount.value} 个；再审核 ${Math.max(0, 3 - calibratedPointCount.value)} 个分散地点并采用真实位置即可自动补齐`
-          : '校准点过于共线，请把控制点分散到校园四周；建议配置 6–8 个',
-    })
+    checks.push(sourceCoordinateMode.value === 'amap'
+      ? {
+          key: 'positioning',
+          label: '真实坐标定位',
+          status: 'pass',
+          message: '地点和路线使用骑手审核后的 GCJ-02 真实坐标；画师图仅负责展示，无需额外添加 3 个校准点',
+        }
+      : {
+          key: 'positioning',
+          label: '定位校准',
+          status: calibrationReadyForProjection.value ? 'pass' : 'error',
+          message: calibrationReadyForProjection.value
+            ? `已配置 ${calibratedPointCount.value} 个分散校准点，其中 ${collectedCalibrationPointCount.value} 个来自已审核地点采集`
+            : calibratedPointCount.value < 3
+              ? `当前草稿已生成 ${calibratedPointCount.value}/3 个校准点；请先同步已审核骑手位置，不足时再补 ${Math.max(0, 3 - calibratedPointCount.value)} 个分散地点`
+              : '校准点过于共线，请把控制点分散到校园四周；建议配置 6–8 个',
+        })
   } else {
     checks.unshift({
       key: 'amap',
@@ -898,11 +944,9 @@ function synchronizeCollectedCalibrationPoints() {
   if (sourceCoordinateMode.value === 'amap') return 0
   let changedCount = 0
   projectCatalog.value.forEach((place) => {
-    if (String(place?.coordinateStatus || '') !== 'verified') return
+    if (!isApprovedPlaceVerificationCoordinate(place)) return
     const longitude = Number(place?.longitude)
     const latitude = Number(place?.latitude)
-    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)
-      || longitude < 70 || longitude > 140 || latitude <= 0 || latitude > 60) return
     const anchor = artworkAnchorFor(place)
     if (!anchor) return
     const placeId = catalogPlaceId(place, currentRegionId())
@@ -914,7 +958,15 @@ function synchronizeCollectedCalibrationPoints() {
       return Math.abs(mapX - anchor[0]) <= 0.01 && Math.abs(mapY - anchor[1]) <= 0.01
     })
     const current = existingIndex >= 0 ? calibrationPoints.value[existingIndex] : null
+    const evidence = calibrationEvidenceMetadata({
+      ...(current || {}),
+      source: 'approved_place_verification',
+      sourcePlaceId: placeId,
+      accuracy: current?.accuracy ?? place?.coordinateAccuracy,
+      collectedAt: current?.collectedAt ?? place?.coordinateCollectedAt,
+    })
     const candidate: CalibrationPoint = {
+      ...evidence,
       id: stableId,
       title: current?.title || `采集校准 · ${String(place.displayName || place.officialName || place.title || placeId)}`,
       longitude,
@@ -929,6 +981,7 @@ function synchronizeCollectedCalibrationPoints() {
       && Math.abs(Number(current.latitude) - candidate.latitude) <= 1e-10
       && Math.abs(Number(current.xRatio) - candidate.xRatio) <= 1e-10
       && Math.abs(Number(current.yRatio) - candidate.yRatio) <= 1e-10
+      && Object.entries(evidence).every(([key, value]) => (current as any)?.[key] === value)
     if (unchanged) return
     if (existingIndex >= 0) calibrationPoints.value[existingIndex] = candidate
     else calibrationPoints.value.push(candidate)
@@ -942,7 +995,7 @@ const validCalibrationPoints = computed(() => calibrationPoints.value.filter((po
 ))
 const calibratedPointCount = computed(() => validCalibrationPoints.value.length)
 const collectedCalibrationPointCount = computed(() => calibrationPoints.value
-  .filter((point) => String(point.id || '').startsWith('place-calibration-')).length)
+  .filter(isRiderCollectedCalibrationPoint).length)
 const calibrationReadyForProjection = computed(() => calibratedPointCount.value >= 3
   && hasNonCollinearCalibration(validCalibrationPoints.value)
   && hasNonCollinearGpsPoints(validCalibrationPoints.value))
@@ -976,7 +1029,7 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
   const contentReady = drawableFeatureCount.value > 0
   const semanticReady = importantKeyPlaceCount.value >= 3
   const semanticPartial = importantKeyPlaceCount.value >= 1 || totalKeyPlaceCount.value >= 3
-  const calibrationReady = editorMode.value === 'amap' || calibrationReadyForProjection.value
+  const calibrationReady = sourceCoordinateMode.value === 'amap' || calibrationReadyForProjection.value
   const previewReady = previewOpened.value
   const publishReady = publishReadiness.value.canPublish
   return [
@@ -1010,9 +1063,11 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
     {
       key: 'calibration',
       order: 4,
-      label: '定位校准',
+      label: sourceCoordinateMode.value === 'amap' ? '真实坐标' : '定位校准',
       message: calibrationReady
-        ? `小程序定位可投射到地图，已复用 ${collectedCalibrationPointCount.value} 个地点采集点`
+        ? sourceCoordinateMode.value === 'amap'
+          ? '地点和路线使用审核后的 GCJ-02 真实坐标，无需三点校准'
+          : `小程序定位可投射到地图，已复用 ${collectedCalibrationPointCount.value} 个地点采集点`
         : calibratedPointCount.value < 3
           ? `还需审核 ${Math.max(0, 3 - calibratedPointCount.value)} 个分散地点并采用真实位置；审核后自动加入校准`
           : '校准点过于共线，请把控制点分散到校园四周',
@@ -1072,7 +1127,7 @@ const assistantWarnings = computed(() => {
     const missing = keyPlaceCoverage.value.filter((item) => item.important && !item.done).map((item) => item.label)
     warnings.push(`核心地点缺少：${missing.join('、')}。`)
   }
-  if (editorMode.value === 'image' && !calibrationReadyForProjection.value) warnings.push('请在校园不同方位完成至少 3 个地点核验，并在审核中采用“真实位置”；系统会自动生成校准点。手工校准仅用于补充或修正。')
+  if (sourceCoordinateMode.value !== 'amap' && !calibrationReadyForProjection.value) warnings.push('请在校园不同方位完成至少 3 个地点核验，并在审核中采用“真实位置”；系统会自动生成校准点。手工校准仅用于补充或修正。')
   if (pois.value.length > 80) warnings.push('点位较多，建议隐藏低频点或按分类展示，避免小程序地图拥挤。')
   if (draftAreaPoints.value.length || draftRoutePoints.value.length) warnings.push('还有未完成的区域或路线草稿，发布前请完成或清空。')
   if (activeImportJob.value?.status === 'needs_converter') warnings.push('DWG 自动转换缺少 ODA 转换器，建议上传 DXF 或安装转换器。')
@@ -1124,8 +1179,12 @@ const collectionFeatures = computed(() => routes.value.map((route) => ({
   title: String(route.title || '未命名路线'),
   kind: 'route',
 })))
+const releasePlaces = computed(() => buildReleasePlaceBatch(
+  projectCatalog.value,
+  [...pois.value, ...areas.value],
+))
 const releaseCockpit = computed(() => buildCampusReleaseCockpit({
-  places: collectionPlaces.value,
+  places: releasePlaces.value,
   features: [...pois.value, ...areas.value],
   routes: routes.value,
   qualityChecks: mapQualityChecks.value,
@@ -1183,13 +1242,12 @@ function projectForFeature(feature: any) {
 
 function resolvedCampusProjectMetadata(feature: any) {
   const project = projectForFeature(feature)
-  if (!project) return pickCampusProjectMetadata(feature)
-  return {
-    ...pickCampusProjectMetadata(project),
-    ...pickCampusProjectMetadata(feature),
+  if (!project) return resolveCampusProjectFeatureState(feature)
+  return resolveCampusProjectFeatureState(feature, {
+    ...project,
     placeId: catalogPlaceId(project, currentRegionId()),
     artworkFeatureKey: String(project.artworkFeatureKey || feature.id || ''),
-  }
+  })
 }
 
 watch(() => props.regionId, () => {
@@ -1370,13 +1428,36 @@ function handleReleaseStage(stage: string) {
   selectedId.value = ''
 }
 
-function handleReleaseAction(action: ReleaseAction) {
+async function handleReleaseAction(action: ReleaseAction) {
   if (action === 'catalog') {
     catalogDrawerVisible.value = true
     return
   }
   if (action === 'collection') {
     collectionDrawerVisible.value = true
+    return
+  }
+  if (action === 'prepareBatch') {
+    try {
+      await ElMessageBox.confirm(
+        '系统会把已核验且已绑定的地点加入本次上线；未核验地点移到“后续采集”，在建或规划地点保留为未来参考。是否继续？',
+        '按已核验结果整理本批',
+        { confirmButtonText: '整理本批', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+    try {
+      const response: any = await prepareCampusMapVerifiedReleaseBatch(currentRegionId())
+      const result = response?.data || response || {}
+      await loadMap()
+      ElMessage.success(
+        `本次上线 ${Number(result.includedCount || 0)} 个地点；后续采集 ${Number(result.deferredCount || 0)} 个`
+        + (result.navigationDeferred ? '；路线可后续采集，当前先上线地点展示与搜索' : ''),
+      )
+    } catch (error: any) {
+      ElMessage.error(error?.message || '整理滚动发布批次失败')
+    }
     return
   }
   if (action === 'save') {
@@ -1412,7 +1493,15 @@ function handleReleaseIssue(issue: any) {
     collectionDrawerVisible.value = true
     return
   }
-  if (['quality', 'publish'].includes(String(issue?.action || ''))) {
+  if (issue?.action === 'bindFeature') {
+    ElMessage.info('已定位到未归档图形，请在右侧“地点档案绑定”中选择对应正式地点')
+    return
+  }
+  if (issue?.action === 'calibration') {
+    synchronizeApprovedRiderCalibrations()
+    return
+  }
+  if (['prepareBatch', 'quality', 'publish'].includes(String(issue?.action || ''))) {
     handleReleaseAction(issue.action as ReleaseAction)
   }
 }
@@ -1464,15 +1553,19 @@ function focusKeyPlace(type: string) {
   ElMessage.info('已切到点位工具，请在地图上点击放置这个地点')
 }
 
-function runAssistantAction(action: AssistantAction) {
+async function runAssistantAction(action: AssistantAction) {
   if (action === 'import') {
     openImportDrawer()
     return
   }
-  if (action === 'poi' || action === 'area' || action === 'route' || action === 'calibration') {
+  if (action === 'calibration') {
+    assistantDrawerVisible.value = false
+    await synchronizeApprovedRiderCalibrations()
+    return
+  }
+  if (action === 'poi' || action === 'area' || action === 'route') {
     setToolMode(action)
     assistantDrawerVisible.value = false
-    if (action === 'calibration') ElMessage.info('请在校园四周添加至少 4 个分散的校准点，建议采集 6 至 8 个')
     return
   }
   if (action === 'preview') {
@@ -1512,7 +1605,7 @@ function syncSelectedSemantic() {
   applySemanticFields(selectedEditableItem.value.item, selectedEditableItem.value.item.semanticType)
 }
 
-function syncSelectedAvailability(status: 'open' | 'unopened') {
+function syncSelectedAvailability(status: 'unknown' | 'open' | 'limited' | 'unopened' | 'temporarily_closed' | 'closed') {
   const selected = selectedEditableItem.value
   if (!selected || (selected.kind !== 'poi' && selected.kind !== 'area')) return
   recordMapHistory()
@@ -1520,6 +1613,44 @@ function syncSelectedAvailability(status: 'open' | 'unopened') {
     ...selected.item,
     serviceStatus: status,
   }))
+}
+
+async function saveSelectedProjectState(item: any) {
+  const project = projectForFeature(item)
+  const officialNumber = Number(project?.officialNumber || item?.officialNumber)
+  if (!project || !Number.isInteger(officialNumber) || projectStateSaving.value) {
+    ElMessage.warning('请先把图形绑定到地点档案')
+    return
+  }
+  projectStateSaving.value = true
+  try {
+    const constructionStatus = String(item.constructionStatus || project.constructionStatus || 'built')
+    const future = ['under_construction', 'planned'].includes(constructionStatus)
+    const payload = {
+      ...project,
+      constructionStatus,
+      serviceStatus: String(item.serviceStatus || project.serviceStatus || 'unknown'),
+      unavailableMessage: String(item.unavailableMessage || '').trim(),
+      publishStatus: future ? 'draft' : String(item.publishStatus || project.publishStatus || 'review'),
+      visibilityScope: future ? 'future_reference' : String(item.visibilityScope || project.visibilityScope || 'phase1_review'),
+      searchable: future ? false : item.searchable === true,
+      navigable: future ? false : item.navigable === true,
+    }
+    const response: any = await upsertCampusMapProject(
+      officialNumber,
+      payload,
+      currentRegionId(),
+      form.mapId,
+    )
+    const updated = { ...project, ...payload, ...(response?.data || response || {}) }
+    handleProjectUpdated(updated)
+    Object.assign(item, applyCampusProject(item, updated, selectedEditableItem.value?.kind === 'area' ? 'area' : 'poi'))
+    ElMessage.success(future ? '地点状态已保存，并移到未来参考' : '地点档案状态已保存')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '地点档案状态保存失败')
+  } finally {
+    projectStateSaving.value = false
+  }
 }
 
 function buildArtworkBinding(selected: SelectedEditableItem) {
@@ -1700,16 +1831,26 @@ function synchronizeCatalogArtworkPois() {
   const previousLock = historyLocked.value
   historyLocked.value = true
   projectCatalog.value.forEach((project) => {
-    const placeId = catalogPlaceId(project, currentRegionId())
     const number = Number(project.officialNumber)
-    const existing = pois.value.find((item) =>
-      (placeId && String(item.placeId || '') === placeId)
-        || (Number.isInteger(number) && Number(item.officialNumber) === number),
+    const existingFeature = findCampusProjectArtworkFeature(
+      project,
+      pois.value,
+      areas.value,
+      currentRegionId(),
     )
-    if (existing) {
-      Object.assign(existing, applyCampusProject(existing, project, 'poi'))
-      const positioned = withArtworkPoint({ ...existing, ...project })
-      if (positioned) Object.assign(existing, positioned)
+    if (existingFeature) {
+      const { kind, item: existing } = existingFeature
+      Object.assign(existing, applyCampusProject(existing, project, kind))
+      if (kind === 'area') {
+        const oldPreviewId = String(project.artworkFeatureKey || `artwork-place-${number}`)
+        pois.value.forEach((poi) => {
+          if (poi.id === oldPreviewId) poi.catalogPreviewOnly = true
+        })
+      }
+      if (kind === 'poi') {
+        const positioned = withArtworkPoint({ ...existing, ...project })
+        if (positioned) Object.assign(existing, positioned)
+      }
       return
     }
     const positioned = withArtworkPoint(project)
@@ -1720,6 +1861,8 @@ function synchronizeCatalogArtworkPois() {
       category: String(project.semanticType || 'building'),
       semanticType: String(project.semanticType || 'building'),
       serviceStatus: String(project.serviceStatus || 'unknown'),
+      // 仅用于工作台在 SVG 上预览没有独立图形的地点，不写入草稿、版本或回滚快照。
+      catalogPreviewOnly: true,
       ...positioned,
     }, project, 'poi'), project.semanticType) as PoiItem
     pois.value.push(item)
@@ -1737,6 +1880,49 @@ async function handleCollectionDraftChanged() {
   }
   await Promise.all([loadMap(), loadProjectCatalog(true)])
   ElMessage.info('已重新加载骑手审核合并后的地图草稿；请预览确认后再人工发布')
+}
+
+async function synchronizeApprovedRiderCalibrations() {
+  if (!currentRegionId()) {
+    ElMessage.warning('请先选择学校')
+    return
+  }
+  if (hasUnsavedChanges.value) {
+    ElMessage.warning('当前地图还有未保存修改，请先保存草稿后再同步骑手位置')
+    return
+  }
+  if (sourceCoordinateMode.value === 'amap') {
+    ElMessage.success('当前地图已直接使用骑手审核后的 GCJ-02 真实坐标，无需再生成 3 个校准点')
+    return
+  }
+  calibrationSyncing.value = true
+  try {
+    const response: any = await synchronizeApprovedCampusMapCalibrations(currentRegionId())
+    const result = response?.data || response || {}
+    await loadMap()
+    const synchronizedCount = Number(result.synchronizedPlaceCount || 0)
+    const pointCount = Number(result.calibrationPointCount || collectedCalibrationPointCount.value || 0)
+    const skipped = Array.isArray(result.skipped) ? result.skipped : []
+    if (synchronizedCount <= 0) {
+      const detail = skipped[0]?.message || '没有找到通过审核且证据合格的骑手地点位置'
+      ElMessage.warning(`未恢复校准点：${detail}`)
+      collectionDrawerVisible.value = true
+      return
+    }
+    releaseStage.value = 'verification'
+    const firstCollected = calibrationPoints.value.find(isRiderCollectedCalibrationPoint)
+    if (firstCollected) selectLayerItem('calibration', firstCollected.id)
+    if (result.ready || calibrationReadyForProjection.value) {
+      ElMessage.success(`已同步 ${synchronizedCount} 个骑手审核地点，共 ${pointCount} 个有效校准点，已满足定位校准`)
+    } else {
+      const remaining = Math.max(0, Number(result.remainingPointCount ?? (3 - pointCount)))
+      ElMessage.success(`已同步 ${synchronizedCount} 个骑手审核地点；还需 ${remaining} 个分散且非共线的地点`)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '同步骑手采集位置失败')
+  } finally {
+    calibrationSyncing.value = false
+  }
 }
 
 function importStatusLabel(status: CampusMapImportJob['status']) {
@@ -2595,6 +2781,7 @@ function finishRoute() {
     semanticType: 'service',
     icon: 'route',
     color: '#f97316',
+    public: false,
     points: draftRoutePoints.value.map((point) => ({ ...point })),
   })
   draftRoutePoints.value = []
@@ -2696,7 +2883,7 @@ function buildPayload() {
   if (sourceCoordinateMode.value === 'amap') return buildAmapPayload()
   const width = Math.max(Number(form.mapWidth) || 1200, 100)
   const height = Math.max(Number(form.mapHeight) || 800, 100)
-  const poiFeatures = pois.value.map((poi) => ({
+  const poiFeatures = persistedCampusMapItems(pois.value).map((poi) => ({
     type: 'Feature',
     properties: {
       id: poi.id,
@@ -2708,7 +2895,6 @@ function buildPayload() {
       sourceLayer: poi.sourceLayer || undefined,
       Text: poi.title || '点位',
       ...resolvedCampusProjectMetadata(poi),
-      ...normalizeBuildingAvailability(poi),
     },
     geometry: {
       type: 'Point',
@@ -2731,7 +2917,6 @@ function buildPayload() {
           color: area.color || semanticMeta(area).color,
           sourceLayer: area.sourceLayer || undefined,
           ...resolvedCampusProjectMetadata(area),
-          ...normalizeBuildingAvailability(area),
         },
         geometry: {
           type: 'Polygon',
@@ -2752,6 +2937,7 @@ function buildPayload() {
         icon: route.icon || 'route',
         color: route.color || '#f97316',
         sourceLayer: route.sourceLayer || undefined,
+        public: route.public === true,
       },
       geometry: {
         type: 'LineString',
@@ -2762,6 +2948,7 @@ function buildPayload() {
     .map((point, index) => {
       const [mapX, mapY] = toMapCoordinate(point)
       return {
+        ...calibrationEvidenceMetadata(point),
         id: point.id || `calibration_${index + 1}`,
         title: point.title || `校准点 ${index + 1}`,
         longitude: Number(point.longitude),
@@ -2841,7 +3028,7 @@ function buildPayload() {
 
 function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | AreaItem | RouteItem) {
   const properties = {
-    ...(kind === 'route' ? ((item as RouteItem).sourceProperties || {}) : {}),
+    ...(kind === 'route' ? { ...((item as RouteItem).sourceProperties || {}), public: (item as RouteItem).public === true } : {}),
     id: item.id,
     title: item.title || (kind === 'poi' ? '点位' : kind === 'area' ? '区域' : '路线'),
       category: item.category || (kind === 'poi' ? 'building' : kind === 'area' ? 'teaching' : 'walk'),
@@ -2850,8 +3037,7 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
       color: (item as any).color || semanticMeta(item).color,
       sourceLayer: (item as any).sourceLayer || undefined,
       provider: 'amap',
-      ...resolvedCampusProjectMetadata(item),
-      ...(kind === 'route' ? {} : normalizeBuildingAvailability(item)),
+      ...(kind === 'route' ? pickCampusProjectMetadata(item) : resolvedCampusProjectMetadata(item)),
     coordinateType: 'gcj02',
     Text: item.title || '',
   }
@@ -2901,7 +3087,7 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
 
 function collectAmapBounds() {
   const coordinates: number[][] = []
-  pois.value.forEach((poi) => {
+  persistedCampusMapItems(pois.value).forEach((poi) => {
     if (hasLngLat(poi)) coordinates.push([Number(poi.longitude), Number(poi.latitude)])
   })
   areas.value.forEach((area) => coordinates.push(...toAmapPath(area.points)))
@@ -2921,7 +3107,7 @@ function collectAmapBounds() {
 }
 
 function buildAmapPayload() {
-  const poiFeatures = pois.value
+  const poiFeatures = persistedCampusMapItems(pois.value)
     .map((poi) => standardizeAmapFeature('poi', poi))
     .filter(Boolean)
   const areaFeatures = areas.value
@@ -2936,6 +3122,7 @@ function buildAmapPayload() {
     .map((point, index) => {
       const [mapX, mapY] = toMapCoordinate(point)
       return {
+        ...calibrationEvidenceMetadata(point),
         id: point.id || `calibration_${index + 1}`,
         title: point.title || `校准点 ${index + 1}`,
         longitude: Number(point.longitude),
@@ -3147,7 +3334,8 @@ async function saveDraft(options: { silent?: boolean } = {}) {
     if (!options.silent) ElMessage.success('校园地图草稿已保存，尚未发布到小程序')
     return config
   } catch (error: any) {
-    ElMessage.error(error?.message || '校园地图草稿保存失败')
+    // 请求层已经展示过服务端错误时，这里不要再弹一次相同提示。
+    if (!error?.userMessage) ElMessage.error(error?.message || '校园地图草稿保存失败')
     return null
   } finally {
     draftSaving.value = false
@@ -3398,6 +3586,7 @@ function parseRouteLayer(layer: any): RouteItem[] {
         icon: String(properties.icon || 'route'),
         color: String(properties.color || '#f97316'),
         sourceLayer: String(properties.sourceLayer || ''),
+        public: properties.public === true,
         sourceProperties: { ...properties },
         points,
       }
@@ -3420,6 +3609,7 @@ function parseAmapRouteLayer(layer: any): RouteItem[] {
         icon: String(properties.icon || 'route'),
         color: String(properties.color || '#f97316'),
         sourceLayer: String(properties.sourceLayer || ''),
+        public: properties.public === true,
         sourceProperties: { ...properties },
         points,
       }
@@ -3433,10 +3623,11 @@ function parseCalibrationPoints(positioning: any): CalibrationPoint[] {
     .map((point: any, index: number) => {
       const ratio = toRatioPoint([Number(point.mapX), Number(point.mapY)])
       return {
+        ...calibrationEvidenceMetadata(point),
         id: String(point.id || createId('calibration')),
         title: String(point.title || point.name || `校准点 ${index + 1}`),
-        longitude: Number(point.longitude || point.lng || 0),
-        latitude: Number(point.latitude || point.lat || 0),
+        longitude: Number(point.longitude ?? point.lng ?? 0),
+        latitude: Number(point.latitude ?? point.lat ?? 0),
         ...ratio,
       }
     })

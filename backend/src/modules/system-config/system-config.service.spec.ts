@@ -4,7 +4,7 @@ jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
 
 describe('SystemConfigService storage config', () => {
-  it('normalizes and persists app review mode with the real previous value in the audit log', async () => {
+  it('normalizes and persists all-user app capabilities with the real previous value in the audit log', async () => {
     const prisma = {
       config: {
         findUnique: jest.fn().mockResolvedValue({ value: { enabled: false, hideDelivery: false, unknown: true } }),
@@ -24,18 +24,46 @@ describe('SystemConfigService storage config', () => {
       hideVirtualGoods: true,
       hideShareInvite: true,
       hideDating: true,
-      placeholderText: '  审核期间暂不开放  ',
+      placeholderText: '  当前业务暂未开放  ',
       unknown: 'discard-me',
     }, 'admin-1', '127.0.0.1')).resolves.toMatchObject({
       success: true,
-      data: { enabled: true, placeholderText: '审核期间暂不开放' },
+      data: { enabled: true, placeholderText: '当前业务暂未开放' },
     });
 
     const saved = prisma.config.upsert.mock.calls[0][0].update.value;
     expect(saved).not.toHaveProperty('unknown');
     expect(prisma.adminOperationLog.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ action: 'UPDATE_APP_REVIEW_MODE' }),
+      data: expect.objectContaining({ action: 'UPDATE_APP_CAPABILITIES' }),
     }));
+    expect(prisma.config.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({
+        group: 'app_capability',
+        desc: '小程序全用户业务能力配置',
+      }),
+    }));
+  });
+
+  it('uses a conservative all-user baseline when no capability config has been saved', async () => {
+    const prisma = {
+      config: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new SystemConfigService(prisma as any, {} as any);
+
+    await expect(service.getAppReviewMode()).resolves.toMatchObject({
+      success: true,
+      data: {
+        enabled: true,
+        hideDelivery: true,
+        hideMall: true,
+        hideErrand: true,
+        hideWallet: true,
+        hideTopup: true,
+        hideVirtualGoods: true,
+        hideShareInvite: true,
+        hideDating: true,
+      },
+    });
   });
 
   it('preserves existing COS secrets when masked fields are omitted by the admin UI', async () => {

@@ -138,7 +138,11 @@ describe('Errand closure acceptance flow', () => {
           Object.assign(state, data);
           return { count: 1 };
         }),
-        findUniqueOrThrow: jest.fn(async () => ({ ...state, User: {}, RegionRider: {} })),
+        findUniqueOrThrow: jest.fn(async () => ({
+          ...state,
+          User: {},
+          RegionRider: { realName: '测试骑手', phone: '13800138000', User: {} },
+        })),
       },
       regionRider: {
         findUnique: jest.fn(async ({ where }: any) => ({ ...riders[where.userId] })),
@@ -175,6 +179,10 @@ describe('Errand closure acceptance flow', () => {
     expect(notifyService.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({
       userId: state.userId,
       scene: 'errand_accepted',
+      data: expect.objectContaining({
+        riderName: '测试骑手',
+        riderPhone: '13800138000',
+      }),
       channelMask: expect.objectContaining({
         inApp: true,
         websocket: true,
@@ -269,7 +277,7 @@ describe('Errand closure acceptance flow', () => {
       errandOrder: { update: jest.fn(async ({ data }: any) => Object.assign(errand, data)) },
       platformLedger: { create: jest.fn().mockResolvedValue({}) },
       riderSettlementItem: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'item-1', riderId: 'rider-1', payableAmount: 10, status: 'included',
           settlement: { id: 'settlement-1', status: 'PAID' },
         }),

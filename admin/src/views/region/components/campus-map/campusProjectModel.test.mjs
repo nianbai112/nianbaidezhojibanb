@@ -3,12 +3,25 @@ import test from 'node:test'
 import {
   applyCampusProject,
   campusProjectCatalogItems,
+  campusProjectCounts,
   campusProjectAvailabilityError,
   catalogPlaceId,
   createCampusProjectCatalogLoader,
+  findCampusProjectArtworkFeature,
+  persistedCampusMapItems,
   pickCampusProjectMetadata,
   publicPlacePhotoUrls,
+  resolveCampusProjectFeatureState,
 } from './campusProjectModel.mjs'
+
+test('project counters exclude deliberately hidden places', () => {
+  assert.deepEqual(campusProjectCounts([
+    { visibilityScope: 'phase1_active', publishStatus: 'published' },
+    { visibilityScope: 'phase1_review', publishStatus: 'review' },
+    { visibilityScope: 'future_reference', publishStatus: 'draft' },
+    { visibilityScope: 'future_reference', publishStatus: 'hidden' },
+  ]), { active: 1, review: 1, future: 1, unmatched: 0 })
+})
 
 test('campus project catalog accepts the paginated items response used by the admin API', () => {
   const items = Array.from({ length: 38 }, (_, index) => ({ officialNumber: index + 1 }))
@@ -86,6 +99,58 @@ test('binds both a point and polygon feature to the same stable placeId while pr
   assert.equal(point.geometryStatus, 'verified_point')
   assert.equal(area.geometryStatus, 'verified_polygon')
   assert.equal(pickCampusProjectMetadata(area).placeId, 'place-7')
+})
+
+test('uses the existing SVG building outline instead of creating a duplicate place marker', () => {
+  const area = {
+    id: 'area-7', placeId: 'place-7', officialNumber: 7,
+    points: [{ xRatio: 0.1, yRatio: 0.1 }, { xRatio: 0.2, yRatio: 0.1 }, { xRatio: 0.2, yRatio: 0.2 }],
+  }
+  const result = findCampusProjectArtworkFeature({
+    placeId: 'place-7', officialNumber: 7, artworkFeatureKey: 'area-7',
+    artworkGeometry: { type: 'Polygon', coordinates: [] },
+  }, [], [area], 'region-a')
+
+  assert.equal(result?.kind, 'area')
+  assert.equal(result?.item, area)
+})
+
+test('keeps catalog preview markers out of draft and rollback snapshots', () => {
+  const realPoint = { id: 'entrance-7', placeId: 'place-7' }
+  const previewMarker = { id: 'area-8', placeId: 'place-8', catalogPreviewOnly: true }
+
+  assert.deepEqual(persistedCampusMapItems([realPoint, previewMarker]), [realPoint])
+})
+
+test('visible construction status overrides a stale legacy future phase', () => {
+  const result = applyCampusProject({ id: 'gate-22' }, {
+    id: 'place-22', officialNumber: 22, officialName: '第一校门',
+    phase: 'future', constructionStatus: 'built', visibilityScope: 'phase1_active',
+  }, 'poi')
+  assert.equal(result.constructionStatus, 'built')
+  assert.equal(result.phase, 'phase1')
+})
+
+test('canonical place availability overrides stale drawing properties', () => {
+  const result = resolveCampusProjectFeatureState({
+    serviceStatus: 'open', searchable: true, navigable: true, constructionStatus: 'built',
+  }, {
+    serviceStatus: 'temporarily_closed', unavailableMessage: '现场临时封闭',
+    searchable: false, navigable: false, constructionStatus: 'built',
+  })
+  assert.equal(result.serviceStatus, 'temporarily_closed')
+  assert.equal(result.unavailableMessage, '现场临时封闭')
+  assert.equal(result.searchable, true)
+  assert.equal(result.navigable, false)
+})
+
+test('future places cannot become searchable or navigable through stale drawing defaults', () => {
+  const result = resolveCampusProjectFeatureState({ searchable: true, navigable: true }, {
+    constructionStatus: 'planned', visibilityScope: 'future_reference', serviceStatus: 'unknown',
+  })
+  assert.equal(result.serviceStatus, 'unknown')
+  assert.equal(result.searchable, false)
+  assert.equal(result.navigable, false)
 })
 
 test('preserves the canonical place archive fields without copying private media into map features', () => {

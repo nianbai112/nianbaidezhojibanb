@@ -1,13 +1,86 @@
-ALTER TABLE `merchants`
-  ADD COLUMN IF NOT EXISTS `auto_dispatch_enabled` BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS `auto_dispatch_minutes` INTEGER NOT NULL DEFAULT 5,
-  ADD COLUMN IF NOT EXISTS `staff_accept_seconds` INTEGER NOT NULL DEFAULT 90,
-  ADD COLUMN IF NOT EXISTS `staff_max_active_orders` INTEGER NOT NULL DEFAULT 2;
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'merchants' AND column_name = 'auto_dispatch_enabled'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `merchants` ADD COLUMN `auto_dispatch_enabled` BOOLEAN NOT NULL DEFAULT false'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
 
-ALTER TABLE `orders`
-  ADD COLUMN IF NOT EXISTS `delivery_receipt_code` VARCHAR(6) NULL,
-  ADD COLUMN IF NOT EXISTS `delivery_code_attempts` INTEGER NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS `delivery_code_locked_at` DATETIME(3) NULL;
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'merchants' AND column_name = 'auto_dispatch_minutes'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `merchants` ADD COLUMN `auto_dispatch_minutes` INTEGER NOT NULL DEFAULT 5'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
+
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'merchants' AND column_name = 'staff_accept_seconds'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `merchants` ADD COLUMN `staff_accept_seconds` INTEGER NOT NULL DEFAULT 90'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
+
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'merchants' AND column_name = 'staff_max_active_orders'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `merchants` ADD COLUMN `staff_max_active_orders` INTEGER NOT NULL DEFAULT 2'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
+
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'delivery_receipt_code'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `orders` ADD COLUMN `delivery_receipt_code` VARCHAR(6) NULL'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
+
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'delivery_code_attempts'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `orders` ADD COLUMN `delivery_code_attempts` INTEGER NOT NULL DEFAULT 0'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
+
+SET @lingmeng_sql = IF(
+  EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'delivery_code_locked_at'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `orders` ADD COLUMN `delivery_code_locked_at` DATETIME(3) NULL'
+);
+PREPARE lingmeng_stmt FROM @lingmeng_sql;
+EXECUTE lingmeng_stmt;
+DEALLOCATE PREPARE lingmeng_stmt;
 
 CREATE TABLE IF NOT EXISTS `merchant_staffs` (
   `id` VARCHAR(191) NOT NULL,
@@ -55,7 +128,7 @@ CREATE TABLE IF NOT EXISTS `shop_delivery_assignments` (
   PRIMARY KEY (`id`),
   UNIQUE INDEX `shop_delivery_assignments_order_id_key` (`order_id`),
   INDEX `shop_delivery_assignments_merchant_id_status_assigned_at_idx` (`merchant_id`, `status`, `assigned_at`),
-  INDEX `shop_delivery_assignments_assignee_user_id_status_assigned_at_idx` (`assignee_user_id`, `status`, `assigned_at`),
+  INDEX `shop_delivery_assignments_assignee_status_assigned_idx` (`assignee_user_id`, `status`, `assigned_at`),
   INDEX `shop_delivery_assignments_staff_id_status_idx` (`staff_id`, `status`),
   CONSTRAINT `shop_delivery_assignments_order_id_fkey` FOREIGN KEY (`order_id`) REFERENCES `orders`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `shop_delivery_assignments_merchant_id_fkey` FOREIGN KEY (`merchant_id`) REFERENCES `merchants`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,

@@ -206,18 +206,18 @@
 	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserFallbackEnabled" active-text="开启" inactive-text="关闭" />
 	            </div>
 	            <div class="switch-row">
-	              <div>
-	                <strong>手机号验证</strong>
-	                <span>开启后，普通用户必须绑定手机号后才能接单。</span>
-	              </div>
-	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequirePhone" active-text="需要" inactive-text="不需要" />
+		              <div>
+		                <strong>手机号验证（安全必选）</strong>
+		                <span>普通用户必须绑定手机号；该项不能由运营关闭。</span>
+		              </div>
+		              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequirePhone" disabled active-text="需要" inactive-text="不需要" />
 	            </div>
 	            <div class="switch-row">
 	              <div>
-	                <strong>学生认证</strong>
-	                <span>开启后，普通用户必须通过学生认证后才能接单。</span>
-	              </div>
-	              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequireStudentVerify" active-text="需要" inactive-text="不需要" />
+		                <strong>同校学生认证（安全必选）</strong>
+		                <span>必须通过学生认证，且认证学校区域与订单一致；该项不能由运营关闭。</span>
+		              </div>
+		              <el-switch v-model="feeConfig.orderTakingPolicy.ordinaryUserRequireStudentVerify" disabled active-text="需要" inactive-text="不需要" />
 	            </div>
 	            <div class="switch-row">
 	              <div>
@@ -479,8 +479,8 @@ function makeFeeConfig(source: any = {}) {
 	    ordinaryUserTaskTypes: Array.isArray(rawPolicy.ordinaryUserTaskTypes || rawPolicy.ordinary_user_task_types)
 	      ? (rawPolicy.ordinaryUserTaskTypes || rawPolicy.ordinary_user_task_types)
 	      : ['express_pickup'],
-	    ordinaryUserRequirePhone: rawPolicy.ordinaryUserRequirePhone ?? rawPolicy.ordinary_user_require_phone ?? false,
-	    ordinaryUserRequireStudentVerify: rawPolicy.ordinaryUserRequireStudentVerify ?? rawPolicy.ordinary_user_require_student_verify ?? false,
+		    ordinaryUserRequirePhone: true,
+		    ordinaryUserRequireStudentVerify: true,
 	    ordinaryUserMaxActiveOrders: Number(rawPolicy.ordinaryUserMaxActiveOrders ?? rawPolicy.ordinary_user_max_active_orders ?? 1),
 	    ordinaryUserDailyLimit: Number(rawPolicy.ordinaryUserDailyLimit ?? rawPolicy.ordinary_user_daily_limit ?? 3),
 	    riderPriorityMinutes: Number(rawPolicy.riderPriorityMinutes ?? rawPolicy.rider_priority_minutes ?? 0),
@@ -577,6 +577,11 @@ async function saveAll() {
   try {
     const payload = {
       ...feeConfig.value,
+      orderTakingPolicy: {
+        ...feeConfig.value.orderTakingPolicy,
+        ordinaryUserRequirePhone: true,
+        ordinaryUserRequireStudentVerify: true,
+      },
       tipOptions: parseOptions(tipOptionsText.value),
       customTaskTipOptions: parseOptions(customTipOptionsText.value),
       banners: feeConfig.value.banners.filter((item: any) => item.image_url),

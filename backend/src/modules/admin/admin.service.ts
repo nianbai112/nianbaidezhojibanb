@@ -140,7 +140,10 @@ export class AdminService {
       await this.userSessionRevocation.revoke(userId);
       return;
     }
-    await this.redis.del(`refresh:${userId}`).catch(() => undefined);
+    await Promise.all([
+      this.redis.del(`refresh:${userId}`).catch(() => undefined),
+      this.redis.delPattern(`refresh:${userId}:*`).catch(() => undefined),
+    ]);
     this.wsNative?.disconnectUser(userId);
   }
 

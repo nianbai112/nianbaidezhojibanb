@@ -68,6 +68,7 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   "riders",
   "rider",
   "rider-app",
+  "partner-app",
   "location",
   "transfer",
   "region-riders",

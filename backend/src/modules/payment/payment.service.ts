@@ -20,6 +20,7 @@ type WxPayRuntimeConfig = {
   refundNotifyUrl: string;
   merchantPrivateKey: string;
   platformCert: string;
+  platformCertificates: Record<string, string>;
   platformPublicKey: string;
   platformPublicKeyId: string;
 };
@@ -124,6 +125,13 @@ export class PaymentService {
     const merchantPrivateKey = this.normalizePem(pay.merchantPrivateKey || pay.privateKey || pay.keyCert) || this.readPemFile(this.config.get('WX_PAY_PRIVATE_KEY_PATH'));
 
     const platformCert = this.normalizePem(pay.platformCert || pay.wechatPayCert || pay.cert) || this.readPemFile(this.config.get('WX_PAY_PLATFORM_CERT_PATH'));
+    const platformCertificates = pay.platformCertificates && typeof pay.platformCertificates === 'object' && !Array.isArray(pay.platformCertificates)
+      ? Object.fromEntries(
+        Object.entries(pay.platformCertificates)
+          .map(([serial, value]) => [this.text(serial), this.normalizePem(value)] as const)
+          .filter(([serial, value]) => serial && value),
+      )
+      : {};
 
     return {
       appid: this.text(miniapp.appId) || this.text(this.config.get('WX_MINI_APPID')),
@@ -134,6 +142,7 @@ export class PaymentService {
       refundNotifyUrl: this.text(pay.refundNotifyUrl) || this.text(this.config.get('WX_PAY_REFUND_NOTIFY_URL')),
       merchantPrivateKey,
       platformCert,
+      platformCertificates,
       platformPublicKey: this.normalizePem(pay.platformPublicKey || pay.wechatPayPublicKey || pay.publicKey),
       platformPublicKeyId: this.text(pay.platformPublicKeyId || pay.publicKeyId),
     };
@@ -294,7 +303,7 @@ export class PaymentService {
     // 验证签名（失败直接 throw）
     const bodyStr = body.toString();
     const wxPayConfig = await this.getWxPayConfig();
-    this.verifyWxPaySign(bodyStr, signature, timestamp, nonce, wxPayConfig);
+    this.verifyWxPaySign(bodyStr, signature, timestamp, nonce, wxPayConfig, serial);
 
     // 解析回调数据（V3 通知 body 为加密 JSON）
     let notifyData: any;
@@ -1933,8 +1942,13 @@ export class PaymentService {
   }
 
   private async adjustErrandRiderSettlementForRefund(tx: any, orderId: string, refundId: string | undefined, amount: number) {
-    const item = await tx.riderSettlementItem.findUnique({
-      where: { orderType_orderId: { orderType: 'errand', orderId } },
+    const item = await tx.riderSettlementItem.findFirst({
+      where: {
+        orderType: 'errand',
+        orderId,
+        settlement: { status: { not: 'REJECTED' } },
+      },
+      orderBy: { createdAt: 'desc' },
       include: { settlement: true },
     });
     if (!item) return;
@@ -2107,6 +2121,45 @@ export class PaymentService {
             refundAmount: refundedAmount,
           },
         });
+        if (tx.errandSettlementHold?.updateMany) {
+          const holdUpdated = await tx.errandSettlementHold.updateMany({
+            where: { orderId: bizId, status: 'holding' },
+            data: isFullRefund
+              ? {
+                  status: 'rejected',
+                  reasonCode: 'full_refund_completed',
+                  releaseAt: null,
+                  resolvedAt: new Date(),
+                  resolvedBy: 'system:refund',
+                }
+              : {
+                  reasonCode: 'partial_refund_review',
+                  releaseAt: null,
+                },
+          });
+          if (!isFullRefund && holdUpdated.count > 0 && tx.deliveryRiskEvent?.findFirst) {
+            const existingRisk = await tx.deliveryRiskEvent.findFirst({
+              where: {
+                orderId: bizId,
+                orderType: 'errand',
+                eventType: 'partial_refund_settlement_review',
+                handled: false,
+              },
+              select: { id: true },
+            });
+            if (!existingRisk) {
+              await tx.deliveryRiskEvent.create({
+                data: {
+                  orderId: bizId,
+                  orderType: 'errand',
+                  eventType: 'partial_refund_settlement_review',
+                  eventLevel: 'critical',
+                  description: `跑腿订单部分退款 ${refundedAmount} 元，冻结收益需人工复核后再放行。`,
+                },
+              });
+            }
+          }
+        }
         await this.adjustErrandRiderSettlementForRefund(tx, bizId, refundId, amount);
         break;
       case 'second_hand':
@@ -2277,7 +2330,14 @@ export class PaymentService {
     }
   }
 
-  private verifyWxPaySign(body: string, signature: string, timestamp: string, nonce: string, wxPayConfig: WxPayRuntimeConfig): void {
+  private verifyWxPaySign(
+    body: string,
+    signature: string,
+    timestamp: string,
+    nonce: string,
+    wxPayConfig: WxPayRuntimeConfig,
+    serial?: string,
+  ): void {
     // 时间戳容差：微信回调时间戳误差在5分钟内有效
     const now = Math.floor(Date.now() / 1000);
     if (Math.abs(now - parseInt(timestamp)) > 300) {
@@ -2288,15 +2348,22 @@ export class PaymentService {
     const message = `${timestamp}\n${nonce}\n${body}\n`;
 
     // 使用微信支付平台证书/公钥 RSA-SHA256 验签
-    const verifyKey = wxPayConfig.platformPublicKey || wxPayConfig.platformCert;
+    const normalizedSerial = this.text(serial);
+    const verifyKey = normalizedSerial && wxPayConfig.platformPublicKeyId === normalizedSerial
+      ? wxPayConfig.platformPublicKey
+      : normalizedSerial && wxPayConfig.platformCertificates[normalizedSerial]
+        ? wxPayConfig.platformCertificates[normalizedSerial]
+        : !normalizedSerial
+          ? (wxPayConfig.platformPublicKey || wxPayConfig.platformCert)
+          : '';
     if (!verifyKey) {
-      throw new BadRequestException('微信支付平台证书或公钥未配置：请在后台粘贴微信支付平台证书/公钥');
+      throw new BadRequestException(`微信支付回调序列号未配置对应验签材料: ${normalizedSerial || 'unknown'}`);
     }
     const verify = crypto.createVerify('RSA-SHA256');
     verify.update(message);
     const isValid = verify.verify(verifyKey, signature, 'base64');
     if (!isValid) {
-      throw new BadRequestException('微信支付回调签名验证失败');
+      throw new BadRequestException(`微信支付回调签名验证失败: ${normalizedSerial || 'unknown'}`);
     }
   }
 
@@ -2362,6 +2429,7 @@ export class PaymentService {
     const signature = headers['wechatpay-signature'];
     const timestamp = headers['wechatpay-timestamp'];
     const nonce = headers['wechatpay-nonce'];
+    const serial = headers['wechatpay-serial'];
 
     if (!signature || !timestamp || !nonce) {
       this.logger.error('退款回调缺少签名参数');
@@ -2371,7 +2439,7 @@ export class PaymentService {
     // 验证签名（失败直接 throw）
     const bodyStr = body.toString();
     const wxPayConfig = await this.getWxPayConfig();
-    this.verifyWxPaySign(bodyStr, signature, timestamp, nonce, wxPayConfig);
+    this.verifyWxPaySign(bodyStr, signature, timestamp, nonce, wxPayConfig, serial);
 
     // 解析回调数据
     let notifyData: any;

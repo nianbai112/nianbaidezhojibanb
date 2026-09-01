@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { errandExtendedConfigKey } from '../errand/errand-config.util';
+import { findErrandSettlementBlocker } from '../errand/errand-transaction-guards';
 
 @Injectable()
 export class FinanceAdminService {
@@ -116,6 +117,80 @@ export class FinanceAdminService {
     return Number(value) || 0;
   }
 
+  private async assertRiderSettlementFinanciallyClear(db: any, settlementId: string) {
+    const items = await db.riderSettlementItem.findMany({
+      where: { settlementId, orderType: 'errand', status: { not: 'reversed' } },
+      select: { orderId: true },
+    });
+    const orderIds = items.map((item: any) => item.orderId).filter(Boolean);
+    if (!orderIds.length) return;
+    const blocker = await findErrandSettlementBlocker(db, orderIds);
+    if (blocker) throw new BadRequestException('结算单包含冻结、申诉或未处理风险订单，暂不能确认或打款');
+    const [marketingLedgers, discountedOrders, releasedHolds] = await Promise.all([
+      db.subsidyLedger.findMany({
+        where: {
+          orderType: 'errand_order',
+          orderId: { in: orderIds },
+          status: { not: 'cancelled' },
+        },
+        select: { orderId: true },
+      }),
+      db.errandOrder.findMany({
+        where: { id: { in: orderIds }, couponDiscount: { gt: 0 } },
+        select: { id: true },
+      }),
+      db.errandSettlementHold.findMany({
+        where: { orderId: { in: orderIds }, status: 'released' },
+        select: { orderId: true },
+      }),
+    ]);
+    const marketingIds = new Set([
+      ...marketingLedgers.map((item: any) => item.orderId),
+      ...discountedOrders.map((item: any) => item.id),
+    ]);
+    const releasedIds = new Set(releasedHolds.map((item: any) => item.orderId));
+    if ([...marketingIds].some(orderId => !releasedIds.has(orderId))) {
+      throw new BadRequestException('结算单包含尚未完成48小时风控复核的营销订单');
+    }
+  }
+
+  private async assertRiderWithdrawalFinanciallyClear(db: any, riderId: string) {
+    const openAppeals = await db.orderAppeal.findMany({
+      where: {
+        orderType: { in: ['errand', 'errand_order'] },
+        status: { notIn: ['resolved', 'rejected', 'closed', 'cancelled', 'completed'] },
+      },
+      select: { orderId: true },
+    });
+    const appealOrderIds = openAppeals.map((item: any) => item.orderId).filter(Boolean);
+    const [hold, openRisk, openAppealOrder, openLiability] = await Promise.all([
+      db.errandSettlementHold.findFirst({
+        where: { riderId, status: 'holding' },
+        select: { id: true },
+      }),
+      db.deliveryRiskEvent.findFirst({
+        where: {
+          riderId,
+          orderType: 'errand',
+          handled: false,
+          eventLevel: { in: ['error', 'critical'] },
+        },
+        select: { id: true },
+      }),
+      appealOrderIds.length ? db.errandOrder.findFirst({
+        where: { id: { in: appealOrderIds }, riderId },
+        select: { id: true },
+      }) : null,
+      db.riderLiability.findFirst({
+        where: { riderId, status: 'open' },
+        select: { id: true },
+      }),
+    ]);
+    if (hold || openRisk || openAppealOrder || openLiability) {
+      throw new BadRequestException('存在冻结收益、未结申诉、退款负债或未处理跑腿风险，暂不可提现');
+    }
+  }
+
   private errandIncentives(order: any, config: any, review: any) {
     const rules: Array<{ ruleType: string; type: 'rider_reward' | 'rider_penalty'; amount: number; description: string }> = [];
     const goodReviewReward = this.toNumber(config?.goodReviewReward);
@@ -223,12 +298,18 @@ export class FinanceAdminService {
       }),
       this.prisma.order.findMany({
         where: {
-          status: { in: ['DELIVERED', 'RECEIVED', 'COMPLETED'] as any[] },
           refundStatus: { notIn: ['refunding', 'refunded'] },
           OR: [
-            { deliverTime: { gte: start, lte: end } },
-            // 兼容上线前未记录送达时间的历史单，避免已确认订单漏结算。
-            { deliverTime: null, completeTime: { gte: start, lte: end } },
+            {
+              status: 'COMPLETED',
+              completeTime: { gte: start, lte: end },
+            },
+            // 仅兼容旧版已确认收货但停留在 RECEIVED 的历史单。
+            // DELIVERED 只表示骑手送达，用户未确认，绝不可进入新结算。
+            {
+              status: 'RECEIVED',
+              receiveTime: { gte: start, lte: end },
+            },
           ],
           riderId: riderId ? riderId : { not: null },
           deliveryMode: { in: ['platform_rider', 'rider_delivery'] },
@@ -313,12 +394,13 @@ export class FinanceAdminService {
           amount: this.toNumber(o.price) + this.toNumber(o.tip),
           price: this.toNumber(o.price),
           tip: this.toNumber(o.tip),
+          marketingBenefit: this.toNumber(o.couponDiscount) > 0,
           pickupTime: o.pickupTime,
           deliverTime: o.deliverTime,
           completeTime: o.completeTime!,
         })),
       ...deliveryOrders
-        .filter(o => !!o.riderId && !!(o.deliverTime || o.completeTime))
+        .filter(o => !!o.riderId && !!(o.completeTime || o.receiveTime || o.deliverTime))
         .map(o => {
           const paidFreight = this.toNumber(o.freightAmount);
           const subsidyAmount = deliverySubsidyMap.get(o.id) || 0;
@@ -339,7 +421,7 @@ export class FinanceAdminService {
             tip: 0,
             subsidyAmount,
             paidFreight,
-            completeTime: o.deliverTime || o.completeTime!,
+            completeTime: o.completeTime || o.receiveTime || o.deliverTime!,
           };
         }),
     ];
@@ -1162,6 +1244,7 @@ export class FinanceAdminService {
     const status = dto.approved ? 'PROCESSING' : 'REJECTED';
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (dto.approved) await this.assertRiderWithdrawalFinanciallyClear(tx, withdraw.userId);
       const transition = await tx.withdraw.updateMany({
         where: { id, status: 'PENDING' },
         data: {
@@ -1223,6 +1306,7 @@ export class FinanceAdminService {
     if (withdraw.status !== 'PROCESSING') throw new BadRequestException(`当前状态 ${withdraw.status} 无法确认打款`);
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.assertRiderWithdrawalFinanciallyClear(tx, withdraw.userId);
       const transition = await tx.withdraw.updateMany({
         where: { id, status: 'PROCESSING' },
         data: { status: 'SUCCESS', transferNo, processedAt: new Date() },
@@ -1568,7 +1652,7 @@ export class FinanceAdminService {
 
     const errandIds = completedOrders.filter(item => item.source === 'errand').map(item => item.orderId);
     const itemKeys = completedOrders.map(item => ({ orderType: item.source, orderId: item.orderId }));
-    const [openAppeals, openRisks, existingItems] = await Promise.all([
+    const [openAppeals, openRisks, existingItems, holds, marketingLedgers] = await Promise.all([
       errandIds.length ? this.prisma.orderAppeal.findMany({
         where: {
           orderType: { in: ['errand', 'errand_order'] },
@@ -1582,11 +1666,34 @@ export class FinanceAdminService {
         select: { orderId: true },
       }) : [],
       itemKeys.length ? this.prisma.riderSettlementItem.findMany({
-        where: { OR: itemKeys },
+        where: {
+          OR: itemKeys,
+          settlement: { status: { not: 'REJECTED' } },
+        },
         select: { orderType: true, orderId: true },
       }) : [],
+      errandIds.length ? this.prisma.errandSettlementHold.findMany({
+        where: { orderId: { in: errandIds } },
+        select: { orderId: true, status: true },
+      }) : [],
+      errandIds.length ? this.prisma.subsidyLedger.findMany({
+        where: { orderType: 'errand_order', orderId: { in: errandIds }, status: { not: 'cancelled' } },
+        select: { orderId: true },
+      }) : [],
     ]);
-    const blockedErrandIds = new Set([...openAppeals, ...openRisks].map(item => item.orderId));
+    const releasedHoldIds = new Set(holds.filter(item => item.status === 'released').map(item => item.orderId));
+    const marketingOrderIds = new Set([
+      ...marketingLedgers.map(item => item.orderId),
+      ...completedOrders
+        .filter(item => item.source === 'errand' && (item as any).marketingBenefit)
+        .map(item => item.orderId),
+    ]);
+    const blockedErrandIds = new Set([
+      ...openAppeals.map(item => item.orderId),
+      ...openRisks.map(item => item.orderId),
+      ...holds.filter(item => item.status !== 'released').map(item => item.orderId),
+      ...[...marketingOrderIds].filter(orderId => !releasedHoldIds.has(orderId)),
+    ]);
     const settledKeys = new Set(existingItems.map(item => `${item.orderType}:${item.orderId}`));
     const eligibleOrders = completedOrders.filter(item =>
       !blockedErrandIds.has(item.orderId) && !settledKeys.has(`${item.source}:${item.orderId}`),
@@ -1674,7 +1781,12 @@ export class FinanceAdminService {
     for (const [riderId, stats] of riderMap) {
       const periodKey = `${riderId}:${start.toISOString()}:${end.toISOString()}`;
       const existing = await this.prisma.riderSettlement.findFirst({
-        where: { riderId, periodStart: start, periodEnd: end },
+        where: {
+          riderId,
+          periodStart: start,
+          periodEnd: end,
+          status: { not: 'REJECTED' },
+        },
       });
       if (existing) continue;
 
@@ -1757,8 +1869,13 @@ export class FinanceAdminService {
   }
 
   async reverseErrandSettlement(orderId: string, refundId: string, amount: number, reason: string) {
-    const item = await this.prisma.riderSettlementItem.findUnique({
-      where: { orderType_orderId: { orderType: 'errand', orderId } },
+    const item = await this.prisma.riderSettlementItem.findFirst({
+      where: {
+        orderType: 'errand',
+        orderId,
+        settlement: { status: { not: 'REJECTED' } },
+      },
+      orderBy: { createdAt: 'desc' },
       include: { settlement: true },
     });
     if (!item) return { success: true, reversed: false, liabilityCreated: false };
@@ -1818,14 +1935,17 @@ export class FinanceAdminService {
       throw new BadRequestException(`当前状态 ${settlement.status} 无法确认`);
     }
 
-    const updated = await this.prisma.riderSettlement.updateMany({
-      where: { id, status: 'PENDING' },
-      data: {
-        status: 'CONFIRMED',
-        remark: dto?.remark,
-        confirmedBy: operatorId,
-        confirmedAt: new Date(),
-      },
+    const updated = await this.prisma.$transaction(async tx => {
+      await this.assertRiderSettlementFinanciallyClear(tx, id);
+      return tx.riderSettlement.updateMany({
+        where: { id, status: 'PENDING' },
+        data: {
+          status: 'CONFIRMED',
+          remark: dto?.remark,
+          confirmedBy: operatorId,
+          confirmedAt: new Date(),
+        },
+      });
     });
     if (!updated.count) throw new BadRequestException('结算单状态已变更，请刷新后重试');
 
@@ -1849,6 +1969,7 @@ export class FinanceAdminService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.assertRiderSettlementFinanciallyClear(tx, id);
       const liabilities = await tx.riderLiability.findMany({
         where: { riderId: settlement.riderId, status: 'open' },
         orderBy: { createdAt: 'asc' },
@@ -1930,16 +2051,23 @@ export class FinanceAdminService {
       throw new BadRequestException(`当前状态 ${settlement.status} 无法驳回`);
     }
 
-    const updated = await this.prisma.riderSettlement.updateMany({
-      where: { id, status: { in: ['PENDING', 'CONFIRMED'] as any[] } },
-      data: {
-        status: 'REJECTED',
-        rejectReason: dto?.reason,
-        rejectedBy: operatorId,
-        rejectedAt: new Date(),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.riderSettlement.updateMany({
+        where: { id, status: { in: ['PENDING', 'CONFIRMED'] as any[] } },
+        data: {
+          status: 'REJECTED',
+          periodKey: null,
+          rejectReason: dto?.reason,
+          rejectedBy: operatorId,
+          rejectedAt: new Date(),
+        },
+      });
+      if (!updated.count) throw new BadRequestException('结算单状态已变更，请刷新后重试');
+      await tx.subsidyLedger.updateMany({
+        where: { settlementId: id, receiverType: 'rider', status: 'locked' },
+        data: { settlementId: null, status: 'pending' },
+      });
     });
-    if (!updated.count) throw new BadRequestException('结算单状态已变更，请刷新后重试');
 
     if (operatorId) {
       try {

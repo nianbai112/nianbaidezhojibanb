@@ -94,6 +94,7 @@ const minimalSchema = Joi.object({
   JWT_SECRET_ADMIN: Joi.string().optional().allow(''),
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('2h'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  RIDER_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
   WX_MINI_APPID: Joi.string().optional().allow(''),
   WX_MINI_SECRET: Joi.string().optional().allow(''),
   SMS_PROVIDER: Joi.string().optional().allow('').default(''),
@@ -190,6 +191,7 @@ const fullSchema = Joi.object({
   JWT_SECRET_ADMIN: Joi.string().optional().allow(''), // 为管理员 JWT 分离预留，暂可选
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('2h'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  RIDER_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
 
   // WeChat Mini Program
   // 小程序 AppID/Secret 可在后台第三方配置里维护，不能阻塞客户首次安装和后台登录。

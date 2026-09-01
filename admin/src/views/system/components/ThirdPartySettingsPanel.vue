@@ -90,7 +90,7 @@
             type="info"
             show-icon
             :closable="false"
-            title="运营者直接在后台填写微信支付 V3 资料，后端会优先使用这里的配置"
+            title="运营后台只维护商户与回调资料；平台验签证书由后端自动托管"
           />
           <div class="form-grid two">
             <el-form-item label="商户号 (mchId)">
@@ -117,28 +117,14 @@
                 </template>
               </el-input>
             </el-form-item>
-            <el-form-item label="微信支付公钥 ID（可选）">
-              <el-input v-model="wechatPay.platformPublicKeyId" placeholder="如：PUB_KEY_ID_011..." />
-              <div class="form-tip">微信商户平台显示的公钥 ID，一般以 PUB_KEY_ID_ 开头</div>
-            </el-form-item>
-            <el-form-item class="wide-field" label="微信支付公钥">
-              <el-input
-                v-model="wechatPay.platformPublicKey"
-                type="textarea"
-                :rows="5"
-                placeholder="粘贴 -----BEGIN PUBLIC KEY----- 开头的微信支付公钥"
-              />
-              <div class="form-tip">用于微信支付回调验签；如果使用平台证书，也可以填写下面的平台证书</div>
-            </el-form-item>
-            <el-form-item class="wide-field" label="微信支付平台证书（兼容旧版）">
-              <el-input
-                v-model="wechatPay.platformCert"
-                type="textarea"
-                :rows="5"
-                placeholder="粘贴 -----BEGIN CERTIFICATE----- 开头的平台证书"
-              />
-              <div class="form-tip" v-if="wechatPay.platformCert === '******'">已配置证书，留空则不修改</div>
-            </el-form-item>
+            <el-alert
+              class="wide-field"
+              type="success"
+              show-icon
+              :closable="false"
+              title="微信支付平台验签材料已由后端管理"
+              description="后台保存时不会上传或覆盖平台公钥、平台证书，避免误粘贴证书申请文件导致支付回调中断。"
+            />
             <el-form-item class="wide-field" label="商户证书 CERT（可选留存）">
               <el-input
                 v-model="wechatPay.merchantCert"
@@ -540,9 +526,6 @@ const wechatPay = reactive<Record<string, any>>({
   certSerialNo: '',
   notifyUrl: '',
   refundNotifyUrl: '',
-  platformPublicKeyId: '',
-  platformPublicKey: '',
-  platformCert: '',
   merchantCert: '',
   merchantPrivateKey: ''
 })
@@ -556,8 +539,13 @@ const backendOrigin = computed(() => {
     : origin
 })
 
-const payNotifyUrl = computed(() => `${backendOrigin.value}/wxpay/notify`)
-const payRefundNotifyUrl = computed(() => `${backendOrigin.value}/wxpay/refund-notify`)
+const backendApiBase = computed(() => {
+  const base = backendOrigin.value.replace(/\/$/, '')
+  return base.endsWith('/api') ? base : `${base}/api`
+})
+
+const payNotifyUrl = computed(() => `${backendApiBase.value}/wxpay/notify`)
+const payRefundNotifyUrl = computed(() => `${backendApiBase.value}/wxpay/refund-notify`)
 
 const email = reactive<Record<string, any>>({
   host: 'smtp.qq.com',
@@ -779,7 +767,12 @@ async function saveMiniapp() {
 async function saveWechatPay() {
   savingWechatPay.value = true
   try {
-    await saveConfigGroup('wechat_pay', { wechat_pay: { ...wechatPay } })
+    const payload = { ...wechatPay }
+    delete payload.platformPublicKeyId
+    delete payload.platformPublicKey
+    delete payload.platformCert
+    delete payload.platformCertificates
+    await saveConfigGroup('wechat_pay', { wechat_pay: payload })
     ElMessage.success('微信支付配置已保存')
   } catch (e: any) {
     ElMessage.error(e?.message || '保存失败')

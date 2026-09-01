@@ -139,6 +139,46 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsBoolean()
   notifySquat?: boolean;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifyLikeMode?: string;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifyCommentMode?: string;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifyReplyMode?: string;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifyMentionMode?: string;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifyFollowMode?: string;
+
+  @ApiProperty({ required: false, enum: ['instant', 'reduced', 'inbox', 'off'] })
+  @IsOptional()
+  @IsIn(['instant', 'reduced', 'inbox', 'off'])
+  notifySquatMode?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  notifyOfficialAccount?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  notifyInteractionBadge?: boolean;
 }
 
 export class StudentVerifyDto {

@@ -1322,23 +1322,128 @@ describe("NotifyService interaction inbox", () => {
     expect(result).toEqual({ success: true, affected: 2 });
   });
 
-  it("skips disabled interaction notifications before creating a history row", async () => {
+  it.each([
+    ["LIKE", "notifyLike", "notifyLikeMode"],
+    ["COMMENT", "notifyComment", "notifyCommentMode"],
+    ["REPLY", "notifyComment", "notifyReplyMode"],
+    ["MENTION", "notifyComment", "notifyMentionMode"],
+  ])(
+    "lets the user disable %s notifications before any channel creates a history row",
+    async (type, preferenceField, modeField) => {
     const prisma = createPrismaMock();
-    prisma.userSettings.findUnique.mockResolvedValue({ notifyLike: false });
+    prisma.userSettings.findUnique.mockResolvedValue({
+      [preferenceField]: false,
+      [modeField]: "off",
+    });
     const service = createService(prisma);
 
     const result = await service.createAndDispatch({
+      userId: "user-1",
+      type: type as any,
+      title: "社区互动",
+      content: "你收到了新互动",
+    });
+
+    expect(prisma.userSettings.findUnique).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      select: {
+        [preferenceField]: true,
+        [modeField]: true,
+        notifyOfficialAccount: true,
+        notifyInteractionBadge: true,
+      },
+    });
+    expect(result).toEqual({
+      skipped: true,
+      reason: "user_notification_preference",
+    });
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps reduced notifications in the inbox without immediate external delivery", async () => {
+    const prisma = createPrismaMock();
+    prisma.userSettings.findUnique.mockResolvedValue({
+      notifyLike: true,
+      notifyLikeMode: "reduced",
+      notifyOfficialAccount: true,
+      notifyInteractionBadge: true,
+    });
+    prisma.notification.create.mockImplementation(async ({ data }: any) => ({
+      id: "notice-1",
+      ...data,
+    }));
+    const channelService = {
+      resolveChannelMask: jest.fn().mockResolvedValue({
+        inApp: true,
+        websocket: true,
+        push: true,
+        email: true,
+        sms: true,
+        wechatSubscribe: true,
+        officialAccount: true,
+      }),
+    };
+
+    await createService(prisma, channelService).createAndDispatch({
       userId: "user-1",
       type: "LIKE",
       title: "有人点赞",
       content: "点赞了你的内容",
     });
 
-    expect(result).toEqual({
-      skipped: true,
-      reason: "user_notification_preference",
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        data: expect.objectContaining({
+          notificationPreferenceMode: "reduced",
+          notificationPreferenceType: "LIKE",
+        }),
+        channelMask: expect.objectContaining({
+          inApp: true,
+          websocket: true,
+          push: false,
+          email: false,
+          sms: false,
+          wechatSubscribe: false,
+          officialAccount: false,
+        }),
+      }),
     });
-    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps inbox-only notifications out of realtime badges", async () => {
+    const prisma = createPrismaMock();
+    prisma.userSettings.findUnique.mockResolvedValue({
+      notifyFollow: true,
+      notifyFollowMode: "inbox",
+      notifyOfficialAccount: true,
+      notifyInteractionBadge: true,
+    });
+    prisma.notification.create.mockImplementation(async ({ data }: any) => ({
+      id: "notice-1",
+      ...data,
+    }));
+
+    await createService(prisma).createAndDispatch({
+      userId: "user-1",
+      type: "FOLLOW",
+      title: "新增关注",
+      content: "有人关注了你",
+    });
+
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        data: expect.objectContaining({
+          notificationPreferenceMode: "inbox",
+          notificationPreferenceType: "FOLLOW",
+        }),
+        channelMask: expect.objectContaining({
+          inApp: true,
+          websocket: false,
+          officialAccount: false,
+        }),
+      }),
+    });
   });
 });
 
@@ -1403,5 +1508,28 @@ describe("NotifyService visible unread buckets", () => {
     expect(result.totalUnread).toBe(
       result.unreadCounts.systemChat + result.unreadCounts.interaction,
     );
+  });
+
+  it("retains quiet interaction history without adding it to unread badges", async () => {
+    const prisma = createPrismaMock();
+    prisma.notification.findMany.mockResolvedValue([
+      { type: "ORDER", data: {} },
+      {
+        type: "FOLLOW",
+        data: { notificationPreferenceMode: "inbox" },
+      },
+      { type: "LIKE", data: { notificationPreferenceMode: "reduced" } },
+    ]);
+    prisma.userSettings.findUnique.mockResolvedValue({
+      notifyInteractionBadge: true,
+    });
+
+    const result = await createService(prisma).getUnreadSummary("user-1");
+
+    expect(result.notificationUnread).toBe(2);
+    expect(result.unreadCounts).toEqual(
+      expect.objectContaining({ follow: 0, like: 1, interaction: 1 }),
+    );
+    expect(result.totalUnread).toBe(2);
   });
 });

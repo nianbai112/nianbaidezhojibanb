@@ -25,8 +25,8 @@ export type ErrandOrderTakingEligibility = {
 export const DEFAULT_ERRAND_ORDER_TAKING_POLICY: ErrandOrderTakingPolicy = {
   ordinaryUserEnabled: false,
   ordinaryUserTaskTypes: ['express_pickup'],
-  ordinaryUserRequirePhone: false,
-  ordinaryUserRequireStudentVerify: false,
+  ordinaryUserRequirePhone: true,
+  ordinaryUserRequireStudentVerify: true,
   ordinaryUserMaxActiveOrders: 1,
   ordinaryUserDailyLimit: 3,
   riderPriorityMinutes: 0,
@@ -82,14 +82,9 @@ export function normalizeErrandOrderTakingPolicy(value: any = {}): ErrandOrderTa
       source.ordinaryUserTaskTypes ?? source.ordinary_user_task_types,
       defaults.ordinaryUserTaskTypes,
     ),
-    ordinaryUserRequirePhone: toBoolean(
-      source.ordinaryUserRequirePhone ?? source.ordinary_user_require_phone,
-      defaults.ordinaryUserRequirePhone,
-    ),
-    ordinaryUserRequireStudentVerify: toBoolean(
-      source.ordinaryUserRequireStudentVerify ?? source.ordinary_user_require_student_verify,
-      defaults.ordinaryUserRequireStudentVerify,
-    ),
+    // 方案 A 的安全边界：一旦开放普通用户接单，这两项不可由运营配置关闭。
+    ordinaryUserRequirePhone: true,
+    ordinaryUserRequireStudentVerify: true,
     ordinaryUserMaxActiveOrders: Math.max(0, Math.floor(toNumber(
       source.ordinaryUserMaxActiveOrders ?? source.ordinary_user_max_active_orders,
       defaults.ordinaryUserMaxActiveOrders,

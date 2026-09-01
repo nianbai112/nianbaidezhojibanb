@@ -19,6 +19,7 @@ const mockAdminPermissionGuard = { canActivate: jest.fn().mockResolvedValue(true
 const mockService = {
   getActiveMap: jest.fn(),
   getProjectCatalog: jest.fn(),
+  prepareVerifiedReleaseBatch: jest.fn(),
   resolveCatalogRegionId: jest.fn(),
   upsertProject: jest.fn(),
   deleteProject: jest.fn(),
@@ -135,6 +136,20 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     const proto = CampusMapController.prototype as any;
     expect(Reflect.getMetadata('path', proto.getProjectCatalog)).toBe('admin/campus-map/project-catalog');
     expect(Reflect.getMetadata('method', proto.getProjectCatalog)).toBe(RequestMethod.GET);
+  });
+
+  it('滚动发布批次接口按区域整理已核验地点', async () => {
+    mockService.prepareVerifiedReleaseBatch.mockResolvedValue({ includedCount: 10, deferredCount: 15 });
+    const req: any = { user: { sub: 'admin-1', isAdmin: true } };
+
+    const result = await (controller as any).prepareVerifiedReleaseBatch(req, 'region-1');
+
+    expect(result).toEqual({ includedCount: 10, deferredCount: 15 });
+    expect(mockService.prepareVerifiedReleaseBatch).toHaveBeenCalledWith('region-1', 'admin-1');
+    const proto = CampusMapController.prototype as any;
+    expect(Reflect.getMetadata('path', proto.prepareVerifiedReleaseBatch))
+      .toBe('admin/campus-map/project-catalog/release-batch/prepare');
+    expect(Reflect.getMetadata('method', proto.prepareVerifiedReleaseBatch)).toBe(RequestMethod.POST);
   });
 
   it('旧目录写接口缺少 regionId/mapId 时明确失败，不写入 global', async () => {

@@ -659,8 +659,13 @@ export class OrderAppealService {
     requestedAmount?: number,
   ) {
     const amount = this.positiveAmount(requestedAmount, "骑手处罚金额");
-    const item = await this.prisma.riderSettlementItem.findUnique({
-      where: { orderType_orderId: { orderType: appeal.orderType === "errand" ? "errand" : "delivery_order", orderId: appeal.orderId } },
+    const item = await this.prisma.riderSettlementItem.findFirst({
+      where: {
+        orderType: appeal.orderType === "errand" ? "errand" : "delivery_order",
+        orderId: appeal.orderId,
+        settlement: { status: { not: "REJECTED" } },
+      },
+      orderBy: { createdAt: "desc" },
       include: { settlement: true },
     });
     if (!item) throw new BadRequestException("该订单尚无骑手结算明细，不能执行处罚");

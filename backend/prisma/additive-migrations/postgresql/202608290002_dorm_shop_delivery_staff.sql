@@ -73,7 +73,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "shop_delivery_assignments_order_id_key"
   ON "shop_delivery_assignments"("order_id");
 CREATE INDEX IF NOT EXISTS "shop_delivery_assignments_merchant_id_status_assigned_at_idx"
   ON "shop_delivery_assignments"("merchant_id", "status", "assigned_at");
-CREATE INDEX IF NOT EXISTS "shop_delivery_assignments_assignee_user_id_status_assigned_at_idx"
+CREATE INDEX IF NOT EXISTS "shop_delivery_assignments_assignee_status_assigned_idx"
   ON "shop_delivery_assignments"("assignee_user_id", "status", "assigned_at");
 CREATE INDEX IF NOT EXISTS "shop_delivery_assignments_staff_id_status_idx"
   ON "shop_delivery_assignments"("staff_id", "status");

@@ -600,6 +600,14 @@ model UserSettings {
   notifySquat          Boolean  @default(true)
   notifySystem         Boolean  @default(true)
   notifyOrder          Boolean  @default(true)
+  notifyLikeMode       String   @default("reduced") // instant / reduced / inbox / off
+  notifyCommentMode    String   @default("instant")
+  notifyReplyMode      String   @default("instant")
+  notifyMentionMode    String   @default("instant")
+  notifyFollowMode     String   @default("inbox")
+  notifySquatMode      String   @default("inbox")
+  notifyOfficialAccount Boolean @default(true)
+  notifyInteractionBadge Boolean @default(true)
   language             String   @default("zh-CN")
   updatedAt            DateTime @updatedAt
 
@@ -1477,7 +1485,7 @@ model ShopDeliveryAssignment {
   updatedAt      DateTime       @updatedAt
 
   @@index([merchantId, status, assignedAt])
-  @@index([assigneeUserId, status, assignedAt])
+  @@index([assigneeUserId, status, assignedAt], map: "shop_delivery_assignments_assignee_status_assigned_idx")
   @@index([staffId, status])
   @@map("shop_delivery_assignments")
 }
@@ -3295,11 +3303,59 @@ model ErrandOrder {
   User                   User              @relation(fields: [userId], references: [id])
   RegionRider            RegionRider?      @relation(fields: [riderId], references: [userId])
   tasks                  ErrandOrderTask[]
+  settlementHold         ErrandSettlementHold?
 
   @@index([userId, createdAt])
   @@index([riderId, status])
   @@index([status, createdAt])
   @@map("errand_orders")
+}
+
+// 同一接单人在不同订单并发接单时的数据库互斥行。事务内 upsert/update
+// 会持有行锁，避免仅按订单加 Redis 锁导致接单上限被并发穿透。
+model ErrandAssigneeMutex {
+  userId    String   @id
+  version   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("errand_assignee_mutexes")
+}
+
+// 跑腿收益冻结台账。营销单至少冷静 48 小时，命中强风控时须人工处置；
+// 只有 released 状态才允许进入自动/人工结算。
+model ErrandSettlementHold {
+  id             String      @id @default(cuid())
+  orderId        String      @unique
+  order          ErrandOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  riderId        String
+  status         String      @default("holding") // holding, released, rejected
+  reasonCode     String
+  releaseAt      DateTime?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  resolutionNote String?     @db.Text
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([riderId, status])
+  @@index([status, releaseAt])
+  @@map("errand_settlement_holds")
+}
+
+// 营销预算的原子计数行。总预算、日预算和个人预算分别占一行，
+// 在创建订单事务里锁行后再校验和递增。
+model MarketingCampaignBudgetCounter {
+  id         String   @id
+  campaignId String
+  scopeKey   String
+  spent      Decimal  @default(0) @db.Decimal(12, 2)
+  uses       Int      @default(0)
+  version    Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([campaignId, scopeKey])
+  @@index([campaignId])
+  @@map("marketing_campaign_budget_counters")
 }
 
 model ErrandOrderTask {
@@ -5129,6 +5185,8 @@ model DeliveryRiskEvent {
   handled     Boolean   @default(false)
   handledBy   String?
   handledAt   DateTime?
+  resolution  String?   // release, reject
+  resolutionNote String? @db.Text
   createdAt   DateTime  @default(now())
 
   @@index([orderId, orderType, createdAt])
@@ -5377,7 +5435,7 @@ model RiderSettlementItem {
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
-  @@unique([orderType, orderId])
+  @@unique([settlementId, orderType, orderId])
   @@index([settlementId, status])
   @@index([riderId, createdAt])
   @@map("rider_settlement_items")
@@ -6724,6 +6782,7 @@ model WechatMessageLog {
   page         String?
   payload      Json?
   status       String // pending / success / failed
+  wechatMsgId  String?   @unique
   errorCode    String?
   errorMessage String?
   sentAt       DateTime?

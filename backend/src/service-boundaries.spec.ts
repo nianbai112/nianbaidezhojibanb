@@ -33,6 +33,22 @@ describe("service process boundaries", () => {
     expect(ecosystem).toContain('realtimeInstances > 1 ? "cluster" : "fork"');
   });
 
+  it("preserves the /api prefix for mall user routes before the legacy API proxy", () => {
+    for (const file of ["portal-site.conf.sample", "admin-site.conf.sample"]) {
+      const nginx = read(
+        path.resolve(__dirname, `../../deploy/nginx/${file}`),
+      );
+      const mallLocation = nginx.indexOf("\n    location ^~ /api/mall/ {");
+      const legacyApiLocation = nginx.indexOf("\n    location /api/ {");
+
+      expect(mallLocation).toBeGreaterThan(-1);
+      expect(legacyApiLocation).toBeGreaterThan(mallLocation);
+      expect(
+        nginx.slice(mallLocation, legacyApiLocation),
+      ).toContain("proxy_pass http://127.0.0.1:3000;");
+    }
+  });
+
   it("waits for database migration before starting Docker services", () => {
     const compose = read(path.resolve(__dirname, "../docker-compose.yml"));
 

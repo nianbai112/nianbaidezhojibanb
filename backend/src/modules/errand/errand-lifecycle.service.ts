@@ -6,9 +6,18 @@ import {
 } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { PrismaService } from "../../common/services/prisma.service";
+import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
+import {
+  inspectErrandAssignmentRisk,
+  recordErrandAssignmentRisk,
+} from "./errand-assignment-guard";
 import { RedisService } from "../../common/services/redis.service";
 import { NotifyService } from "../notify/notify.service";
 import { errandExtendedConfigKey } from "./errand-config.util";
+import {
+  ERRAND_MARKETING_HOLD_MS,
+  hasErrandMarketingBenefit,
+} from "./errand-transaction-guards";
 
 @Injectable()
 export class ErrandLifecycleService {
@@ -36,6 +45,132 @@ export class ErrandLifecycleService {
     return lock.call(this.redis, "errand:risk-scan", 4 * 60, () =>
       this.scanActionableRisks(),
     );
+  }
+
+  @Interval(5 * 60 * 1000)
+  async runScheduledSettlementRelease() {
+    if (!this.redis) return;
+    const lock = (this.redis as any).withRenewingLock || this.redis.withLock;
+    return lock.call(this.redis, "errand:settlement-hold-release", 4 * 60, () =>
+      this.releaseMaturedSettlementHolds(),
+    );
+  }
+
+  async releaseMaturedSettlementHolds(now = new Date()) {
+    const holds = await this.prisma.errandSettlementHold.findMany({
+      where: { status: "holding", releaseAt: { lte: now } },
+      select: { id: true, orderId: true, riderId: true },
+      orderBy: { releaseAt: "asc" },
+      take: 100,
+    });
+    let released = 0;
+    let blocked = 0;
+    for (const hold of holds) {
+      try {
+        const result = await this.prisma.$transaction(async (tx) => {
+          const currentHold = await tx.errandSettlementHold.findUnique({
+            where: { id: hold.id },
+          });
+          if (
+            !currentHold ||
+            currentHold.status !== "holding" ||
+            !currentHold.releaseAt ||
+            currentHold.releaseAt > now
+          ) return "skipped";
+          const order = await tx.errandOrder.findUnique({ where: { id: hold.orderId } });
+          if (!order || order.status !== "completed" || order.riderId !== hold.riderId) {
+            await tx.errandSettlementHold.update({
+              where: { id: hold.id },
+              data: { releaseAt: null, reasonCode: "order_state_mismatch" },
+            });
+            return "blocked";
+          }
+          if (["refunding", "refunded"].includes(String(order.refundStatus || "none"))) {
+            await tx.errandSettlementHold.update({
+              where: { id: hold.id },
+              data: { releaseAt: null, reasonCode: "refund_in_progress" },
+            });
+            return "blocked";
+          }
+          const [appeal, openRisk, assignmentRisk] = await Promise.all([
+            tx.orderAppeal.findFirst({
+              where: {
+                orderId: order.id,
+                orderType: { in: ["errand", "errand_order"] },
+                status: { notIn: ["resolved", "rejected", "closed", "cancelled", "completed"] },
+              },
+              select: { id: true },
+            }),
+            tx.deliveryRiskEvent.findFirst({
+              where: {
+                orderId: order.id,
+                orderType: "errand",
+                handled: false,
+                eventLevel: { in: ["error", "critical"] },
+              },
+              select: { id: true, eventType: true },
+            }),
+            inspectErrandAssignmentRisk(tx, order, order.riderId || ""),
+          ]);
+          const assignmentManualApproved = !!currentHold.resolvedBy
+            && currentHold.reasonCode === `admin_release:${assignmentRisk.eventType}`;
+          if (assignmentRisk.blocked || !assignmentManualApproved) {
+            await recordErrandAssignmentRisk(
+              tx,
+              order,
+              order.riderId || "",
+              "冻结收益释放复核",
+              assignmentRisk,
+            );
+          }
+          const assignmentRequiresReview = assignmentRisk.blocked
+            || (
+              ["error", "critical"].includes(String(assignmentRisk.eventLevel || ""))
+              && !assignmentManualApproved
+            );
+          if (appeal || openRisk || assignmentRequiresReview) {
+            await tx.errandSettlementHold.update({
+              where: { id: hold.id },
+              data: {
+                releaseAt: null,
+                reasonCode: appeal
+                  ? "open_appeal"
+                  : openRisk?.eventType || assignmentRisk.reasonCode || "risk_recheck_failed",
+              },
+            });
+            await tx.errandOrder.update({
+              where: { id: order.id },
+              data: { settlementEligibleAt: null },
+            });
+            return "blocked";
+          }
+          const claimed = await tx.errandSettlementHold.updateMany({
+            where: { id: hold.id, status: "holding", releaseAt: { lte: now } },
+            data: {
+              status: "released",
+              resolvedAt: now,
+              resolvedBy: "system:risk_recheck",
+              reasonCode: "risk_recheck_passed",
+            },
+          });
+          if (claimed.count !== 1) return "skipped";
+          await this.creditConfirmedRiderIncome(tx, order, now);
+          await tx.errandOrder.update({
+            where: { id: order.id },
+            data: { settlementEligibleAt: now },
+          });
+          return "released";
+        });
+        if (result === "released") released += 1;
+        if (result === "blocked") blocked += 1;
+      } catch (error: any) {
+        blocked += 1;
+        this.logger.warn(
+          `跑腿冻结收益释放失败 hold=${hold.id}: ${error?.message || error}`,
+        );
+      }
+    }
+    return { checked: holds.length, released, blocked };
   }
 
   async autoConfirmDueOrders(now = new Date()) {
@@ -390,8 +525,7 @@ export class ErrandLifecycleService {
       throw new BadRequestException("订单退款处理中，不能确认收货");
     }
 
-    const [appeal, riskEvent] = await Promise.all([
-      this.prisma.orderAppeal.findFirst({
+    const appeal = await this.prisma.orderAppeal.findFirst({
         where: {
           orderId,
           orderType: { in: ["errand", "errand_order"] },
@@ -400,23 +534,74 @@ export class ErrandLifecycleService {
           },
         },
         select: { id: true, status: true },
-      }),
-      this.prisma.deliveryRiskEvent.findFirst({
-        where: {
-          orderId,
-          orderType: "errand",
-          handled: false,
-          eventLevel: { in: ["error", "critical"] },
-        },
-        select: { id: true, eventLevel: true },
-      }),
-    ]);
+      });
     if (appeal) throw new BadRequestException("订单售后处理中，暂不能确认收货");
-    if (riskEvent)
-      throw new BadRequestException("订单存在未处理风险事件，暂不能确认收货");
 
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
+      const [assignmentRisk, marketingBenefit, existingHold, currentOpenRisk, currentAppeal] = await Promise.all([
+        inspectErrandAssignmentRisk(tx, order, order.riderId || ""),
+        hasErrandMarketingBenefit(tx, order),
+        tx.errandSettlementHold.findUnique({ where: { orderId } }),
+        tx.deliveryRiskEvent.findFirst({
+          where: {
+            orderId,
+            orderType: "errand",
+            handled: false,
+            eventLevel: { in: ["error", "critical"] },
+          },
+          select: { id: true, eventType: true },
+        }),
+        tx.orderAppeal.findFirst({
+          where: {
+            orderId,
+            orderType: { in: ["errand", "errand_order"] },
+            status: {
+              notIn: ["resolved", "rejected", "closed", "cancelled", "completed"],
+            },
+          },
+          select: { id: true, status: true },
+        }),
+      ]);
+      if (currentAppeal) {
+        throw new BadRequestException("订单售后处理中，暂不能确认收货");
+      }
+      const assignmentManualApproved = !!existingHold?.resolvedBy
+        && existingHold.reasonCode === `admin_release:${assignmentRisk.eventType}`;
+      if (assignmentRisk.blocked || !assignmentManualApproved) {
+        await recordErrandAssignmentRisk(
+          tx,
+          order,
+          order.riderId || "",
+          "确认收货结算",
+          assignmentRisk,
+        );
+      }
+      const riskBlocked = !!currentOpenRisk
+        || assignmentRisk.blocked
+        || (
+          ["error", "critical"].includes(String(assignmentRisk.eventLevel || ""))
+          && !assignmentManualApproved
+        );
+      const rejected = existingHold?.status === "rejected";
+      const keepExistingHold = existingHold?.status === "holding";
+      const shouldHold = rejected || riskBlocked || marketingBenefit || keepExistingHold;
+      const releaseAt = rejected || riskBlocked
+        ? null
+        : marketingBenefit
+          ? new Date(now.getTime() + ERRAND_MARKETING_HOLD_MS)
+          : keepExistingHold
+            ? existingHold.releaseAt || now
+            : null;
+      const holdReason = rejected
+        ? existingHold.reasonCode
+        : riskBlocked
+          ? currentOpenRisk?.eventType || assignmentRisk.reasonCode || "risk_review_required"
+          : assignmentManualApproved
+            ? existingHold.reasonCode
+            : marketingBenefit
+              ? "marketing_cooling_period"
+              : existingHold?.reasonCode || "admin_release_pending_recheck";
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
@@ -429,7 +614,7 @@ export class ErrandLifecycleService {
           receiptConfirmedAt: now,
           receiptConfirmedBy: source,
           completeTime: now,
-          settlementEligibleAt: now,
+          settlementEligibleAt: shouldHold ? releaseAt : now,
         },
       });
       if (claimed.count !== 1) {
@@ -488,10 +673,50 @@ export class ErrandLifecycleService {
                 : "用户主动确认收货",
         },
       });
+      if (shouldHold && order.riderId) {
+        await tx.errandSettlementHold.upsert({
+          where: { orderId },
+          create: {
+            orderId,
+            riderId: order.riderId,
+            status: rejected ? "rejected" : "holding",
+            reasonCode: holdReason,
+            releaseAt,
+          },
+          update: {
+            riderId: order.riderId,
+            status: rejected ? "rejected" : "holding",
+            reasonCode: holdReason,
+            releaseAt,
+          },
+        });
+      } else {
+        await this.creditConfirmedRiderIncome(tx, order, now);
+      }
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
     });
     await this.dispatchLifecycleNotification(updated, "errand_delivered");
     return updated;
+  }
+
+  /**
+   * 收货确认是跑腿基础配送费真正可结算的唯一业务节点。
+   * 在同一事务内把明细并入骑手当日的已入账结算单，同时增加钱包余额，
+   * 避免“订单已完成但余额仍为 0”，也避免财务列表每单产生一张结算单。
+   * 后续退款仍由既有结算冲正/骑手负债流程处理。
+   */
+  private async creditConfirmedRiderIncome(tx: any, order: any, now: Date) {
+    return creditConfirmedRiderIncome(tx, {
+      orderType: "errand",
+      orderId: order.id,
+      orderNo: order.orderNo,
+      riderId: order.riderId,
+      ownerUserId: order.userId,
+      regionId: order.regionId,
+      deliveryFeeAmount: Number(order.price || 0),
+      tipAmount: Number(order.tip || 0),
+      now,
+    });
   }
 
   private async transitionRiderOrder(
@@ -542,13 +767,15 @@ export class ErrandLifecycleService {
     });
     if (toStatus === "in_progress") {
       await this.dispatchLifecycleNotification(updated, "errand_picked");
+    } else if (toStatus === "arrived") {
+      await this.dispatchLifecycleNotification(updated, "errand_arrived");
     }
     return updated;
   }
 
   private async dispatchLifecycleNotification(
     order: any,
-    scene: "errand_picked" | "errand_delivered",
+    scene: "errand_picked" | "errand_arrived" | "errand_delivered",
   ) {
     if (!this.notifyService || !order?.userId) return;
 
@@ -561,9 +788,12 @@ export class ErrandLifecycleService {
           .catch(() => null)
       : null;
     const isPicked = scene === "errand_picked";
+    const isArrived = scene === "errand_arrived";
     const occurredAt = isPicked
       ? order.pickupTime || new Date()
-      : order.completeTime || new Date();
+      : isArrived
+        ? order.deliverTime || new Date()
+        : order.completeTime || new Date();
 
     try {
       await this.notifyService.createAndDispatch({
@@ -571,10 +801,16 @@ export class ErrandLifecycleService {
         regionId: order.regionId || undefined,
         type: "delivery",
         scene,
-        title: isPicked ? "骑手已取件" : "订单已完成",
+        title: isPicked
+          ? "骑手已取件"
+          : isArrived
+            ? "骑手已送达，请确认收货"
+            : "订单已完成",
         content: isPicked
           ? `您的跑腿订单 ${order.orderNo || ""} 已由骑手取件，正在配送中。`
-          : `您的跑腿订单 ${order.orderNo || ""} 已完成，感谢您的使用。`,
+          : isArrived
+            ? `您的跑腿订单 ${order.orderNo || ""} 已送达，请确认收货。`
+            : `您的跑腿订单 ${order.orderNo || ""} 已完成，感谢您的使用。`,
         data: {
           orderId: order.id,
           orderNo: order.orderNo || "",
@@ -583,6 +819,11 @@ export class ErrandLifecycleService {
           deliveryAddress: order.deliverAddress || "",
           estimatedTime: this.formatWechatTime(occurredAt),
           finishedAt: this.formatWechatTime(occurredAt),
+          remark: isPicked
+            ? "骑手已取件，正在配送中"
+            : isArrived
+              ? "已送达，请确认收货"
+              : "订单已完成",
         },
         linkType: "page",
         linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
@@ -590,7 +831,8 @@ export class ErrandLifecycleService {
           inApp: true,
           websocket: true,
           push: false,
-          wechatSubscribe: true,
+          // 一次性订阅额度留给最终 completed；arrived 复用服务号模板。
+          wechatSubscribe: !isArrived,
           officialAccount: true,
         },
       });

@@ -16,8 +16,9 @@ describe('ErrandAdminService closed-loop detail', () => {
       deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
       orderAppeal: { findFirst: jest.fn().mockResolvedValue(null) },
       paymentRefund: { findMany: jest.fn().mockResolvedValue([{ id: 'refund-1', status: 'success' }]) },
-      riderSettlementItem: { findUnique: jest.fn().mockResolvedValue({ id: 'item-1', settlementId: 'settlement-1' }) },
+      riderSettlementItem: { findFirst: jest.fn().mockResolvedValue({ id: 'item-1', settlementId: 'settlement-1' }) },
       riderLiability: { findMany: jest.fn().mockResolvedValue([{ id: 'liability-1', status: 'open' }]) },
+      errandSettlementHold: { findUnique: jest.fn().mockResolvedValue(null) },
       errandReview: { findUnique: jest.fn().mockResolvedValue({ rating: 5 }) },
     };
     const detail = await new ErrandAdminService(prisma).getOrderDetail('order-1');
@@ -86,13 +87,21 @@ describe('ErrandAdminService closed-loop detail', () => {
     const tx: any = {
       errandOrder: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'order-1', userId: 'owner-1', regionId: 'region-a', status: 'pending_accept', riderId: null, refundStatus: 'none' }),
+        count: jest.fn().mockResolvedValue(0),
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'order-1', riderId: 'rider-1', status: 'accepted' }),
       },
       deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
-      regionRider: { update: jest.fn().mockResolvedValue({}) },
+      regionRider: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'rr-1', userId: 'rider-1', regionId: 'region-a', verifyStatus: 'approved', status: 'online', riderType: 'part_time' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ userId: 'rider-1', version: 1 }) },
+      order: { count: jest.fn().mockResolvedValue(0) },
+      deliveryRiskEvent: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const prisma: any = {
-      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'order-1', regionId: 'region-a', status: 'pending_accept', riderId: null, refundStatus: 'none' }) },
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'order-1', userId: 'owner-1', regionId: 'region-a', status: 'pending_accept', riderId: null, refundStatus: 'none' }) },
       regionRider: { findFirst: jest.fn().mockResolvedValue({ id: 'rr-1', userId: 'rider-1', regionId: 'region-a', verifyStatus: 'approved', status: 'online', riderType: 'part_time' }) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
@@ -102,11 +111,32 @@ describe('ErrandAdminService closed-loop detail', () => {
     await service.assignOrder('order-1', { riderId: 'rider-1' }, 'admin-a');
     expect(tx.errandOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
-        id: 'order-1', regionId: 'region-a', status: 'pending_accept', riderId: null,
+        id: 'order-1', regionId: 'region-a', userId: { not: 'rider-1' }, status: 'pending_accept', riderId: null,
         refundStatus: { notIn: ['refunding', 'refunded'] },
       },
       data: expect.objectContaining({ riderId: 'rider-1', status: 'accepted' }),
     }));
+  });
+
+  it('does not let an administrator assign an order to its publisher', async () => {
+    const prisma: any = {
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({
+        id: 'order-1', orderNo: 'ERR-1', userId: 'rider-1', regionId: 'region-a', status: 'pending_accept', riderId: null,
+      }) },
+      regionRider: { findFirst: jest.fn().mockResolvedValue({
+        id: 'rr-1', userId: 'rider-1', regionId: 'region-a', verifyStatus: 'approved', status: 'online',
+      }) },
+      deliveryRiskEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'risk-1' }),
+      },
+      $transaction: jest.fn(),
+    };
+    const service = new ErrandAdminService(prisma);
+
+    await expect(service.assignOrder('order-1', { riderId: 'rider-1' }))
+      .rejects.toThrow('不能接自己发布的跑腿订单');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('returns the actionable risk reasons and closes them only inside the admin region', async () => {
@@ -114,6 +144,7 @@ describe('ErrandAdminService closed-loop detail', () => {
       id: 'risk-1', orderId: 'order-1', orderType: 'errand', eventType: 'delivery_overdue',
       eventLevel: 'error', description: '履约超时', handled: false,
     };
+    const updateRisk = jest.fn().mockResolvedValue({ count: 1 });
     const prisma: any = {
       deliveryRiskEvent: {
         findMany: jest.fn(({ where, select }: any) => {
@@ -121,13 +152,17 @@ describe('ErrandAdminService closed-loop detail', () => {
           return Promise.resolve(select ? [{ orderId: 'order-1' }] : [risk]);
         }),
         findUnique: jest.fn().mockResolvedValue({ ...risk, order: undefined }),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        updateMany: updateRisk,
       },
       errandOrder: {
         findMany: jest.fn().mockResolvedValue([{ id: 'order-1', orderNo: 'ERR-1', regionId: 'region-a', status: 'in_progress', tasks: [] }]),
         count: jest.fn().mockResolvedValue(1),
         findUnique: jest.fn().mockResolvedValue({ id: 'order-1', regionId: 'region-a' }),
       },
+      $transaction: jest.fn((fn: any) => fn({
+        deliveryRiskEvent: { updateMany: updateRisk },
+        errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'order-1', riderId: null }) },
+      })),
     };
     const scope = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: false, regionIds: ['region-a'] }) };
     const service = new ErrandAdminService(prisma, scope as any);
@@ -137,7 +172,7 @@ describe('ErrandAdminService closed-loop detail', () => {
       abnormalReason: '履约超时',
       openRiskEvents: [expect.objectContaining({ id: 'risk-1', eventType: 'delivery_overdue' })],
     }));
-    await expect((service as any).handleRiskEvent('risk-1', 'admin-a')).resolves.toEqual({ success: true });
+    await expect(service.handleRiskEvent('risk-1', { resolution: 'release', note: '已核验履约轨迹' }, 'admin-a')).resolves.toEqual({ success: true });
     expect(prisma.deliveryRiskEvent.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'risk-1', handled: false },
       data: expect.objectContaining({ handled: true, handledBy: 'admin-a' }),
@@ -150,11 +185,12 @@ describe('ErrandAdminService closed-loop detail', () => {
       eventType: 'cannot_contact', eventLevel: 'warning', description: '到达后多次联系不上用户',
       handled: false, createdAt: new Date('2026-07-28T10:00:00.000Z'),
     };
+    const updateRisk = jest.fn().mockResolvedValue({ count: 1 });
     const prisma: any = {
       deliveryRiskEvent: {
         findMany: jest.fn(({ where }: any) => Promise.resolve(where.orderType === 'shop' ? [risk] : [])),
         findUnique: jest.fn().mockResolvedValue(risk),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        updateMany: updateRisk,
       },
       errandOrder: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       order: {
@@ -166,6 +202,7 @@ describe('ErrandAdminService closed-loop detail', () => {
         }]),
         findUnique: jest.fn().mockResolvedValue({ id: 'shop-1', merchant: { regionId: 'region-a' } }),
       },
+      $transaction: jest.fn((fn: any) => fn({ deliveryRiskEvent: { updateMany: updateRisk } })),
     };
     const scope = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: false, regionIds: ['region-a'] }) };
     const service = new ErrandAdminService(prisma, scope as any);
@@ -179,6 +216,41 @@ describe('ErrandAdminService closed-loop detail', () => {
         openRiskEvents: [expect.objectContaining({ id: 'risk-shop-1', eventType: 'cannot_contact' })],
       })],
     }));
-    await expect(service.handleRiskEvent('risk-shop-1', 'admin-a')).resolves.toEqual({ success: true });
+    await expect(service.handleRiskEvent('risk-shop-1', { resolution: 'release', note: '已联系用户确认' }, 'admin-a')).resolves.toEqual({ success: true });
+  });
+
+  it('creates one rider liability when an already-paid errand is rejected by risk review', async () => {
+    const risk = {
+      id: 'risk-paid-1', orderId: 'order-paid-1', orderType: 'errand', riderId: 'rider-1',
+      eventType: 'marketing_related_account_assignment_attempt', eventLevel: 'critical', handled: false,
+    };
+    const tx: any = {
+      deliveryRiskEvent: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'order-paid-1', riderId: 'rider-1' }) },
+      errandSettlementHold: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'hold-1', status: 'released' }),
+        upsert: jest.fn().mockResolvedValue({ id: 'hold-1', status: 'rejected' }),
+      },
+      riderSettlementItem: {
+        findFirst: jest.fn().mockResolvedValue({ payableAmount: 6, reversalAmount: 1 }),
+      },
+      riderLiability: { upsert: jest.fn().mockResolvedValue({ id: 'liability-1' }) },
+    };
+    const prisma: any = {
+      deliveryRiskEvent: { findUnique: jest.fn().mockResolvedValue(risk) },
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'order-paid-1', regionId: 'region-a' }) },
+      $transaction: jest.fn((fn: any) => fn(tx)),
+    };
+    const scope = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: false, regionIds: ['region-a'] }) };
+    const service = new ErrandAdminService(prisma, scope as any);
+
+    await service.handleRiskEvent('risk-paid-1', { resolution: 'reject', note: '确认关联刷单' }, 'admin-a');
+
+    expect(tx.errandSettlementHold.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ status: 'rejected', releaseAt: null }),
+    }));
+    expect(tx.riderLiability.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ riderId: 'rider-1', amount: 5 }),
+    }));
   });
 });

@@ -6,6 +6,7 @@ import { WechatTokenService } from './wechat-token.service';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import { XMLParser } from 'fast-xml-parser';
+import { getManagedWechatTemplateContract } from './wechat-template-contracts';
 
 @Injectable()
 export class WechatOfficialService {
@@ -14,6 +15,7 @@ export class WechatOfficialService {
   private readonly xmlParser = new XMLParser({
     ignoreAttributes: false,
     processEntities: false,
+    parseTagValue: false,
   });
 
   constructor(
@@ -213,7 +215,8 @@ export class WechatOfficialService {
       }
       templateId = template.templateId;
 
-      const fieldMapping = (template.fieldMapping || {}) as Record<string, string>;
+      const managedContract = getManagedWechatTemplateContract('official', templateType);
+      const fieldMapping = (managedContract?.fieldMapping || template.fieldMapping || {}) as Record<string, string>;
       templateData = {};
       for (const [templateKey, dataKey] of Object.entries(fieldMapping)) {
         const value = data[dataKey];
@@ -223,7 +226,16 @@ export class WechatOfficialService {
           };
         }
       }
-      if (!Object.keys(templateData).length) {
+      const missingRequiredFields = (managedContract?.requiredTemplateKeys || [])
+        .filter((templateKey) => !templateData[templateKey]);
+      const mappingInvalid = !Object.keys(fieldMapping).length
+        || (managedContract ? missingRequiredFields.length > 0 : !Object.keys(templateData).length);
+      if (mappingInvalid) {
+        const errorMessage = !Object.keys(fieldMapping).length
+          ? '服务号模板字段映射未配置'
+          : managedContract
+            ? `服务号模板字段缺少业务数据: ${missingRequiredFields.join(', ')}`
+            : '服务号模板字段映射为空或业务数据缺失';
         await this.writeMessageLog({
           userId,
           openid,
@@ -233,9 +245,9 @@ export class WechatOfficialService {
           payload: data,
           status: 'failed',
           errorCode: 'mapping_empty',
-          errorMessage: '服务号模板字段映射为空或业务数据缺失',
+          errorMessage,
         });
-        return { success: false, error: '服务号模板字段映射为空或业务数据缺失' };
+        return { success: false, error: errorMessage };
       }
 
       const requestBody: Record<string, any> = {
@@ -243,7 +255,7 @@ export class WechatOfficialService {
         template_id: templateId,
         data: templateData,
       };
-      if (page?.startsWith('http://') || page?.startsWith('https://')) requestBody.url = page;
+      await this.attachTemplateTarget(requestBody, page);
 
       const response = await this.postOfficialTemplateMessage(requestBody);
       if (Number(response?.errcode || 0) !== 0) {
@@ -261,6 +273,22 @@ export class WechatOfficialService {
         return { success: false, error: String(response?.errmsg || '微信服务号发送失败') };
       }
 
+      const wechatMsgId = String(response?.msgid || '').trim();
+      if (!wechatMsgId) {
+        await this.writeMessageLog({
+          userId,
+          openid,
+          templateType,
+          templateId,
+          page,
+          payload: templateData,
+          status: 'failed',
+          errorCode: 'missing_msgid',
+          errorMessage: '微信接口未返回消息 ID，无法跟踪送达结果',
+        });
+        return { success: false, error: '微信接口未返回消息 ID' };
+      }
+
       await this.writeMessageLog({
         userId,
         openid,
@@ -268,7 +296,8 @@ export class WechatOfficialService {
         templateId,
         page,
         payload: templateData,
-        status: 'success',
+        status: 'pending',
+        wechatMsgId,
       });
       return { success: true };
     } catch (err: any) {
@@ -293,6 +322,7 @@ export class WechatOfficialService {
     if (!log) throw new BadRequestException('日志不存在');
     if (log.platformType !== 'official') throw new BadRequestException('不是服务号消息日志');
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
+    if (log.status === 'pending') return { success: true, message: '微信已受理，正在等待送达回执' };
     if (!log.openid || !log.templateId || !log.payload || typeof log.payload !== 'object') {
       throw new BadRequestException('原发送数据不完整，无法重试');
     }
@@ -303,20 +333,27 @@ export class WechatOfficialService {
         template_id: log.templateId,
         data: log.payload,
       };
-      if (log.page?.startsWith('http://') || log.page?.startsWith('https://')) requestBody.url = log.page;
+      await this.attachTemplateTarget(requestBody, log.page || undefined);
       const response = await this.postOfficialTemplateMessage(requestBody);
-      const success = Number(response?.errcode || 0) === 0;
+      const accepted = Number(response?.errcode || 0) === 0;
+      const wechatMsgId = accepted ? String(response?.msgid || '').trim() : '';
+      const success = accepted && !!wechatMsgId;
       await this.prisma.wechatMessageLog.update({
         where: { id: logId },
         data: {
-          status: success ? 'success' : 'failed',
-          errorCode: success ? null : String(response?.errcode ?? 'wechat_error'),
-          errorMessage: success ? null : String(response?.errmsg || '微信服务号发送失败'),
+          status: success ? 'pending' : 'failed',
+          wechatMsgId: success ? wechatMsgId : null,
+          errorCode: success ? null : accepted ? 'missing_msgid' : String(response?.errcode ?? 'wechat_error'),
+          errorMessage: success
+            ? null
+            : accepted
+              ? '微信接口未返回消息 ID，无法跟踪送达结果'
+              : String(response?.errmsg || '微信服务号发送失败'),
           sentAt: success ? new Date() : null,
         },
       });
       return success
-        ? { success: true, message: '服务号消息已重新发送' }
+        ? { success: true, message: '服务号消息已重新提交，等待微信送达回执' }
         : { success: false, message: '服务号消息重试失败', error: String(response?.errmsg || '微信服务号发送失败') };
     } catch (err: any) {
       await this.prisma.wechatMessageLog.update({
@@ -352,12 +389,55 @@ export class WechatOfficialService {
     return response;
   }
 
+  private async attachTemplateTarget(requestBody: Record<string, any>, page?: string) {
+    const target = String(page || '').trim();
+    if (!target) return;
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      requestBody.url = target;
+      return;
+    }
+    if (!target.startsWith('/')) return;
+
+    const saved = await this.prisma.config.findUnique({ where: { key: 'miniapp' } }).catch(() => null);
+    const value = (saved?.value || {}) as Record<string, any>;
+    const appid = String(value.appId || value.appid || this.config.get('WX_MINI_APPID') || '').trim();
+    if (!appid || appid.startsWith('your-')) {
+      this.logger.warn('服务号模板消息未配置小程序 AppID，已省略小程序跳转');
+      return;
+    }
+    requestBody.miniprogram = {
+      appid,
+      pagepath: target.replace(/^\/+/, ''),
+    };
+  }
+
   private normalizeTemplateFieldValue(templateKey: string, value: unknown) {
     const text = String(value ?? '').trim();
     if (/^thing\d+$/i.test(templateKey)) return text.slice(0, 20);
     if (/^character_string\d+$/i.test(templateKey)) return text.slice(0, 32);
-    if (/^time\d+$/i.test(templateKey)) return text.slice(0, 20);
+    if (/^time\d+$/i.test(templateKey)) return this.normalizeWechatTime(value).slice(0, 20);
     return text.slice(0, 200);
+  }
+
+  private normalizeWechatTime(value: unknown) {
+    const text = String(value ?? '').trim();
+    const date = value instanceof Date
+      ? value
+      : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)
+        ? new Date(text)
+        : null;
+    if (!date || Number.isNaN(date.getTime())) return text;
+    const parts = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+    const valueOf = (type: string) => parts.find((part) => part.type === type)?.value || '';
+    return `${valueOf('year')}-${valueOf('month')}-${valueOf('day')} ${valueOf('hour')}:${valueOf('minute')}`;
   }
 
   private resolveTemplateType(scene?: string | null): string {
@@ -369,6 +449,7 @@ export class WechatOfficialService {
     if (value.includes('circle') && value.includes('new')) return 'community_circle_new';
     if (value.includes('accepted') || value.includes('rider_status') || value.includes('reassigned')) return 'errand_accepted';
     if (value.includes('picked') || value.includes('pickup')) return 'errand_picked';
+    if (value.includes('arrived')) return 'errand_delivered';
     if (value.includes('delivered') || value.includes('delivery_status') || value.includes('auto_received')) return 'errand_delivered';
     if (
       value.includes('abnormal') || value.includes('cancel') || value.includes('delay') ||
@@ -454,6 +535,7 @@ export class WechatOfficialService {
     page?: string;
     payload: any;
     status: string;
+    wechatMsgId?: string;
     errorCode?: string;
     errorMessage?: string;
   }) {
@@ -467,9 +549,10 @@ export class WechatOfficialService {
         page: params.page || null,
         payload: params.payload,
         status: params.status,
+        wechatMsgId: params.wechatMsgId || null,
         errorCode: params.errorCode || null,
         errorMessage: params.errorMessage || null,
-        sentAt: params.status === 'success' ? new Date() : null,
+        sentAt: ['pending', 'success'].includes(params.status) ? new Date() : null,
       },
     }).catch((err: any) => {
       this.logger.warn(`写入服务号发送日志失败: ${err.message}`);
@@ -578,12 +661,36 @@ export class WechatOfficialService {
         await this.handleUnsubscribe(fromUser);
       } else if (event === 'scan') {
         await this.handleScan(fromUser, eventKey);
+      } else if (event === 'templatesendjobfinish') {
+        await this.handleTemplateSendJobFinish(msg);
       }
 
       return 'success';
     } catch (err: any) {
       this.logger.warn(`处理公众号回调失败: ${err.message}`);
       return 'error';
+    }
+  }
+
+  private async handleTemplateSendJobFinish(msg: Record<string, any>) {
+    const wechatMsgId = String(msg.MsgID || msg.MsgId || '').trim();
+    const callbackStatus = String(msg.Status || '').trim();
+    if (!wechatMsgId || !callbackStatus) {
+      this.logger.warn('服务号模板消息送达回执缺少 MsgID 或 Status');
+      return;
+    }
+
+    const success = callbackStatus.toLowerCase() === 'success';
+    const updated = await this.prisma.wechatMessageLog.updateMany({
+      where: { platformType: 'official', wechatMsgId },
+      data: {
+        status: success ? 'success' : 'failed',
+        errorCode: success ? null : 'delivery_failed',
+        errorMessage: success ? null : callbackStatus,
+      },
+    });
+    if (!updated.count) {
+      this.logger.warn(`未找到服务号模板消息回执对应日志: ${wechatMsgId}`);
     }
   }
 

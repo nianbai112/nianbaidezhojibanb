@@ -147,6 +147,18 @@ export class CampusMapCollectionController {
     });
   }
 
+  @Post("admin/campus-map/collections/:regionId/calibrations/sync")
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission("region:edit")
+  @ApiBearerAuth()
+  async synchronizeApprovedPlaceCalibrations(
+    @Param("regionId") regionId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const adminId = await this.assertAdminRegion(req, regionId);
+    return this.service.synchronizeApprovedPlaceCalibrations(regionId, adminId);
+  }
+
   @Patch("admin/campus-map/collections/:regionId/tasks/:taskId")
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission("region:edit")

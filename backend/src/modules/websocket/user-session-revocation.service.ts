@@ -13,7 +13,10 @@ export class UserSessionRevocationService {
   ) {}
 
   async revoke(userId: string) {
-    await this.redis.del(`refresh:${userId}`).catch(() => undefined);
+    await Promise.all([
+      this.redis.del(`refresh:${userId}`).catch(() => undefined),
+      this.redis.delPattern(`refresh:${userId}:*`).catch(() => undefined),
+    ]);
     const nativeSockets = this.wsNative.disconnectUser(userId);
     const socketIoSockets = this.messageGateway?.disconnectUser(userId) || 0;
     return { nativeSockets, socketIoSockets };

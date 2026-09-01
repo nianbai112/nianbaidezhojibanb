@@ -18,6 +18,7 @@ describe('AuthService phone login identity resolution', () => {
             : { id: 'phone-only-user', phone: '13800138000' }),
         ),
         create: jest.fn(),
+        update: jest.fn(),
       },
     };
     const service = new AuthService(
@@ -99,5 +100,31 @@ describe('AuthService phone login identity resolution', () => {
       { strictPartnerIdentity: true },
     )).rejects.toThrow('请先在小程序登录并绑定手机号');
     expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding a phone that belongs to another active user', async () => {
+    const { service, prisma } = createService();
+    jest.spyOn(service as any, 'resolveWxPhoneNumber').mockResolvedValue('13800138000');
+    prisma.user.findFirst.mockResolvedValueOnce({ id: 'other-user' });
+
+    await expect(
+      service.getPhoneNumber('wechat-user', { code: 'phone-code' }),
+    ).rejects.toThrow('该手机号已关联其他账号');
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('binds a phone when no other active user owns it', async () => {
+    const { service, prisma } = createService();
+    jest.spyOn(service as any, 'resolveWxPhoneNumber').mockResolvedValue('13800138000');
+    prisma.user.findFirst.mockResolvedValueOnce(null);
+    prisma.user.update.mockResolvedValueOnce({ id: 'wechat-user', phone: '13800138000' });
+
+    await expect(
+      service.getPhoneNumber('wechat-user', { code: 'phone-code' }),
+    ).resolves.toMatchObject({ phone: '13800138000' });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'wechat-user' },
+      data: { phone: '13800138000' },
+    });
   });
 });

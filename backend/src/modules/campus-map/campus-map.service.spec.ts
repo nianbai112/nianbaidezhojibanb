@@ -1351,6 +1351,101 @@ describe('CampusMapService', () => {
     });
   });
 
+  it('derives legacy phase from the visible construction status', () => {
+    const service = new CampusMapService(createPrisma() as any);
+    const built = (service as any).projectMutationData({
+      phase: 'future', constructionStatus: 'built', serviceStatus: 'open',
+    }, 'region-1', 'map-1', 22, '第一校门', 'admin-1');
+    const planned = (service as any).projectMutationData({
+      phase: 'phase1', constructionStatus: 'planned', serviceStatus: 'open',
+    }, 'region-1', 'map-1', 23, '教学楼A', 'admin-1');
+    expect(built.phase).toBe('phase1');
+    expect(planned.phase).toBe('future');
+  });
+
+  it('prepares a rolling batch from verified places and defers uncollected active places', async () => {
+    const prisma: any = makeTransactional();
+    prisma.campusMapProject.findMany.mockResolvedValue([
+      {
+        id: 'place-22', officialNumber: 22, officialName: '第一校门', constructionStatus: 'built',
+        serviceStatus: 'open', publishStatus: 'published', visibilityScope: 'phase1_active',
+        coordinateStatus: 'verified', longitude: 108.75, latitude: 30.97,
+        geometryStatus: 'verified_point', artworkFeatureKey: 'project-22', artworkAnchorX: null, artworkAnchorY: null,
+        searchable: true, navigable: true,
+      },
+      {
+        id: 'place-19', officialNumber: 19, officialName: '和沐书院', constructionStatus: 'built',
+        serviceStatus: 'open', publishStatus: 'published', visibilityScope: 'phase1_active',
+        coordinateStatus: 'uncollected', longitude: null, latitude: null,
+        geometryStatus: 'verified_point', artworkFeatureKey: 'project-19', artworkAnchorX: null, artworkAnchorY: null,
+      },
+      {
+        id: 'place-20', officialNumber: 20, officialName: '运动场', constructionStatus: 'built',
+        serviceStatus: 'open', publishStatus: 'review', visibilityScope: 'phase1_review',
+        coordinateStatus: 'uncollected', longitude: null, latitude: null,
+        geometryStatus: 'verified_point', artworkFeatureKey: 'project-20', artworkAnchorX: null, artworkAnchorY: null,
+      },
+      {
+        id: 'place-16', officialNumber: 16, officialName: '贤怡苑', constructionStatus: 'built',
+        serviceStatus: 'open', publishStatus: 'hidden', visibilityScope: 'future_reference',
+        coordinateStatus: 'uncollected', longitude: null, latitude: null,
+        geometryStatus: 'verified_point', artworkFeatureKey: 'project-16', artworkAnchorX: null, artworkAnchorY: null,
+      },
+      {
+        id: 'place-23', officialNumber: 23, officialName: '教学楼A', constructionStatus: 'planned',
+        serviceStatus: 'open', publishStatus: 'published', visibilityScope: 'phase1_active',
+        coordinateStatus: 'uncollected', longitude: null, latitude: null,
+        geometryStatus: 'verified_point', artworkFeatureKey: 'project-23', artworkAnchorX: null, artworkAnchorY: null,
+      },
+    ]);
+    prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1' });
+    prisma.campusMapDraft.findUnique.mockResolvedValue({
+      mapId: 'map-1', revision: 8,
+      manifest: {
+        layers: [{ inlineData: { features: [
+          { properties: { id: 'project-22', placeId: 'place-22', officialNumber: 22, publishStatus: 'review', visibilityScope: 'phase1_review' } },
+          { properties: { id: 'project-19', placeId: 'place-19', officialNumber: 19, publishStatus: 'published', visibilityScope: 'phase1_active' } },
+          { properties: { id: 'project-23', placeId: 'place-23', officialNumber: 23, publishStatus: 'published', visibilityScope: 'phase1_active' } },
+          { properties: { id: 'project-16', placeId: 'place-16', officialNumber: 16, publishStatus: 'published', visibilityScope: 'phase1_active' } },
+        ] } }],
+        placeCatalog: [{ id: 'place-22', officialNumber: 22, publishStatus: 'review', visibilityScope: 'phase1_review' }],
+      },
+    });
+    prisma.campusMapDraft.updateMany.mockResolvedValue({ count: 1 });
+    const service = new CampusMapService(prisma);
+
+    const result: any = await service.prepareVerifiedReleaseBatch('region-1', 'admin-1');
+
+    expect(result).toMatchObject({
+      includedCount: 1,
+      deferredCount: 2,
+      futureCount: 1,
+      hiddenCount: 1,
+      navigationDeferred: true,
+      navigationDeferredCount: 1,
+      draftRevision: 9,
+    });
+    expect(prisma.campusMapProject.updateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: { id: { in: ['place-22'] } },
+      data: expect.objectContaining({ publishStatus: 'published', visibilityScope: 'phase1_active', phase: 'phase1' }),
+    }));
+    expect(prisma.campusMapProject.updateMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: { id: { in: ['place-19', 'place-20'] } },
+      data: expect.objectContaining({ publishStatus: 'review', visibilityScope: 'phase1_review' }),
+    }));
+    expect(prisma.campusMapProject.updateMany).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      where: { id: { in: ['place-23'] } },
+      data: expect.objectContaining({ publishStatus: 'draft', visibilityScope: 'future_reference', phase: 'future' }),
+    }));
+    const synchronizedManifest = prisma.campusMapDraft.updateMany.mock.calls[0][0].data.manifest;
+    const stateByNumber = new Map(synchronizedManifest.layers[0].inlineData.features
+      .map((feature: any) => [feature.properties.officialNumber, feature.properties]));
+    expect(stateByNumber.get(22)).toMatchObject({ publishStatus: 'published', visibilityScope: 'phase1_active', navigable: false });
+    expect(stateByNumber.get(19)).toMatchObject({ publishStatus: 'review', visibilityScope: 'phase1_review', searchable: false, navigable: false });
+    expect(stateByNumber.get(23)).toMatchObject({ publishStatus: 'draft', visibilityScope: 'future_reference', searchable: false, navigable: false });
+    expect(stateByNumber.get(16)).toMatchObject({ publishStatus: 'hidden', searchable: false, navigable: false });
+  });
+
   it('updates existing entrance ids, creates new entrances, and deletes only omitted ids atomically', async () => {
     const prisma: any = makeTransactional();
     prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1' });
@@ -1477,6 +1572,7 @@ describe('CampusMapService', () => {
             properties: {
               id: 'collection-route-object-1', sourceObjectId: 'object-1',
               collectionSource: 'rider_app_approved',
+              public: true,
               sourceGeometryGcj02: {
                 type: 'LineString',
                 coordinates: [[106.5, 29.6], [106.5003, 29.6]],
@@ -1645,7 +1741,7 @@ describe('CampusMapService', () => {
     });
   });
 
-  it('does not compile an approved route that public walking navigation cannot use', () => {
+  it('does not compile an approved route until an admin explicitly makes it public', () => {
     const service = new CampusMapService(createPrisma() as any);
     const manifest = {
       layers: [{
@@ -1659,7 +1755,6 @@ describe('CampusMapService', () => {
               id: 'private-road',
               collectionSource: 'rider_app_approved',
               coordinateType: 'gcj02',
-              public: false,
             },
           }],
         },
@@ -1729,12 +1824,19 @@ describe('CampusMapService', () => {
       id: 'place-2', officialNumber: 2, longitude: 106.5002, latitude: 29.6,
     }];
 
-    expect(() => (service as any).assertIllustratedNavigationCalibration(onlyTwoAnchors, navigation))
+    const illustratedManifest = { baseSource: 'artist-svg', coordinateSystem: { type: 'svg' } };
+    expect(() => (service as any).assertIllustratedNavigationCalibration(illustratedManifest, onlyTwoAnchors, navigation))
       .toThrow('至少需要 3 个分散的已发布地点');
-    expect(() => (service as any).assertIllustratedNavigationCalibration([
+    expect(() => (service as any).assertIllustratedNavigationCalibration(illustratedManifest, [
       ...onlyTwoAnchors,
       { id: 'place-3', officialNumber: 3, longitude: 106.5001, latitude: 29.6002 },
     ], navigation)).not.toThrow();
+
+    expect(() => (service as any).assertIllustratedNavigationCalibration(
+      { baseSource: 'amap', coordinateSystem: { type: 'gcj02' } },
+      onlyTwoAnchors,
+      navigation,
+    )).not.toThrow();
   });
 
   it('accepts all 1-38 AI anchors and still requires a manual anchor outside the illustrated catalog', () => {
@@ -1756,13 +1858,14 @@ describe('CampusMapService', () => {
       officialNumber: 34, longitude: 106.5001, latitude: 29.6002,
     }];
 
-    expect(() => (service as any).assertIllustratedNavigationCalibration(places, navigation)).not.toThrow();
+    const illustratedManifest = { baseSource: 'artist-svg', coordinateSystem: { type: 'svg' } };
+    expect(() => (service as any).assertIllustratedNavigationCalibration(illustratedManifest, places, navigation)).not.toThrow();
     places[2].officialNumber = 99;
-    expect(() => (service as any).assertIllustratedNavigationCalibration(places, navigation))
+    expect(() => (service as any).assertIllustratedNavigationCalibration(illustratedManifest, places, navigation))
       .toThrow('至少需要 3 个分散的已发布地点');
     places[2].artworkAnchorX = 1200;
     places[2].artworkAnchorY = 900;
-    expect(() => (service as any).assertIllustratedNavigationCalibration(places, navigation)).not.toThrow();
+    expect(() => (service as any).assertIllustratedNavigationCalibration(illustratedManifest, places, navigation)).not.toThrow();
   });
 
   it('uses a shared server ACK anchor key to join adjacent rider segments deterministically', () => {
@@ -1860,7 +1963,7 @@ describe('CampusMapService', () => {
       type: 'Feature',
       geometry: { type: 'LineString', coordinates },
       properties: {
-        id, sourceObjectId: id, collectionSource: 'rider_app_approved', coordinateType: 'gcj02',
+        id, sourceObjectId: id, collectionSource: 'rider_app_approved', coordinateType: 'gcj02', public: true,
         sourceGeometryGcj02: { type: 'LineString', coordinates },
         routeEndpointAnchors: {
           version: 1,
@@ -1949,7 +2052,7 @@ describe('CampusMapService', () => {
     expect(prisma.campusMapCollectionTask.update).not.toHaveBeenCalled();
   });
 
-  it('syncs an explicitly bound map feature into the stable place archive', async () => {
+  it('syncs only geometry from an explicitly bound map feature into the stable place archive', async () => {
     const prisma: any = createPrisma();
     prisma.campusMapProject.findMany.mockResolvedValue([{ id: 'place-15', officialNumber: 15 }]);
     const service = new CampusMapService(prisma);
@@ -1974,10 +2077,16 @@ describe('CampusMapService', () => {
       data: expect.objectContaining({
         mapId: 'map-1', artworkFeatureKey: 'project-15',
         artworkAnchorX: 1150.91, artworkAnchorY: 1041.78,
-        geometryStatus: 'verified_point', publishStatus: 'review',
-        visibilityScope: 'phase1_active', searchable: true,
+        geometryStatus: 'verified_point', semanticType: 'canteen',
       }),
     });
+    const update = prisma.campusMapProject.update.mock.calls[0][0].data;
+    expect(update).not.toHaveProperty('constructionStatus');
+    expect(update).not.toHaveProperty('serviceStatus');
+    expect(update).not.toHaveProperty('publishStatus');
+    expect(update).not.toHaveProperty('visibilityScope');
+    expect(update).not.toHaveProperty('searchable');
+    expect(update).not.toHaveProperty('navigable');
   });
 
   it('never stores amap longitude and latitude as commissioned artwork anchors', async () => {
@@ -2003,9 +2112,10 @@ describe('CampusMapService', () => {
 
     expect(prisma.campusMapProject.update).toHaveBeenCalledWith({
       where: { id: 'place-15' },
-      data: expect.objectContaining({ mapId: 'map-1', publishStatus: 'review' }),
+      data: expect.objectContaining({ mapId: 'map-1' }),
     });
     const update = prisma.campusMapProject.update.mock.calls[0][0].data;
+    expect(update).not.toHaveProperty('publishStatus');
     expect(update).not.toHaveProperty('artworkAnchorX');
     expect(update).not.toHaveProperty('artworkAnchorY');
     expect(update).not.toHaveProperty('artworkGeometry');

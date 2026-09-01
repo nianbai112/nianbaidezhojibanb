@@ -769,6 +769,10 @@ export async function reviewCampusMapCollectionObject(
   return request.patch(`/admin/campus-map/collections/${regionId}/objects/${objectId}/review`, data)
 }
 
+export async function synchronizeApprovedCampusMapCalibrations(regionId: string | number) {
+  return request.post(`/admin/campus-map/collections/${regionId}/calibrations/sync`)
+}
+
 export async function updateCampusMapCollectionTask(regionId: string | number, taskId: string, data: any) {
   return request.patch(`/admin/campus-map/collections/${regionId}/tasks/${taskId}`, data)
 }
@@ -865,6 +869,12 @@ function campusMapCatalogParams(regionId?: string | number, mapId?: string) {
 
 export async function fetchCampusMapProjectCatalog(regionId?: string | number, mapId?: string) {
   return request.get('/admin/campus-map/project-catalog', {
+    params: campusMapCatalogParams(regionId, mapId),
+  })
+}
+
+export async function prepareCampusMapVerifiedReleaseBatch(regionId?: string | number, mapId?: string) {
+  return request.post('/admin/campus-map/project-catalog/release-batch/prepare', undefined, {
     params: campusMapCatalogParams(regionId, mapId),
   })
 }

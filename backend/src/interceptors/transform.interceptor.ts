@@ -95,6 +95,7 @@ const MINI_PROGRAM_PREFIXES = [
   "/config/ai",
   "/AnonymousIdentity/",
   "/rider-app/",
+  "/partner-app/",
   "/rider/",
   "/current/",
   "/riders/",

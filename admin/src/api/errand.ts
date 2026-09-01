@@ -73,8 +73,8 @@ export async function cancelErrandOrder(id: string, reason: string) {
   return request.put(`/admin/errand/orders/${id}/cancel`, { reason })
 }
 
-export async function handleErrandRiskEvent(id: string) {
-  return request.post(`/admin/errand/risk-events/${id}/handle`)
+export async function handleErrandRiskEvent(id: string, resolution: 'release' | 'reject', note: string) {
+  return request.post(`/admin/errand/risk-events/${id}/handle`, { resolution, note })
 }
 
 export async function fetchErrandFeeConfig(regionId?: string) {

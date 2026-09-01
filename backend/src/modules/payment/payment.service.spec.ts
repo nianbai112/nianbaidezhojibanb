@@ -36,7 +36,7 @@ const createService = () => {
     },
     riderSettlement: { update: jest.fn() },
     riderSettlementItem: {
-      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findMany: jest.fn().mockResolvedValue([]),
     },
@@ -1436,7 +1436,7 @@ describe('PaymentService manual refund completion', () => {
 
   it('creates an idempotent rider liability when a settled errand is refunded', async () => {
     const { service, tx } = createService();
-    tx.riderSettlementItem.findUnique.mockResolvedValue({
+    tx.riderSettlementItem.findFirst.mockResolvedValue({
       id: 'item-1',
       riderId: 'rider-1',
       payableAmount: 8,
@@ -1473,7 +1473,7 @@ describe('PaymentService manual refund completion', () => {
 
   it('keeps the user refund successful and opens a risk event when settlement reversal loses its race', async () => {
     const { service, tx } = createService();
-    tx.riderSettlementItem.findUnique.mockResolvedValue({
+    tx.riderSettlementItem.findFirst.mockResolvedValue({
       id: 'item-1',
       riderId: 'rider-1',
       payableAmount: 8,

@@ -556,14 +556,14 @@ export class SystemConfigService {
 
   getDefaultAppReviewMode() {
     return {
-      enabled: false,
+      enabled: true,
       hideDelivery: true,
-      hideMall: false,
+      hideMall: true,
       hideErrand: true,
       hideWallet: true,
       hideTopup: true,
       hideVirtualGoods: true,
-      hideShareInvite: false,
+      hideShareInvite: true,
       hideDating: true,
       placeholderText: '该功能即将上线',
     };
@@ -596,10 +596,10 @@ export class SystemConfigService {
     const value = this.normalizeAppReviewMode(dto);
     await this.prisma.config.upsert({
       where: { key: 'app_review_mode' },
-      update: { value, group: 'app_review', desc: '小程序审核模式配置', updatedBy: operatorId },
-      create: { key: 'app_review_mode', value, group: 'app_review', desc: '小程序审核模式配置', createdBy: operatorId, updatedBy: operatorId },
+      update: { value, group: 'app_capability', desc: '小程序全用户业务能力配置', updatedBy: operatorId },
+      create: { key: 'app_review_mode', value, group: 'app_capability', desc: '小程序全用户业务能力配置', createdBy: operatorId, updatedBy: operatorId },
     });
-    await this.logConfigChange(operatorId, 'UPDATE_APP_REVIEW_MODE', 'config', 'app_review_mode', 'config', {
+    await this.logConfigChange(operatorId, 'UPDATE_APP_CAPABILITIES', 'config', 'app_review_mode', 'config', {
       before, after: value,
     }, ip).catch(() => undefined);
     return { success: true, data: value };

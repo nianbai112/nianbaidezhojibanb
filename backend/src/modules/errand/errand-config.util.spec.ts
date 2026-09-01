@@ -5,6 +5,16 @@ import {
 } from './errand-config.util';
 
 describe('errand risk tag config', () => {
+  it('does not advertise advance-payment shopping when rider advances are disabled', () => {
+    const miniConfig = buildMiniErrandConfig(
+      { id: 'cfg-1', regionId: 'region-1', basePrice: 2, isOpen: true },
+      {},
+    );
+
+    expect(miniConfig.service_descriptions.custom_task).toContain('无需垫付');
+    expect(miniConfig.service_descriptions.custom_task).not.toContain('买东西');
+  });
+
   it('uses scene-specific default risk tags instead of one generic list', () => {
     const normalized = normalizeErrandExtendedConfig({}, 2);
 

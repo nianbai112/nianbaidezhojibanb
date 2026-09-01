@@ -37,7 +37,7 @@
       <el-button v-if="toolMode === 'route'" size="small" :icon="Finished" @click="$emit('finishRoute')">完成路线</el-button>
       <el-button v-if="toolMode === 'route'" size="small" text @click="$emit('clearDraftRoute')">清空草稿</el-button>
       <el-button v-if="toolMode === 'poi'" size="small" :icon="Plus" @click="$emit('addPoi')">标一个地点</el-button>
-      <el-button v-if="toolMode === 'calibration'" size="small" :icon="Plus" @click="$emit('addCalibration')">加校准点</el-button>
+      <el-button v-if="toolMode === 'calibration'" size="small" :icon="Plus" @click="$emit('addCalibration')">加手工补充点</el-button>
     </div>
   </div>
 </template>
@@ -87,8 +87,8 @@ const guides: Record<string, { title: string; message: string }> = {
     message: '沿道路或步行路线连续点击，完成后点“完成路线”。',
   },
   calibration: {
-    title: '校准真实位置',
-    message: '选择 CAD 上的明显点，再填写或用真实地图定位经纬度。',
+    title: '手工补充校准',
+    message: '默认复用已审核的骑手位置；仅在采集点不足时手工补充。',
   },
 }
 
@@ -98,7 +98,7 @@ const tools = [
   { value: 'poi', label: '点位' },
   { value: 'area', label: '建筑' },
   { value: 'route', label: '路线' },
-  { value: 'calibration', label: '校准' },
+  { value: 'calibration', label: '手工校准' },
 ]
 
 function emitToolMode(value: string | number | boolean) {

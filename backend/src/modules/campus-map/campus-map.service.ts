@@ -145,6 +145,173 @@ export class CampusMapService {
     }
   }
 
+  async prepareVerifiedReleaseBatch(regionId: string, adminId?: string) {
+    const normalizedRegionId = this.requireWriteRegionId(regionId);
+    return this.prisma.$transaction(async (tx) => {
+      const places = await tx.campusMapProject.findMany({
+        where: { regionId: normalizedRegionId },
+        select: {
+          id: true,
+          officialNumber: true,
+          officialName: true,
+          displayName: true,
+          phase: true,
+          constructionStatus: true,
+          serviceStatus: true,
+          unavailableMessage: true,
+          publishStatus: true,
+          visibilityScope: true,
+          coordinateStatus: true,
+          longitude: true,
+          latitude: true,
+          geometryStatus: true,
+          artworkFeatureKey: true,
+          artworkAnchorX: true,
+          artworkAnchorY: true,
+          searchable: true,
+          navigable: true,
+        },
+        orderBy: [{ officialNumber: 'asc' }],
+      });
+      const map = await tx.campusMap.findUnique({
+        where: { regionId: normalizedRegionId },
+        select: { id: true },
+      });
+      const draft = map?.id
+        ? await tx.campusMapDraft.findUnique({ where: { mapId: map.id } })
+        : null;
+      const sourceManifest = this.asRecord(draft?.manifest);
+      const hasPublicNavigationRoute = Boolean(sourceManifest && this.inlineFeatures(sourceManifest).some((feature: any) => {
+        const properties = this.asRecord(feature?.properties) || {};
+        return feature?.geometry?.type === 'LineString'
+          && String(properties.collectionSource || '') === 'rider_app_approved'
+          && properties.public === true
+          && properties.pedestrian !== false
+          && properties.closed !== true
+          && properties.construction !== true;
+      }));
+      const isFuture = (place: any) => ['under_construction', 'planned'].includes(String(place.constructionStatus || ''));
+      const isBound = (place: any) => Boolean(String(place.artworkFeatureKey || '').trim())
+        || (Number.isFinite(Number(place.artworkAnchorX)) && Number.isFinite(Number(place.artworkAnchorY)));
+      const hasAvailability = (place: any) => String(place.serviceStatus || '') === 'open'
+        || Boolean(String(place.unavailableMessage || '').trim());
+      const eligible = places.filter((place: any) => !isFuture(place)
+        && place.publishStatus !== 'hidden'
+        && place.coordinateStatus === 'verified'
+        && this.isValidPublicCoordinate(place.longitude, place.latitude)
+        && isBound(place)
+        && hasAvailability(place));
+      const eligibleIds = new Set(eligible.map((place: any) => String(place.id)));
+      const deferred = places.filter((place: any) => !isFuture(place)
+        && !eligibleIds.has(String(place.id))
+        && place.publishStatus !== 'hidden');
+      const future = places.filter((place: any) => isFuture(place) && place.publishStatus !== 'hidden');
+      const hidden = places.filter((place: any) => place.publishStatus === 'hidden');
+
+      if (eligible.length) {
+        await tx.campusMapProject.updateMany({
+          where: { id: { in: eligible.map((place: any) => place.id) } },
+          data: {
+            phase: 'phase1',
+            publishStatus: 'published',
+            visibilityScope: 'phase1_active',
+            ...(!hasPublicNavigationRoute ? { navigable: false } : {}),
+            updatedBy: adminId,
+          },
+        });
+      }
+      if (deferred.length) {
+        await tx.campusMapProject.updateMany({
+          where: { id: { in: deferred.map((place: any) => place.id) } },
+          data: {
+            phase: 'phase1',
+            publishStatus: 'review',
+            visibilityScope: 'phase1_review',
+            searchable: false,
+            navigable: false,
+            updatedBy: adminId,
+          },
+        });
+      }
+      if (future.length) {
+        await tx.campusMapProject.updateMany({
+          where: { id: { in: future.map((place: any) => place.id) } },
+          data: {
+            phase: 'future',
+            publishStatus: 'draft',
+            visibilityScope: 'future_reference',
+            searchable: false,
+            navigable: false,
+            updatedBy: adminId,
+          },
+        });
+      }
+
+      const releaseStateByPlaceId = new Map<string, Record<string, any>>();
+      const rememberReleaseState = (place: any, state: Record<string, any>) => {
+        releaseStateByPlaceId.set(String(place.id), state);
+        releaseStateByPlaceId.set(`official:${Number(place.officialNumber)}`, state);
+      };
+      eligible.forEach((place: any) => rememberReleaseState(place, {
+        phase: 'phase1', publishStatus: 'published', visibilityScope: 'phase1_active',
+        searchable: place.searchable === true,
+        navigable: hasPublicNavigationRoute && place.navigable === true,
+      }));
+      deferred.forEach((place: any) => rememberReleaseState(place, {
+        phase: 'phase1', publishStatus: 'review', visibilityScope: 'phase1_review',
+        searchable: false, navigable: false,
+      }));
+      future.forEach((place: any) => rememberReleaseState(place, {
+        phase: 'future', publishStatus: 'draft', visibilityScope: 'future_reference',
+        searchable: false, navigable: false,
+      }));
+      hidden.forEach((place: any) => rememberReleaseState(place, {
+        phase: isFuture(place) ? 'future' : 'phase1',
+        publishStatus: 'hidden',
+        visibilityScope: isFuture(place) ? 'future_reference' : String(place.visibilityScope || 'phase1_review'),
+        searchable: false,
+        navigable: false,
+      }));
+
+      let draftRevision: number | undefined;
+      if (map?.id && releaseStateByPlaceId.size) {
+        if (draft && sourceManifest) {
+          const manifest = JSON.parse(JSON.stringify(sourceManifest));
+          const changed = this.synchronizeReleaseBatchManifest(manifest, releaseStateByPlaceId);
+          if (changed) {
+            const updated = await tx.campusMapDraft.updateMany({
+              where: { mapId: map.id, revision: draft.revision },
+              data: { manifest, revision: { increment: 1 }, updatedBy: adminId },
+            });
+            if (updated.count !== 1) throw new ConflictException('草稿已被其他管理员更新，请重新加载');
+            draftRevision = Number(draft.revision) + 1;
+          } else {
+            draftRevision = Number(draft.revision);
+          }
+        }
+      }
+
+      const summary = (place: any) => ({
+        id: place.id,
+        officialNumber: place.officialNumber,
+        name: place.displayName || place.officialName,
+      });
+      return {
+        includedCount: eligible.length,
+        deferredCount: deferred.length,
+        futureCount: future.length,
+        hiddenCount: hidden.length,
+        navigationDeferred: !hasPublicNavigationRoute,
+        navigationDeferredCount: hasPublicNavigationRoute
+          ? 0
+          : eligible.filter((place: any) => place.navigable === true).length,
+        draftRevision,
+        included: eligible.map(summary),
+        deferred: deferred.map(summary),
+      };
+    });
+  }
+
   async deleteProject(officialNumber: number, regionId?: string) {
     const normalizedRegionId = this.requireWriteRegionId(regionId);
     const existing = await this.prisma.campusMapProject.findUnique({
@@ -723,7 +890,7 @@ export class CampusMapService {
       manifest.placeCatalog = await this.buildPublishedPlaceCatalog(tx, normalizedRegionId);
       manifest.navigation = this.compilePublishedNavigation(manifest, manifest.placeCatalog);
       this.assertPublishedNavigationClosure(manifest.placeCatalog, manifest.navigation);
-      this.assertIllustratedNavigationCalibration(manifest.placeCatalog, manifest.navigation);
+      this.assertIllustratedNavigationCalibration(manifest, manifest.placeCatalog, manifest.navigation);
       const stats = this.manifestStats(manifest);
       const projectErrors = validateCampusProjectCollection(this.inlineFeatures(manifest));
       if (projectErrors.length) {
@@ -836,7 +1003,7 @@ export class CampusMapService {
         this.publicPlaceSnapshots(manifest.placeCatalog),
         manifest.navigation,
       );
-      this.assertIllustratedNavigationCalibration(manifest.placeCatalog, manifest.navigation);
+      this.assertIllustratedNavigationCalibration(manifest, manifest.placeCatalog, manifest.navigation);
       const stats = this.manifestStats(manifest);
       const numbered = await tx.campusMap.update({
         where: { id: map.id },
@@ -1605,7 +1772,7 @@ export class CampusMapService {
       if (!riderApproved) return [];
       // 发布路网只承载当前允许公众步行的路线。受限、关闭或施工路线即使已经审核，
       // 也不能成为入口“已接入”的假证据，否则小程序路由引擎会在运行时过滤它。
-      if (properties.public === false
+      if (properties.public !== true
         || properties.pedestrian === false
         || properties.closed === true
         || properties.construction === true) return [];
@@ -1659,7 +1826,8 @@ export class CampusMapService {
         lengthM: pathLength(navigableCoordinates),
         coordinates: navigableCoordinates.map((point) => [point.longitude, point.latitude]),
         verificationStatus: 'verified',
-        public: properties.public !== false,
+        // 能进入这里的路线已经通过上面的显式公开筛选。
+        public: true,
         pedestrian: properties.pedestrian !== false,
         wheelchair: properties.wheelchair === true || properties.accessible === true,
         stairs: properties.stairs === true,
@@ -1808,7 +1976,8 @@ export class CampusMapService {
     }
   }
 
-  private assertIllustratedNavigationCalibration(places: any[], navigation?: any) {
+  private assertIllustratedNavigationCalibration(manifest: Record<string, any>, places: any[], navigation?: any) {
+    if (isNativeGcj02Manifest(manifest)) return;
     const graph = this.asRecord(this.asRecord(navigation)?.graph);
     const hasPublicRoute = (Array.isArray(graph?.edges) ? graph.edges : []).some((edge: any) =>
       edge?.public === true
@@ -1932,6 +2101,8 @@ export class CampusMapService {
     officialName: string,
     adminId?: string,
   ) {
+    const constructionStatus = VALID_CONSTRUCTION_STATUS.includes(dto.constructionStatus)
+      ? dto.constructionStatus : 'built';
     const serviceStatus = VALID_SERVICE_STATUS.includes(dto.serviceStatus) ? dto.serviceStatus : 'unknown';
     const unavailableMessage = String(dto.unavailableMessage || '').trim().slice(0, 120) || null;
     const publishStatus = VALID_PUBLISH_STATUS.includes(dto.publishStatus) ? dto.publishStatus : 'draft';
@@ -1948,9 +2119,9 @@ export class CampusMapService {
       officialName,
       displayName: String(dto.displayName || '').trim() || null,
       engineeringAlias: String(dto.engineeringAlias || '').trim(),
-      phase: dto.phase === 'future' ? 'future' : 'phase1',
-      constructionStatus: VALID_CONSTRUCTION_STATUS.includes(dto.constructionStatus)
-        ? dto.constructionStatus : 'built',
+      // phase 只保留为兼容字段，始终由管理员可见的建设状态派生，避免“已建但仍是 future”。
+      phase: ['under_construction', 'planned'].includes(constructionStatus) ? 'future' : 'phase1',
+      constructionStatus,
       serviceStatus,
       unavailableMessage,
       publishStatus,
@@ -2143,19 +2314,41 @@ export class CampusMapService {
           sourceConfidence: 'official_signage_and_cad',
         });
       }
-      if (VALID_CONSTRUCTION_STATUS.includes(properties.constructionStatus)) data.constructionStatus = properties.constructionStatus;
-      if (VALID_SERVICE_STATUS.includes(properties.serviceStatus)) data.serviceStatus = properties.serviceStatus;
-      if (VALID_PUBLISH_STATUS.includes(properties.publishStatus)) data.publishStatus = properties.publishStatus;
-      if (VALID_VISIBILITY_SCOPE.includes(properties.visibilityScope)) data.visibilityScope = properties.visibilityScope;
-      if (typeof properties.searchable === 'boolean') data.searchable = properties.searchable;
-      if (typeof properties.navigable === 'boolean') data.navigable = properties.navigable;
+      // 草稿图层只负责图形绑定，不再把旧的建设/开放/发布状态反向覆盖地点档案。
+      // 这些业务字段只能通过地点档案接口写入，发布检查也只读取该事实源。
       if (String(properties.semanticType || '').trim()) data.semanticType = String(properties.semanticType).trim();
-      if (properties.unavailableMessage !== undefined) data.unavailableMessage = String(properties.unavailableMessage || '').trim() || null;
-      if (properties.addressDescription !== undefined || properties.address !== undefined) {
-        data.addressDescription = String(properties.addressDescription || properties.address || '').trim() || null;
-      }
       await repository.update({ where: { id: binding.placeId }, data });
     }
+  }
+
+  private synchronizeReleaseBatchManifest(
+    manifest: Record<string, any>,
+    releaseStateByPlaceId: Map<string, Record<string, any>>,
+  ) {
+    let changed = false;
+    const synchronizeRecord = (value: any) => {
+      const record = this.asRecord(value);
+      if (!record) return;
+      const placeId = String(record.placeId || record.id || '').trim();
+      const officialNumber = Number(record.officialNumber);
+      const state = releaseStateByPlaceId.get(placeId)
+        || (Number.isInteger(officialNumber) ? releaseStateByPlaceId.get(`official:${officialNumber}`) : undefined);
+      if (!state) return;
+      Object.entries(state).forEach(([key, nextValue]) => {
+        if (record[key] === nextValue) return;
+        record[key] = nextValue;
+        changed = true;
+      });
+    };
+
+    (Array.isArray(manifest.layers) ? manifest.layers : []).forEach((layer: any) => {
+      const inlineData = this.asRecord(layer?.inlineData || layer?.data);
+      (Array.isArray(inlineData?.features) ? inlineData.features : []).forEach((feature: any) => {
+        synchronizeRecord(feature?.properties);
+      });
+    });
+    (Array.isArray(manifest.placeCatalog) ? manifest.placeCatalog : []).forEach(synchronizeRecord);
+    return changed;
   }
 
   private optionalSnapshotNumber(value: unknown) {

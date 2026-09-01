@@ -11,6 +11,11 @@ describe('FinanceAdminService withdrawal completion', () => {
       withdraw: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUnique: jest.fn().mockResolvedValue({ ...withdraw, status: 'SUCCESS' }) },
       wallet: { update: jest.fn().mockResolvedValue({ balance: 90 }) },
       walletTransaction: { create: jest.fn().mockResolvedValue({}) },
+      errandSettlementHold: { findFirst: jest.fn().mockResolvedValue(null) },
+      deliveryRiskEvent: { findFirst: jest.fn().mockResolvedValue(null) },
+      orderAppeal: { findMany: jest.fn().mockResolvedValue([]) },
+      errandOrder: { findFirst: jest.fn().mockResolvedValue(null) },
+      riderLiability: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const prisma: any = {
       withdraw: { findUnique: jest.fn().mockResolvedValue(withdraw) },
@@ -266,14 +271,11 @@ describe('FinanceAdminService merchant settlements', () => {
 });
 
 describe('FinanceAdminService rider settlement payout', () => {
-  it('uses actual delivery time so delivered takeaway orders do not wait for buyer receipt to settle', async () => {
+  it('does not treat rider-delivered orders as settlement-ready before buyer receipt', async () => {
     const deliveredAt = new Date('2026-07-17T10:00:00.000Z');
     const prisma: any = {
       errandOrder: { findMany: jest.fn().mockResolvedValue([]) },
-      order: { findMany: jest.fn().mockResolvedValue([{
-        id: 'order-1', orderNo: 'ORD-1', riderId: 'rider-1', deliverTime: deliveredAt, completeTime: null,
-        freightAmount: 3, originalFreightAmount: 3, merchant: { regionId: 'region-1', name: '测试商家' }, user: { nickname: '用户' },
-      }]) },
+      order: { findMany: jest.fn().mockResolvedValue([]) },
       subsidyLedger: { groupBy: jest.fn().mockResolvedValue([]) },
     };
     const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
@@ -285,10 +287,35 @@ describe('FinanceAdminService rider settlement payout', () => {
     expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         refundStatus: { notIn: ['refunding', 'refunded'] },
-        OR: expect.arrayContaining([{ deliverTime: { gte: expect.any(Date), lte: expect.any(Date) } }]),
+        OR: expect.arrayContaining([
+          expect.objectContaining({ status: 'COMPLETED', completeTime: { gte: expect.any(Date), lte: expect.any(Date) } }),
+          expect.objectContaining({ status: 'RECEIVED', receiveTime: { gte: expect.any(Date), lte: expect.any(Date) } }),
+        ]),
       }),
     }));
-    expect(earnings).toEqual([expect.objectContaining({ orderId: 'order-1', completeTime: deliveredAt, amount: 3 })]);
+    expect(JSON.stringify(prisma.order.findMany.mock.calls[0][0].where)).not.toContain('DELIVERED');
+    expect(earnings).toEqual([]);
+  });
+
+  it('keeps explicit historical RECEIVED orders readable by their receipt time', async () => {
+    const receivedAt = new Date('2026-07-17T10:00:00.000Z');
+    const prisma: any = {
+      errandOrder: { findMany: jest.fn().mockResolvedValue([]) },
+      order: { findMany: jest.fn().mockResolvedValue([{
+        id: 'order-received', orderNo: 'ORD-RECEIVED', riderId: 'rider-1',
+        status: 'RECEIVED', receiveTime: receivedAt, deliverTime: null, completeTime: null,
+        freightAmount: 3, originalFreightAmount: 3,
+        merchant: { regionId: 'region-1', name: '历史商家' }, user: { nickname: '用户' },
+      }]) },
+      subsidyLedger: { groupBy: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
+
+    await expect((service as any).getCompletedRiderEarnings({
+      start: new Date('2026-07-17T00:00:00.000Z'), end: new Date('2026-07-17T23:59:59.999Z'), includeCovered: true,
+    })).resolves.toEqual([
+      expect.objectContaining({ orderId: 'order-received', completeTime: receivedAt, amount: 3 }),
+    ]);
   });
 
   it('does not turn a goods coupon into rider delivery pay when no rider subsidy ledger exists', async () => {
@@ -383,6 +410,8 @@ describe('FinanceAdminService rider settlement payout', () => {
       riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       orderAppeal: { findMany: jest.fn().mockResolvedValue([{ orderId: 'appealed-order' }]) },
       deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([{ orderId: 'risky-order' }]) },
+      errandSettlementHold: { findMany: jest.fn().mockResolvedValue([]) },
+      subsidyLedger: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
@@ -406,6 +435,12 @@ describe('FinanceAdminService rider settlement payout', () => {
         riderId: 'rider-1', deliveryFeeAmount: 6, tipAmount: 2, payableAmount: 8,
       }),
     });
+    expect(prisma.riderSettlementItem.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ settlement: { status: { not: 'REJECTED' } } }),
+    }));
+    expect(prisma.riderSettlement.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: { not: 'REJECTED' } }),
+    }));
   });
 
   it('adds idempotent review, timeout and night rules to the order settlement amounts', async () => {
@@ -420,6 +455,8 @@ describe('FinanceAdminService rider settlement payout', () => {
       riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       orderAppeal: { findMany: jest.fn().mockResolvedValue([]) },
       deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
+      errandSettlementHold: { findMany: jest.fn().mockResolvedValue([]) },
+      subsidyLedger: { findMany: jest.fn().mockResolvedValue([]) },
       errandRewardPunish: { findMany: jest.fn().mockResolvedValue([{
         regionId: 'region-1', timeoutMinutes: 30, timeoutPenalty: 1,
         goodReviewReward: 2, badReviewPenalty: 4, nightReward: 3,
@@ -467,7 +504,7 @@ describe('FinanceAdminService rider settlement payout', () => {
       riderLiability: { upsert: jest.fn().mockResolvedValue({ id: 'liability-1' }) },
     };
     const prisma: any = {
-      riderSettlementItem: { findUnique: jest.fn().mockResolvedValue({
+      riderSettlementItem: { findFirst: jest.fn().mockResolvedValue({
         id: 'item-1', riderId: 'rider-1', payableAmount: 8, reversalAmount: 0, status: 'included',
         settlement: { id: 'settlement-1', status: 'PAID' },
       }) },
@@ -487,6 +524,7 @@ describe('FinanceAdminService rider settlement payout', () => {
     const settlement = { id: 'rider-settlement-1', riderId: 'rider-1', settlementNo: 'RS-1', status: 'CONFIRMED', payableAmount: 12.5 };
     const tx: any = {
       riderSettlement: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       riderLiability: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       wallet: { upsert: jest.fn().mockResolvedValue({ balance: 32.5 }) },
       walletTransaction: { create: jest.fn().mockResolvedValue({}) },
@@ -515,6 +553,7 @@ describe('FinanceAdminService rider settlement payout', () => {
     const settlement = { id: 'rider-settlement-2', riderId: 'rider-1', settlementNo: 'RS-2', status: 'CONFIRMED', payableAmount: 12.5 };
     const tx: any = {
       riderSettlement: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       riderLiability: {
         findMany: jest.fn().mockResolvedValue([{ id: 'liability-1', amount: 5, recoveredAmount: 1 }]),
         update: jest.fn().mockResolvedValue({}),
@@ -540,6 +579,30 @@ describe('FinanceAdminService rider settlement payout', () => {
     }));
     expect(tx.riderLiability.update).toHaveBeenCalledWith({
       where: { id: 'liability-1' }, data: { recoveredAmount: 5, status: 'recovered' },
+    });
+  });
+
+  it('rejects a settlement atomically and unlocks its orders and rider subsidies for regeneration', async () => {
+    const settlement = { id: 'settlement-1', riderId: 'rider-1', regionId: 'region-1', status: 'CONFIRMED' };
+    const tx: any = {
+      riderSettlement: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      subsidyLedger: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const prisma: any = {
+      riderSettlement: { findUnique: jest.fn().mockResolvedValue(settlement) },
+      $transaction: jest.fn((fn: any) => fn(tx)),
+      adminOperationLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
+
+    await expect(service.rejectRiderSettlement('settlement-1', { reason: '金额需要重新核算' }, 'admin-1'))
+      .resolves.toEqual(expect.objectContaining({ success: true }));
+    expect(tx.riderSettlement.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'REJECTED', periodKey: null }),
+    }));
+    expect(tx.subsidyLedger.updateMany).toHaveBeenCalledWith({
+      where: { settlementId: 'settlement-1', receiverType: 'rider', status: 'locked' },
+      data: { settlementId: null, status: 'pending' },
     });
   });
 

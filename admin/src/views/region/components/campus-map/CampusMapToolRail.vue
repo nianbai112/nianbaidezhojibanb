@@ -32,6 +32,7 @@ const props = defineProps<{
   hasVectorBaseMap: boolean
   hasVisualBaseMap: boolean
   calibrationPointCount: number
+  calibrationRequired: boolean
   featureCount: number
   canPublish: boolean
 }>()
@@ -49,12 +50,13 @@ const steps = computed(() => campusMapWorkflowSteps({
   hasVectorBaseMap: props.hasVectorBaseMap,
   featureCount: props.featureCount,
   calibrationPointCount: props.calibrationPointCount,
+  calibrationRequired: props.calibrationRequired,
   canPublish: props.canPublish,
 }))
 
 const stageText = computed(() => {
   if (!props.hasVisualBaseMap && props.featureCount === 0) return '先准备底图'
-  if (props.calibrationPointCount < 3) return '在画师图上管理地点，按需补真实坐标'
+  if (props.calibrationRequired && props.calibrationPointCount < 3) return '在画师图上管理地点，按需补真实坐标'
   if (!props.canPublish) return '补齐名称和关键点位'
   return '检查通过，准备发布'
 })

@@ -1,5 +1,42 @@
 import { publicPlaceMedia } from './campusProjectModel.mjs'
 
+export const APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE = 'rider_app_place_verification_approved'
+
+export function isApprovedPlaceVerificationCoordinate(place = {}) {
+  const longitude = Number(place?.longitude)
+  const latitude = Number(place?.latitude)
+  return String(place?.coordinateStatus || '') === 'verified'
+    && String(place?.coordinateSource || '') === APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE
+    && Number.isFinite(longitude)
+    && Number.isFinite(latitude)
+    && longitude >= 70
+    && longitude <= 140
+    && latitude > 0
+    && latitude <= 60
+}
+
+export function calibrationEvidenceMetadata(point = {}) {
+  const metadata = {}
+  for (const key of [
+    'source',
+    'sourcePlaceId',
+    'sourceCollectionObjectId',
+    'collectedAt',
+    'reviewedAt',
+  ]) {
+    const value = String(point?.[key] || '').trim()
+    if (value) metadata[key] = value
+  }
+  const accuracy = Number(point?.accuracy)
+  if (Number.isFinite(accuracy) && accuracy > 0) metadata.accuracy = accuracy
+  return metadata
+}
+
+export function isRiderCollectedCalibrationPoint(point = {}) {
+  return String(point?.source || '') === 'approved_place_verification'
+    || String(point?.id || '').startsWith('place-calibration-')
+}
+
 export function accuracyBand(accuracy) {
   const value = Number(accuracy)
   if (Number.isFinite(value) && value <= 8) return { key: 'good', label: '良好', color: '#16a34a' }

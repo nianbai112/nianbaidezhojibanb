@@ -893,9 +893,14 @@ describe("CampusMapCollectionService", () => {
       coverUrl: null,
       media: [],
     };
+    const updatedPlace = {
+      ...place,
+      coordinateSource: "rider_app_place_verification_approved",
+      coordinateCollectedAt: new Date("2026-08-26T01:00:12.000Z"),
+    };
     prisma.campusMapProject.findFirst.mockResolvedValue(place);
-    prisma.campusMapProject.findUnique.mockResolvedValue(place);
-    prisma.campusMapProject.update.mockResolvedValue(place);
+    prisma.campusMapProject.findUnique.mockResolvedValue(updatedPlace);
+    prisma.campusMapProject.update.mockResolvedValue(updatedPlace);
     prisma.campusMapPlaceEntrance.findFirst.mockResolvedValue(null);
     prisma.campusMapPlaceEntrance.updateMany.mockResolvedValue({ count: 0 });
     prisma.campusMapPlaceEntrance.create.mockResolvedValue({ id: "entrance-primary-1" });
@@ -942,13 +947,21 @@ describe("CampusMapCollectionService", () => {
     expect(manifest.layers[0].inlineData.features[0].properties).toMatchObject({
       longitude: 106.5,
       latitude: 29.6,
-      coordinateSource: "rider_app_approved",
+      coordinateSource: "rider_app_place_verification_approved",
     });
+    expect(manifest.placeCatalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "place-library",
+        coordinateSource: "rider_app_place_verification_approved",
+        coordinateAccuracy: 3.2,
+      }),
+    ]));
     expect(prisma.campusMapProject.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: "place-library" },
       data: expect.objectContaining({
         longitude: 106.5,
         latitude: 29.6,
+        coordinateSource: "rider_app_place_verification_approved",
         coordinateCollectedAt: new Date("2026-08-26T01:00:12.000Z"),
       }),
     }));
@@ -963,6 +976,112 @@ describe("CampusMapCollectionService", () => {
       }),
     });
     expect(prisma.campusMapPlaceMedia.upsert).not.toHaveBeenCalled();
+  });
+
+  it("restores legacy approved rider locations through the explicit calibration sync", async () => {
+    const prisma = makeTransactional();
+    const object: any = {
+      ...makePlaceVerificationEvidence("place-library"),
+      id: "object-legacy",
+      reviewStatus: "approved",
+      reviewedAt: new Date("2026-08-26T02:00:00.000Z"),
+      applyResult: { applyFields: ["media"], promotedAttachmentIds: ["photo-facade"] },
+      session: {
+        ...makePlaceVerificationEvidence("place-library").session,
+        task: { id: "task-1", taskType: "place_verification", status: "completed" },
+      },
+    };
+    prisma.campusMapCollectionObject.findMany.mockResolvedValue([object]);
+    const service = new CampusMapCollectionService(prisma as any);
+    const applySpy = jest.spyOn(service as any, "applyApprovedObject").mockResolvedValue({
+      applied: true,
+      draftId: "draft-1",
+      draftRevision: 9,
+      fingerprint: "sync-fingerprint",
+      applyFields: ["location"],
+      calibration: {
+        applied: true,
+        pointCount: 3,
+        remainingPointCount: 0,
+        ready: true,
+      },
+    });
+
+    const result: any = await service.synchronizeApprovedPlaceCalibrations(
+      "region-1",
+      "admin-1",
+    );
+
+    expect(applySpy).toHaveBeenCalledWith(
+      prisma,
+      "region-1",
+      object,
+      {
+        targetPlaceId: "place-library",
+        applyFields: ["location"],
+        promoteAttachmentIds: [],
+      },
+      "admin-1",
+      new Date("2026-08-26T02:00:00.000Z"),
+      { force: true },
+    );
+    expect(prisma.campusMapCollectionObject.update).toHaveBeenCalledWith({
+      where: { id: "object-legacy" },
+      data: expect.objectContaining({
+        appliedDraftId: "draft-1",
+        appliedDraftRevision: 9,
+        applyFingerprint: "sync-fingerprint",
+        applyResult: expect.objectContaining({
+          applyFields: ["location"],
+          calibration: expect.objectContaining({ ready: true }),
+          synchronizedCalibrationAt: expect.any(String),
+        }),
+      }),
+    });
+    expect(result).toMatchObject({
+      scannedObjectCount: 1,
+      candidatePlaceCount: 1,
+      synchronizedPlaceCount: 1,
+      calibrationPointCount: 3,
+      remainingPointCount: 0,
+      ready: true,
+      draftRevision: 9,
+    });
+  });
+
+  it("reports native GCJ-02 maps as ready without inventing three calibration points", async () => {
+    const prisma = makeTransactional();
+    const object: any = {
+      ...makePlaceVerificationEvidence("place-gate"),
+      id: "object-native",
+      reviewStatus: "approved",
+      reviewedAt: new Date("2026-08-27T02:00:00.000Z"),
+      applyResult: {},
+      session: {
+        ...makePlaceVerificationEvidence("place-gate").session,
+        task: { id: "task-1", taskType: "place_verification", status: "completed" },
+      },
+    };
+    prisma.campusMapCollectionObject.findMany.mockResolvedValue([object]);
+    const service = new CampusMapCollectionService(prisma as any);
+    jest.spyOn(service as any, "applyApprovedObject").mockResolvedValue({
+      applied: true,
+      draftId: "draft-1",
+      draftRevision: 10,
+      fingerprint: "native-sync",
+      calibration: { applied: false, reason: "native_gcj02_not_required" },
+    });
+
+    const result: any = await service.synchronizeApprovedPlaceCalibrations("region-1", "admin-1");
+
+    expect(result).toMatchObject({
+      synchronizedPlaceCount: 1,
+      calibrationPointCount: 0,
+      requiredPointCount: 0,
+      remainingPointCount: 0,
+      ready: true,
+      calibrationNotRequired: true,
+    });
   });
 
   it("enables image positioning when the third approved place creates non-collinear calibration", async () => {
@@ -1231,6 +1350,7 @@ describe("CampusMapCollectionService", () => {
         id: "collection-route-road-object-1",
         sourceObjectId: "road-object-1",
         collectionSource: "rider_app_approved",
+        public: false,
         quality: {
           acceptedPointCount: 5,
           medianAccuracy: 6,

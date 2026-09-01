@@ -33,7 +33,16 @@ describe("RiderAppService", () => {
       region: { findUnique: jest.fn().mockResolvedValue({ name: "测试区域" }) },
       errandOrder: {
         count: jest.fn().mockResolvedValue(1),
-        findMany: jest.fn().mockResolvedValue([{ id: "order-1" }]),
+        findMany: jest.fn().mockResolvedValue([{
+          id: "order-1",
+          status: "in_progress",
+          refundStatus: "none",
+          deliverTime: null,
+          completeTime: null,
+          cancelTime: null,
+          updatedAt: new Date(),
+        }]),
+        findFirst: jest.fn().mockResolvedValue({ id: "order-1" }),
         findUnique: jest.fn().mockResolvedValue({
           id: "order-1",
           riderId: "user-1",
@@ -43,6 +52,7 @@ describe("RiderAppService", () => {
       order: {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn().mockResolvedValue(null),
       },
       riderLocationTrack: {
@@ -69,6 +79,7 @@ describe("RiderAppService", () => {
         aggregate: jest.fn().mockResolvedValue({ _sum: { payableAmount: 0 } }),
       },
       riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
+      errandSettlementHold: { findMany: jest.fn().mockResolvedValue([]) },
       withdraw: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -120,7 +131,12 @@ describe("RiderAppService", () => {
         .mockResolvedValue({ success: true, updated: true }),
       getRiderInfo: jest.fn().mockResolvedValue({ id: "rider-1" }),
       updateRiderInfo: jest.fn().mockResolvedValue({ id: "rider-1" }),
-      getOrderStats: jest.fn().mockResolvedValue({ today: 1 }),
+      getOrderStats: jest.fn().mockResolvedValue({
+        total: 9,
+        today: 3,
+        total_orders: 9,
+        today_orders: 3,
+      }),
       confirmReceiptByCode: jest.fn().mockResolvedValue({
         success: true,
         data: { id: "order-1", status: "completed" },
@@ -170,6 +186,8 @@ describe("RiderAppService", () => {
         region_name: "测试区域",
         rider_type: "official",
         is_official: true,
+        total_orders: 9,
+        today_orders: 3,
       },
     });
   });
@@ -203,6 +221,8 @@ describe("RiderAppService", () => {
       "rider-app",
       {
         preferApprovedOfficialRider: true,
+        strictPartnerIdentity: true,
+        sessionScope: "partner_app",
       },
     );
   });
@@ -374,6 +394,7 @@ describe("RiderAppService", () => {
       {
         preferApprovedOfficialRider: true,
         strictPartnerIdentity: true,
+        sessionScope: "partner_app",
       },
     );
   });
@@ -429,6 +450,44 @@ describe("RiderAppService", () => {
       lat: 30,
       lng: 120,
     });
+  });
+
+  it("never returns a receipt code from any dedicated rider App order response", async () => {
+    const { service, errand } = createService();
+    const leaked = {
+      success: true,
+      data: {
+        receipt_code: "123456",
+        receiptCode: "123456",
+        nested: { deliveryReceiptCode: "654321" },
+      },
+      orders: [{ id: "order-1", delivery_receipt_code: "654321" }],
+    };
+    errand.getDeliveryOrdersList.mockResolvedValue(leaked);
+    errand.getRiderDeliveryOrderDetail.mockResolvedValue(leaked);
+    errand.acceptOrder.mockResolvedValue(leaked);
+    errand.updateRiderStatus.mockResolvedValue(leaked);
+    errand.confirmReceiptByCode.mockResolvedValue(leaked);
+
+    const responses = [
+      await service.getOrders("user-1", {}),
+      await service.getOrderDetail("user-1", "order-1"),
+      await service.acceptOrder("user-1", "order-1"),
+      await service.updateOrderStatus("user-1", "order-1", {
+        status: "arrived",
+      }),
+      await service.confirmOrderByCode("user-1", "order-1", "123456"),
+    ];
+
+    for (const response of responses) {
+      const serialized = JSON.stringify(response);
+      expect(serialized).not.toContain("receipt_code");
+      expect(serialized).not.toContain("receiptCode");
+      expect(serialized).not.toContain("delivery_receipt_code");
+      expect(serialized).not.toContain("deliveryReceiptCode");
+      expect(serialized).not.toContain("123456");
+      expect(serialized).not.toContain("654321");
+    }
   });
 
   it("rejects part-time riders before an App order operation reaches the delivery service", async () => {
@@ -496,12 +555,70 @@ describe("RiderAppService", () => {
       "user-1",
       { lat: 30.1, lng: 120.1 },
       new Date(recordedAt),
+      { orderId: "order-1", orderType: "errand" },
     );
   });
 
-  it("accepts cached points for a recently completed assigned order", async () => {
-    const { service, prisma } = createService();
-    const recordedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  it("rechecks a bound shop order before refreshing its live location", async () => {
+    const { service, prisma, errand } = createService();
+    const recordedAt = new Date().toISOString();
+    prisma.errandOrder.findMany.mockResolvedValue([]);
+    prisma.order.findMany.mockResolvedValue([{
+      id: "shop-1",
+      status: "SHIPPED",
+      refundStatus: "none",
+      deliverTime: null,
+      receiveTime: null,
+      completeTime: null,
+      cancelTime: null,
+      updatedAt: new Date(),
+    }]);
+    prisma.order.findFirst.mockResolvedValue({ id: "shop-1" });
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "shop-point",
+        order_id: "shop-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: recordedAt,
+      }],
+    })).resolves.toMatchObject({
+      success: true,
+      accepted_client_ids: ["shop-point"],
+      live_location_updated: true,
+    });
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "shop-1",
+        riderId: "user-1",
+        status: "SHIPPED",
+        refundStatus: { notIn: ["refunding", "refunded"] },
+      },
+      select: { id: true },
+    });
+    expect(errand.updateLocationIfNewer).toHaveBeenCalledWith(
+      "user-1",
+      { lat: 30, lng: 120 },
+      new Date(recordedAt),
+      { orderId: "shop-1", orderType: "shop" },
+    );
+  });
+
+  it("stores a pre-completion cached point without refreshing the live rider location", async () => {
+    const { service, prisma, errand } = createService();
+    const completeTime = new Date(Date.now() - 4 * 60 * 1000);
+    const recordedAt = new Date(
+      completeTime.getTime() - 60 * 1000,
+    ).toISOString();
+    prisma.errandOrder.findMany.mockResolvedValue([{
+      id: "order-1",
+      status: "completed",
+      completeTime,
+      cancelTime: null,
+      updatedAt: completeTime,
+    }]);
 
     await expect(
       service.updateLocationBatch("user-1", {
@@ -518,12 +635,207 @@ describe("RiderAppService", () => {
     ).resolves.toMatchObject({
       success: true,
       accepted_client_ids: ["completed-point"],
+      live_location_updated: false,
     });
 
     expect(prisma.errandOrder.findMany).toHaveBeenCalledWith({
-      where: { riderId: "user-1", updatedAt: { gte: expect.any(Date) } },
-      select: { id: true },
+      where: {
+        riderId: "user-1",
+        OR: [
+          {
+            status: { in: ["accepted", "in_progress"] },
+            refundStatus: { notIn: ["refunding", "refunded"] },
+          },
+          { updatedAt: { gte: expect.any(Date) } },
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        refundStatus: true,
+        deliverTime: true,
+        completeTime: true,
+        cancelTime: true,
+        updatedAt: true,
+      },
     });
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("treats arrived as live-location terminal and only stores points captured before delivery", async () => {
+    const { service, prisma, errand } = createService();
+    const deliverTime = new Date(Date.now() - 2 * 60 * 1000);
+    prisma.errandOrder.findMany.mockResolvedValue([{
+      id: "order-1",
+      status: "arrived",
+      refundStatus: "none",
+      deliverTime,
+      completeTime: null,
+      cancelTime: null,
+      updatedAt: deliverTime,
+    }]);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "pre-arrival-point",
+        order_id: "order-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date(deliverTime.getTime() - 1000).toISOString(),
+      }],
+    })).resolves.toMatchObject({
+      success: true,
+      accepted_client_ids: ["pre-arrival-point"],
+      live_location_updated: false,
+    });
+
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("rejects location uploads for refunding orders even if their delivery status still looks active", async () => {
+    const { service, prisma, errand } = createService();
+    prisma.errandOrder.findMany.mockResolvedValue([{
+      id: "order-1",
+      status: "in_progress",
+      refundStatus: "refunding",
+      deliverTime: null,
+      completeTime: null,
+      cancelTime: null,
+      updatedAt: new Date(),
+    }]);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "refunding-point",
+        order_id: "order-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date().toISOString(),
+      }],
+    })).rejects.toThrow("当前订单状态不允许补传定位");
+
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("rejects an order-bound point recorded after the order terminal time", async () => {
+    const { service, prisma, errand } = createService();
+    const completeTime = new Date(Date.now() - 5 * 60 * 1000);
+    prisma.errandOrder.findMany.mockResolvedValue([{
+      id: "order-1",
+      status: "completed",
+      completeTime,
+      cancelTime: null,
+      updatedAt: completeTime,
+    }]);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "post-completion-point",
+        order_id: "order-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date(completeTime.getTime() + 1000).toISOString(),
+      }],
+    })).rejects.toThrow("终态后的定位点");
+
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("rejects an errand point captured after arrival even when confirmation happened later", async () => {
+    const { service, prisma, errand } = createService();
+    const deliverTime = new Date(Date.now() - 5 * 60 * 1000);
+    const completeTime = new Date(Date.now() - 60 * 1000);
+    prisma.errandOrder.findMany.mockResolvedValue([{
+      id: "order-1",
+      status: "completed",
+      refundStatus: "none",
+      deliverTime,
+      completeTime,
+      cancelTime: null,
+      updatedAt: completeTime,
+    }]);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "post-arrival-point",
+        order_id: "order-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date(deliverTime.getTime() + 1000).toISOString(),
+      }],
+    })).rejects.toThrow("终态后的定位点");
+
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a shop point captured after delivery when the buyer later received it", async () => {
+    const { service, prisma, errand } = createService();
+    const deliverTime = new Date(Date.now() - 5 * 60 * 1000);
+    const receiveTime = new Date(Date.now() - 60 * 1000);
+    prisma.errandOrder.findMany.mockResolvedValue([]);
+    prisma.order.findMany.mockResolvedValue([{
+      id: "shop-1",
+      status: "RECEIVED",
+      refundStatus: "none",
+      deliverTime,
+      receiveTime,
+      completeTime: null,
+      cancelTime: null,
+      updatedAt: receiveTime,
+    }]);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "shop-post-arrival-point",
+        order_id: "shop-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date(deliverTime.getTime() + 1000).toISOString(),
+      }],
+    })).rejects.toThrow("终态后的定位点");
+
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("rejects every unbound location point even when an active order exists", async () => {
+    const { service, prisma, errand } = createService();
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "unbound-point",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date().toISOString(),
+      }],
+    })).rejects.toThrow("必须绑定当前配送订单");
+
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh live location when the order becomes non-active before the final write", async () => {
+    const { service, prisma, errand } = createService();
+    prisma.errandOrder.findFirst.mockResolvedValueOnce(null);
+
+    await expect(service.updateLocationBatch("user-1", {
+      points: [{
+        client_id: "raced-point",
+        order_id: "order-1",
+        lat: 30,
+        lng: 120,
+        recorded_at: new Date().toISOString(),
+      }],
+    })).resolves.toMatchObject({
+      success: true,
+      accepted_client_ids: ["raced-point"],
+      live_location_updated: false,
+    });
+
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
   });
 
   it("rejects oversized, stale, invalid, or unassigned trajectory batches", async () => {
@@ -716,8 +1028,34 @@ describe("RiderAppService", () => {
       today_income: 12,
       month_income: 12,
       pending_settlement: 42, // 12 未结算 + 30 已结算未打款
+      held_settlement: 0,
       withdrawing: 8,
     });
+    expect(prisma.riderSettlementItem.findMany).toHaveBeenCalledWith({
+      where: {
+        riderId: "user-1",
+        settlement: { status: { not: "REJECTED" } },
+      },
+      select: { orderType: true, orderId: true },
+    });
+    for (const [args] of prisma.order.findMany.mock.calls) {
+      const whereText = JSON.stringify(args.where);
+      expect(whereText).toContain("COMPLETED");
+      expect(whereText).toContain("RECEIVED");
+      expect(whereText).not.toContain("DELIVERED");
+    }
+  });
+
+  it("uses Shanghai calendar boundaries for rider daily and monthly income", () => {
+    const { service } = createService();
+    const afterShanghaiMidnight = new Date("2026-08-31T17:30:00.000Z");
+
+    expect((service as any).shanghaiDayStart(afterShanghaiMidnight)).toEqual(
+      new Date("2026-08-31T16:00:00.000Z"),
+    );
+    expect((service as any).shanghaiMonthStart(afterShanghaiMidnight)).toEqual(
+      new Date("2026-08-31T16:00:00.000Z"),
+    );
   });
 
   it("lists only the rider own settlements with appeal status", async () => {
@@ -786,9 +1124,9 @@ describe("RiderAppService", () => {
         orderId: "e1",
         deliveryFeeAmount: 8,
         tipAmount: 2,
-        rewardAmount: 0,
-        penaltyAmount: 0,
-        payableAmount: 10,
+        rewardAmount: 2,
+        penaltyAmount: 1,
+        payableAmount: 11,
         status: "included",
         reversalAmount: 0,
       },
@@ -808,8 +1146,9 @@ describe("RiderAppService", () => {
       appealStatus: "processing",
       appealReason: "金额不对",
       appealReply: "已核实",
-      itemNetAmount: 10,
-      orders: [{ orderNo: "E-100", originalAmount: 10, netAmount: 10 }],
+      itemOriginalAmount: 11,
+      itemNetAmount: 11,
+      orders: [{ orderNo: "E-100", originalAmount: 11, netAmount: 11 }],
     });
   });
 
@@ -857,8 +1196,8 @@ describe("RiderAppService", () => {
   it("delegates rider wallet transactions and withdrawals to the finance service", async () => {
     const { service, finance } = createService();
 
-    await service.getRiderIncomeTransactions("user-1", { page: 1 });
-    expect(finance.transactions).toHaveBeenCalledWith("user-1", { page: 1 });
+    await service.getRiderIncomeTransactions("user-1", { page: "2", pageSize: "500" });
+    expect(finance.transactions).toHaveBeenCalledWith("user-1", { page: 2, pageSize: 50 });
 
     await service.createRiderWithdrawal("user-1", {
       amount: 10,

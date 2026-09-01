@@ -14,6 +14,8 @@ describe('TransformInterceptor', () => {
 
   it.each([
     '/current/rider',
+    '/partner-app/login/phone',
+    '/partner-app/session',
     '/rider/apply',
     '/riders/current',
     '/delivery-orders/distribution/list',

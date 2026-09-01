@@ -2,12 +2,14 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException,
 import { PrismaService } from '../../common/services/prisma.service'
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service'
 import { ErrandService } from '../errand/errand.service'
+import { enforceErrandAssignmentGuard } from '../errand/errand-assignment-guard'
+import { lockErrandAssignee } from '../errand/errand-transaction-guards'
 import {
   RiderQueryDto, AuditRiderDto, RiderStatusDto,
   DeliveryOrderQueryDto, AssignOrderDto, CancelOrderDto,
   UpdateFeeConfigDto,
   UpdatePageConfigDto,
-  UpdateRewardPunishDto,
+  UpdateRewardPunishDto, ResolveRiskEventDto,
 } from './dto/errand-admin.dto'
 import {
   ERRAND_EXTENDED_CONFIG_GROUP,
@@ -449,7 +451,12 @@ export class ErrandAdminService {
     return { list: list.map(row => this.formatOrder(row)), total, page: +page, pageSize: +pageSize }
   }
 
-  async handleRiskEvent(id: string, operatorId?: string) {
+  async handleRiskEvent(id: string, dto: ResolveRiskEventDto, operatorId?: string) {
+    const resolution = dto?.resolution
+    const note = String(dto?.note || '').trim()
+    if (!['release', 'reject'].includes(resolution) || !note) {
+      throw new BadRequestException('必须选择审核放行或拒绝结算，并填写处置说明')
+    }
     const event = await this.prisma.deliveryRiskEvent.findUnique({ where: { id } })
     if (!event || !['errand', 'shop'].includes(event.orderType)) throw new NotFoundException('风险事件不存在')
     if (event.orderType === 'shop') {
@@ -464,11 +471,86 @@ export class ErrandAdminService {
       if (!order) throw new NotFoundException('跑腿订单不存在')
       await this.assertOrderRegion(order.regionId, operatorId)
     }
-    const updated = await this.prisma.deliveryRiskEvent.updateMany({
-      where: { id, handled: false },
-      data: { handled: true, handledBy: operatorId || null, handledAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      const now = new Date()
+      const updated = await tx.deliveryRiskEvent.updateMany({
+        where: { id, handled: false },
+        data: {
+          handled: true,
+          handledBy: operatorId || null,
+          handledAt: now,
+          resolution,
+          resolutionNote: note,
+        },
+      })
+      if (updated.count !== 1) throw new BadRequestException('该风险事件已处理')
+      if (event.orderType !== 'errand') return
+      const order = await tx.errandOrder.findUnique({
+        where: { id: event.orderId },
+        select: { id: true, riderId: true },
+      })
+      if (!order?.riderId) return
+      const currentHold = await tx.errandSettlementHold.findUnique({ where: { orderId: order.id } })
+      if (resolution === 'release' && currentHold?.status === 'rejected') {
+        throw new BadRequestException('该订单收益已被拒绝结算，不能通过其他风险事件再次放行')
+      }
+      await tx.errandSettlementHold.upsert({
+        where: { orderId: order.id },
+        create: {
+          orderId: order.id,
+          riderId: order.riderId,
+          status: resolution === 'reject' ? 'rejected' : 'holding',
+          reasonCode: resolution === 'reject' ? 'admin_rejected' : `admin_release:${event.eventType}`,
+          releaseAt: resolution === 'release' ? now : null,
+          resolvedAt: now,
+          resolvedBy: operatorId || null,
+          resolutionNote: note,
+        },
+        update: {
+          riderId: order.riderId,
+          status: resolution === 'reject' ? 'rejected' : 'holding',
+          reasonCode: resolution === 'reject' ? 'admin_rejected' : `admin_release:${event.eventType}`,
+          releaseAt: resolution === 'release' ? now : null,
+          resolvedAt: now,
+          resolvedBy: operatorId || null,
+          resolutionNote: note,
+        },
+      })
+      if (resolution === 'reject') {
+        const paidItem = await tx.riderSettlementItem.findFirst({
+          where: {
+            orderType: 'errand',
+            orderId: order.id,
+            riderId: order.riderId,
+            settlement: { status: 'PAID' },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { payableAmount: true, reversalAmount: true },
+        })
+        const liabilityAmount = Math.max(
+          0,
+          Number((Number(paidItem?.payableAmount || 0) - Number(paidItem?.reversalAmount || 0)).toFixed(2)),
+        )
+        if (liabilityAmount > 0) {
+          await tx.riderLiability.upsert({
+            where: {
+              orderId_refundId: {
+                orderId: order.id,
+                refundId: `admin-risk-reject:${order.id}`,
+              },
+            },
+            create: {
+              riderId: order.riderId,
+              orderId: order.id,
+              refundId: `admin-risk-reject:${order.id}`,
+              amount: liabilityAmount,
+              reason: `跑腿风控拒绝结算：${note}`,
+            },
+            update: {},
+          })
+        }
+      }
     })
-    if (updated.count !== 1) throw new BadRequestException('该风险事件已处理')
     return { success: true }
   }
 
@@ -486,7 +568,7 @@ export class ErrandAdminService {
     const rawTasks = this.rawOrderTasks(o)
     const itemSizeIds: string[] = Array.from(new Set(rawTasks.map((task: any) => this.cleanId(task?.item_size_id)).filter(Boolean)))
     const pickupPointIds: string[] = Array.from(new Set(rawTasks.map((task: any) => this.cleanId(task?.pickup_point_id)).filter(Boolean)))
-    const [itemSizes, pickupPoints, deliveryNodes, riskEvents, appeal, refundAttempts, settlementItem, liabilities, review] = await Promise.all([
+    const [itemSizes, pickupPoints, deliveryNodes, riskEvents, appeal, refundAttempts, settlementItem, liabilities, settlementHold, review] = await Promise.all([
       itemSizeIds.length ? this.prisma.errandItemSize.findMany({ where: { id: { in: itemSizeIds } } }) : [],
       pickupPointIds.length ? this.prisma.errandPickupPoint.findMany({ where: { id: { in: pickupPointIds } } }) : [],
       this.prisma.deliveryOrderNode.findMany({ where: { orderId: id, orderType: 'errand' }, orderBy: { createdAt: 'asc' } }).catch(() => []),
@@ -496,11 +578,17 @@ export class ErrandAdminService {
         where: { payment: { is: { bizType: 'errand_order', bizId: id } } },
         orderBy: { createdAt: 'desc' },
       }).catch(() => []),
-      this.prisma.riderSettlementItem.findUnique({
-        where: { orderType_orderId: { orderType: 'errand', orderId: id } },
+      this.prisma.riderSettlementItem.findFirst({
+        where: {
+          orderType: 'errand',
+          orderId: id,
+          settlement: { status: { not: 'REJECTED' } },
+        },
+        orderBy: { createdAt: 'desc' },
         include: { settlement: true },
       }).catch(() => null),
       this.prisma.riderLiability.findMany({ where: { orderId: id }, orderBy: { createdAt: 'desc' } }).catch(() => []),
+      this.prisma.errandSettlementHold.findUnique({ where: { orderId: id } }).catch(() => null),
       this.prisma.errandReview.findUnique({ where: { orderId: id } }).catch(() => null),
     ])
     const tasks = this.formatOrderTasks(o, {
@@ -522,6 +610,7 @@ export class ErrandAdminService {
       refundAttempts,
       settlementItem,
       liabilities,
+      settlementHold,
       review,
       allowedActions: {
         assign: o.status === 'pending_accept' && !o.riderId && !['refunding', 'refunded'].includes(refundStatus),
@@ -552,11 +641,29 @@ export class ErrandAdminService {
     if (rider.verifyStatus !== 'approved') throw new BadRequestException('骑手未通过审核')
     if (rider.regionId !== currentOrder.regionId) throw new BadRequestException('骑手与订单不在同一区域')
     if (rider.status !== 'online') throw new BadRequestException('骑手当前不在线或正在配送')
+    await enforceErrandAssignmentGuard(this.prisma, currentOrder, rider.userId, '后台派单')
     return this.prisma.$transaction(async (tx) => {
+      await lockErrandAssignee(tx, rider.userId)
+      const [freshOrder, freshRider, activeErrands, activeShopOrders] = await Promise.all([
+        tx.errandOrder.findUnique({ where: { id } }),
+        tx.regionRider.findUnique({ where: { userId: rider.userId } }),
+        tx.errandOrder.count({ where: { riderId: rider.userId, status: { in: ['accepted', 'in_progress'] } } }),
+        tx.order.count({ where: { riderId: rider.userId, status: 'SHIPPED' as any } }),
+      ])
+      if (!freshOrder || freshOrder.status !== 'pending_accept' || freshOrder.riderId) {
+        throw new BadRequestException('订单状态已变化，请刷新后重试')
+      }
+      if (!freshRider || freshRider.verifyStatus !== 'approved' || freshRider.status !== 'online') {
+        throw new BadRequestException('骑手状态已变化，请刷新后重试')
+      }
+      if (freshRider.regionId !== freshOrder.regionId) throw new BadRequestException('骑手与订单不在同一区域')
+      if (activeErrands + activeShopOrders >= 2) throw new BadRequestException('骑手同时配送中的订单已达上限（2 单）')
+      await enforceErrandAssignmentGuard(tx, freshOrder, freshRider.userId, '后台派单事务校验')
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id,
           regionId: currentOrder.regionId,
+          userId: { not: rider.userId },
           status: 'pending_accept',
           riderId: null,
           refundStatus: { notIn: ['refunding', 'refunded'] },
@@ -565,7 +672,7 @@ export class ErrandAdminService {
           riderId: rider.userId,
           status: 'accepted',
           acceptTime: new Date(),
-          deliveryDisplayMode: this.deliveryDisplayModeForRider(rider),
+          deliveryDisplayMode: this.deliveryDisplayModeForRider(freshRider),
         },
       })
       if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试')
@@ -574,8 +681,8 @@ export class ErrandAdminService {
         nodeType: 'admin_assigned',
         nodeLabel: '后台已派单',
         operatorId: rider.userId,
-        riderType: rider.riderType,
-        displayMode: this.deliveryDisplayModeForRider(rider),
+        riderType: freshRider.riderType,
+        displayMode: this.deliveryDisplayModeForRider(freshRider),
       })
       await tx.regionRider.update({ where: { userId: rider.userId }, data: { status: 'busy' } })
       return tx.errandOrder.findUniqueOrThrow({ where: { id } })

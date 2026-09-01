@@ -163,8 +163,8 @@
         <div class="form-row">
           <el-form-item label="可见范围">
             <el-select v-model="formData.visibilityScope">
-              <el-option label="一期活动" value="phase1_active" />
-              <el-option label="一期待审" value="phase1_review" />
+              <el-option label="本次上线" value="phase1_active" />
+              <el-option label="后续采集（不阻断本次）" value="phase1_review" />
               <el-option label="未来参考" value="future_reference" />
             </el-select>
           </el-form-item>

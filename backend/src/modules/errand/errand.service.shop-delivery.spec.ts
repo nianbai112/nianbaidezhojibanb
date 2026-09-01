@@ -1,6 +1,41 @@
 import { ErrandService } from './errand.service';
 
 describe('ErrandService shop delivery bridge', () => {
+  it('rejects an owner taking their own pending errand before opening a transaction', async () => {
+    const prisma: any = {
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({
+        id: 'errand-self', orderNo: 'ERR-SELF', userId: 'user-1', riderId: null, status: 'pending_accept',
+      }) },
+      deliveryRiskEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'risk-1' }),
+      },
+      $transaction: jest.fn(),
+    };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+
+    await expect((service as any).acceptOrderUnlocked('errand-self', 'user-1'))
+      .rejects.toThrow('不能接自己发布的跑腿订单');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('excludes the current user orders from the pending errand pool query', async () => {
+    const prisma: any = {
+      errandOrder: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    jest.spyOn(service as any, 'getOrderTakingIdentity').mockResolvedValue({
+      role: 'ordinary_user', regionId: 'region-1', canTakeOrders: false, policy: {}, user: { id: 'user-1' },
+    });
+    jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([]);
+
+    await service.getUserOrders('user-1', { filter_type: 'pending_orders', region_id: 'region-1' });
+
+    expect(prisma.errandOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: { not: 'user-1' }, status: 'pending_accept', riderId: null }),
+    }));
+  });
+
   it('rejects a rider taking a shop order before the merchant marks it ready', async () => {
     const order = { id: 'shop-1', riderId: null, status: 'PAID', readyTime: null, deliveryMode: 'platform_rider', merchant: {} };
     const tx: any = { order: { findUnique: jest.fn().mockResolvedValue(order) } };
@@ -185,13 +220,28 @@ describe('ErrandService shop delivery bridge', () => {
   it('claims the receiving rider atomically and releases the source rider after a transfer', async () => {
     const transfer = { id: 'transfer-1', orderId: 'errand-1', fromRiderId: 'rider-a', toRiderId: 'rider-b', status: 'pending' };
     const tx: any = {
-      transferRequest: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      regionRider: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      errandOrder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), count: jest.fn().mockResolvedValue(0) },
+      transferRequest: {
+        findUnique: jest.fn().mockResolvedValue(transfer),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      regionRider: {
+        findUnique: jest.fn().mockResolvedValue({ userId: 'rider-b', regionId: 'region-1', verifyStatus: 'approved', status: 'online' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      errandOrder: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'errand-1', userId: 'owner-1', riderId: 'rider-a', regionId: 'region-1', status: 'accepted' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
+      },
       order: { count: jest.fn().mockResolvedValue(0) },
       deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ userId: 'rider-b', version: 1 }) },
     };
-    const prisma: any = { transferRequest: { findUnique: jest.fn().mockResolvedValue(transfer) }, $transaction: jest.fn((callback: any) => callback(tx)) };
+    const prisma: any = {
+      transferRequest: { findUnique: jest.fn().mockResolvedValue(transfer) },
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'errand-1', userId: 'owner-1', riderId: 'rider-a', status: 'accepted' }) },
+      $transaction: jest.fn((callback: any) => callback(tx)),
+    };
     const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
     await (service as any).respondToTransferUnlocked('transfer-1', 'rider-b', { action: 'accept' });
@@ -202,6 +252,30 @@ describe('ErrandService shop delivery bridge', () => {
     expect(tx.regionRider.updateMany).toHaveBeenNthCalledWith(2, {
       where: { userId: 'rider-a', verifyStatus: 'approved', status: 'busy' }, data: { status: 'online' },
     });
+    expect(tx.errandOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: { not: 'rider-b' } }),
+    }));
+  });
+
+  it('blocks transferring an errand to the account that published it', async () => {
+    const prisma: any = {
+      errandOrder: { findUnique: jest.fn().mockResolvedValue({
+        id: 'errand-1', orderNo: 'ERR-1', userId: 'rider-b', riderId: 'rider-a', regionId: 'region-1', status: 'accepted',
+      }) },
+      regionRider: { findFirst: jest.fn().mockResolvedValue({
+        id: 'rr-b', userId: 'rider-b', regionId: 'region-1', verifyStatus: 'approved',
+      }) },
+      transferRequest: { create: jest.fn() },
+      deliveryRiskEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'risk-1' }),
+      },
+    };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+
+    await expect(service.requestTransfer('errand-1', 'rider-a', { target_rider_id: 'rider-b' }))
+      .rejects.toThrow('不能接自己发布的跑腿订单');
+    expect(prisma.transferRequest.create).not.toHaveBeenCalled();
   });
 
   it('blocks and records a cross-region errand transfer attempt', async () => {
@@ -265,6 +339,7 @@ describe('ErrandService shop delivery bridge', () => {
       order: { findUnique: jest.fn().mockResolvedValue(order), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, riderId: 'rider-1', status: 'SHIPPED' }) },
       regionRider: { findUnique: jest.fn().mockResolvedValue({ userId: 'rider-1', riderType: 'official', verifyStatus: 'approved', status: 'online', regionId: null }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       orderLog: { create: jest.fn() }, deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ userId: 'rider-1', version: 1 }) },
     };
     const prisma: any = { $transaction: jest.fn((callback: any) => callback(tx)), regionRider: { findMany: jest.fn().mockResolvedValue([]) } };
     const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
@@ -294,6 +369,7 @@ describe('ErrandService shop delivery bridge', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       orderLog: { create: jest.fn() }, deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ userId: 'rider-1', version: 1 }) },
     };
     const prisma: any = { $transaction: jest.fn((callback: any) => callback(tx)) };
     const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
@@ -317,6 +393,7 @@ describe('ErrandService shop delivery bridge', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       deliveryOrderNode: { create: jest.fn().mockResolvedValue({}) },
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ userId: 'rider-1', version: 1 }) },
     };
     const prisma: any = {
       errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'errand-1' }) },

@@ -11,6 +11,7 @@ import {
   UpdateFeeConfigDto,
   UpdatePageConfigDto,
   UpdateRewardPunishDto,
+  ResolveRiskEventDto,
 } from './dto/errand-admin.dto'
 
 @ApiTags('Admin - Errand & Rider')
@@ -103,9 +104,9 @@ export class ErrandAdminController {
 
   @Post('admin/errand/risk-events/:id/handle')
   @RequirePermission('errand:config')
-  @ApiOperation({ summary: '标记配送风险事件已处理' })
-  handleRiskEvent(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
-    return this.service.handleRiskEvent(id, operatorId)
+  @ApiOperation({ summary: '审核处置配送风险事件' })
+  handleRiskEvent(@Param('id') id: string, @Body() dto: ResolveRiskEventDto, @CurrentUser('sub') operatorId: string) {
+    return this.service.handleRiskEvent(id, dto, operatorId)
   }
 
   // ==================== Fee Config ====================

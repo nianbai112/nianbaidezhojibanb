@@ -18,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, shallowRef } from 'vue'
+import { ref, computed } from 'vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import { Setting, Lock, Bell, Warning, Upload, Connection, PictureFilled, DocumentChecked } from '@element-plus/icons-vue'
 import BasicSettingsPanel from './components/BasicSettingsPanel.vue'
@@ -38,7 +38,7 @@ const tabs = [
   { key: 'storage', label: '存储上传', icon: Upload },
   { key: 'loginPage', label: '登录页视觉', icon: PictureFilled },
   { key: 'thirdParty', label: '第三方配置', icon: Connection },
-  { key: 'reviewMode', label: '审核模式', icon: DocumentChecked },
+  { key: 'reviewMode', label: '业务能力', icon: DocumentChecked },
 ]
 
 const active = ref('basic')

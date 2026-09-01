@@ -77,6 +77,33 @@ describe('WechatOfficialService callback signature', () => {
 
     await expect(service.handleCallback('', { ...signedQuery(), echostr: 'challenge' })).resolves.toBe('challenge');
   });
+
+  it('updates the accepted template message only after the delivery receipt arrives', async () => {
+    const prisma = {
+      config: { findUnique: jest.fn().mockResolvedValue({ value: { token: 'official-token' } }) },
+      wechatMessageLog: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new WechatOfficialService(
+      prisma as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+    const body = [
+      '<xml>',
+      '<Event><![CDATA[TEMPLATESENDJOBFINISH]]></Event>',
+      '<MsgID>9223372036854775806</MsgID>',
+      '<Status><![CDATA[success]]></Status>',
+      '</xml>',
+    ].join('');
+
+    await expect(service.handleCallback(body, signedQuery())).resolves.toBe('success');
+
+    expect(prisma.wechatMessageLog.updateMany).toHaveBeenCalledWith({
+      where: { platformType: 'official', wechatMsgId: '9223372036854775806' },
+      data: { status: 'success', errorCode: null, errorMessage: null },
+    });
+  });
 });
 
 describe('WechatOfficialService AES callback binding', () => {
@@ -209,6 +236,7 @@ describe('WechatOfficialService template notification delivery', () => {
       config: {
         findUnique: jest.fn().mockImplementation(({ where }: any) => {
           if (where.key === 'wechat_official_notify') return Promise.resolve({ value: policy });
+          if (where.key === 'miniapp') return Promise.resolve({ value: { appId: 'wx-miniapp-1' } });
           return Promise.resolve(null);
         }),
       },
@@ -251,6 +279,13 @@ describe('WechatOfficialService template notification delivery', () => {
     return { service, prisma, redis, tokenService };
   };
 
+  it('reuses the managed delivered template for the distinct arrived scene', () => {
+    const { service } = createDeliveryService({});
+    expect((service as any).resolveTemplateType('errand_arrived')).toBe(
+      'errand_delivered',
+    );
+  });
+
   it('routes an enabled delivery scene through the configured official template and writes success log', async () => {
     const { service, prisma } = createDeliveryService({
       globalEnabled: true,
@@ -272,6 +307,10 @@ describe('WechatOfficialService template notification delivery', () => {
       expect.objectContaining({
         touser: 'official-openid-1',
         template_id: 'wechat-template-1',
+        miniprogram: {
+          appid: 'wx-miniapp-1',
+          pagepath: 'pagesA/order/detail?id=order-1',
+        },
         data: expect.objectContaining({
           thing1: { value: 'ORDER-1' },
           time2: { value: expect.any(String) },
@@ -284,7 +323,8 @@ describe('WechatOfficialService template notification delivery', () => {
       data: expect.objectContaining({
         platformType: 'official',
         templateType: 'errand_delivered',
-        status: 'success',
+        status: 'pending',
+        wechatMsgId: '123',
         sentAt: expect.any(Date),
       }),
     });
@@ -306,6 +346,30 @@ describe('WechatOfficialService template notification delivery', () => {
       success: false,
       skipped: true,
       error: 'official_notification_disabled',
+    }));
+
+    expect(post).not.toHaveBeenCalled();
+    expect(prisma.wechatMessageLog.create).not.toHaveBeenCalled();
+    post.mockRestore();
+  });
+
+  it('enforces the admin like threshold on the server before calling WeChat', async () => {
+    const { service, prisma } = createDeliveryService({
+      globalEnabled: true,
+      scenes: { community_like: true },
+      antispam: { likeThreshold: 5, likeDailyMax: 1, dailyMax: 5 },
+    });
+    const post = jest.spyOn(axios, 'post');
+
+    await expect(service.sendNotificationTemplate({
+      userId: 'user-1',
+      scene: 'post_like',
+      data: { likeCount: 4, postTitle: '校园新鲜事' },
+    })).resolves.toEqual(expect.objectContaining({
+      success: false,
+      skipped: true,
+      error: 'like_threshold_not_reached',
+      templateType: 'community_like',
     }));
 
     expect(post).not.toHaveBeenCalled();
@@ -340,44 +404,141 @@ describe('WechatOfficialService template notification delivery', () => {
   });
 
   it('constrains official template values to the limits of their WeChat field types', async () => {
+    const { service } = createDeliveryService({});
+    expect((service as any).normalizeTemplateFieldValue(
+      'character_string13',
+      'ORDER-1234567890123456789012345678901234567890',
+    )).toBe('ORDER-12345678901234567890123456');
+    expect((service as any).normalizeTemplateFieldValue(
+      'time5',
+      '2026年08月25日 00:12:34',
+    )).toBe('2026年08月25日 00:12:34');
+    expect((service as any).normalizeTemplateFieldValue(
+      'thing7',
+      '重庆城乡发展职业学院第一教学楼东侧学生宿舍二栋大厅',
+    )).toBe('重庆城乡发展职业学院第一教学楼东侧学生宿');
+  });
+
+  it('formats Date objects as valid WeChat time fields in China Standard Time', async () => {
     const { service, prisma } = createDeliveryService({
       globalEnabled: true,
-      scenes: { errand_delivered: true },
+      scenes: { errand_accepted: true },
       antispam: {},
     });
     prisma.wechatTemplateConfig.findMany.mockResolvedValue([{
-      id: 'template-delivered',
+      id: 'template-accepted',
       platformType: 'official',
-      templateType: 'errand_delivered',
-      templateId: 'wechat-template-delivered',
+      templateType: 'errand_accepted',
+      templateId: 'wechat-template-accepted',
       regionId: null,
       enabled: true,
-      fieldMapping: {
-        character_string13: 'orderNo',
-        time5: 'finishedAt',
-        thing7: 'deliveryAddress',
-      },
+      fieldMapping: { time3: 'estimatedTime' },
     }]);
-    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 789 } } as any);
+    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 790 } } as any);
 
     await expect(service.sendNotificationTemplate({
       userId: 'user-1',
-      scene: 'errand_delivered',
+      scene: 'errand_accepted',
       data: {
-        orderNo: 'ORDER-1234567890123456789012345678901234567890',
-        finishedAt: '2026年08月25日 00:12:34',
-        deliveryAddress: '重庆城乡发展职业学院第一教学楼东侧学生宿舍二栋大厅',
+        orderNo: 'ERR-1',
+        riderName: '测试骑手',
+        estimatedTime: new Date('2026-08-30T14:05:00.000Z'),
       },
     })).resolves.toEqual(expect.objectContaining({ success: true }));
 
     expect(post).toHaveBeenCalledWith(
-      expect.stringContaining('/cgi-bin/message/template/send?access_token=access-token'),
+      expect.any(String),
+      expect.objectContaining({ data: {
+        character_string1: { value: 'ERR-1' },
+        character_string2: { value: '测试骑手' },
+        time3: { value: '2026-08-30 22:05' },
+      } }),
+      { timeout: 10000 },
+    );
+    post.mockRestore();
+  });
+
+  it('ignores a mutable database mapping for a backend-managed template', async () => {
+    const { service, prisma } = createDeliveryService({
+      globalEnabled: true,
+      scenes: { errand_accepted: true },
+      antispam: {},
+    });
+    prisma.wechatTemplateConfig.findMany.mockResolvedValue([{
+      id: 'template-accepted',
+      platformType: 'official',
+      templateType: 'errand_accepted',
+      templateId: 'wechat-template-accepted',
+      regionId: null,
+      enabled: true,
+      fieldMapping: {
+        character_string1: 'orderNo',
+        phone_number2: 'riderPhone',
+      },
+    }]);
+    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 791 } } as any);
+
+    await expect(service.sendNotificationTemplate({
+      userId: 'user-1',
+      scene: 'errand_accepted',
+      data: {
+        orderNo: 'ERR-1',
+        riderName: '测试骑手',
+        estimatedTime: new Date('2026-08-30T14:05:00.000Z'),
+      },
+    })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+    expect(post).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ data: expect.objectContaining({
+        character_string1: { value: 'ERR-1' },
+        character_string2: { value: '测试骑手' },
+      }) }),
+      { timeout: 10000 },
+    );
+    post.mockRestore();
+  });
+
+  it('fails before calling WeChat when a required managed field is absent', async () => {
+    const { service, prisma } = createDeliveryService({});
+    prisma.wechatTemplateConfig.findMany.mockResolvedValue([{
+      id: 'template-accepted', platformType: 'official', templateType: 'errand_accepted',
+      templateId: 'wechat-template-accepted', regionId: null, enabled: true,
+      fieldMapping: { thing1: 'content' },
+    }]);
+    const post = jest.spyOn(axios, 'post');
+
+    await expect(service.sendTemplateMessage({
+      userId: 'user-1',
+      templateType: 'errand_accepted',
+      data: { orderNo: 'ERR-1' },
+    })).resolves.toEqual({
+      success: false,
+      error: '服务号模板字段缺少业务数据: character_string2, time3',
+    });
+    expect(post).not.toHaveBeenCalled();
+    post.mockRestore();
+  });
+
+  it('keeps a developer-defined template on its persisted mapping', async () => {
+    const { service, prisma } = createDeliveryService({});
+    prisma.wechatTemplateConfig.findMany.mockResolvedValue([{
+      id: 'template-custom', platformType: 'official', templateType: 'custom_scene',
+      templateId: 'wechat-template-custom', regionId: null, enabled: true,
+      fieldMapping: { character_string9: 'externalId', thing2: 'optionalText' },
+    }]);
+    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 792 } } as any);
+
+    await expect(service.sendTemplateMessage({
+      userId: 'user-1',
+      templateType: 'custom_scene',
+      data: { externalId: 'EXTERNAL-1' },
+    })).resolves.toEqual({ success: true });
+    expect(post).toHaveBeenCalledWith(
+      expect.any(String),
       expect.objectContaining({
-        data: {
-          character_string13: { value: 'ORDER-12345678901234567890123456' },
-          time5: { value: '2026年08月25日 00:12:34' },
-          thing7: { value: '重庆城乡发展职业学院第一教学楼东侧学生宿' },
-        },
+        template_id: 'wechat-template-custom',
+        data: { character_string9: { value: 'EXTERNAL-1' } },
       }),
       { timeout: 10000 },
     );
@@ -397,16 +558,16 @@ describe('WechatOfficialService template notification delivery', () => {
       payload: { thing1: { value: 'ORDER-1' } },
       status: 'failed',
     });
-    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0 } } as any);
+    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 900 } } as any);
 
     await expect(service.retryTemplateMessage('log-1')).resolves.toEqual({
       success: true,
-      message: '服务号消息已重新发送',
+      message: '服务号消息已重新提交，等待微信送达回执',
     });
     expect(prisma.wechatMessageLog.update).toHaveBeenCalledWith({
       where: { id: 'log-1' },
       data: expect.objectContaining({
-        status: 'success', errorCode: null, errorMessage: null, sentAt: expect.any(Date),
+        status: 'pending', wechatMsgId: '900', errorCode: null, errorMessage: null, sentAt: expect.any(Date),
       }),
     });
     post.mockRestore();

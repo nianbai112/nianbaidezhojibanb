@@ -45,6 +45,7 @@ export function campusMapWorkflowSteps({
   hasVectorBaseMap = false,
   featureCount = 0,
   calibrationPointCount = 0,
+  calibrationRequired = true,
   canPublish = false,
 } = {}) {
   const hasBase = Boolean(hasVisualBaseMap || hasVectorBaseMap)
@@ -66,8 +67,10 @@ export function campusMapWorkflowSteps({
     {
       key: 'amap',
       title: '真实坐标',
-      subtitle: calibrationPointCount ? `${calibrationPointCount} 个校准点` : '高德仅用于定位',
-      status: calibrationPointCount >= 3 ? 'done' : 'todo',
+      subtitle: calibrationRequired
+        ? calibrationPointCount ? `${calibrationPointCount} 个校准点` : '高德仅用于定位'
+        : 'GCJ-02 已启用',
+      status: !calibrationRequired || calibrationPointCount >= 3 ? 'done' : 'todo',
       disabled: !hasBase && featureCount === 0,
     },
     {

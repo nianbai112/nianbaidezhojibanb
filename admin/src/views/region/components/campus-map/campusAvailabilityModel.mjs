@@ -1,5 +1,14 @@
 const SCHOOL_MESSAGE_LIMIT = 200
 const BUILDING_MESSAGE_LIMIT = 120
+const BUILDING_SERVICE_STATUSES = new Set([
+  'unknown',
+  'open',
+  'limited',
+  'unopened',
+  'temporarily_closed',
+  'closed',
+])
+const NON_NAVIGABLE_SERVICE_STATUSES = new Set(['unopened', 'temporarily_closed', 'closed'])
 
 function cleanMessage(value, limit) {
   return String(value || '').trim().slice(0, limit)
@@ -16,14 +25,20 @@ export function normalizeSchoolAvailability(value = {}) {
 }
 
 export function normalizeBuildingAvailability(value = {}) {
-  const serviceStatus = value?.serviceStatus === 'unopened' ? 'unopened' : 'open'
+  const serviceStatus = BUILDING_SERVICE_STATUSES.has(value?.serviceStatus)
+    ? value.serviceStatus
+    : 'open'
+  const isFuture = value?.constructionStatus === 'under_construction'
+    || value?.constructionStatus === 'planned'
+    || value?.visibilityScope === 'future_reference'
+  const isUnavailable = NON_NAVIGABLE_SERVICE_STATUSES.has(serviceStatus)
   return {
     serviceStatus,
-    unavailableMessage: serviceStatus === 'unopened'
+    unavailableMessage: serviceStatus !== 'open'
       ? cleanMessage(value?.unavailableMessage, BUILDING_MESSAGE_LIMIT)
       : '',
-    searchable: serviceStatus === 'unopened' ? true : value?.searchable !== false,
-    navigable: serviceStatus === 'unopened' ? false : value?.navigable !== false,
+    searchable: isFuture ? false : isUnavailable ? true : value?.searchable !== false,
+    navigable: isFuture || isUnavailable ? false : value?.navigable !== false,
   }
 }
 

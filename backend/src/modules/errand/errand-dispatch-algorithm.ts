@@ -199,6 +199,17 @@ const getDeadline = (order: any = {}) => {
   return value ? toDate(value) : null;
 };
 
+const isScheduledDelivery = (order: any = {}) => {
+  const mode = String(
+    order.delivery_mode ??
+    order.deliveryMode ??
+    order.fulfillment_mode ??
+    order.fulfillmentMode ??
+    '',
+  ).trim().toLowerCase();
+  return ['scheduled', 'appointment', 'reserved', 'reserve'].includes(mode);
+};
+
 const createReasonText = (reasons: string[]) => {
   if (!reasons.length) return '路线顺路，预计可按时送达';
   return reasons.join('，');
@@ -225,11 +236,14 @@ export const assessErrandDispatch = ({ order = {}, rider = {}, now = new Date() 
   });
   const deadline = getDeadline(order);
   const deadlineRisk = deadline ? estimate.latestAt.getTime() > deadline.getTime() : false;
+  // “立即配送”的 delivery_time 是下单时的 ETA，不是预约硬截止时间。
+  // 订单等待后 ETA 过期只能提示风险，否则会造成所有骑手永久无法接单。
+  const deadlineBlocked = deadlineRisk && isScheduledDelivery(order);
   const reasons: string[] = [];
   if (riderUsedUnits + capacityUnits > MAX_RIDER_CAPACITY_UNITS) reasons.push('任务容量已满');
   if (!sameArea) reasons.push('取送跨区');
   if (deadlineRisk) reasons.push('预计可能超时');
-  const canAccept = !reasons.includes('任务容量已满') && !deadlineRisk;
+  const canAccept = !reasons.includes('任务容量已满') && !deadlineBlocked;
   const score = Math.max(
     0,
     100 -

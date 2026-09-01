@@ -1,3 +1,5 @@
+import { normalizeBuildingAvailability } from './campusAvailabilityModel.mjs'
+
 export const CAMPUS_PROJECT_KEYS = [
   'placeId',
   'artworkFeatureKey',
@@ -86,7 +88,8 @@ export function applyCampusProject(item = {}, project = {}, kind = inferKind(ite
   const previousTitle = String(item.title || '').trim()
   const placeId = catalogPlaceId(project)
   const constructionStatus = String(project.constructionStatus || item.constructionStatus || 'built')
-  const future = project.phase === 'future' || ['under_construction', 'planned'].includes(constructionStatus)
+  // 建设状态是管理员可见且可编辑的事实字段；phase 只是旧目录分组，不能覆盖人工核验结果。
+  const future = ['under_construction', 'planned'].includes(constructionStatus)
   return {
     ...item,
     ...pickCampusProjectMetadata(project),
@@ -96,7 +99,7 @@ export function applyCampusProject(item = {}, project = {}, kind = inferKind(ite
     officialName,
     engineeringAlias: String(project.engineeringAlias || (previousTitle !== officialName ? previousTitle : '')).trim(),
     title: officialName || previousTitle,
-    phase: String(project.phase || item.phase || (future ? 'future' : 'phase1')),
+    phase: future ? 'future' : 'phase1',
     constructionStatus,
     publishStatus: String(project.publishStatus || item.publishStatus || 'draft'),
     visibilityScope: String(project.visibilityScope || item.visibilityScope || (future ? 'future_reference' : 'phase1_review')),
@@ -115,6 +118,37 @@ export function catalogPlaceId(project = {}, regionId = '') {
   if (!Number.isInteger(number) || number <= 0) return ''
   const scope = String(regionId || project.regionId || 'legacy').trim() || 'legacy'
   return `campus-place:${scope}:${number}`
+}
+
+export function findCampusProjectArtworkFeature(project = {}, pois = [], areas = [], regionId = '') {
+  const pointItems = Array.isArray(pois) ? pois : []
+  const areaItems = Array.isArray(areas) ? areas : []
+  const featureKey = String(project.artworkFeatureKey || '').trim()
+  const placeId = catalogPlaceId(project, regionId)
+  const officialNumber = Number(project.officialNumber)
+  const exactPoint = featureKey ? pointItems.find((item) => String(item?.id || '') === featureKey) : null
+  const exactArea = featureKey ? areaItems.find((item) => String(item?.id || '') === featureKey) : null
+  const geometryType = String(project?.artworkGeometry?.type || '').toLowerCase()
+
+  if (geometryType === 'polygon' && exactArea) return { kind: 'area', item: exactArea }
+  if (geometryType === 'point' && exactPoint) return { kind: 'poi', item: exactPoint }
+  if (exactArea) return { kind: 'area', item: exactArea }
+  if (exactPoint) return { kind: 'poi', item: exactPoint }
+
+  const matchesIdentity = (item) => (placeId && String(item?.placeId || '') === placeId)
+    || (Number.isInteger(officialNumber) && Number(item?.officialNumber) === officialNumber)
+  const matchingArea = areaItems.find(matchesIdentity)
+  const matchingPoint = pointItems.find(matchesIdentity)
+
+  if (geometryType === 'polygon' && matchingArea) return { kind: 'area', item: matchingArea }
+  if (geometryType === 'point' && matchingPoint) return { kind: 'poi', item: matchingPoint }
+  if (matchingArea) return { kind: 'area', item: matchingArea }
+  if (matchingPoint) return { kind: 'poi', item: matchingPoint }
+  return null
+}
+
+export function persistedCampusMapItems(items = []) {
+  return (Array.isArray(items) ? items : []).filter((item) => item?.catalogPreviewOnly !== true)
 }
 
 export function catalogPlaceOption(project = {}, regionId = '') {
@@ -158,6 +192,7 @@ export function publicPlacePhotoUrls(project = {}) {
 
 export function campusProjectCounts(items = []) {
   return items.reduce((counts, item) => {
+    if (item?.publishStatus === 'hidden') return counts
     if (item?.visibilityScope === 'phase1_active') counts.active += 1
     if (item?.visibilityScope === 'phase1_review') counts.review += 1
     if (item?.visibilityScope === 'future_reference') counts.future += 1
@@ -176,6 +211,18 @@ export function pickCampusProjectMetadata(item = {}) {
     if (item[key] !== undefined && item[key] !== null && item[key] !== '') metadata[key] = item[key]
     return metadata
   }, {})
+}
+
+export function resolveCampusProjectFeatureState(feature = {}, canonicalProject = {}) {
+  const metadata = {
+    ...pickCampusProjectMetadata(feature),
+    ...pickCampusProjectMetadata(canonicalProject),
+  }
+  return {
+    ...metadata,
+    // 先用地点档案覆盖旧图层，再按统一规则归一化，避免旧草稿把状态改回去。
+    ...normalizeBuildingAvailability({ ...feature, ...metadata }),
+  }
 }
 
 export function normalizeImportedPoiProject(item = {}) {

@@ -1,4 +1,4 @@
-import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray } from 'class-validator'
+import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray, IsIn, MaxLength } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 
@@ -131,6 +131,18 @@ export class CancelOrderDto {
   @IsOptional()
   @IsString()
   reason?: string
+}
+
+export class ResolveRiskEventDto {
+  @ApiProperty({ description: 'release=审核放行；reject=拒绝结算' })
+  @IsString()
+  @IsIn(['release', 'reject'])
+  resolution: 'release' | 'reject'
+
+  @ApiProperty({ description: '处置依据或复核说明' })
+  @IsString()
+  @MaxLength(500)
+  note: string
 }
 
 // ==================== Fee Config ====================

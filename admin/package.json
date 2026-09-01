@@ -1,7 +1,7 @@
 {
   "name": "lingmeng-admin",
   "private": true,
-  "version": "1.0.46-selfhosted.1",
+  "version": "1.0.47-selfhosted.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host",

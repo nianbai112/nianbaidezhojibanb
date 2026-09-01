@@ -70,6 +70,9 @@ if command -v rsync >/dev/null 2>&1; then
     --exclude "uploads" \
     --exclude "storage" \
     --exclude "logs" \
+    --exclude "certs" \
+    --exclude "certificates" \
+    --exclude "secrets" \
     "$PACKAGE_ROOT/backend/" "$BACKEND_DIR/"
   rsync -a --delete "$PACKAGE_ROOT/admin/dist/" "$ADMIN_DIST/"
   rsync -a --delete "$PACKAGE_ROOT/site/dist/" "$SITE_DIST/"

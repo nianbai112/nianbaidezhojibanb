@@ -20,7 +20,7 @@ import { AdminGuard, AdminPermissionGuard } from "../../guards/admin.guard";
 import { RequirePermission } from "../../decorators/require-permission.decorator";
 import { CurrentUser } from "../../decorators/current-user.decorator";
 import { Request } from "express";
-import { SaveAppReviewModeDto } from './dto/app-review-mode.dto';
+import { SaveAppCapabilityConfigDto } from './dto/app-review-mode.dto';
 
 @ApiTags("系统配置")
 @Controller()
@@ -145,19 +145,19 @@ export class SystemConfigController {
     return this.systemConfigService.resetGroup(dto.group, operatorId, req.ip);
   }
 
-  @Get('admin/config/app-review-mode')
+  @Get(['admin/config/app-capabilities', 'admin/config/app-review-mode'])
   @RequirePermission('system:config')
   @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: '获取小程序审核模式配置' })
+  @ApiOperation({ summary: '获取小程序全用户业务能力配置（旧审核模式地址继续兼容）' })
   getAppReviewMode() {
     return this.systemConfigService.getAppReviewMode();
   }
 
-  @Put('admin/config/app-review-mode')
+  @Put(['admin/config/app-capabilities', 'admin/config/app-review-mode'])
   @RequirePermission('system:config')
   @UseGuards(AdminPermissionGuard)
-  @ApiOperation({ summary: '保存小程序审核模式配置' })
-  saveAppReviewMode(@Body() dto: SaveAppReviewModeDto, @CurrentUser('sub') operatorId: string, @Req() req: Request) {
+  @ApiOperation({ summary: '保存小程序全用户业务能力配置（旧审核模式地址继续兼容）' })
+  saveAppReviewMode(@Body() dto: SaveAppCapabilityConfigDto, @CurrentUser('sub') operatorId: string, @Req() req: Request) {
     return this.systemConfigService.saveAppReviewMode(dto, operatorId, req.ip);
   }
 
@@ -626,9 +626,9 @@ export class LoginPageConfigPublicController {
     return this.systemConfigService.getPublicApiConfig();
   }
 
-  @Get('platform/app-review-mode')
+  @Get(['platform/app-capabilities', 'platform/app-review-mode'])
   @Header('Cache-Control', 'no-store, max-age=0')
-  @ApiOperation({ summary: '获取小程序审核模式配置（小程序启动时读取）' })
+  @ApiOperation({ summary: '获取小程序全用户业务能力配置（旧审核模式地址继续兼容）' })
   getPublicAppReviewMode() {
     return this.systemConfigService.getAppReviewMode();
   }

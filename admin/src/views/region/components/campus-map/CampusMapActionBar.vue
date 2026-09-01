@@ -15,11 +15,15 @@
         <span v-if="activeVersion" :class="{ warning: !publicationVerified }">线上 v{{ activeVersion }}</span>
         <span :class="{ warning: !publicationVerified }">{{ publishedPlaceCount }} 个公开地点</span>
         <span :class="{ warning: !canPublish }">{{ publishSummary }}</span>
+        <span>本批 {{ releaseCockpit.scope.releaseTotal }} 个地点</span>
+        <span v-if="releaseCockpit.scope.deferredCount">后续采集 {{ releaseCockpit.scope.deferredCount }} 个，不计本批</span>
+        <span v-if="releaseCockpit.scope.futureReferenceCount">未来参考 {{ releaseCockpit.scope.futureReferenceCount }} 个，不计本批</span>
+        <span v-if="releaseCockpit.scope.orphanFeatureCount" class="warning">{{ releaseCockpit.scope.orphanFeatureCount }} 个图形未归档</span>
       </div>
 
       <div class="primary-actions">
         <el-button :icon="OfficeBuilding" @click="$emit('run-action', 'catalog')">补地点</el-button>
-        <el-button :icon="Position" @click="$emit('run-action', 'collection')">派采集</el-button>
+        <el-button :icon="Position" @click="$emit('run-action', 'collection')">继续采集</el-button>
         <el-button
           :icon="DocumentChecked"
           :loading="draftSaving"
@@ -63,18 +67,24 @@
       </button>
     </div>
 
-    <div class="release-focus" :class="releaseCockpit.issues.length ? 'blocked' : 'ready'">
+    <button
+      type="button"
+      class="release-focus"
+      :class="releaseCockpit.issues.length ? 'blocked' : 'ready'"
+      @click="$emit('run-issue', releaseCockpit.nextAction)"
+    >
       <span>{{ releaseCockpit.issues.length ? '下一步' : '发布状态' }}</span>
       <div>
         <strong>{{ releaseCockpit.nextAction.label }}</strong>
         <small>{{ releaseCockpit.nextAction.message }}</small>
       </div>
-    </div>
+      <el-icon><ArrowRight /></el-icon>
+    </button>
   </section>
 </template>
 
 <script setup lang="ts">
-import { Check, DocumentChecked, MoreFilled, OfficeBuilding, Position } from '@element-plus/icons-vue'
+import { ArrowRight, Check, DocumentChecked, MoreFilled, OfficeBuilding, Position } from '@element-plus/icons-vue'
 
 type ReleaseStage = {
   key: string
@@ -88,6 +98,7 @@ type ReleaseStage = {
 type ReleaseCockpit = {
   stages: ReleaseStage[]
   issues: any[]
+  scope: { releaseTotal: number; deferredCount: number; futureReferenceCount: number; orphanFeatureCount: number }
   nextAction: { action: string; label: string; message: string }
 }
 
@@ -110,6 +121,7 @@ defineProps<{
 defineEmits<{
   'select-stage': [stage: string]
   'run-action': [action: 'catalog' | 'collection' | 'save' | 'publish']
+  'run-issue': [issue: any]
   operation: [command: string]
 }>()
 </script>
@@ -240,12 +252,23 @@ defineEmits<{
 
 .release-focus {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   border-radius: 8px;
   padding: 10px 12px;
   background: var(--el-color-danger-light-9);
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.release-focus:hover,
+.release-focus:focus-visible {
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-7);
+  outline: none;
 }
 
 .release-focus.ready {

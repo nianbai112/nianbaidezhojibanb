@@ -29,7 +29,10 @@
                 {{ riskTypeMap[event.eventType] || event.eventType }}
               </el-tag>
               <span>{{ event.description }}</span>
-              <el-button link type="primary" @click="handleRisk(event.id)">标记已处理</el-button>
+              <span class="risk-actions">
+                <el-button link type="success" @click="handleRisk(event.id, 'release')">审核放行</el-button>
+                <el-button link type="danger" @click="handleRisk(event.id, 'reject')">拒绝结算</el-button>
+              </span>
             </div>
             <span v-if="!(row.openRiskEvents || []).length">{{ row.abnormalReason || '-' }}</span>
           </div>
@@ -47,7 +50,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
 import { handleErrandRiskEvent } from '@/api/errand'
@@ -72,6 +75,11 @@ const riskTypeMap: Record<string, string> = {
   unaccepted_timeout: '长时间无人接单',
   delivery_overdue: '履约超时',
   refund_failed: '退款失败',
+  partial_refund_settlement_review: '部分退款收益复核',
+  marketing_related_account_assignment_attempt: '营销关联账号',
+  marketing_shared_device_and_ip: '营销设备与网络关联',
+  marketing_shared_device_or_ip: '营销弱关联提示',
+  self_assignment_attempt: '本人接单',
   auto_receipt_hold_48h: '自动确认长时间阻塞',
   merchant_delay: '商家出餐延迟',
   cannot_contact: '无法联系用户',
@@ -94,10 +102,15 @@ const loadData = async () => {
   } catch (e: any) { ElMessage.error(e?.message || '加载失败') } finally { loading.value = false }
 }
 
-const handleRisk = async (id: string) => {
+const handleRisk = async (id: string, resolution: 'release' | 'reject') => {
   try {
-    await handleErrandRiskEvent(id)
-    ElMessage.success('已标记处理')
+    const { value } = await ElMessageBox.prompt(
+      resolution === 'release' ? '请填写审核放行依据' : '请填写拒绝结算原因',
+      resolution === 'release' ? '审核放行' : '拒绝结算',
+      { inputValidator: value => !!String(value || '').trim() || '处置说明不能为空' },
+    )
+    await handleErrandRiskEvent(id, resolution, String(value).trim())
+    ElMessage.success(resolution === 'release' ? '已提交放行复核' : '已拒绝结算')
     await loadData()
   } catch (e: any) {
     ElMessage.error(e?.message || '处理失败')
@@ -113,4 +126,5 @@ onMounted(() => loadData())
 .pagination-bar { display: flex; justify-content: flex-end; margin-top: 16px; }
 .risk-list { display: grid; gap: 8px; }
 .risk-item { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+.risk-actions { display: inline-flex; white-space: nowrap; }
 </style>

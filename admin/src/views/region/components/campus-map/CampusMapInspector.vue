@@ -65,7 +65,25 @@
             </el-button>
           </section>
 
-          <div class="project-publish-grid">
+          <el-alert
+            v-if="selectedEditableItem.item.officialNumber"
+            class="project-state-source"
+            type="info"
+            :closable="false"
+            title="状态保存到地点档案"
+            description="地图草稿只保存图形和路线；建设、开放、搜索和发布状态以地点档案为准。"
+          />
+
+          <el-form-item v-if="selectedEditableItem.item.officialNumber" label="建设状态">
+            <el-select v-model="selectedEditableItem.item.constructionStatus">
+              <el-option label="已建" value="built" />
+              <el-option label="在建" value="under_construction" />
+              <el-option label="改造中" value="renovating" />
+              <el-option label="未建/规划" value="planned" />
+            </el-select>
+          </el-form-item>
+
+          <div v-if="selectedEditableItem.item.officialNumber" class="project-publish-grid">
             <el-form-item label="用户端状态">
               <el-select v-model="selectedEditableItem.item.publishStatus">
                 <el-option label="草稿" value="draft" />
@@ -76,8 +94,8 @@
             </el-form-item>
             <el-form-item label="可见范围">
               <el-select v-model="selectedEditableItem.item.visibilityScope">
-                <el-option label="一期用户可见" value="phase1_active" />
-                <el-option label="一期待复核" value="phase1_review" />
+                <el-option label="本次上线" value="phase1_active" />
+                <el-option label="后续采集（不阻断本次）" value="phase1_review" />
                 <el-option label="未来参考" value="future_reference" />
               </el-select>
             </el-form-item>
@@ -144,42 +162,54 @@
             </div>
           </section>
 
-          <template v-if="selectedEditableItem.item.constructionStatus !== 'under_construction'">
+          <template v-if="selectedEditableItem.item.officialNumber && !['under_construction', 'planned'].includes(selectedEditableItem.item.constructionStatus)">
             <el-form-item label="建筑开放状态">
-              <el-radio-group
+              <el-select
                 :model-value="selectedEditableItem.item.serviceStatus || 'open'"
-                @update:model-value="$emit('syncAvailability', $event as 'open' | 'unopened')"
+                style="width: 100%"
+                @update:model-value="$emit('syncAvailability', $event as CampusServiceStatus)"
               >
-                <el-radio-button value="open">已开放</el-radio-button>
-                <el-radio-button value="unopened">未开放</el-radio-button>
-              </el-radio-group>
+                <el-option label="待确认" value="unknown" />
+                <el-option label="已开放" value="open" />
+                <el-option label="有限开放" value="limited" />
+                <el-option label="未开放" value="unopened" />
+                <el-option label="临时关闭" value="temporarily_closed" />
+                <el-option label="已关闭" value="closed" />
+              </el-select>
             </el-form-item>
-            <el-form-item v-if="selectedEditableItem.item.serviceStatus === 'unopened'" label="未开放说明">
+            <el-form-item v-if="selectedEditableItem.item.serviceStatus !== 'open'" label="用户端状态说明">
               <el-input
                 v-model="selectedEditableItem.item.unavailableMessage"
                 type="textarea"
                 :rows="3"
                 maxlength="120"
                 show-word-limit
-                placeholder="例如：建筑正在维护，暂不提供导航"
+                placeholder="例如：仅工作日开放，或建筑正在维护"
               />
             </el-form-item>
           </template>
 
-          <div class="project-switches">
+          <div v-if="selectedEditableItem.item.officialNumber" class="project-switches">
             <el-form-item label="可搜索">
               <el-switch
                 v-model="selectedEditableItem.item.searchable"
-                :disabled="selectedEditableItem.item.serviceStatus === 'unopened' || selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+                :disabled="['unopened', 'temporarily_closed', 'closed'].includes(selectedEditableItem.item.serviceStatus) || ['under_construction', 'planned'].includes(selectedEditableItem.item.constructionStatus) || selectedEditableItem.item.geometryStatus === 'unmatched'"
               />
             </el-form-item>
             <el-form-item label="可导航">
               <el-switch
                 v-model="selectedEditableItem.item.navigable"
-                :disabled="selectedEditableItem.item.serviceStatus === 'unopened' || selectedEditableItem.item.constructionStatus === 'under_construction' || selectedEditableItem.item.geometryStatus === 'unmatched'"
+                :disabled="['unopened', 'temporarily_closed', 'closed'].includes(selectedEditableItem.item.serviceStatus) || ['under_construction', 'planned'].includes(selectedEditableItem.item.constructionStatus) || selectedEditableItem.item.geometryStatus === 'unmatched'"
               />
             </el-form-item>
           </div>
+          <el-button
+            v-if="selectedEditableItem.item.officialNumber"
+            type="primary"
+            :loading="projectStateSaving"
+            style="width: 100%; margin-bottom: 16px"
+            @click="$emit('saveProjectState', selectedEditableItem.item)"
+          >保存地点档案状态</el-button>
         </template>
 
         <el-form-item v-if="selectedEditableItem.kind === 'poi' || selectedEditableItem.kind === 'area'" label="校园标志">
@@ -227,25 +257,62 @@
               <small>这条路线会在骑手端高亮，审核通过后才写回地图草稿</small>
             </div>
           </div>
+          <el-form-item label="本次是否公开">
+            <el-switch
+              v-model="selectedEditableItem.item.public"
+              active-text="随本版上线"
+              inactive-text="留在草稿，后续再上线"
+            />
+          </el-form-item>
           <el-button type="primary" style="width: 100%" @click="$emit('collectRoute', selectedEditableItem.item)">
             派骑手采集这条路线
           </el-button>
         </section>
 
         <template v-if="selectedEditableItem.kind === 'calibration'">
-          <el-form-item label="坐标拾取">
-            <el-button :icon="Aim" style="width: 100%" @click="$emit('pickLocation')">
-              从高德地图拾取坐标
-            </el-button>
-          </el-form-item>
-          <div class="calibration-grid">
-            <el-form-item label="经度">
-              <el-input-number v-model="selectedEditableItem.item.longitude" :precision="6" :step="0.000001" />
+          <section class="calibration-source-card" :class="{ collected: selectedCalibrationFromRider }">
+            <div>
+              <strong>{{ selectedCalibrationFromRider ? '骑手已审核位置' : '手工补充校准' }}</strong>
+              <small>
+                {{ selectedCalibrationFromRider
+                  ? '坐标来自骑手现场站定采集和后台审核，系统会自动复用。'
+                  : '这个点不是骑手采集结果；默认应先同步已审核位置。' }}
+              </small>
+            </div>
+            <el-tag :type="selectedCalibrationFromRider ? 'success' : 'warning'" size="small">
+              {{ selectedCalibrationFromRider ? '可信来源' : '人工补充' }}
+            </el-tag>
+          </section>
+          <template v-if="selectedCalibrationFromRider">
+            <div class="calibration-evidence-grid">
+              <span>经度</span><strong>{{ Number(selectedEditableItem.item.longitude).toFixed(6) }}</strong>
+              <span>纬度</span><strong>{{ Number(selectedEditableItem.item.latitude).toFixed(6) }}</strong>
+              <span>定位精度</span><strong>{{ selectedEditableItem.item.accuracy ? `${Number(selectedEditableItem.item.accuracy).toFixed(1)} 米` : '已通过审核' }}</strong>
+              <span>采集时间</span><strong>{{ selectedEditableItem.item.collectedAt ? new Date(selectedEditableItem.item.collectedAt).toLocaleString() : '--' }}</strong>
+            </div>
+          </template>
+          <template v-else>
+            <el-button
+              type="primary"
+              plain
+              :loading="calibrationSyncing"
+              style="width: 100%; margin-bottom: 12px"
+              @click="$emit('syncRiderCalibrations')"
+            >同步已审核骑手位置</el-button>
+            <el-form-item label="手工坐标拾取">
+              <el-button :icon="Aim" style="width: 100%" @click="$emit('pickLocation')">
+                从高德地图拾取坐标
+              </el-button>
             </el-form-item>
-            <el-form-item label="纬度">
-              <el-input-number v-model="selectedEditableItem.item.latitude" :precision="6" :step="0.000001" />
-            </el-form-item>
-          </div>
+            <div class="calibration-grid">
+              <el-form-item label="经度">
+                <el-input-number v-model="selectedEditableItem.item.longitude" :precision="6" :step="0.000001" />
+              </el-form-item>
+              <el-form-item label="纬度">
+                <el-input-number v-model="selectedEditableItem.item.latitude" :precision="6" :step="0.000001" />
+              </el-form-item>
+            </div>
+          </template>
         </template>
 
         <div v-if="editorMode === 'amap' && selectedEditableItem.kind === 'poi'" class="coordinate-line">
@@ -281,7 +348,7 @@
             删除路线
           </el-button>
           <el-button
-            v-else
+            v-else-if="selectedEditableItem.kind === 'calibration' && !selectedCalibrationFromRider"
             type="danger"
             plain
             :icon="Delete"
@@ -294,6 +361,34 @@
     </div>
 
     <div v-else class="empty-inspector">
+      <section class="rider-calibration-card" :class="{ ready: calibrationReady }">
+        <div class="rider-calibration-head">
+          <div>
+            <strong>{{ calibrationRequired ? '骑手采集校准' : '骑手真实坐标已启用' }}</strong>
+            <small>{{ calibrationRequired
+              ? '优先复用已经审核通过的现场位置，手工点只用于补充。'
+              : '地点和路线已使用 GCJ-02 真实坐标，画师图无需再做三点校准。' }}</small>
+          </div>
+          <el-tag :type="calibrationReady ? 'success' : 'warning'" size="small">
+            {{ !calibrationRequired ? '无需校准' : calibrationReady ? '已就绪' : `${collectedCalibrationPointCount}/3` }}
+          </el-tag>
+        </div>
+        <div v-if="calibrationRequired" class="rider-calibration-progress">
+          <span>有效校准点 {{ calibratedPointCount }} 个</span>
+          <span>骑手来源 {{ collectedCalibrationPointCount }} 个</span>
+        </div>
+        <el-button
+          v-if="calibrationRequired"
+          type="primary"
+          :loading="calibrationSyncing"
+          style="width: 100%"
+          @click="$emit('syncRiderCalibrations')"
+        >同步已审核骑手位置</el-button>
+        <el-button v-if="calibrationRequired" text style="width: 100%; margin-left: 0" @click="$emit('addManualCalibration')">
+          没有可用采集点时，手工补充
+        </el-button>
+      </section>
+
       <section class="issue-queue">
         <div class="issue-queue-head">
           <div>
@@ -370,7 +465,7 @@
               class="layer-row"
               @click="$emit('selectLayerItem', 'calibration', point.id)"
             >
-              <span>准</span>
+              <span>{{ isRiderCollectedCalibrationPoint(point) ? '采' : '手' }}</span>
               <strong>{{ point.title || '校准点' }}</strong>
             </button>
           </div>
@@ -395,6 +490,7 @@ import {
   uploadCampusMapPlaceMedia,
 } from '@/api/admin'
 import { catalogPlaceId, publicPlaceMedia } from './campusProjectModel.mjs'
+import { isRiderCollectedCalibrationPoint } from './campusMapCollectionModel.mjs'
 
 type ReleaseIssue = {
   key: string
@@ -407,6 +503,8 @@ type ReleaseIssue = {
   action: string
 }
 
+type CampusServiceStatus = 'unknown' | 'open' | 'limited' | 'unopened' | 'temporarily_closed' | 'closed'
+
 const props = defineProps<{
   selectedEditableItem: any | null
   regionId: string | number
@@ -418,8 +516,16 @@ const props = defineProps<{
   areas: any[]
   routes: any[]
   calibrationPoints: any[]
+  calibratedPointCount: number
+  collectedCalibrationPointCount: number
+  calibrationReady: boolean
+  calibrationRequired: boolean
+  calibrationSyncing: boolean
+  projectStateSaving: boolean
   formatLngLat: (point: any) => string
   activeVersion?: number
+  publishedPlaceCount?: number
+  publicationVerified?: boolean
   hasUnsavedChanges?: boolean
   releaseCockpit: {
     stages: Array<{ key: string; label: string }>
@@ -434,16 +540,19 @@ const emit = defineEmits<{
   beforeEdit: []
   pickLocation: []
   syncSemantic: []
-  syncAvailability: [status: 'open' | 'unopened']
+  syncAvailability: [status: CampusServiceStatus]
   assignPlace: [placeId: string]
   removePoi: [id: string]
   removeArea: [id: string]
   removeRoute: [id: string]
   removeCalibration: [id: string]
+  syncRiderCalibrations: []
+  addManualCalibration: []
   selectLayerItem: [kind: string, id: string]
   removePhoto: [officialNumber: number, url: string]
   photoAdded: [officialNumber: number, url: string]
   projectUpdated: [project: any]
+  saveProjectState: [item: any]
   mediaChanged: []
   collectPlace: [item: any]
   collectRoute: [item: any]
@@ -452,6 +561,8 @@ const emit = defineEmits<{
 
 const photoUploading = ref(false)
 const reviewingMediaId = ref('')
+const selectedCalibrationFromRider = computed(() => props.selectedEditableItem?.kind === 'calibration'
+  && isRiderCollectedCalibrationPoint(props.selectedEditableItem.item))
 const activeStageLabel = computed(() => props.releaseCockpit.stages.find((stage) => stage.key === props.releaseStage)?.label || '全部阶段')
 const visibleIssues = computed(() => {
   const stageIssues = props.releaseCockpit.issues.filter((issue) => issue.stage === props.releaseStage)
@@ -496,7 +607,16 @@ const projectGateSteps = computed(() => {
     { key: 'availability', done: serviceReady, label: '开放状态可解释', help: serviceReady ? '状态可对用户展示' : '未开放地点必须填写用户端说明' },
     { key: 'publish', done: publicStateReady, label: '地点设为一期已发布', help: publicStateReady ? '地点已进入发布候选' : '需设为“已发布”且“一期用户可见”' },
     { key: 'navigation', done: navigationReady, label: '导航条件满足', help: navigationReady ? '当前导航配置有效' : '开启导航前必须先取得已核验坐标' },
-    { key: 'version', done: Number(props.activeVersion || 0) > 0 && !props.hasUnsavedChanges, label: '地图版本已发布', help: props.hasUnsavedChanges ? '当前还有未保存/未发布改动' : `当前线上版本 v${props.activeVersion || 0}` },
+    {
+      key: 'version',
+      done: Boolean(props.publicationVerified) && Number(props.publishedPlaceCount || 0) > 0 && !props.hasUnsavedChanges,
+      label: '当前批次已进入用户端版本',
+      help: props.hasUnsavedChanges
+        ? '当前还有未保存/未发布改动'
+        : Boolean(props.publicationVerified) && Number(props.publishedPlaceCount || 0) > 0
+          ? `线上 v${props.activeVersion || 0}，公开地点 ${props.publishedPlaceCount}`
+          : '当前正式版还没有公开本批地点',
+    },
   ]
 })
 const selectedProjectPublicReady = computed(() => projectGateSteps.value.every((step) => step.done))
@@ -744,6 +864,78 @@ async function reviewProjectMedia(media: any, reviewStatus: 'approved' | 'reject
   width: 100%;
 }
 
+.calibration-source-card,
+.rider-calibration-card {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #fffaf0;
+}
+
+.calibration-source-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.calibration-source-card.collected,
+.rider-calibration-card.ready {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.calibration-source-card > div,
+.rider-calibration-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.calibration-source-card strong,
+.rider-calibration-card strong {
+  color: var(--mx-text);
+  font-size: 13px;
+}
+
+.calibration-source-card small,
+.rider-calibration-card small {
+  color: var(--mx-sub);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.calibration-evidence-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--mx-soft);
+}
+
+.calibration-evidence-grid span,
+.rider-calibration-progress {
+  color: var(--mx-sub);
+  font-size: 11px;
+}
+
+.calibration-evidence-grid strong {
+  color: var(--mx-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.rider-calibration-head,
+.rider-calibration-progress {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .coordinate-line {
   margin: 4px 0 12px;
   padding: 9px 10px;
@@ -757,6 +949,7 @@ async function reviewProjectMedia(media: any, reviewStatus: 'approved' | 'reject
 .issue-queue {
   display: grid;
   gap: 10px;
+  margin-top: 14px;
 }
 
 .issue-queue-head {

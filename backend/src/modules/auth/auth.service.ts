@@ -134,6 +134,22 @@ export class AuthService {
     return String(openid || '').startsWith(this.PHONE_LOGIN_OPENID_PREFIX);
   }
 
+  private async assertPhoneBindingAvailable(userId: string, phone: string) {
+    const conflict = await this.prisma.user.findFirst({
+      where: {
+        phone,
+        id: { not: userId },
+        status: { not: 'DELETED' as any },
+      },
+      select: { id: true },
+    });
+    if (conflict) {
+      throw new BadRequestException(
+        '该手机号已关联其他账号，请使用手机号验证码登录或联系管理员合并账号',
+      );
+    }
+  }
+
   private async buildLoginMeta(input: LoginMetaInput) {
     const deviceText = this.buildMiniLoginDevice(input.device, input.ua);
     const method = this.compactLoginDevice(input.method || null);
@@ -491,6 +507,7 @@ export class AuthService {
 
   async getPhoneNumber(userId: string, dto: { code: string }) {
     const phone = await this.resolveWxPhoneNumber(dto.code);
+    await this.assertPhoneBindingAvailable(userId, phone);
     await this.prisma.user.update({ where: { id: userId }, data: { phone } });
     return { phone, phoneNumber: phone, mobile: phone };
   }
@@ -546,6 +563,7 @@ export class AuthService {
           });
       await this.createUserProfileDefaults(user.id);
     } else {
+      await this.assertPhoneBindingAvailable(user.id, phone);
       user = await (this.prisma.user as any).update({
         where: { id: user.id },
         data: {
@@ -672,7 +690,11 @@ export class AuthService {
     dto: { phone?: string; mobile?: string; code?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
     ip?: string,
     ua?: string,
-    options: { preferApprovedOfficialRider?: boolean; strictPartnerIdentity?: boolean } = {},
+    options: {
+      preferApprovedOfficialRider?: boolean;
+      strictPartnerIdentity?: boolean;
+      sessionScope?: string;
+    } = {},
   ) {
     const phone = this.normalizePhone(dto.phone || dto.mobile);
     const code = String(dto.code || '').trim();
@@ -707,7 +729,9 @@ export class AuthService {
 
     user = await this.ensurePublicUid(user);
     await this.bindInitialRegion(user.id, dto.region_id || dto.regionId);
-    const tokens = await this.generateTokens(user.id, user.openid);
+    const tokens = await this.generateTokens(user.id, user.openid, {
+      scope: options.sessionScope,
+    });
     // AUD-P1-069: 记录协议确认
     await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId).catch(() => {});
     await this.clearUserProfileCache(user.id);
@@ -773,18 +797,35 @@ export class AuthService {
   }
 
   async refreshToken(refreshToken: string) {
+    let payload: any;
     try {
-      const payload = await this.jwtService.verifyAsync(refreshToken, {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
         secret: this.config.get('JWT_SECRET'),
       });
-      const stored = await this.redis.get(`refresh:${payload.sub}`);
-      if (stored !== refreshToken) {
-        throw new UnauthorizedException('刷新令牌已失效');
-      }
-      return this.generateTokens(payload.sub, payload.openid);
     } catch {
       throw new UnauthorizedException('刷新令牌无效');
     }
+
+    // Redis/数据库暂时异常必须保持为 5xx，不能伪装成 401。
+    // 否则客户端会当作凭证失效清空本地会话，用户就会遇到“休息一会自动退出”。
+    const refreshKey = this.refreshSessionKey(payload.sub, payload.sid);
+    const stored = await this.redis.get(refreshKey);
+    if (stored !== refreshToken) {
+      throw new UnauthorizedException('刷新令牌已失效');
+    }
+    const tokens = await this.generateTokens(payload.sub, payload.openid, {
+      sessionId: payload.sid,
+      scope: payload.scope,
+      // 已经具有 sid 的会话在 30 天有效期内保持 refresh token 不变，
+      // 只换新短期 access token。这样服务端已响应但网络丢包时，
+      // 客户端仍能用原 refresh token 重试，不会被误判成登录失效。
+      refreshToken: payload.sid ? refreshToken : undefined,
+    });
+    // 兼容升级前的单会话 token；先成功写入新会话，再移除旧 key。
+    if (!payload.sid) {
+      await this.redis.del(refreshKey).catch(() => undefined);
+    }
+    return tokens;
   }
 
   async getProfile(userId: string) {
@@ -1515,7 +1556,42 @@ export class AuthService {
     };
   }
 
-  private async generateTokens(userId: string, openid: string) {
+  private durationSeconds(value: unknown, fallbackSeconds: number) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+    const match = String(value || '').trim().match(/^(\d+)\s*([smhd])$/i);
+    if (!match) return fallbackSeconds;
+    const unitSeconds: Record<string, number> = {
+      s: 1,
+      m: 60,
+      h: 60 * 60,
+      d: 24 * 60 * 60,
+    };
+    return Number(match[1]) * unitSeconds[match[2].toLowerCase()];
+  }
+
+  private refreshSessionKey(userId: string, sessionId?: string) {
+    return sessionId ? `refresh:${userId}:${sessionId}` : `refresh:${userId}`;
+  }
+
+  private async clearUserRefreshSessions(userId: string) {
+    await this.redis.del(`refresh:${userId}`).catch(() => undefined);
+    const redis = this.redis as any;
+    if (typeof redis.delPattern === 'function') {
+      await redis.delPattern(`refresh:${userId}:*`).catch(() => undefined);
+    }
+  }
+
+  private async generateTokens(
+    userId: string,
+    openid: string,
+    session: {
+      sessionId?: string;
+      scope?: string;
+      refreshToken?: string;
+    } = {},
+  ) {
     // 封禁用户仍需受限会话访问状态查询、原生客服和自助解封；JwtGuard 会按实时用户状态封锁其他接口。
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -1523,7 +1599,7 @@ export class AuthService {
     });
     if (!user || !['ACTIVE', 'BANNED'].includes(user.status)) {
       // 清理可能残留的 refresh token，防止旧 token 被刷新
-      await this.redis.del(`refresh:${userId}`).catch(() => undefined);
+      await this.clearUserRefreshSessions(userId);
       if (!user) {
         throw new UnauthorizedException('用户不存在');
       }
@@ -1536,20 +1612,38 @@ export class AuthService {
       throw new UnauthorizedException('账号状态异常，暂无法登录');
     }
 
+    const sessionId = session.sessionId || crypto.randomUUID();
+    const sessionScope = String(session.scope || 'default').trim() || 'default';
+    const accessExpiresIn = this.config.get('JWT_ACCESS_EXPIRES_IN') || '2h';
+    const refreshExpiresIn = sessionScope === 'partner_app'
+      ? this.config.get('RIDER_REFRESH_EXPIRES_IN') || '30d'
+      : this.config.get('JWT_REFRESH_EXPIRES_IN') || '7d';
     const payload = {
       sub: userId,
       openid,
       isAdmin: false,
       restricted: user.status === 'BANNED',
+      sid: sessionId,
+      scope: sessionScope,
     };
     const accessToken = this.jwtService.sign(payload, {
-      expiresIn: this.config.get('JWT_ACCESS_EXPIRES_IN') || '2h',
+      expiresIn: accessExpiresIn,
     });
-    const refreshToken = this.jwtService.sign(payload, {
-      expiresIn: this.config.get('JWT_REFRESH_EXPIRES_IN') || '7d',
+    const refreshToken = session.refreshToken || this.jwtService.sign(payload, {
+      expiresIn: refreshExpiresIn,
     });
-    await this.redis.set(`refresh:${userId}`, refreshToken, 7 * 24 * 3600);
-    return { accessToken, refreshToken, expiresIn: 7200 };
+    if (!session.refreshToken) {
+      await this.redis.set(
+        this.refreshSessionKey(userId, sessionId),
+        refreshToken,
+        this.durationSeconds(refreshExpiresIn, 7 * 24 * 60 * 60),
+      );
+    }
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: this.durationSeconds(accessExpiresIn, 2 * 60 * 60),
+    };
   }
 
   private async generateAdminTokens(accountId: string, username: string) {

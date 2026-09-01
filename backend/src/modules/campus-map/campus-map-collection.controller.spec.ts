@@ -24,6 +24,7 @@ describe("CampusMapCollectionController", () => {
     createMarker: jest.fn(),
     createCollectionObject: jest.fn(),
     reviewCollectionObject: jest.fn(),
+    synchronizeApprovedPlaceCalibrations: jest.fn(),
     listObjects: jest.fn(),
     finishSession: jest.fn(),
   };
@@ -107,6 +108,15 @@ describe("CampusMapCollectionController", () => {
     expect(Reflect.getMetadata("admin_permissions", proto.listObjects)).toEqual([
       "region:view",
     ]);
+    expect(Reflect.getMetadata("path", proto.synchronizeApprovedPlaceCalibrations)).toBe(
+      "admin/campus-map/collections/:regionId/calibrations/sync",
+    );
+    expect(Reflect.getMetadata("method", proto.synchronizeApprovedPlaceCalibrations)).toBe(
+      RequestMethod.POST,
+    );
+    expect(Reflect.getMetadata("admin_permissions", proto.synchronizeApprovedPlaceCalibrations)).toEqual([
+      "region:edit",
+    ]);
   });
 
   it("checks admin region scope before reading task data", async () => {
@@ -188,6 +198,21 @@ describe("CampusMapCollectionController", () => {
       page: 1,
       pageSize: 20,
     });
+  });
+
+  it("checks admin region scope before synchronizing approved rider calibrations", async () => {
+    service.synchronizeApprovedPlaceCalibrations.mockResolvedValue({ synchronizedPlaceCount: 3 });
+
+    await controller.synchronizeApprovedPlaceCalibrations(
+      "region-1",
+      { user: { sub: "admin-1" } } as any,
+    );
+
+    expect(scope.assertRegionAccess).toHaveBeenCalledWith("admin-1", "region-1");
+    expect(service.synchronizeApprovedPlaceCalibrations).toHaveBeenCalledWith(
+      "region-1",
+      "admin-1",
+    );
   });
 
   it("returns a real mini-program code for the short-lived collector scene", async () => {

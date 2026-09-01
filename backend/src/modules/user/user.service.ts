@@ -974,6 +974,11 @@ export class UserService {
     return this.interactionPermission.permissionText(value);
   }
 
+  private notificationMode(value: any, fallback: 'instant' | 'reduced' | 'inbox' | 'off') {
+    const mode = String(value || '').trim().toLowerCase();
+    return ['instant', 'reduced', 'inbox', 'off'].includes(mode) ? mode : fallback;
+  }
+
   private visibilityValue(value: any, fallback: boolean) {
     return value === undefined || value === null ? fallback : value !== false;
   }
@@ -991,6 +996,30 @@ export class UserService {
     const coCreatePermission = this.normalizeInteractionPermission(settings?.coCreatePermission, 0);
     const legacyPublicVisible = privacyLevel <= 1;
     const legacySearchVisible = privacyLevel < 3;
+    const likeMode = this.notificationMode(
+      settings?.notifyLikeMode,
+      settings?.notifyLike === false ? 'off' : 'reduced',
+    );
+    const commentMode = this.notificationMode(
+      settings?.notifyCommentMode,
+      settings?.notifyComment === false ? 'off' : 'instant',
+    );
+    const replyMode = this.notificationMode(
+      settings?.notifyReplyMode,
+      settings?.notifyComment === false ? 'off' : 'instant',
+    );
+    const mentionMode = this.notificationMode(
+      settings?.notifyMentionMode,
+      settings?.notifyComment === false ? 'off' : 'instant',
+    );
+    const followMode = this.notificationMode(
+      settings?.notifyFollowMode,
+      settings?.notifyFollow === false ? 'off' : 'inbox',
+    );
+    const squatMode = this.notificationMode(
+      settings?.notifySquatMode,
+      settings?.notifySquat === false ? 'off' : 'inbox',
+    );
     return {
       id: settings?.id || '',
       user_id: settings?.userId || '',
@@ -1046,12 +1075,22 @@ export class UserService {
         phone: { permission: privacyLevel >= 3 ? 3 : 0, price: 0 },
       },
       notification_settings: {
-        like: settings?.notifyLike !== false,
-        comment: settings?.notifyComment !== false,
-        follow: settings?.notifyFollow !== false,
-        squat: settings?.notifySquat !== false,
-        system: settings?.notifySystem !== false,
-        order: settings?.notifyOrder !== false,
+        like: likeMode !== 'off',
+        comment: commentMode !== 'off',
+        reply: replyMode !== 'off',
+        mention: mentionMode !== 'off',
+        follow: followMode !== 'off',
+        squat: squatMode !== 'off',
+        like_mode: likeMode,
+        comment_mode: commentMode,
+        reply_mode: replyMode,
+        mention_mode: mentionMode,
+        follow_mode: followMode,
+        squat_mode: squatMode,
+        official_account: settings?.notifyOfficialAccount !== false,
+        interaction_badge: settings?.notifyInteractionBadge !== false,
+        system: true,
+        order: true,
       },
       language: settings?.language || 'zh-CN',
       updated_at: settings?.updatedAt,
@@ -1066,6 +1105,17 @@ export class UserService {
         if (value === undefined || value === null || value === '') continue;
         if (value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true') return true;
         if (value === false || value === 0 || value === '0' || String(value).toLowerCase() === 'false') return false;
+      }
+      return undefined;
+    };
+    const pickMode = (...values: any[]) => {
+      for (const value of values) {
+        if (value === undefined || value === null || value === '') continue;
+        const mode = String(value).trim().toLowerCase();
+        if (!['instant', 'reduced', 'inbox', 'off'].includes(mode)) {
+          throw new BadRequestException('通知提醒方式参数不合法');
+        }
+        return mode;
       }
       return undefined;
     };
@@ -1157,12 +1207,59 @@ export class UserService {
     const notifySquat = pickBool(dto.notifySquat, dto.notify_squat, notifications.squat);
     const notifySystem = pickBool(dto.notifySystem, dto.notify_system, notifications.system);
     const notifyOrder = pickBool(dto.notifyOrder, dto.notify_order, notifications.order);
-    if (notifyLike !== undefined) data.notifyLike = notifyLike;
-    if (notifyComment !== undefined) data.notifyComment = notifyComment;
-    if (notifyFollow !== undefined) data.notifyFollow = notifyFollow;
-    if (notifySquat !== undefined) data.notifySquat = notifySquat;
-    if (notifySystem !== undefined) data.notifySystem = notifySystem;
-    if (notifyOrder !== undefined) data.notifyOrder = notifyOrder;
+    const notifyLikeMode = pickMode(dto.notifyLikeMode, dto.notify_like_mode, notifications.like_mode);
+    const notifyCommentMode = pickMode(dto.notifyCommentMode, dto.notify_comment_mode, notifications.comment_mode);
+    const notifyReplyMode = pickMode(dto.notifyReplyMode, dto.notify_reply_mode, notifications.reply_mode);
+    const notifyMentionMode = pickMode(dto.notifyMentionMode, dto.notify_mention_mode, notifications.mention_mode);
+    const notifyFollowMode = pickMode(dto.notifyFollowMode, dto.notify_follow_mode, notifications.follow_mode);
+    const notifySquatMode = pickMode(dto.notifySquatMode, dto.notify_squat_mode, notifications.squat_mode);
+    const notifyOfficialAccount = pickBool(
+      dto.notifyOfficialAccount,
+      dto.notify_official_account,
+      notifications.official_account,
+    );
+    const notifyInteractionBadge = pickBool(
+      dto.notifyInteractionBadge,
+      dto.notify_interaction_badge,
+      notifications.interaction_badge,
+    );
+    if (notifyLikeMode !== undefined) {
+      data.notifyLikeMode = notifyLikeMode;
+      data.notifyLike = notifyLikeMode !== 'off';
+    } else if (notifyLike !== undefined) {
+      data.notifyLike = notifyLike;
+      data.notifyLikeMode = notifyLike ? 'reduced' : 'off';
+    }
+    if (notifyCommentMode !== undefined) data.notifyCommentMode = notifyCommentMode;
+    if (notifyReplyMode !== undefined) data.notifyReplyMode = notifyReplyMode;
+    if (notifyMentionMode !== undefined) data.notifyMentionMode = notifyMentionMode;
+    if (notifyComment !== undefined) {
+      data.notifyComment = notifyComment;
+      if (notifyCommentMode === undefined) data.notifyCommentMode = notifyComment ? 'instant' : 'off';
+      if (notifyReplyMode === undefined) data.notifyReplyMode = notifyComment ? 'instant' : 'off';
+      if (notifyMentionMode === undefined) data.notifyMentionMode = notifyComment ? 'instant' : 'off';
+    }
+    if (notifyFollowMode !== undefined) {
+      data.notifyFollowMode = notifyFollowMode;
+      data.notifyFollow = notifyFollowMode !== 'off';
+    } else if (notifyFollow !== undefined) {
+      data.notifyFollow = notifyFollow;
+      data.notifyFollowMode = notifyFollow ? 'inbox' : 'off';
+    }
+    if (notifySquatMode !== undefined) {
+      data.notifySquatMode = notifySquatMode;
+      data.notifySquat = notifySquatMode !== 'off';
+    } else if (notifySquat !== undefined) {
+      data.notifySquat = notifySquat;
+      data.notifySquatMode = notifySquat ? 'inbox' : 'off';
+    }
+    if (notifyOfficialAccount !== undefined) data.notifyOfficialAccount = notifyOfficialAccount;
+    if (notifyInteractionBadge !== undefined) data.notifyInteractionBadge = notifyInteractionBadge;
+    // 账号安全、订单、退款和申诉结果属于不可关闭的重要通知。
+    if (notifySystem !== undefined || notifyOrder !== undefined) {
+      data.notifySystem = true;
+      data.notifyOrder = true;
+    }
     if (dto.language !== undefined) data.language = String(dto.language || 'zh-CN').trim() || 'zh-CN';
     return data;
   }
@@ -1233,6 +1330,26 @@ export class UserService {
       create: { userId, ...data },
     });
     await this.clearProfileCache(userId);
+    if (
+      Object.keys(data).some((key) =>
+        [
+          'notifyLike',
+          'notifyComment',
+          'notifyFollow',
+          'notifySquat',
+          'notifyLikeMode',
+          'notifyCommentMode',
+          'notifyReplyMode',
+          'notifyMentionMode',
+          'notifyFollowMode',
+          'notifySquatMode',
+          'notifyOfficialAccount',
+          'notifyInteractionBadge',
+        ].includes(key),
+      )
+    ) {
+      await this.notifyService.clearUnreadSummaryCache(userId);
+    }
     if (Object.prototype.hasOwnProperty.call(data, 'showOnlineStatus')) {
       this.wsNative.publishUserPresence(userId).catch(() => undefined);
     }
@@ -1320,11 +1437,36 @@ export class UserService {
   }
 
   async getPendingWithdrawTotal(userId: string) {
-    const result = await this.prisma.withdraw.aggregate({
-      where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
-      _sum: { amount: true },
-    });
-    return { pendingTotal: result._sum.amount || 0 };
+    const [result, pendingCount, holds] = await Promise.all([
+      this.prisma.withdraw.aggregate({
+        where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
+        _sum: { amount: true },
+      }),
+      this.prisma.withdraw.count({
+        where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
+      }),
+      this.prisma.errandSettlementHold.findMany({
+        where: { riderId: userId, status: 'holding', order: { status: 'completed' } },
+        select: {
+          releaseAt: true,
+          order: { select: { price: true, tip: true } },
+        },
+        orderBy: { releaseAt: 'asc' },
+      }),
+    ]);
+    const pendingAmount = Number(result._sum.amount || 0);
+    const heldErrandAmount = holds.reduce(
+      (sum, item) => sum + Number(item.order.price || 0) + Number(item.order.tip || 0),
+      0,
+    );
+    return {
+      pendingTotal: pendingAmount,
+      total_pending_amount: pendingAmount,
+      total_pending_count: pendingCount,
+      held_errand_amount: Number(heldErrandAmount.toFixed(2)),
+      held_errand_count: holds.length,
+      next_release_at: holds.find(item => !!item.releaseAt)?.releaseAt || null,
+    };
   }
 
   async getBanStatus(userId: string) {

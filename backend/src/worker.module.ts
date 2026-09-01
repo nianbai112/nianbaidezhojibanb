@@ -1,6 +1,7 @@
 import "./config/bootstrap-env";
 import { Module } from "@nestjs/common";
-import { ConfigModule } from "@nestjs/config";
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { JwtModule } from "@nestjs/jwt";
 import { ScheduleModule } from "@nestjs/schedule";
 import { getEnvFilePaths } from "./config/env-loader";
 import { validate } from "./config/env.validation";
@@ -21,6 +22,17 @@ import { WorkerHeartbeatService } from "./worker-heartbeat.service";
       isGlobal: true,
       envFilePath: getEnvFilePaths(),
       validate,
+    }),
+    JwtModule.registerAsync({
+      global: true,
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get("JWT_SECRET"),
+        signOptions: {
+          expiresIn: config.get("JWT_ACCESS_EXPIRES_IN") || "2h",
+        },
+      }),
     }),
     ScheduleModule.forRoot(),
     PrismaModule,

@@ -44,6 +44,9 @@ describe("rewriteMiniProgramApiPath", () => {
     expect(
       rewriteMiniProgramApiPath("/api/rider-app/orders?status=accepted"),
     ).toBe("/rider-app/orders?status=accepted");
+    expect(
+      rewriteMiniProgramApiPath("/api/partner-app/login/phone/send-code"),
+    ).toBe("/partner-app/login/phone/send-code");
     expect(rewriteMiniProgramApiPath("/api/rider/apply")).toBe("/rider/apply");
     expect(rewriteMiniProgramApiPath("/api/current/rider")).toBe(
       "/current/rider",
@@ -100,6 +103,7 @@ describe("rewriteMiniProgramApiPath", () => {
     expect(excludes).toContain("official-assistant/{*path}");
     expect(excludes).toContain("delivery-distance/{*path}");
     expect(excludes).toContain("rider-app/{*path}");
+    expect(excludes).toContain("partner-app/{*path}");
     expect(excludes).toContain("rider/{*path}");
     expect(excludes).toContain("current/{*path}");
     expect(excludes).toContain("riders/{*path}");

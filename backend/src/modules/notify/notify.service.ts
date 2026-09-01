@@ -184,13 +184,51 @@ export class NotifyService {
     return key.toLowerCase();
   }
 
-  private notificationPreferenceField(type?: string) {
+  private interactionNotificationPreference(type?: string) {
     const key = this.toDbNotificationType(type);
-    if (key === "LIKE") return "notifyLike";
-    if (["COMMENT", "REPLY", "MENTION"].includes(key)) return "notifyComment";
-    if (key === "FOLLOW") return "notifyFollow";
-    if (key === "SQUAT") return "notifySquat";
-    return "";
+    const preferences: Record<
+      string,
+      { legacyField: string; modeField: string; defaultMode: string }
+    > = {
+      LIKE: {
+        legacyField: "notifyLike",
+        modeField: "notifyLikeMode",
+        defaultMode: "reduced",
+      },
+      COMMENT: {
+        legacyField: "notifyComment",
+        modeField: "notifyCommentMode",
+        defaultMode: "instant",
+      },
+      REPLY: {
+        legacyField: "notifyComment",
+        modeField: "notifyReplyMode",
+        defaultMode: "instant",
+      },
+      MENTION: {
+        legacyField: "notifyComment",
+        modeField: "notifyMentionMode",
+        defaultMode: "instant",
+      },
+      FOLLOW: {
+        legacyField: "notifyFollow",
+        modeField: "notifyFollowMode",
+        defaultMode: "inbox",
+      },
+      SQUAT: {
+        legacyField: "notifySquat",
+        modeField: "notifySquatMode",
+        defaultMode: "inbox",
+      },
+    };
+    return preferences[key] || null;
+  }
+
+  private normalizeNotificationMode(value: unknown, fallback: string) {
+    const mode = String(value || "").trim().toLowerCase();
+    return ["instant", "reduced", "inbox", "off"].includes(mode)
+      ? mode
+      : fallback;
   }
 
   private getNotificationData(notification: any) {
@@ -1103,8 +1141,10 @@ export class NotifyService {
         report.officialAccount = sent.success
           ? { status: "success", templateType: sent.templateType }
           : {
-              status: "skipped",
-              reason: sent.error,
+              status: sent.skipped ? "skipped" : "failed",
+              ...(sent.skipped
+                ? { reason: sent.error }
+                : { error: sent.error }),
               templateType: sent.templateType,
             };
       }
@@ -1176,15 +1216,31 @@ export class NotifyService {
   }
 
   async createAndDispatch(dto: CreateNotificationDto) {
-    const preferenceField = this.notificationPreferenceField(dto.type);
-    if (preferenceField) {
-      const settings = await this.prisma.userSettings.findUnique({
+    const preference = this.interactionNotificationPreference(dto.type);
+    let preferenceMode = "";
+    let interactionBadgeEnabled = true;
+    let officialAccountEnabled = true;
+    if (preference) {
+      const settings: any = await this.prisma.userSettings.findUnique({
         where: { userId: dto.userId },
-        select: { [preferenceField]: true },
+        select: {
+          [preference.legacyField]: true,
+          [preference.modeField]: true,
+          notifyOfficialAccount: true,
+          notifyInteractionBadge: true,
+        },
       } as any);
-      if (settings?.[preferenceField] === false) {
+      preferenceMode = this.normalizeNotificationMode(
+        settings?.[preference.modeField],
+        settings?.[preference.legacyField] === false
+          ? "off"
+          : preference.defaultMode,
+      );
+      if (preferenceMode === "off") {
         return { skipped: true, reason: "user_notification_preference" } as any;
       }
+      interactionBadgeEnabled = settings?.notifyInteractionBadge !== false;
+      officialAccountEnabled = settings?.notifyOfficialAccount !== false;
     }
 
     const defaultChannelMask = {
@@ -1195,13 +1251,39 @@ export class NotifyService {
       officialAccount: false,
       ...dto.channelMask,
     };
-    const channelMask = this.channelService
+    const resolvedChannelMask = this.channelService
       ? await this.channelService.resolveChannelMask(
           defaultChannelMask,
           this.toDbNotificationType(dto.type),
           dto.scene,
         )
       : defaultChannelMask;
+    const externalImmediate = !preference || preferenceMode === "instant";
+    const channelMask = preference
+      ? {
+          ...resolvedChannelMask,
+          websocket:
+            resolvedChannelMask.websocket !== false &&
+            interactionBadgeEnabled &&
+            preferenceMode !== "inbox",
+          push: resolvedChannelMask.push !== false && externalImmediate,
+          email: resolvedChannelMask.email === true && externalImmediate,
+          sms: resolvedChannelMask.sms === true && externalImmediate,
+          wechatSubscribe:
+            resolvedChannelMask.wechatSubscribe === true && externalImmediate,
+          officialAccount:
+            resolvedChannelMask.officialAccount === true &&
+            externalImmediate &&
+            officialAccountEnabled,
+        }
+      : resolvedChannelMask;
+    const notificationData = preference
+      ? {
+          ...(dto.data || {}),
+          notificationPreferenceMode: preferenceMode,
+          notificationPreferenceType: this.toDbNotificationType(dto.type),
+        }
+      : dto.data;
 
     // 1. 站内通知入库（必须成功）
     const notification = await this.prisma.notification.create({
@@ -1212,7 +1294,7 @@ export class NotifyService {
         scene: dto.scene || null,
         title: dto.title,
         content: dto.content,
-        data: dto.data || undefined,
+        data: notificationData || undefined,
         linkType: dto.linkType || null,
         linkValue: dto.linkValue || null,
         channelMask: channelMask as any,
@@ -1531,10 +1613,10 @@ export class NotifyService {
       };
     }
 
-    const [notifications, chatMembers] = await Promise.all([
+    const [notifications, chatMembers, rawSettings] = await Promise.all([
       this.prisma.notification.findMany({
         where,
-        select: { type: true },
+        select: { type: true, data: true },
       }),
       this.prisma.conversationMember.findMany({
         where: chatWhere,
@@ -1543,7 +1625,12 @@ export class NotifyService {
           conversation: { select: { type: true } },
         },
       }),
+      this.prisma.userSettings.findUnique({
+        where: { userId },
+        select: { notifyInteractionBadge: true },
+      } as any),
     ]);
+    const settings: any = rawSettings;
 
     const counts: Record<string, number> = {
       like: 0,
@@ -1565,8 +1652,19 @@ export class NotifyService {
       interaction: 0,
     };
 
+    let visibleNotificationUnread = 0;
     for (const n of notifications) {
       const key = this.toClientNotificationType(n.type);
+      const isInteraction = ["like", "comment", "reply", "follow", "squat"].includes(key);
+      const data = this.getNotificationData(n);
+      if (
+        isInteraction &&
+        (settings?.notifyInteractionBadge === false ||
+          data.notificationPreferenceMode === "inbox")
+      ) {
+        continue;
+      }
+      visibleNotificationUnread++;
       if (key in counts) counts[key]++;
       else if (key === "wallet") counts.system++;
     }
@@ -1583,7 +1681,7 @@ export class NotifyService {
     }
 
     counts.message += chatUnread;
-    const notificationUnread = notifications.length;
+    const notificationUnread = visibleNotificationUnread;
     counts.interaction =
       counts.comment +
       counts.reply +
@@ -1605,6 +1703,10 @@ export class NotifyService {
       .setJson(cacheKey, result, this.unreadCacheTtl)
       .catch(() => undefined);
     return result;
+  }
+
+  async clearUnreadSummaryCache(userId: string) {
+    await this.clearUnreadCache(userId);
   }
 
   // ===========================================================================

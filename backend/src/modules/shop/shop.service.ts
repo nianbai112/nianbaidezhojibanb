@@ -17,6 +17,7 @@ import { MembershipService } from "../membership/membership.service";
 import { SystemConfigService } from "../system-config/system-config.service";
 import { PrintService } from "../print/print.service";
 import { PaymentService } from "../payment/payment.service";
+import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
 import { randomInt } from "node:crypto";
 
 @Injectable()
@@ -752,6 +753,11 @@ export class ShopService {
         orderNo: true,
         userId: true,
         merchantId: true,
+        riderId: true,
+        deliveryMode: true,
+        businessType: true,
+        freightAmount: true,
+        originalFreightAmount: true,
         merchant: { select: { userId: true, regionId: true } },
       },
       take: 100,
@@ -785,6 +791,7 @@ export class ShopService {
           riderType: "system",
           remark: "订单送达满24小时，系统自动确认收货",
         });
+        await this.creditConfirmedShopRiderIncome(tx, order, now);
         return true;
       });
       if (!completed || !order.userId) continue;
@@ -891,7 +898,10 @@ export class ShopService {
           ),
         )
       : null;
+    const orderStatus = String(order?.status || "").toUpperCase();
+    const locationActive = orderStatus === "SHIPPED";
     const hasFreshLocation =
+      locationActive &&
       displayMode === "live_map" &&
       String(rider?.riderType || "").toLowerCase() === "official" &&
       rider?.lat !== null &&
@@ -914,6 +924,14 @@ export class ShopService {
           Number.isFinite(Number(node.lat)) &&
           Number.isFinite(Number(node.lng)),
       );
+    const statusText: Record<string, string> = {
+      SHIPPED: "骑手正在配送中",
+      DELIVERED: "骑手已送达，等待确认收货",
+      RECEIVED: "订单已完成，骑手定位已关闭",
+      COMPLETED: "订单已完成，骑手定位已关闭",
+      CANCELLED: "订单已结束，骑手定位已关闭",
+      REFUNDED: "订单已退款，骑手定位已关闭",
+    };
     return {
       display_mode: displayMode,
       rider_type:
@@ -922,10 +940,11 @@ export class ShopService {
           ? "merchant_self"
           : rider?.riderType || "platform",
       can_show_live_map: hasFreshLocation,
-      estimated_arrival_text: hasFreshLocation
-        ? "骑手正在配送中"
-        : "以骑手更新的配送节点为准",
-      location_stale: displayMode === "live_map" && !hasFreshLocation,
+      estimated_arrival_text:
+        statusText[orderStatus] ||
+        (hasFreshLocation ? "骑手正在配送中" : "以骑手更新的配送节点为准"),
+      location_stale:
+        locationActive && displayMode === "live_map" && !hasFreshLocation,
       current_location: hasFreshLocation
         ? {
             latitude: Number(rider.lat),
@@ -952,6 +971,80 @@ export class ShopService {
         proof_images: Array.isArray(node.proofImages) ? node.proofImages : [],
       })),
     };
+  }
+
+  private async creditConfirmedShopRiderIncome(
+    tx: any,
+    order: any,
+    now: Date,
+  ) {
+    if (
+      !order?.riderId ||
+      !["platform_rider", "rider_delivery"].includes(
+        String(order.deliveryMode || ""),
+      ) ||
+      String(order.businessType || "") === "dorm_shop"
+    ) {
+      return { credited: false, reason: "not_platform_rider" };
+    }
+
+    const [appeal, riskEvent, subsidyRows] = await Promise.all([
+      tx.orderAppeal.findFirst({
+        where: {
+          orderId: order.id,
+          orderType: { in: ["order", "shop", "delivery_order"] },
+          status: {
+            notIn: ["resolved", "rejected", "closed", "cancelled", "completed"],
+          },
+        },
+        select: { id: true },
+      }),
+      tx.deliveryRiskEvent.findFirst({
+        where: {
+          orderId: order.id,
+          orderType: { in: ["order", "shop", "delivery_order"] },
+          handled: false,
+          eventLevel: { in: ["error", "critical"] },
+        },
+        select: { id: true },
+      }),
+      tx.subsidyLedger.findMany({
+        where: {
+          orderType: "order",
+          orderId: order.id,
+          receiverType: "rider",
+          status: { not: "cancelled" },
+        },
+        select: { amount: true },
+      }),
+    ]);
+    if (appeal || riskEvent) {
+      return { credited: false, reason: "open_hold" };
+    }
+
+    const paidFreight = Math.max(0, Number(order.freightAmount || 0));
+    const originalFreight = Math.max(
+      0,
+      Number(order.originalFreightAmount || 0),
+    );
+    const subsidyAmount = subsidyRows.reduce(
+      (sum: number, row: any) => sum + Math.max(0, Number(row.amount || 0)),
+      0,
+    );
+    const riderAmount = Math.max(
+      originalFreight,
+      paidFreight + subsidyAmount,
+      paidFreight,
+    );
+    return creditConfirmedRiderIncome(tx, {
+      orderType: "delivery_order",
+      orderId: order.id,
+      orderNo: order.orderNo,
+      riderId: order.riderId,
+      regionId: order.merchant?.regionId || order.regionId || null,
+      deliveryFeeAmount: riderAmount,
+      now,
+    });
   }
 
   private couponDiscountAmount(coupon: any, amount: number) {
@@ -4706,7 +4799,10 @@ export class ShopService {
   async updateOrderStatus(orderId: string, userId: string, dto: any) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { items: true },
+      include: {
+        items: true,
+        merchant: { select: { regionId: true } },
+      },
     });
     if (!order || order.userId !== userId)
       throw new NotFoundException("订单不存在");
@@ -4740,6 +4836,7 @@ export class ShopService {
     }
 
     const status = requestedStatus;
+    const completionTime = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
       if (status === "CANCELLED") {
         const claimed = await tx.order.updateMany({
@@ -4791,8 +4888,8 @@ export class ShopService {
           },
           data: {
             status: "COMPLETED" as any,
-            receiveTime: new Date(),
-            completeTime: new Date(),
+            receiveTime: completionTime,
+            completeTime: completionTime,
           },
         });
         if (claimed.count !== 1)
@@ -4817,6 +4914,7 @@ export class ShopService {
           displayMode: this.deliveryDisplayModeForOrder(order),
           remark: "用户确认收货",
         });
+        await this.creditConfirmedShopRiderIncome(tx, order, completionTime);
       }
       return tx.order.findUniqueOrThrow({
         where: { id: orderId },

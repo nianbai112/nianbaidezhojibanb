@@ -36,7 +36,10 @@ const ACCESS_CODE_TTL_MS = 30 * 60 * 1000;
 const PLACE_PHOTO_SESSION_TOLERANCE_MS = 2 * 60 * 1000;
 const MAX_PLACE_PHOTO_ACCURACY_METERS = 20;
 const MAX_PLACE_PHOTO_DISTANCE_METERS = 20;
-const PLACE_CALIBRATION_APPLY_VERSION = 1;
+// Bump when a previously approved place-verification object must be applied
+// again to upgrade trusted calibration metadata in an existing draft.
+const PLACE_CALIBRATION_APPLY_VERSION = 2;
+const PLACE_VERIFICATION_COORDINATE_SOURCE = "rider_app_place_verification_approved";
 
 type CampusPlaceTarget = {
   id: string;
@@ -814,6 +817,156 @@ export class CampusMapCollectionService {
       return routeDependency ? { ...object, routeDependency } : object;
     });
     return { items: decoratedItems, total, page, pageSize };
+  }
+
+  async synchronizeApprovedPlaceCalibrations(regionId: string, adminId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const objects = await tx.campusMapCollectionObject.findMany({
+        where: {
+          objectType: "place_verification",
+          reviewStatus: "approved",
+          session: { task: { regionId, status: { not: "cancelled" } } },
+        },
+        include: {
+          attachments: true,
+          session: {
+            select: {
+              id: true,
+              taskId: true,
+              startedAt: true,
+              endedAt: true,
+              task: { select: { id: true, taskType: true, status: true } },
+            },
+          },
+        },
+        orderBy: [{ reviewedAt: "desc" }, { recordedAt: "desc" }],
+        take: 500,
+      });
+
+      const candidatesByPlace = new Map<string, any[]>();
+      let missingTargetCount = 0;
+      for (const object of objects) {
+        const properties = object.properties
+          && typeof object.properties === "object"
+          && !Array.isArray(object.properties)
+          ? object.properties as Record<string, unknown>
+          : {};
+        const bindings = Array.isArray(object.bindings)
+          ? object.bindings as Array<Record<string, unknown>>
+          : [];
+        const targetPlaceId = String(
+          properties.targetPlaceId
+          || bindings.find((binding) => String(binding?.targetType || "") === "place"
+            && String(binding?.relationType || "") === "verifies")?.targetId
+          || "",
+        ).trim();
+        if (!targetPlaceId) {
+          missingTargetCount += 1;
+          continue;
+        }
+        const candidates = candidatesByPlace.get(targetPlaceId) || [];
+        candidates.push(object);
+        candidatesByPlace.set(targetPlaceId, candidates);
+      }
+
+      const skipped: Array<{ placeId: string; objectId: string; reason: string; message: string }> = [];
+      let synchronizedPlaceCount = 0;
+      let calibrationPointCount = 0;
+      let ready = false;
+      let draftRevision: number | null = null;
+
+      for (const [targetPlaceId, candidates] of candidatesByPlace.entries()) {
+        let synchronized = false;
+        for (const object of candidates) {
+          try {
+            const reviewedAt = object.reviewedAt ? new Date(object.reviewedAt) : new Date();
+            const draftApply = await this.applyApprovedObject(
+              tx,
+              regionId,
+              object,
+              {
+                targetPlaceId,
+                applyFields: ["location"],
+                promoteAttachmentIds: [],
+              },
+              adminId,
+              reviewedAt,
+              { force: true },
+            );
+            const previousApplyResult = object.applyResult
+              && typeof object.applyResult === "object"
+              && !Array.isArray(object.applyResult)
+              ? object.applyResult as Record<string, unknown>
+              : {};
+            await tx.campusMapCollectionObject.update({
+              where: { id: object.id },
+              data: {
+                appliedToDraftAt: reviewedAt,
+                appliedDraftId: draftApply.draftId,
+                appliedDraftRevision: draftApply.draftRevision,
+                applyFingerprint: draftApply.fingerprint,
+                applyResult: {
+                  ...previousApplyResult,
+                  ...draftApply,
+                  synchronizedCalibrationAt: new Date().toISOString(),
+                } as Prisma.InputJsonValue,
+              },
+            });
+            synchronizedPlaceCount += 1;
+            calibrationPointCount = Math.max(
+              calibrationPointCount,
+              Number(draftApply?.calibration?.pointCount || 0),
+            );
+            ready = ready || draftApply?.calibration?.ready === true;
+            draftRevision = Number(draftApply.draftRevision || draftRevision || 0) || draftRevision;
+            if (draftApply?.calibration?.applied !== true) {
+              skipped.push({
+                placeId: targetPlaceId,
+                objectId: String(object.id),
+                reason: String(draftApply?.calibration?.reason || "calibration_not_required"),
+                message: draftApply?.calibration?.reason === "artwork_anchor_missing"
+                  ? "地点缺少画师地图锚点，坐标已恢复但不能生成校准点"
+                  : "当前地图不需要生成画师底图校准点",
+              });
+            }
+            synchronized = true;
+            break;
+          } catch (error) {
+            if (!(error instanceof BadRequestException)) throw error;
+            skipped.push({
+              placeId: targetPlaceId,
+              objectId: String(object.id),
+              reason: "evidence_invalid",
+              message: String(error.message || "历史采集证据不满足当前校验规则"),
+            });
+          }
+        }
+        if (!synchronized && candidates.length > 1) {
+          skipped.push({
+            placeId: targetPlaceId,
+            objectId: "",
+            reason: "no_valid_candidate",
+            message: "该地点的历史审核记录均未通过当前证据复核",
+          });
+        }
+      }
+
+      const calibrationNotRequired = synchronizedPlaceCount > 0
+        && skipped.filter((item) => item.reason === "native_gcj02_not_required").length === synchronizedPlaceCount;
+      return {
+        scannedObjectCount: objects.length,
+        candidatePlaceCount: candidatesByPlace.size,
+        synchronizedPlaceCount,
+        calibrationPointCount,
+        requiredPointCount: calibrationNotRequired ? 0 : 3,
+        remainingPointCount: calibrationNotRequired ? 0 : Math.max(0, 3 - calibrationPointCount),
+        ready: calibrationNotRequired || ready,
+        calibrationNotRequired,
+        draftRevision,
+        missingTargetCount,
+        skipped,
+      };
+    });
   }
 
   async updateTask(
@@ -2515,6 +2668,7 @@ export class CampusMapCollectionService {
     },
     adminId: string,
     reviewedAt: Date,
+    options: { force?: boolean } = {},
   ) {
     const properties = object.properties && typeof object.properties === "object" && !Array.isArray(object.properties)
       ? object.properties as Record<string, unknown>
@@ -2576,7 +2730,7 @@ export class CampusMapCollectionService {
       : null;
     const canReuseAppliedResult = object.objectType !== "road"
       || Number(previousRouteAnchors?.version) === 1;
-    if (object.applyFingerprint === fingerprint && object.appliedToDraftAt && canReuseAppliedResult) {
+    if (!options.force && object.applyFingerprint === fingerprint && object.appliedToDraftAt && canReuseAppliedResult) {
       return {
         ...previousApplyResult,
         applied: true,
@@ -2932,6 +3086,9 @@ export class CampusMapCollectionService {
         : [];
       const layer = this.ensureOperatorLayer(manifest, "operator_routes", "现场采集路线");
       const stableFeatureId = `collection-route-${object.id}`;
+      const index = layer.inlineData.features.findIndex((item: any) => String(item?.properties?.sourceObjectId || item?.properties?.id) === object.id || item?.properties?.id === stableFeatureId);
+      const existingPublic = index >= 0
+        && layer.inlineData.features[index]?.properties?.public === true;
       const feature = {
         type: "Feature",
         geometry: { ...object.geometry, coordinates: draftCoordinates },
@@ -2948,6 +3105,9 @@ export class CampusMapCollectionService {
             : String(manifest?.coordinateSystem?.type || manifest?.baseSource || "projected"),
           sourceGeometryGcj02: { type: "LineString", coordinates: authoritativeCoordinates },
           collectionSource: "rider_app_approved",
+          // 审核通过只表示路线数据可信，不代表已经授权给用户端导航。
+          // 新路线默认留在草稿；管理员在整改板块明确开启后才随版本发布。
+          public: existingPublic,
           routeEndpointAnchors: routeFeatureAnchors,
           collectedAt: object.recordedAt,
           reviewedAt,
@@ -2960,7 +3120,6 @@ export class CampusMapCollectionService {
           evidence,
         },
       };
-      const index = layer.inlineData.features.findIndex((item: any) => String(item?.properties?.sourceObjectId || item?.properties?.id) === object.id || item?.properties?.id === stableFeatureId);
       if (index >= 0) layer.inlineData.features[index] = feature;
       else layer.inlineData.features.push(feature);
       layer.featureCount = layer.inlineData.features.length;
@@ -3004,7 +3163,9 @@ export class CampusMapCollectionService {
           latitude: acceptedLatitude,
           coordinateType: "gcj02",
           coordinateStatus: "verified",
-          coordinateSource: "rider_app_approved",
+          coordinateSource: object.objectType === "place_verification"
+            ? PLACE_VERIFICATION_COORDINATE_SOURCE
+            : "rider_app_approved",
           coordinateAccuracy: acceptedAccuracy,
           coordinateCollectedAt: placeVerification?.acceptedRecordedAt || object.recordedAt,
           geometryStatus: place.geometryStatus === "verified_polygon" ? place.geometryStatus : "verified_point",
@@ -3018,6 +3179,7 @@ export class CampusMapCollectionService {
         const value = String(properties.constructionStatus || "");
         if (!["built", "under_construction", "planned", "renovating"].includes(value)) throw new BadRequestException("现场建设状态无效");
         data.constructionStatus = value;
+        data.phase = ["under_construction", "planned"].includes(value) ? "future" : "phase1";
       }
       if (applyFields.includes("serviceStatus")) {
         const value = String(properties.serviceStatus || properties.openStatus || "");
@@ -3369,6 +3531,9 @@ export class CampusMapCollectionService {
       longitude: place.coordinateStatus === "verified" ? place.longitude : null,
       latitude: place.coordinateStatus === "verified" ? place.latitude : null,
       coordinateStatus: place.coordinateStatus,
+      coordinateSource: place.coordinateSource,
+      coordinateAccuracy: place.coordinateAccuracy,
+      coordinateCollectedAt: place.coordinateCollectedAt,
       addressDescription: place.addressDescription,
       description: place.description,
       coverUrl: place.coverUrl || place.media?.find((item: any) => item.mediaType === "cover")?.url || null,

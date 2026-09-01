@@ -1,7 +1,10 @@
 import { NotifyService } from "./notify.service";
 
 describe("NotifyService official account channel mask", () => {
-  const build = (officialAccount: boolean) => {
+  const build = (
+    officialAccount: boolean,
+    officialResult: Record<string, any> = { success: true, templateType: "errand_accepted" },
+  ) => {
     const notification = {
       id: "notification-1",
       userId: "user-1",
@@ -40,7 +43,7 @@ describe("NotifyService official account channel mask", () => {
     const official = {
       sendNotificationTemplate: jest
         .fn()
-        .mockResolvedValue({ success: true, templateType: "errand_accepted" }),
+        .mockResolvedValue(officialResult),
     };
     const service = new NotifyService(
       prisma,
@@ -76,7 +79,7 @@ describe("NotifyService official account channel mask", () => {
       });
       await service.dispatchPendingNotifications();
     };
-    return { dispatch, official };
+    return { dispatch, official, prisma };
   };
 
   it("does not send a service-account template when the channel is disabled", async () => {
@@ -94,5 +97,29 @@ describe("NotifyService official account channel mask", () => {
         scene: "errand_accepted",
       }),
     );
+  });
+
+  it("marks a real service-account send failure as partial so the worker can retry", async () => {
+    const { dispatch, prisma } = build(true, {
+      success: false,
+      error: "wechat api unavailable",
+      templateType: "errand_accepted",
+    });
+
+    await dispatch();
+
+    expect(prisma.notification.update).toHaveBeenCalledWith({
+      where: { id: "notification-1" },
+      data: expect.objectContaining({
+        deliveryStatus: "partial",
+        deliveryReport: expect.objectContaining({
+          officialAccount: {
+            status: "failed",
+            error: "wechat api unavailable",
+            templateType: "errand_accepted",
+          },
+        }),
+      }),
+    });
   });
 });

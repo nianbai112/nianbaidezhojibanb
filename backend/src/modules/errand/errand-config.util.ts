@@ -21,7 +21,7 @@ export const DEFAULT_ERRAND_SERVICE_DESCRIPTIONS: Record<string, string> = {
   express_pickup: '快递到了不方便拿，同校同学顺路帮取',
   express_send: '寄快递不用跑驿站，填写信息后等人上门',
   food_delivery: '外卖、奶茶、校园餐，到点帮你送到手边',
-  custom_task: '打印、买东西、送资料等临时任务都可以发布',
+  custom_task: '打印、送资料、排队等无需垫付的临时任务都可以发布',
 }
 
 export const DEFAULT_ERRAND_SWITCHES = {

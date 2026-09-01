@@ -12,6 +12,11 @@ import * as nodemailer from 'nodemailer';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  getManagedWechatTemplateContract,
+  isWechatTemplateTechnicalConfigManaged,
+  normalizeWechatTemplatePlatform,
+} from '../wechat/wechat-template-contracts';
 
 const SECRET_MASK = '******';
 const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|pass$/i;
@@ -115,7 +120,18 @@ export class SystemAdminService {
       this.prisma.wechatTemplateConfig.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.wechatTemplateConfig.count({ where }),
     ]);
-    return { list, total, page, pageSize };
+    return {
+      list: list.map((item: any) => {
+        const contract = getManagedWechatTemplateContract(item.platformType, item.templateType);
+        const contractManaged = isWechatTemplateTechnicalConfigManaged(item.platformType, item.templateType);
+        return contract
+          ? { ...item, fieldMapping: contract.fieldMapping, defaultPage: contract.defaultPage || item.defaultPage, contractManaged }
+          : { ...item, contractManaged };
+      }),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async createTemplate(dto: CreateWechatTemplateDto) {
@@ -125,12 +141,27 @@ export class SystemAdminService {
   async updateTemplate(id: string, dto: UpdateWechatTemplateDto) {
     const tpl = await this.prisma.wechatTemplateConfig.findUnique({ where: { id } });
     if (!tpl) throw new NotFoundException('模板不存在');
-    return this.prisma.wechatTemplateConfig.update({ where: { id }, data: this.normalizeWechatTemplateDto(dto) as any });
+    if (isWechatTemplateTechnicalConfigManaged(tpl.platformType, tpl.templateType)) {
+      const immutableChanged =
+        (dto.platformType && normalizeWechatTemplatePlatform(dto.platformType) !== normalizeWechatTemplatePlatform(tpl.platformType))
+        || (dto.templateType && dto.templateType !== tpl.templateType)
+        || (dto.templateId !== undefined && dto.templateId !== tpl.templateId)
+        || dto.fieldMapping !== undefined
+        || dto.defaultPage !== undefined
+        || dto.pageTemplate !== undefined;
+      if (immutableChanged) {
+        throw new BadRequestException('该通知模板的 ID、字段映射和页面路径由发布配置托管');
+      }
+    }
+    return this.prisma.wechatTemplateConfig.update({ where: { id }, data: this.normalizeWechatTemplateDto(dto, tpl) as any });
   }
 
   async deleteTemplate(id: string) {
     const tpl = await this.prisma.wechatTemplateConfig.findUnique({ where: { id } });
     if (!tpl) throw new NotFoundException('模板不存在');
+    if (isWechatTemplateTechnicalConfigManaged(tpl.platformType, tpl.templateType)) {
+      throw new BadRequestException('该通知模板由后端托管，不能从运营后台删除');
+    }
     return this.prisma.wechatTemplateConfig.delete({ where: { id } });
   }
 
@@ -142,10 +173,30 @@ export class SystemAdminService {
     return { success: true };
   }
 
-  private normalizeWechatTemplateDto<T extends CreateWechatTemplateDto | UpdateWechatTemplateDto>(dto: T): T {
+  private normalizeWechatTemplateDto<T extends CreateWechatTemplateDto | UpdateWechatTemplateDto>(dto: T, current?: any): T {
     const data: Record<string, any> = { ...dto };
     if (data.platformType === 'miniapp') data.platformType = 'miniprogram';
     if (data.pageTemplate && !data.defaultPage) data.defaultPage = data.pageTemplate;
+    const platformType = data.platformType || current?.platformType;
+    const templateType = data.templateType || current?.templateType;
+    const contract = getManagedWechatTemplateContract(platformType, templateType);
+    if (contract) {
+      if (current) {
+        // A non-technical update (for example enabled=false) must not rewrite
+        // the persisted production mapping as a side effect.
+        if (data.platformType !== undefined) data.platformType = contract.platformType;
+        if (data.templateType !== undefined) data.templateType = contract.templateType;
+        delete data.fieldMapping;
+        delete data.defaultPage;
+        delete data.pageTemplate;
+      } else {
+        data.platformType = contract.platformType;
+        data.templateType = contract.templateType;
+        data.fieldMapping = contract.fieldMapping;
+        if (contract.defaultPage) data.defaultPage = contract.defaultPage;
+        delete data.pageTemplate;
+      }
+    }
     return data as T;
   }
 
@@ -699,7 +750,8 @@ export class SystemAdminService {
   }
 
   async saveConfigGroup(group: string, configs: Record<string, any>) {
-    for (const [key, value] of Object.entries(configs)) {
+    for (const [key, rawValue] of Object.entries(configs)) {
+      const value = this.omitBackendManagedConfigFields(group, key, rawValue);
       // Merge secrets for sensitive fields
       if (typeof value === 'object' && value !== null) {
         const existing = await this.prisma.config.findUnique({ where: { key } });
@@ -726,6 +778,18 @@ export class SystemAdminService {
       await this.prisma.config.upsert({ where: { key }, create: { key, value, group }, update: { value } });
     }
     return { success: true };
+  }
+
+  private omitBackendManagedConfigFields(group: string, key: string, value: any) {
+    if (group !== 'wechat_pay' || key !== 'wechat_pay' || !value || typeof value !== 'object' || Array.isArray(value)) {
+      return value;
+    }
+    const safeValue = { ...value };
+    delete safeValue.platformPublicKeyId;
+    delete safeValue.platformPublicKey;
+    delete safeValue.platformCert;
+    delete safeValue.platformCertificates;
+    return safeValue;
   }
 
   private getAgreementDefinition(type: any) {

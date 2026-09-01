@@ -78,6 +78,20 @@ export class CampusMapController {
     return this.service.getProjectCatalog(resolvedRegionId);
   }
 
+  @Post('admin/campus-map/project-catalog/release-batch/prepare')
+  @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
+  @RequirePermission('region:edit')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '按已核验地点整理本次滚动发布批次' })
+  async prepareVerifiedReleaseBatch(
+    @Req() req: Request,
+    @Query('regionId') regionId?: string,
+    @Query('mapId') mapId?: string,
+  ) {
+    const resolvedRegionId = await this.resolveCatalogWriteRegion(req, regionId, mapId);
+    return this.service.prepareVerifiedReleaseBatch(resolvedRegionId, (req as any).user?.sub);
+  }
+
   @Put('admin/campus-map/project-catalog/:number')
   @UseGuards(JwtGuard, AdminGuard, AdminPermissionGuard)
   @RequirePermission('region:edit')
