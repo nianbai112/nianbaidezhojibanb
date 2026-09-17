@@ -1,3 +1,4 @@
+import { reserveCouponIssue } from '../../common/coupon-policy';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import {
@@ -48,15 +49,9 @@ export class ShareService {
   private async grantCoupon(tx: any, userId: string, couponId: any, reason: string) {
     const id = String(couponId || '').trim();
     if (!id) return null;
-    const coupon = await tx.coupon.findUnique({ where: { id } });
-    if (!coupon || coupon.status !== 'active') throw new BadRequestException(`${reason}优惠券不存在或已失效`);
-    const now = new Date();
-    if (coupon.endAt && now > coupon.endAt) throw new BadRequestException(`${reason}优惠券已过期`);
-    if (coupon.receivedCount >= coupon.totalCount) throw new BadRequestException(`${reason}优惠券已领完`);
-    const owned = await tx.couponReceive.count({ where: { couponId: id, userId } });
-    if (owned >= coupon.limitPerUser) return null;
+    const coupon = await reserveCouponIssue(tx, id, userId, 1, { skipIfLimit: true });
+    if (!coupon) return null;
     const receive = await tx.couponReceive.create({ data: { couponId: id, userId } });
-    await tx.coupon.update({ where: { id }, data: { receivedCount: { increment: 1 } } });
     return receive;
   }
 
@@ -230,7 +225,7 @@ export class ShareService {
         }
       }
       return updated;
-    });
+    }, { isolationLevel: 'ReadCommitted' });
   }
 
   // ==================== 统计 ====================

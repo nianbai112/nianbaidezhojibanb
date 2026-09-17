@@ -5,6 +5,7 @@ describe("ShopService SKU checkout bridge", () => {
     const prisma = {
       product: { findUnique: jest.fn(), findFirst: jest.fn() },
       merchant: { findUnique: jest.fn() },
+      couponReceive: { findMany: jest.fn().mockResolvedValue([]) },
       cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
       productModifierGroup: { findMany: jest.fn() },
       order: { findUnique: jest.fn(), findUniqueOrThrow: jest.fn() },
@@ -283,6 +284,7 @@ describe("ShopService SKU checkout bridge", () => {
           },
         ]),
       },
+      couponReceive: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
       address: { findFirst: jest.fn().mockResolvedValue(null) },
     };
@@ -311,6 +313,7 @@ describe("ShopService SKU checkout bridge", () => {
         }),
       },
       cart: { findMany: jest.fn().mockResolvedValue([]) },
+      couponReceive: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
       address: { findFirst: jest.fn().mockResolvedValue(null) },
     };
@@ -338,6 +341,7 @@ describe("ShopService SKU checkout bridge", () => {
         }),
       },
       cart: { findMany: jest.fn().mockResolvedValue([]) },
+      couponReceive: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
       address: { findFirst: jest.fn().mockResolvedValue(null) },
     };
@@ -395,6 +399,7 @@ describe("ShopService SKU checkout bridge", () => {
           },
         ]),
       },
+      couponReceive: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
       address: { findFirst: jest.fn().mockResolvedValue(null) },
       productModifierOption: {
@@ -1404,7 +1409,7 @@ describe("ShopService SKU checkout bridge", () => {
     );
 
     expect(tx.cart.deleteMany).toHaveBeenCalledWith({
-      where: { userId: "user-1", id: { in: ["cart-1"] }, selected: true },
+      where: { userId: "user-1", OR: [{ id: "cart-1", quantity: 1, updatedAt: undefined }], selected: true },
     });
     expect(tx.order.create).toHaveBeenCalledWith(
       expect.objectContaining({

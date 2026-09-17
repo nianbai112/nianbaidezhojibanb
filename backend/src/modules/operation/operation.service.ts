@@ -1,3 +1,4 @@
+import { reserveCouponIssue, couponDiscountAmount } from '../../common/coupon-policy';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Gender } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
@@ -6,6 +7,8 @@ import { PaymentService } from '../payment/payment.service';
 import { MembershipService } from '../membership/membership.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
 import { GrowthService } from '../growth/growth.service';
+import { assertErrandGenderChangeAllowed } from '../errand/errand-delivery-requirements';
+import { resolveActiveCouponCampaign, assertCouponCampaignRules, lockErrandAssignee } from '../errand/errand-transaction-guards';
 
 @Injectable()
 export class OperationService {
@@ -268,8 +271,8 @@ export class OperationService {
       valid_to: coupon.endAt,
       startAt: coupon.startAt,
       endAt: coupon.endAt,
-      status: receive?.status || coupon.status,
-      user_coupon_status: receive?.status || coupon.status,
+      status: receive?.status === 'unused' && new Date(coupon.endAt) < new Date() ? 'expired' : receive?.status || coupon.status,
+      user_coupon_status: receive?.status === 'unused' && new Date(coupon.endAt) < new Date() ? 'expired' : receive?.status || coupon.status,
       coupon_status: coupon.status,
       description: coupon.description,
       region_id: coupon.regionId,
@@ -278,7 +281,8 @@ export class OperationService {
       merchantId: coupon.merchantId,
       business_scope: businessScope,
       businessScope,
-      is_universal: !coupon.merchantId,
+      is_universal: businessScope === 'all' && !coupon.merchantId && !coupon.regionId,
+      applicable_to_module: businessScope !== 'all' || !!coupon.merchantId || !!coupon.regionId,
       applicable_modules: modules,
       coupon,
     };
@@ -309,7 +313,8 @@ export class OperationService {
       daily_limit_per_user: 0,
       user_claimed_count: userClaimedCount,
       user_daily_claimed_count: userDailyClaimedCount,
-      is_claimed: userClaimedCount > 0,
+      is_claimed: userClaimedCount >= limitPerUser,
+      has_claimed: userClaimedCount > 0,
       can_claim: canClaim,
       coupon_status: canClaim ? '可领取' : userClaimedCount >= limitPerUser ? '已领取' : base.coupon_status,
     };
@@ -333,7 +338,8 @@ export class OperationService {
       };
     }
     const where: any = {
-      status: 'pending',
+      status: 'active',
+      startAt: { lte: new Date() },
       endAt: { gte: new Date() },
     };
     where.OR = [{ regionId: null }, { regionId }];
@@ -403,56 +409,73 @@ export class OperationService {
       const now = new Date();
       if (coupon.startAt && now < coupon.startAt) throw new BadRequestException('优惠券领取未开始');
       if (coupon.endAt && now > coupon.endAt) throw new BadRequestException('优惠券已过期');
-      if (coupon.receivedCount >= coupon.totalCount) throw new BadRequestException('优惠券已领完');
-      const owned = await tx.couponReceive.count({ where: { couponId: id, userId } });
-      if (owned >= coupon.limitPerUser) throw new BadRequestException('已达到领取上限');
+      await reserveCouponIssue(tx, id, userId);
       const receive = await tx.couponReceive.create({ data: { couponId: id, userId }, include: { coupon: true } });
-      await tx.coupon.update({ where: { id }, data: { receivedCount: { increment: 1 } } });
       return this.formatUserCoupon(receive);
-    });
+    }, { isolationLevel: 'ReadCommitted' });
   }
 
-  async getMyCoupons(userId: string, query: any) {
-    const { status = 'unused', module: moduleType, page = 1, limit = 10 } = query;
+  async getMyCoupons(userId: string, query: any = {}) {
+    const status = String(query.status || 'unused').toLowerCase();
+    const moduleType = String(query.module || '').toLowerCase();
+    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 10)));
+    const now = new Date();
     const where: any = { userId };
-    if (status) where.status = status;
+    if (status !== 'all') where.status = status;
+    if (status === 'expired') {
+      delete where.status;
+      where.OR = [{ status: 'expired' }, { status: 'unused', coupon: { endAt: { lt: now } } }];
+    }
     const couponWhere: any = {};
     const scopeMap: Record<string, string[]> = {
-      errand: ['all', 'errand'],
-      running: ['all', 'errand'],
-      shop: ['all', 'shop'],
-      takeout: ['all', 'shop'],
-      takeaway: ['all', 'shop'],
-      mall: ['all', 'mall'],
-      activity: ['all', 'activity'],
-      membership: ['all', 'membership'],
+      errand: ['all', 'errand'], running: ['all', 'errand'],
+      shop: ['all', 'shop'], takeout: ['all', 'shop'], takeaway: ['all', 'shop'],
+      mall: ['all', 'mall'], activity: ['all', 'activity'], membership: ['all', 'membership'],
     };
-    const scopes = scopeMap[String(moduleType || '').toLowerCase()];
-    if (scopes?.length) couponWhere.businessScope = { in: scopes };
-    if (moduleType === 'mall') couponWhere.merchantId = null;
-    const [rows, total] = await Promise.all([
-      this.prisma.couponReceive.findMany({
-        where: Object.keys(couponWhere).length ? { ...where, coupon: couponWhere } : where,
-        include: { coupon: true },
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.couponReceive.count({
-        where: Object.keys(couponWhere).length ? { ...where, coupon: couponWhere } : where,
-      }),
-    ]);
+    if (scopeMap[moduleType]) couponWhere.businessScope = { in: scopeMap[moduleType] };
+    const regionId = String(query.region_id || query.regionId || '').trim();
+    const merchantId = String(query.merchant_id || query.merchantId || '').trim();
+    const amount = query.amount ?? query.goods_amount;
+    const contexts: any[] = [];
+    if (regionId) contexts.push({ OR: [{ regionId: null }, { regionId }] });
+    if (merchantId) contexts.push({ OR: [{ merchantId: null }, { merchantId }] });
+    if (contexts.length) couponWhere.AND = contexts;
+    if (['mall', 'errand', 'running'].includes(moduleType)) couponWhere.merchantId = null;
+    if (status === 'unused') {
+      Object.assign(couponWhere, { status: 'active', startAt: { lte: now }, endAt: { gte: now } });
+      if (amount !== undefined && Number.isFinite(Number(amount))) couponWhere.minAmount = { lte: Math.max(0, Number(amount)) };
+    }
+    if (Object.keys(couponWhere).length) where.coupon = couponWhere;
+    // Filter campaign eligibility before pagination so earlier unusable coupons cannot hide usable ones.
+    const receives = await this.prisma.couponReceive.findMany({ where, include: { coupon: true }, orderBy: { createdAt: 'desc' } });
+    const checks = new Map<string, Promise<boolean>>();
+    const orderType = ['errand', 'running'].includes(moduleType) ? 'errand' : 'shop';
+    const filtered = [];
+    for (const receive of receives) {
+      if (status === 'unused') {
+        if (!checks.has(receive.couponId)) checks.set(receive.couponId, (async () => {
+          try {
+            const campaign = await resolveActiveCouponCampaign(this.prisma, receive.couponId);
+            if (['errand', 'running', 'shop', 'takeout', 'takeaway'].includes(moduleType)) {
+              await assertCouponCampaignRules(this.prisma, campaign, userId, receive.couponId,
+                amount === undefined ? 0 : couponDiscountAmount(receive.coupon, Number(amount)), orderType);
+            }
+            return true;
+          } catch (error) {
+            if (error instanceof BadRequestException) return false;
+            throw error;
+          }
+        })());
+        if (!await checks.get(receive.couponId)) continue;
+      }
+      filtered.push(receive);
+    }
+    const total = filtered.length;
     return {
-      list: rows.map((receive) => this.formatUserCoupon(receive)),
-      total,
-      page: Number(page),
-      pageSize: Number(limit),
-      pagination: {
-        total,
-        current_page: Number(page),
-        per_page: Number(limit),
-        total_pages: Math.max(1, Math.ceil(total / Number(limit || 10))),
-      },
+      list: filtered.slice((page - 1) * limit, page * limit).map(receive => this.formatUserCoupon(receive)),
+      total, page, pageSize: limit,
+      pagination: { total, page, current_page: page, per_page: limit, total_pages: Math.max(1, Math.ceil(total / limit)) },
     };
   }
 
@@ -462,6 +485,8 @@ export class OperationService {
     if (!code) throw new BadRequestException('请输入兑换码');
     await this.userAccess.assertStudentProtectedAction(userId, regionId, '兑换卡券');
     return this.prisma.$transaction(async (tx) => {
+      const lockedCode = await tx.couponRedeemCode.updateMany({ where: { code }, data: { usedCount: { increment: 0 } } });
+      if (lockedCode.count !== 1) throw new BadRequestException('兑换码不存在或已失效');
       const redeemCode = await tx.couponRedeemCode.findUnique({
         where: { code },
         include: { coupon: true },
@@ -482,13 +507,14 @@ export class OperationService {
       if (coupon.regionId && coupon.regionId !== regionId) throw new BadRequestException('优惠券不属于当前区域');
       if (coupon.startAt && now < coupon.startAt) throw new BadRequestException('优惠券领取未开始');
       if (coupon.endAt && now > coupon.endAt) throw new BadRequestException('优惠券已过期');
-      if (coupon.receivedCount >= coupon.totalCount) throw new BadRequestException('优惠券已领完');
-      const owned = await tx.couponReceive.count({ where: { couponId: coupon.id, userId } });
-      if (owned >= coupon.limitPerUser) throw new BadRequestException('已达到领取上限');
-
+      await reserveCouponIssue(tx, coupon.id, userId);
+      const reserved = await tx.couponRedeemCode.updateMany({
+        where: { id: redeemCode.id, status: 'active', usedCount: redeemCode.usedCount,
+          totalLimit: { gt: redeemCode.usedCount }, perUserLimit: redeemCode.perUserLimit },
+        data: { usedCount: { increment: 1 } },
+      });
+      if (reserved.count !== 1) throw new BadRequestException('兑换码状态已变化，请刷新后重试');
       const receive = await tx.couponReceive.create({ data: { couponId: coupon.id, userId }, include: { coupon: true } });
-      await tx.coupon.update({ where: { id: coupon.id }, data: { receivedCount: { increment: 1 } } });
-      await tx.couponRedeemCode.update({ where: { id: redeemCode.id }, data: { usedCount: { increment: 1 } } });
       await tx.couponRedeemRecord.create({
         data: {
           redeemCodeId: redeemCode.id,
@@ -499,7 +525,7 @@ export class OperationService {
         },
       });
       return this.formatUserCoupon(receive);
-    });
+    }, { isolationLevel: 'ReadCommitted' });
   }
 
   async getRuntimePopups(query: any) {
@@ -1652,85 +1678,6 @@ export class OperationService {
     };
   }
 
-  // ========== 打卡 ==========
-  async getPunchInConfig(regionId: string) {
-    return this.prisma.punchInConfig.findUnique({ where: { regionId } });
-  }
-
-  async getPunchInStatus(regionId: string, userId: string) {
-    return this.getSigninStatus(regionId, userId);
-  }
-
-  async punchInCheckIn(userId: string, dto: any) {
-    return this.signin(dto.region_id, userId);
-  }
-
-  async getPunchInLocations(query: any) {
-    const { region_id } = query;
-    return this.prisma.punchInLocation.findMany({ where: { regionId: region_id, status: 'PUBLISHED' } });
-  }
-
-  async getPunchInLocationDetail(locationId: string) {
-    return this.prisma.punchInLocation.findUnique({ where: { id: locationId } });
-  }
-
-  async updatePunchInLocation(locationId: string, dto: any) {
-    return this.prisma.punchInLocation.update({
-      where: { id: locationId },
-      data: {
-        name: dto.name,
-        description: dto.description || dto.desc,
-        address: dto.address,
-        latitude: dto.latitude === undefined ? undefined : Number(dto.latitude),
-        longitude: dto.longitude === undefined ? undefined : Number(dto.longitude),
-        coverImage: dto.coverImage || dto.cover || dto.cover_url,
-        status: dto.status,
-      },
-    });
-  }
-
-  async getPunchInComments(locationId: string, query: any) {
-    const { page = 1, limit = 10 } = query;
-    return this.prisma.comment.findMany({
-      where: { postId: locationId },
-      skip: (page - 1) * limit,
-      take: Number(limit),
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
-  async createPunchInComment(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '发布打卡评论');
-    return this.prisma.comment.create({
-      data: {
-        userId,
-        postId: dto.location_id,
-        content: dto.content,
-      },
-    });
-  }
-
-  async getWishlist(userId: string) {
-    return this.prisma.punchInWishlist.findMany({ where: { userId } });
-  }
-
-  async addWishlist(locationId: string, userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '收藏打卡点');
-    return this.prisma.punchInWishlist.create({ data: { userId, locationId, content: dto.content } });
-  }
-
-  async addWishlistFromBody(userId: string, dto: any) {
-    const locationId = dto.locationId || dto.location_id;
-    if (!locationId) throw new BadRequestException('缺少打卡点ID');
-    return this.addWishlist(String(locationId), userId, dto);
-  }
-
-  async removeWishlist(locationId: string, userId: string) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '取消收藏打卡点');
-    await this.prisma.punchInWishlist.deleteMany({ where: { userId, locationId } });
-    return { success: true };
-  }
-
   // ========== 评分 ==========
   async getRatingCategories(regionId: string, query: any) {
     const { page = 1, limit = 10 } = query;
@@ -1870,95 +1817,6 @@ export class OperationService {
   }
 
   // ========== 网盘 ==========
-  async getNetDiskCategories(query: any) {
-    const where: any = {};
-    const regionId = query?.region_id || query?.regionId;
-    if (regionId) where.regionId = String(regionId);
-    return this.prisma.netDiskCategory.findMany({ where, orderBy: { sortOrder: 'asc' } });
-  }
-
-  async getNetDiskResources(query: any) {
-    const where: any = { status: 'active', isShared: true };
-    const catId = query?.category_id || query?.categoryId;
-    if (catId) where.categoryId = String(catId);
-    // AUD-P1-130: 通过分类间接过滤区域
-    const regionId = query?.region_id || query?.regionId;
-    if (regionId) {
-      const catIds = await this.prisma.netDiskCategory.findMany({
-        where: { regionId: String(regionId) },
-        select: { id: true },
-      });
-      if (catIds.length) where.categoryId = { in: catIds.map(c => c.id) };
-    }
-    // AUD-P1-130: 支持关键词搜索标题
-    const keyword = query?.keyword;
-    if (keyword) where.title = { contains: String(keyword) };
-    return this.prisma.netDiskResource.findMany({ where, orderBy: { createdAt: 'desc' } });
-  }
-
-  async getNetDiskResourceDetail(id: string) {
-    const resource = await this.prisma.netDiskResource.findUnique({ where: { id } });
-    if (!resource) throw new NotFoundException('资源不存在');
-    // AUD-P1-131: 构造前端期望的 links[] 格式
-    return {
-      ...resource,
-      links: [{
-        id: resource.id,
-        url: resource.url,
-        extract_code: resource.extractCode || '',
-        platform_id: resource.platformId || '',
-      }],
-    };
-  }
-
-  async getNetDiskComments(query: any) {
-    const where: any = {};
-    const resourceId = query?.resource_id || query?.resourceId;
-    if (resourceId) where.resourceId = String(resourceId);
-    return this.prisma.netDiskComment.findMany({ where, orderBy: { createdAt: 'desc' } });
-  }
-
-  async createNetDiskComment(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '发布网盘评论');
-    return this.prisma.netDiskComment.create({ data: { userId, resourceId: dto.resource_id, content: dto.content } });
-  }
-
-  async favoriteNetDisk(resourceId: string, userId: string) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '收藏网盘资源');
-    return this.prisma.netDiskFavorite.upsert({ where: { userId_resourceId: { userId, resourceId } }, create: { userId, resourceId }, update: {} });
-  }
-
-  async unfavoriteNetDisk(resourceId: string, userId: string) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '取消收藏网盘资源');
-    await this.prisma.netDiskFavorite.deleteMany({ where: { userId, resourceId } });
-    return { success: true };
-  }
-
-  async getNetDiskFavorites(userId: string, query: any) {
-    return this.prisma.netDiskFavorite.findMany({ where: { userId } });
-  }
-
-  async reportNetDisk(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '举报网盘资源');
-    // AUD-P1-131: 兼容前端传入的 link_id 和 report_reason
-    const targetId = dto?.link_id || dto?.resource_id;
-    if (!targetId) throw new BadRequestException('缺少举报对象ID');
-    const reason = this.textValue(dto?.reason || dto?.report_type || dto?.report_reason, '用户举报');
-    const detail = this.textValue(dto?.detail || dto?.content || dto?.description || dto?.report_reason);
-    const duplicated = await this.prisma.report.findFirst({
-      where: { reporterId: userId, targetType: 'netdisk', targetId, status: { in: ['pending', 'processing'] } },
-    }).catch(() => null);
-    if (duplicated) return { success: true, message: '你已举报过，运营会尽快处理', data: duplicated };
-    return this.prisma.report.create({
-      data: {
-        reporterId: userId,
-        targetType: 'netdisk',
-        targetId: dto.resource_id,
-        reason: dto.reason,
-        status: 'pending',
-      },
-    });
-  }
 
   // ========== 贴纸 ==========
   private toBoolFlag(value: any) {
@@ -2175,15 +2033,9 @@ export class OperationService {
   private async grantInviteCoupon(tx: any, userId: string, couponId: any, reason: string) {
     const id = String(couponId || '').trim();
     if (!id) return null;
-    const coupon = await tx.coupon.findUnique({ where: { id } });
-    if (!coupon || coupon.status !== 'active') throw new BadRequestException(`${reason}优惠券不存在或已失效`);
-    const now = new Date();
-    if (coupon.endAt && now > coupon.endAt) throw new BadRequestException(`${reason}优惠券已过期`);
-    if (coupon.receivedCount >= coupon.totalCount) throw new BadRequestException(`${reason}优惠券已领完`);
-    const owned = await tx.couponReceive.count({ where: { couponId: id, userId } });
-    if (owned >= coupon.limitPerUser) return null;
+    const coupon = await reserveCouponIssue(tx, id, userId, 1, { skipIfLimit: true });
+    if (!coupon) return null;
     const receive = await tx.couponReceive.create({ data: { couponId: id, userId }, include: { coupon: true } });
-    await tx.coupon.update({ where: { id }, data: { receivedCount: { increment: 1 } } });
     return receive;
   }
 
@@ -2446,12 +2298,10 @@ export class OperationService {
       } else {
         await this.createPendingShareReward(tx, invite.id, userId, 'INVITEE', inviteeReward, pendingReason, !!couponValue.inviteeCouponId);
       }
-      const [inviterCoupon, inviteeCoupon] = immediateReward
-        ? await Promise.all([
-            this.grantInviteCoupon(tx, inviterId, couponValue.inviterCouponId, '邀请人奖励'),
-            this.grantInviteCoupon(tx, userId, couponValue.inviteeCouponId, '新人奖励'),
-          ])
-        : [null, null];
+      const inviterCoupon = immediateReward
+        ? await this.grantInviteCoupon(tx, inviterId, couponValue.inviterCouponId, '邀请人奖励') : null;
+      const inviteeCoupon = immediateReward
+        ? await this.grantInviteCoupon(tx, userId, couponValue.inviteeCouponId, '新人奖励') : null;
       return {
         success: true,
         invite,
@@ -2462,7 +2312,7 @@ export class OperationService {
           invitee: inviteeCoupon ? this.formatUserCoupon(inviteeCoupon) : null,
         },
       };
-    });
+    }, { isolationLevel: 'ReadCommitted' });
   }
 
   async getInviteRecords(userId: string) {
@@ -2883,6 +2733,10 @@ export class OperationService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (gender !== undefined) {
+        await lockErrandAssignee(tx, userId);
+        await assertErrandGenderChangeAllowed(tx, userId, gender);
+      }
       const userData: Record<string, any> = {};
       if (nickname !== undefined) userData.nickname = nickname;
       if (avatar !== undefined) userData.avatar = avatar;
@@ -3100,655 +2954,6 @@ export class OperationService {
   }
 
   // ========== 对象匹配 ==========
-  private cleanDatingId(value: any) {
-    const text = String(value || '').trim();
-    if (!text || text === 'undefined' || text === 'null') return undefined;
-    return text;
-  }
-
-  private asBoolean(value: any, fallback = false) {
-    if (value === undefined || value === null || value === '') return fallback;
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value === 1;
-    return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
-  }
-
-  private asArray(value: any): any[] {
-    if (!value) return [];
-    if (Array.isArray(value)) return value;
-    if (typeof value === 'string') {
-      try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed : [value].filter(Boolean);
-      } catch {
-        return value.split(',').map((item) => item.trim()).filter(Boolean);
-      }
-    }
-    return [value];
-  }
-
-  private normalizeDatingTags(value: any) {
-    return this.asArray(value)
-      .map((item) => (typeof item === 'string' ? { text: item } : { ...item, text: item?.text || item?.name || String(item || '') }))
-      .filter((item) => item.text);
-  }
-
-  private getDatingAge(birthYear?: number | null) {
-    if (!birthYear) return null;
-    const age = new Date().getFullYear() - Number(birthYear);
-    return age > 0 && age < 100 ? age : null;
-  }
-
-  private formatDatingStatus(status?: string) {
-    const map: Record<string, string> = {
-      pending: '待审核',
-      approved: '已通过',
-      rejected: '未通过',
-      PENDING: '待回应',
-      MATCHED: '互相喜欢',
-      REJECTED: '已跳过',
-      EXPIRED: '已过期',
-    };
-    return map[status || ''] || status || '-';
-  }
-
-  private formatDatingProfile(profile: any, viewerId?: string) {
-    if (!profile) return null;
-    const user = profile.user || {};
-    const userProfile = user.profile || {};
-    const photos = this.asArray(profile.photos).filter(Boolean);
-    const gender = profile.gender || userProfile.gender || '';
-    const normalizedGender = String(gender).toLowerCase();
-    const age = this.getDatingAge(profile.birthYear) || this.getDatingAge(userProfile.birthday ? new Date(userProfile.birthday).getFullYear() : null);
-    return {
-      id: profile.id,
-      profile_id: profile.id,
-      user_id: profile.userId,
-      uid: user.uid,
-      uid_text: user.uid ? String(user.uid).padStart(6, '0') : '',
-      name: profile.displayName || user.nickname || user.name || '校园用户',
-      avatar: user.avatar || photos[0] || '/static/logo.jpg',
-      photos: photos.length ? photos : [user.avatar || '/static/logo.jpg'],
-      gender: normalizedGender === 'male' || normalizedGender === '1' || normalizedGender === '男' ? 'male' : normalizedGender === 'female' || normalizedGender === '2' || normalizedGender === '女' ? 'female' : '',
-      gender_text: normalizedGender === 'male' || normalizedGender === '1' || normalizedGender === '男' ? '男' : normalizedGender === 'female' || normalizedGender === '2' || normalizedGender === '女' ? '女' : '未填写',
-      age,
-      height: profile.height || null,
-      is_student: !!profile.isStudent,
-      school: profile.school || userProfile.school || '',
-      grade: profile.grade || userProfile.grade || '',
-      major: profile.major || userProfile.major || '',
-      work: profile.work || '',
-      cp_declaration: profile.bio || userProfile.bio || '',
-      bio: profile.bio || userProfile.bio || '',
-      hobbies: this.normalizeDatingTags(profile.hobbies || profile.tags),
-      personality_tags: this.normalizeDatingTags(profile.personalityTags),
-      visibility: profile.visibility || 'region',
-      audit_status: profile.auditStatus,
-      audit_status_text: this.formatDatingStatus(profile.auditStatus),
-      audit_remark: profile.auditRemark || '',
-      is_open: !!profile.isOpen,
-      liked_count: profile.likedCount || 0,
-      matched_count: profile.matchedCount || 0,
-      distance_text: '同区域',
-      last_active: profile.lastActiveAt || profile.updatedAt || profile.createdAt,
-      is_self: viewerId ? profile.userId === viewerId : false,
-      created_at: profile.createdAt,
-      updated_at: profile.updatedAt,
-    };
-  }
-
-  private async ensureDatingConfig(regionId?: string) {
-    const cleanRegionId = this.cleanDatingId(regionId);
-    if (!cleanRegionId) return null;
-    const region = await this.prisma.region.findUnique({
-      where: { id: cleanRegionId },
-      select: { id: true, name: true },
-    });
-    if (!region) return null;
-    return this.prisma.datingConfig.upsert({
-      where: { regionId: cleanRegionId },
-      create: {
-        regionId: cleanRegionId,
-        isOpen: true,
-        dailyMatchLimit: 10,
-        requireAudit: true,
-        requireStudentAuth: false,
-        enableWhoLikedMe: true,
-        enablePaidPackage: true,
-        profileReviewMode: 'manual',
-      } as any,
-      update: {},
-      include: { region: { select: { id: true, name: true } } },
-    });
-  }
-
-  private formatDatingConfig(config: any, regionId?: string) {
-    return {
-      id: config?.id || '',
-      region_id: config?.regionId || regionId || '',
-      region_name: config?.region?.name || '',
-      is_open: config?.isOpen ?? true,
-      daily_match_limit: config?.dailyMatchLimit ?? 10,
-      require_audit: config?.requireAudit ?? true,
-      require_student_auth: config?.requireStudentAuth ?? false,
-      enable_who_liked_me: config?.enableWhoLikedMe ?? true,
-      enable_paid_package: config?.enablePaidPackage ?? true,
-      ai_recommend_enabled: config?.aiRecommendEnabled ?? false,
-      profile_review_mode: config?.profileReviewMode || 'manual',
-      price: Number(config?.price || 0),
-      match_rules: config?.matchRules || {},
-    };
-  }
-
-  private async getDatingQuotaSnapshot(userId: string, regionId?: string) {
-    const config = await this.ensureDatingConfig(regionId);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dailyLimit = config?.dailyMatchLimit ?? 10;
-    const dailyUsed = await this.prisma.match.count({
-      where: {
-        userId,
-        status: { in: ['PENDING', 'MATCHED'] as any },
-        createdAt: { gte: today },
-      },
-    });
-    const quota = await this.prisma.datingQuota.upsert({
-      where: { userId },
-      create: { userId, remainingCount: 0, totalPurchased: 0, usedPurchased: 0 },
-      update: {},
-    });
-    const freeRemaining = Math.max(0, dailyLimit - dailyUsed);
-    return {
-      daily_limit: dailyLimit,
-      daily_used: dailyUsed,
-      free_remaining: freeRemaining,
-      paid_remaining: quota.remainingCount,
-      remaining_matches: freeRemaining + quota.remainingCount,
-      total_purchased: quota.totalPurchased,
-      used_purchased: quota.usedPurchased,
-      config: this.formatDatingConfig(config, regionId),
-    };
-  }
-
-  async getDatingConfig(regionId: string) {
-    const config = await this.ensureDatingConfig(regionId);
-    return {
-      success: true,
-      data: this.formatDatingConfig(config, regionId),
-      message: config ? '对象匹配配置已获取' : '当前区域暂未配置对象匹配',
-    };
-  }
-
-  async getDatingProfile(userId: string) {
-    const profile = await this.prisma.datingProfile.findUnique({
-      where: { userId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            uid: true,
-            nickname: true,
-            avatar: true,
-            profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } },
-          },
-        },
-        region: { select: { id: true, name: true } },
-      },
-    });
-    const quota = await this.getDatingQuotaSnapshot(userId, profile?.regionId || undefined);
-    return {
-      success: true,
-      data: {
-        profile: this.formatDatingProfile(profile, userId),
-        quota,
-      },
-    };
-  }
-
-  async createOrUpdateDatingProfile(userId: string, dto: any) {
-    const regionId = this.cleanDatingId(dto.region_id || dto.regionId);
-    if (!regionId) throw new BadRequestException('请先选择区域后再完善对象匹配资料');
-    await this.userAccess.assertStudentProtectedAction(userId, regionId, '编辑对象匹配资料');
-    const config = await this.ensureDatingConfig(regionId);
-    if (!config || !config.isOpen) throw new BadRequestException('当前区域暂未开启对象匹配');
-    if (config?.requireStudentAuth) {
-      const verified = await this.prisma.studentVerify.findUnique({ where: { userId }, select: { status: true } });
-      if (verified?.status !== 'APPROVED') throw new BadRequestException('当前区域要求先完成学生认证后才能使用对象匹配');
-    }
-
-    const autoApprove = config && (!config.requireAudit || config.profileReviewMode === 'auto' || config.profileReviewMode === 'auto_approve');
-    const auditStatus = autoApprove ? 'approved' : 'pending';
-    const photos = this.asArray(dto.photos || dto.images).filter(Boolean);
-    const data: any = {
-      regionId: regionId || null,
-      displayName: dto.display_name || dto.displayName || dto.name || null,
-      gender: dto.gender || null,
-      birthYear: dto.birth_year || dto.birthYear ? Number(dto.birth_year || dto.birthYear) : null,
-      height: dto.height ? Number(dto.height) : null,
-      isStudent: this.asBoolean(dto.is_student ?? dto.isStudent, false),
-      school: dto.school || null,
-      grade: dto.grade || null,
-      major: dto.major || null,
-      work: dto.work || null,
-      longitude: dto.longitude ? Number(dto.longitude) : null,
-      latitude: dto.latitude ? Number(dto.latitude) : null,
-      photos,
-      bio: dto.cp_declaration || dto.bio || dto.description || '',
-      tags: this.normalizeDatingTags(dto.tags || dto.hobbies),
-      hobbies: this.normalizeDatingTags(dto.hobbies || dto.tags),
-      personalityTags: this.normalizeDatingTags(dto.personality_tags || dto.personalityTags),
-      visibility: dto.visibility || 'region',
-      isOpen: this.asBoolean(dto.is_open ?? dto.isOpen, true),
-      auditStatus,
-      auditRemark: autoApprove ? '' : '资料已提交，等待运营审核',
-      lastActiveAt: new Date(),
-    };
-
-    const profile = await this.prisma.datingProfile.upsert({
-      where: { userId },
-      update: data,
-      create: { userId, ...data },
-      include: {
-        user: {
-          select: {
-            id: true,
-            uid: true,
-            nickname: true,
-            avatar: true,
-            profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } },
-          },
-        },
-        region: { select: { id: true, name: true } },
-      },
-    });
-    return {
-      success: true,
-      data: { profile: this.formatDatingProfile(profile, userId) },
-      message: auditStatus === 'approved' ? '资料已保存，已开始推荐' : '资料已提交，等待运营审核',
-    };
-  }
-
-  async getDatingProfileList(viewerId: string, query: any) {
-    const page = Math.max(1, Number(query.page || 1));
-    const limit = Math.min(50, Math.max(1, Number(query.limit || query.pageSize || 20)));
-    const regionId = this.cleanDatingId(query.region_id || query.regionId);
-    const config = regionId ? await this.ensureDatingConfig(regionId) : null;
-    const quota = await this.getDatingQuotaSnapshot(viewerId, regionId);
-    if (regionId && (!config || !config.isOpen)) {
-      return {
-        success: true,
-        data: {
-          profiles: [],
-          pagination: {
-            current_page: page,
-            per_page: limit,
-            total_count: 0,
-            total_pages: 1,
-          },
-          quota,
-        },
-        message: '当前区域暂未开启对象匹配',
-      };
-    }
-    const where: any = {
-      isOpen: true,
-      auditStatus: 'approved',
-      userId: { not: viewerId },
-    };
-    if (regionId) {
-      where.OR = [{ regionId }, { visibility: 'all' }];
-    }
-    if (query.gender) where.gender = String(query.gender);
-    if (query.is_student === 1 || query.is_student === '1' || query.is_student === true) where.isStudent = true;
-    if (query.min_height || query.max_height) {
-      where.height = {};
-      if (query.min_height) where.height.gte = Number(query.min_height);
-      if (query.max_height) where.height.lte = Number(query.max_height);
-    }
-    if (query.min_age || query.max_age) {
-      const year = new Date().getFullYear();
-      where.birthYear = {};
-      if (query.min_age) where.birthYear.lte = year - Number(query.min_age);
-      if (query.max_age) where.birthYear.gte = year - Number(query.max_age);
-    }
-
-    const [blockRows, actedRows] = await Promise.all([
-      this.prisma.block.findMany({
-        where: { OR: [{ userId: viewerId }, { blockedId: viewerId }] },
-        select: { userId: true, blockedId: true },
-      }),
-      this.prisma.match.findMany({
-        where: { userId: viewerId },
-        select: { targetId: true },
-      }),
-    ]);
-    const excludedUserIds = new Set<string>([viewerId]);
-    blockRows.forEach((row) => {
-      excludedUserIds.add(row.userId === viewerId ? row.blockedId : row.userId);
-    });
-    if (!this.asBoolean(query.include_seen, false)) {
-      actedRows.forEach((row) => excludedUserIds.add(row.targetId));
-    }
-    where.userId = { notIn: Array.from(excludedUserIds) };
-
-    const [list, total] = await Promise.all([
-      this.prisma.datingProfile.findMany({
-        where,
-        skip: (page - 1) * limit,
-        take: limit,
-        orderBy: [{ lastActiveAt: 'desc' }, { updatedAt: 'desc' }],
-        include: {
-          user: {
-            select: {
-              id: true,
-              uid: true,
-              nickname: true,
-              avatar: true,
-              profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } },
-            },
-          },
-          region: { select: { id: true, name: true } },
-        },
-      }),
-      this.prisma.datingProfile.count({ where }),
-    ]);
-
-    return {
-      success: true,
-      data: {
-        profiles: list.map((item) => this.formatDatingProfile(item, viewerId)),
-        pagination: {
-          current_page: page,
-          per_page: limit,
-          total_count: total,
-          total_pages: Math.max(1, Math.ceil(total / limit)),
-        },
-        quota,
-      },
-    };
-  }
-
-  async datingMatchAction(userId: string, dto: any) {
-    const targetId = this.cleanDatingId(dto.target_user_id || dto.targetId || dto.target_id);
-    if (!targetId) throw new BadRequestException('请选择要匹配的用户');
-    if (targetId === userId) throw new BadRequestException('不能匹配自己');
-    const rawAction = String(dto.match_type || dto.action || 'like').toLowerCase();
-    const action = ['pass', 'skip', 'reject', 'nope'].includes(rawAction) ? 'pass' : 'like';
-    const regionId = this.cleanDatingId(dto.region_id || dto.regionId);
-    await this.userAccess.assertStudentProtectedAction(userId, regionId, '使用对象匹配');
-    const config = regionId ? await this.ensureDatingConfig(regionId) : null;
-    if (regionId && (!config || !config.isOpen)) throw new BadRequestException('当前区域暂未开启对象匹配');
-
-    const targetProfile = await this.prisma.datingProfile.findUnique({
-      where: { userId: targetId },
-      include: {
-        user: { select: { id: true, uid: true, nickname: true, avatar: true, profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } } } },
-      },
-    });
-    if (!targetProfile || !targetProfile.isOpen || targetProfile.auditStatus !== 'approved') {
-      throw new BadRequestException('该用户暂时不能匹配');
-    }
-
-    const block = await this.prisma.block.findFirst({
-      where: { OR: [{ userId, blockedId: targetId }, { userId: targetId, blockedId: userId }] },
-      select: { id: true },
-    });
-    if (block) throw new BadRequestException('你们之间存在屏蔽关系，不能继续匹配');
-
-    if (action === 'pass') {
-      await this.prisma.$transaction([
-        this.prisma.match.upsert({
-          where: { userId_targetId: { userId, targetId } },
-          update: { status: 'REJECTED' as any, matchType: 'interest', regionId, actionSource: 'mini_program' },
-          create: { userId, targetId, status: 'REJECTED' as any, matchType: 'interest', regionId, actionSource: 'mini_program' },
-        }),
-        this.prisma.match.updateMany({
-          where: { userId: targetId, targetId: userId, status: 'PENDING' as any },
-          data: { status: 'REJECTED' as any, actionSource: 'mini_program' },
-        }),
-      ]);
-      return { success: true, data: { action: 'pass' }, message: '已跳过' };
-    }
-
-    const quota = await this.getDatingQuotaSnapshot(userId, regionId);
-    const existing = await this.prisma.match.findUnique({ where: { userId_targetId: { userId, targetId } } });
-    if (!existing || existing.status === 'REJECTED') {
-      if (quota.free_remaining <= 0 && quota.paid_remaining <= 0) {
-        throw new BadRequestException('今日喜欢次数已用完，可以购买匹配次数后继续使用');
-      }
-      if (quota.free_remaining <= 0) {
-        await this.prisma.datingQuota.update({
-          where: { userId },
-          data: { remainingCount: { decrement: 1 }, usedPurchased: { increment: 1 } },
-        });
-      }
-    }
-
-    const reverse = await this.prisma.match.findUnique({ where: { userId_targetId: { userId: targetId, targetId: userId } } });
-    const isMutual = reverse?.status === 'PENDING' || reverse?.status === 'MATCHED';
-    const now = new Date();
-    const status = isMutual ? 'MATCHED' : 'PENDING';
-    await this.prisma.$transaction([
-      this.prisma.match.upsert({
-        where: { userId_targetId: { userId, targetId } },
-        update: { status: status as any, matchType: 'interest', regionId, actionSource: 'mini_program', matchedAt: isMutual ? now : null },
-        create: { userId, targetId, status: status as any, matchType: 'interest', regionId, actionSource: 'mini_program', matchedAt: isMutual ? now : null },
-      }),
-      ...(isMutual
-        ? [
-            this.prisma.match.update({
-              where: { userId_targetId: { userId: targetId, targetId: userId } },
-              data: { status: 'MATCHED' as any, matchedAt: now },
-            }),
-            this.prisma.datingProfile.update({ where: { userId }, data: { matchedCount: { increment: 1 } } }),
-            this.prisma.datingProfile.update({ where: { userId: targetId }, data: { matchedCount: { increment: 1 } } }),
-          ]
-        : [this.prisma.datingProfile.update({ where: { userId: targetId }, data: { likedCount: { increment: 1 } } })]),
-    ]);
-
-    const nextQuota = await this.getDatingQuotaSnapshot(userId, regionId);
-    return {
-      success: true,
-      data: {
-        action: 'like',
-        is_mutual: isMutual,
-        remaining_matches: nextQuota.remaining_matches,
-        quota: nextQuota,
-        target_user: this.formatDatingProfile(targetProfile, userId),
-      },
-      message: isMutual ? '你们互相喜欢了，可以开始聊天' : '已喜欢，等对方回应',
-    };
-  }
-
-  async getDatingPackages(query: any) {
-    const regionId = this.cleanDatingId(query.region_id || query.regionId);
-    const config = regionId ? await this.ensureDatingConfig(regionId) : null;
-    if (regionId && config?.enablePaidPackage === false) {
-      return { success: true, data: { packages: [] }, message: '当前区域未开启对象匹配套餐' };
-    }
-    const where: any = {};
-    if (regionId) where.OR = [{ regionId }, { regionId: null }];
-    const list = await this.prisma.datingPackage.findMany({
-      where,
-      include: { region: { select: { id: true, name: true } } },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
-    });
-    return {
-      success: true,
-      data: {
-        packages: list.map((item) => ({
-          id: item.id,
-          package_name: item.name,
-          name: item.name,
-          current_price: Number(item.price || 0),
-          original_price: Number((item.rights as any)?.original_price || item.price || 0),
-          match_count: item.matchCount,
-          validity_days: item.validDays,
-          description: item.description || '',
-          bonus_description: item.description || `${item.matchCount} 次喜欢机会`,
-          is_hot: !!(item.rights as any)?.is_hot,
-          is_recommended: !!(item.rights as any)?.is_recommended,
-          region_id: item.regionId,
-          region_name: item.region?.name || '全部区域',
-        })),
-      },
-    };
-  }
-
-  async createDatingOrder(userId: string, dto: any) {
-    const packageId = this.cleanDatingId(dto.package_id || dto.packageId);
-    if (!packageId) throw new BadRequestException('请选择匹配套餐');
-    const pkg = await this.prisma.datingPackage.findUnique({ where: { id: packageId } });
-    if (!pkg) throw new NotFoundException('匹配套餐不存在');
-    const regionId = this.cleanDatingId((pkg as any).regionId || dto.region_id || dto.regionId);
-    await this.userAccess.assertStudentProtectedAction(userId, regionId, '购买对象匹配套餐');
-    const config = regionId ? await this.ensureDatingConfig(regionId) : null;
-    if (regionId && config?.enablePaidPackage === false) throw new BadRequestException('当前区域未开启对象匹配套餐');
-    const payType = String(dto.pay_type || dto.payType || 'balance');
-    const amount = Number(pkg.price || 0);
-    const orderNo = `DAT${Date.now()}${Math.floor(Math.random() * 1000)}`;
-
-    if (amount <= 0 || payType === 'balance') {
-      const result = await this.prisma.$transaction(async (tx) => {
-        if (amount > 0) {
-          const wallet = await tx.wallet.findUnique({ where: { userId } });
-          if (!wallet || Number(wallet.balance) < amount) throw new BadRequestException('余额不足，请先充值');
-          const nextBalance = Number(wallet.balance) - amount;
-          await tx.wallet.update({
-            where: { userId },
-            data: { balance: { decrement: amount }, totalOut: { increment: amount } },
-          });
-          await tx.walletTransaction.create({
-            data: {
-              userId,
-              type: 'PAY',
-              amount,
-              balance: nextBalance,
-              channel: 'BALANCE',
-              orderNo,
-              description: `对象匹配套餐：${pkg.name}`,
-              status: 'SUCCESS',
-            } as any,
-          });
-        }
-        const order = await tx.datingOrder.create({
-          data: { userId, packageId, amount, orderNo, status: 'paid', payChannel: amount > 0 ? 'balance' : 'free', payTime: new Date() },
-          include: { package: true },
-        });
-        const quota = await tx.datingQuota.upsert({
-          where: { userId },
-          create: { userId, remainingCount: pkg.matchCount, totalPurchased: pkg.matchCount, usedPurchased: 0 },
-          update: { remainingCount: { increment: pkg.matchCount }, totalPurchased: { increment: pkg.matchCount } },
-        });
-        return { order, quota };
-      });
-      return {
-        success: true,
-        data: {
-          order_id: result.order.id,
-          order_number: result.order.orderNo,
-          total_amount: amount,
-          status: result.order.status,
-          quota: result.quota,
-        },
-        message: '购买成功，匹配次数已到账',
-      };
-    }
-
-    const order = await this.prisma.datingOrder.create({ data: { userId, packageId, amount, orderNo, status: 'pending', payChannel: payType } });
-    return {
-      success: true,
-      data: {
-        order_id: order.id,
-        order_number: order.orderNo,
-        total_amount: amount,
-        status: order.status,
-        requires_payment: true,
-      },
-      message: '订单已创建，请继续完成支付',
-    };
-  }
-
-  async getMyDatingMatches(userId: string, query: any) {
-    const regionId = this.cleanDatingId(query.region_id || query.regionId);
-    const matchScope = regionId ? { regionId } : {};
-    const [matchedRows, likedMeRows, sentRows, quota] = await Promise.all([
-      this.prisma.match.findMany({
-        where: { ...matchScope, OR: [{ userId }, { targetId: userId }], status: 'MATCHED' as any },
-        take: 50,
-        orderBy: { updatedAt: 'desc' },
-        include: {
-          user: { select: { id: true, uid: true, nickname: true, avatar: true, profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } }, datingProfile: true } },
-          target: { select: { id: true, uid: true, nickname: true, avatar: true, profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } }, datingProfile: true } },
-        },
-      }),
-      this.prisma.match.findMany({
-        where: { ...matchScope, targetId: userId, status: 'PENDING' as any },
-        take: 50,
-        orderBy: { createdAt: 'desc' },
-        include: { user: { select: { id: true, uid: true, nickname: true, avatar: true, profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } }, datingProfile: true } } },
-      }),
-      this.prisma.match.findMany({
-        where: { ...matchScope, userId, status: 'PENDING' as any },
-        take: 50,
-        orderBy: { createdAt: 'desc' },
-        include: { target: { select: { id: true, uid: true, nickname: true, avatar: true, profile: { select: { gender: true, birthday: true, school: true, major: true, grade: true, bio: true } }, datingProfile: true } } },
-      }),
-      this.getDatingQuotaSnapshot(userId, regionId),
-    ]);
-    const toOtherProfile = (row: any) => {
-      const other = row.userId === userId ? row.target : row.user;
-      return this.formatDatingProfile({ ...(other.datingProfile || {}), userId: other.id, user: other }, userId);
-    };
-    return {
-      success: true,
-      data: {
-        matches: matchedRows.map(toOtherProfile).filter(Boolean),
-        liked_me: quota.config?.enable_who_liked_me === false
-          ? []
-          : likedMeRows.map((row: any) => this.formatDatingProfile({ ...(row.user.datingProfile || {}), userId: row.user.id, user: row.user }, userId)).filter(Boolean),
-        sent_likes: sentRows.map((row: any) => this.formatDatingProfile({ ...(row.target.datingProfile || {}), userId: row.target.id, user: row.target }, userId)).filter(Boolean),
-        quota,
-      },
-    };
-  }
-
-  async reportDatingUser(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '举报对象匹配用户');
-    const targetId = this.cleanDatingId(dto.target_user_id || dto.targetId || dto.target_id);
-    if (!targetId || targetId === userId) throw new BadRequestException('举报对象不正确');
-    const target = await this.prisma.user.findUnique({ where: { id: targetId }, select: { id: true } });
-    if (!target) throw new BadRequestException('举报对象不存在');
-    const report = await this.prisma.datingReport.create({
-      data: {
-        reporterId: userId,
-        targetId,
-        reason: dto.reason || '其他问题',
-        detail: dto.detail || dto.content || '',
-        images: this.asArray(dto.images),
-        status: 'pending',
-      },
-    });
-    return { success: true, data: { report_id: report.id }, message: '已提交举报，运营会尽快处理' };
-  }
-
-  async blockDatingUser(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '屏蔽对象匹配用户');
-    const targetId = this.cleanDatingId(dto.target_user_id || dto.targetId || dto.target_id);
-    if (!targetId || targetId === userId) throw new BadRequestException('屏蔽对象不正确');
-    await this.prisma.$transaction([
-      this.prisma.block.upsert({
-        where: { userId_blockedId: { userId, blockedId: targetId } },
-        create: { userId, blockedId: targetId },
-        update: {},
-      }),
-      this.prisma.match.updateMany({
-        where: { OR: [{ userId, targetId }, { userId: targetId, targetId: userId }] },
-        data: { status: 'REJECTED' as any },
-      }),
-    ]);
-    return { success: true, message: '已屏蔽，对方不会再出现在推荐里' };
-  }
 
   // ========== 团购 ==========
   async getGroupBuyPackages(query: any) {

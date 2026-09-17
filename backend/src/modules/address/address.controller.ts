@@ -40,7 +40,7 @@ export class AddressController {
   @Get('addresses/specified/detail/:addressId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getSpecifiedDetail(@Param('addressId') addressId: string) {
-    return this.addressService.getDetail(addressId);
+  getSpecifiedDetail(@Param('addressId') addressId: string, @CurrentUser('sub') userId: string) {
+    return this.addressService.getDetail(addressId, userId);
   }
 }

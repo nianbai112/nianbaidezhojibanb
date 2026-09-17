@@ -1,11 +1,11 @@
 <template>
   <div class="page-shell">
-    <PageHeader title="外卖区域规则" subtitle="配置区域抽成、配送范围、审核与结算规则" icon="Setting" />
+    <PageHeader title="外卖 / 宿舍小店区域规则" subtitle="配置配送范围、审核与结算规则" icon="Setting" />
     <div class="filter-bar">
       <el-select v-model="selectedRegionId" placeholder="选择区域" clearable filterable style="width: 240px" @change="loadDetail">
         <el-option v-for="r in regionList" :key="r.id" :label="r.name" :value="r.id" />
       </el-select>
-      <el-button type="primary" :disabled="!selectedRegionId" @click="save">保存设置</el-button>
+      <el-button type="primary" :disabled="!selectedRegionId || loading || !detailLoaded" @click="save">保存设置</el-button>
     </div>
     <el-card v-loading="loading" v-if="selectedRegionId">
       <template #header><span>区域商家配置</span></template>
@@ -24,8 +24,9 @@
         </el-row>
         <el-row :gutter="24">
           <el-col :span="12">
-            <el-form-item label="平台抽成比例(%)">
-              <el-input-number v-model="form.commissionRate" :min="0" :max="100" :precision="2" style="width: 100%" />
+            <el-form-item label="校区商家抽成">
+              <span>{{ Number(form.commissionRate).toFixed(2) }}%</span>
+              <el-button v-if="canViewFinance" link type="primary" @click="$router.push('/finance/overview')">前往财务中心设置</el-button>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -94,7 +95,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { canAccessPath } from '@/router/access'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getRegionMerchantSettings, getRegionMerchantSettingDetail, saveRegionMerchantSettings } from '@/api/merchant'
@@ -102,6 +105,9 @@ import { fetchRegions } from '@/api/admin'
 import { ElMessage } from 'element-plus'
 
 const loading = ref(false)
+const detailLoaded = ref(false)
+const auth = useAuthStore()
+const canViewFinance = computed(() => canAccessPath('/finance/overview', auth.accessContext))
 const selectedRegionId = ref('')
 const regionList = ref<any[]>([])
 const settingsMap = ref<Record<string, any>>({})
@@ -109,7 +115,7 @@ const settingsMap = ref<Record<string, any>>({})
 const form = reactive({
   autoAuditEnabled: false,
   maxMerchants: 100,
-  commissionRate: 5,
+  commissionRate: 0,
   minWithdrawAmount: 10,
   withdrawFeeRate: 0,
   defaultDeliveryRange: 3,
@@ -131,12 +137,7 @@ const loadRegions = async () => {
 
 const loadDetail = async () => {
   if (!selectedRegionId.value) return
-  // 优先使用已缓存的设置
-  const cached = settingsMap.value[selectedRegionId.value]
-  if (cached) {
-    Object.assign(form, cached)
-    return
-  }
+  detailLoaded.value = false
   loading.value = true
   try {
     const res: any = await getRegionMerchantSettingDetail(selectedRegionId.value)
@@ -145,7 +146,7 @@ const loadDetail = async () => {
       Object.assign(form, {
         autoAuditEnabled: !!data.autoAuditEnabled,
         maxMerchants: data.maxMerchants ?? 100,
-        commissionRate: data.commissionRate ?? 5,
+        commissionRate: data.commissionRate ?? 0,
         minWithdrawAmount: data.minWithdrawAmount ?? 10,
         withdrawFeeRate: data.withdrawFeeRate ?? 0,
         defaultDeliveryRange: data.defaultDeliveryRange ?? 3,
@@ -157,11 +158,12 @@ const loadDetail = async () => {
         isOpen: data.isOpen !== false,
       })
       settingsMap.value[selectedRegionId.value] = { ...form }
+      detailLoaded.value = true
     }
   } catch (e: any) {
     // 可能是404表示没有设置过，使用默认值
     Object.assign(form, {
-      autoAuditEnabled: false, maxMerchants: 100, commissionRate: 5, minWithdrawAmount: 10,
+      autoAuditEnabled: false, maxMerchants: 100, commissionRate: 0, minWithdrawAmount: 10,
       withdrawFeeRate: 0, defaultDeliveryRange: 3, allowNegativeStock: false, maxProductCount: 200,
       requireProductAudit: true, settlementCycle: 'weekly', settlementDay: 1, isOpen: true,
     })
@@ -176,7 +178,8 @@ const loadDetail = async () => {
 const save = async () => {
   if (!selectedRegionId.value) { ElMessage.warning('请选择区域'); return }
   try {
-    const payload = { ...form }
+    if (!detailLoaded.value) return
+    const { commissionRate, ...payload } = form
     await saveRegionMerchantSettings(selectedRegionId.value, payload)
     settingsMap.value[selectedRegionId.value] = { ...form }
     ElMessage.success('保存成功')

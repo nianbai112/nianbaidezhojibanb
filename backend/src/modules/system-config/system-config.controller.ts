@@ -164,7 +164,7 @@ export class SystemConfigController {
   // ================= 业务抽成费率配置 =================
 
   @Get('admin/config/biz-fee-configs')
-  @RequirePermission('finance:config')
+  @RequirePermission('finance:view')
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: '获取所有业务抽成费率配置' })
   getBizFeeConfigs() {

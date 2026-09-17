@@ -260,15 +260,6 @@ async function main() {
     { code: 'secondhand:audit', name: '审核二手交易', module: 'secondhand', action: 'audit' },
     { code: 'secondhand:config', name: '二手配置', module: 'secondhand', action: 'config' },
 
-
-    // 打卡管理
-    { code: 'punchIn:location:list', name: '查看打卡点列表', module: 'punchIn', action: 'location:list' },
-    { code: 'punchIn:location:create', name: '创建打卡点', module: 'punchIn', action: 'location:create' },
-    { code: 'punchIn:location:update', name: '更新打卡点', module: 'punchIn', action: 'location:update' },
-    { code: 'punchIn:location:delete', name: '删除打卡点', module: 'punchIn', action: 'location:delete' },
-    { code: 'punchIn:record:list', name: '查看打卡记录', module: 'punchIn', action: 'record:list' },
-    { code: 'punchIn:list', name: '查看打卡管理列表', module: 'punchIn', action: 'list' },
-
     // 评分管理
     { code: 'rating:view', name: '查看评分管理', module: 'rating', action: 'view' },
     { code: 'rating:edit', name: '管理评分', module: 'rating', action: 'edit' },
@@ -288,19 +279,6 @@ async function main() {
     { code: 'share:view', name: '查看分享有礼', module: 'share', action: 'view' },
     { code: 'share:config', name: '管理分享活动', module: 'share', action: 'config' },
     { code: 'share:reward', name: '管理分享奖励', module: 'share', action: 'reward' },
-
-    // 网盘资源（新增）
-    { code: 'netdisk:view', name: '查看网盘资源', module: 'netdisk', action: 'view' },
-    { code: 'netdisk:edit', name: '编辑网盘资源', module: 'netdisk', action: 'edit' },
-    { code: 'netdisk:audit', name: '审核网盘资源', module: 'netdisk', action: 'audit' },
-    { code: 'netdisk:config', name: '网盘配置', module: 'netdisk', action: 'config' },
-    { code: 'netdisk:list', name: '查看网盘列表', module: 'netdisk', action: 'list' },
-
-    // 对象匹配（新增）
-    { code: 'dating:view', name: '查看对象匹配', module: 'dating', action: 'view' },
-    { code: 'dating:audit', name: '审核对象匹配', module: 'dating', action: 'audit' },
-    { code: 'dating:config', name: '配置对象匹配', module: 'dating', action: 'config' },
-    { code: 'dating:list', name: '查看对象匹配列表', module: 'dating', action: 'list' },
 
     // 平台会员
     { code: 'membership:list', name: '查看会员概览', module: 'membership', action: 'list' },
@@ -378,12 +356,6 @@ async function main() {
     { code: 'sticker:update', name: '更新贴纸状态', module: 'sticker', action: 'update' },
     { code: 'sticker:delete', name: '删除贴纸', module: 'sticker', action: 'delete' },
 
-    // 爆照评选
-    { code: 'photoContest:view', name: '查看爆照评选', module: 'photoContest', action: 'view' },
-    { code: 'photoContest:audit', name: '审核爆照评选', module: 'photoContest', action: 'audit' },
-    { code: 'photoContest:config', name: '配置爆照评选', module: 'photoContest', action: 'config' },
-    { code: 'photoContest:list', name: '查看爆照评选列表', module: 'photoContest', action: 'list' },
-
     // A/B 测试
     { code: 'abtest:view', name: '查看A/B测试', module: 'abtest', action: 'view' },
     { code: 'abtest:edit', name: '编辑A/B测试', module: 'abtest', action: 'edit' },
@@ -411,12 +383,6 @@ async function main() {
     // 通知
     { code: 'notification:send', name: '发送通知', module: 'notification', action: 'send' },
     { code: 'notification:view', name: '查看通知', module: 'notification', action: 'view' },
-
-    // 打卡
-    { code: 'punch:view', name: '查看打卡', module: 'punch', action: 'view' },
-    { code: 'punch:edit', name: '编辑打卡', module: 'punch', action: 'edit' },
-    { code: 'punch:audit', name: '审核打卡', module: 'punch', action: 'audit' },
-    { code: 'punch:config', name: '打卡配置', module: 'punch', action: 'config' },
 
     // 推荐
     { code: 'recommend:view', name: '查看推荐', module: 'recommend', action: 'view' },
@@ -478,9 +444,6 @@ async function main() {
     'message:view', 'robot:view', 'robot:post', 'robot:comment',
     'dashboard:view',
     'secondhand:view', 'secondhand:audit', 'secondhand:config',
-    'punchIn:location:list', 'punchIn:location:create', 'punchIn:location:update', 'punchIn:location:delete', 'punchIn:record:list',
-    'netdisk:view', 'netdisk:edit', 'netdisk:audit', 'netdisk:config',
-    'dating:view', 'dating:audit', 'dating:config',
     'topup:package:list', 'topup:order:list',
     'club:list', 'club:detail', 'club:create', 'club:update', 'club:audit', 'club:delete', 'club:member:list', 'club:member:delete',
     'ranking:list', 'ranking:create', 'ranking:update',
@@ -494,7 +457,6 @@ async function main() {
     'rating:view', 'rating:edit', 'rating:audit', 'rating:config',
     'mall:view', 'mall:edit', 'mall:distributor', 'mall:config', 'mall:export', 'mall:refund',
     'share:view', 'share:config', 'share:reward',
-    'photoContest:view', 'photoContest:audit', 'photoContest:config',
     'system:upload', 'system:admin',
   ];
   for (const code of opsPermissions) {
@@ -522,7 +484,7 @@ async function main() {
   }
 
   // 审核人员
-  const audPermissions = ['post:view', 'post:audit', 'comment:view', 'comment:audit', 'comment:delete', 'merchant:view', 'merchant:audit', 'report:handle', 'dashboard:view', 'photoContest:view', 'photoContest:audit', 'activity:view', 'activity:order', 'club:audit', 'sticker:update'];
+  const audPermissions = ['post:view', 'post:audit', 'comment:view', 'comment:audit', 'comment:delete', 'merchant:view', 'merchant:audit', 'report:handle', 'dashboard:view', 'activity:view', 'activity:order', 'club:audit', 'sticker:update'];
   for (const code of audPermissions) {
     const perm = permissions[code];
     if (perm) {
@@ -680,33 +642,10 @@ async function main() {
     { name: '商品管理', path: '/second-hand/products', parentPath: '/second-hand', sortOrder: 0 },
     { name: '订单管理', path: '/second-hand/orders', parentPath: '/second-hand', sortOrder: 1 },
     { name: '区域配置', path: '/second-hand/settings', parentPath: '/second-hand', sortOrder: 2 },
-    { name: '打卡管理', path: '/punch-in', icon: 'EnvironmentOutlined', sortOrder: 13 },
-    { name: '分类管理', path: '/punch-in/categories', parentPath: '/punch-in', sortOrder: 0 },
-    { name: '地点管理', path: '/punch-in/locations', parentPath: '/punch-in', sortOrder: 1 },
-    { name: '打卡记录', path: '/punch-in/records', parentPath: '/punch-in', sortOrder: 2 },
-    { name: '评论管理', path: '/punch-in/comments', parentPath: '/punch-in', sortOrder: 3 },
-    { name: '数据统计', path: '/punch-in/stats', parentPath: '/punch-in', sortOrder: 4 },
-    { name: '区域配置', path: '/punch-in/config', parentPath: '/punch-in', sortOrder: 5 },
     { name: '分享有礼', path: '/share', icon: 'ShareAltOutlined', sortOrder: 14 },
     { name: '分享活动设置', path: '/share/activity', parentPath: '/share', sortOrder: 0 },
     { name: '邀请记录', path: '/share/invites', parentPath: '/share', sortOrder: 1 },
     { name: '奖励记录', path: '/share/rewards', parentPath: '/share', sortOrder: 2 },
-    { name: '网盘资源', path: '/netdisk', icon: 'CloudOutlined', sortOrder: 15 },
-    { name: '分类管理', path: '/netdisk/categories', parentPath: '/netdisk', sortOrder: 0 },
-    { name: '平台管理', path: '/netdisk/platforms', parentPath: '/netdisk', sortOrder: 1 },
-    { name: '资源管理', path: '/netdisk/resources', parentPath: '/netdisk', sortOrder: 2 },
-    { name: '举报管理', path: '/netdisk/reports', parentPath: '/netdisk', sortOrder: 3 },
-    { name: '评论管理', path: '/netdisk/comments', parentPath: '/netdisk', sortOrder: 4 },
-    { name: '下载记录', path: '/netdisk/downloads', parentPath: '/netdisk', sortOrder: 5 },
-    { name: '收益配置', path: '/netdisk/profit-config', parentPath: '/netdisk', sortOrder: 6 },
-    { name: '对象匹配', path: '/dating', icon: 'HeartOutlined', sortOrder: 16 },
-    { name: '资料管理', path: '/dating/profiles', parentPath: '/dating', sortOrder: 0 },
-    { name: '匹配记录', path: '/dating/matches', parentPath: '/dating', sortOrder: 1 },
-    { name: '套餐管理', path: '/dating/packages', parentPath: '/dating', sortOrder: 2 },
-    { name: '订单管理', path: '/dating/orders', parentPath: '/dating', sortOrder: 3 },
-    { name: '举报管理', path: '/dating/reports', parentPath: '/dating', sortOrder: 4 },
-    { name: '配置管理', path: '/dating/config', parentPath: '/dating', sortOrder: 5 },
-    { name: '缓存管理', path: '/dating/cache', parentPath: '/dating', sortOrder: 6 },
     { name: '会员运营', path: '/membership', icon: 'CrownOutlined', sortOrder: 16 },
     { name: '会员概览', path: '/membership/overview', parentPath: '/membership', sortOrder: 0 },
     { name: '付费置顶', path: '/topup', icon: 'DollarOutlined', sortOrder: 17 },
@@ -737,14 +676,6 @@ async function main() {
     { name: '贴纸管理', path: '/sticker', icon: 'SmileOutlined', sortOrder: 27 },
     { name: '分类管理', path: '/sticker/categories', parentPath: '/sticker', sortOrder: 0 },
     { name: '贴纸审核', path: '/sticker/list', parentPath: '/sticker', sortOrder: 1 },
-    // 爆照评选
-    { name: '爆照评选', path: '/photo-contest', icon: 'CameraOutlined', sortOrder: 27 },
-    { name: '评选项目', path: '/photo-contest/contests', parentPath: '/photo-contest', sortOrder: 0 },
-    { name: '待审核照片', path: '/photo-contest/pending', parentPath: '/photo-contest', sortOrder: 1 },
-    { name: '作品管理', path: '/photo-contest/entries', parentPath: '/photo-contest', sortOrder: 2 },
-    { name: '投票统计', path: '/photo-contest/stats', parentPath: '/photo-contest', sortOrder: 3 },
-    { name: '获奖管理', path: '/photo-contest/winners', parentPath: '/photo-contest', sortOrder: 4 },
-    { name: '评选配置', path: '/photo-contest/config', parentPath: '/photo-contest', sortOrder: 5 },
     // 活动管理
     { name: '活动管理', path: '/activity', icon: 'ScheduleOutlined', sortOrder: 28 },
     { name: '活动列表', path: '/activity/list', parentPath: '/activity', sortOrder: 0 },
@@ -810,10 +741,7 @@ async function main() {
     '/system', '/system/admins', '/system/roles', '/system/logs', '/system/config', '/system/website-config', '/system/email-config', '/system/storage', '/system/wechat-pay', '/system/files', '/system/map-picker',
     '/miniapp', '/miniapp/upload', '/miniapp/qrcode', '/miniapp/pages', '/miniapp/subscribe',
     '/second-hand', '/second-hand/products', '/second-hand/orders', '/second-hand/settings',
-    '/punch-in', '/punch-in/categories', '/punch-in/locations', '/punch-in/records', '/punch-in/comments', '/punch-in/stats', '/punch-in/config',
     '/share', '/share/activity', '/share/invites', '/share/rewards',
-    '/netdisk', '/netdisk/categories', '/netdisk/platforms', '/netdisk/resources', '/netdisk/reports', '/netdisk/comments', '/netdisk/downloads', '/netdisk/profit-config',
-    '/dating', '/dating/profiles', '/dating/matches', '/dating/packages', '/dating/orders', '/dating/reports', '/dating/config', '/dating/cache',
     '/topup', '/topup/packages', '/topup/orders',
     '/community', '/community/circles', '/community/payments', '/community/config',
     '/club', '/club/list',
@@ -826,7 +754,6 @@ async function main() {
     '/printer', '/printer/list',
     '/user-title', '/user-title/list',
     '/sticker', '/sticker/categories', '/sticker/list',
-    '/photo-contest', '/photo-contest/contests', '/photo-contest/pending', '/photo-contest/entries', '/photo-contest/stats', '/photo-contest/winners', '/photo-contest/config',
     '/activity', '/activity/list', '/activity/types', '/activity/packages', '/activity/orders', '/activity/rewards',
     '/rating', '/rating/dashboard', '/rating/settings', '/rating/categories', '/rating/items', '/rating/records', '/rating/replies',
   ];
@@ -865,7 +792,6 @@ async function main() {
     '/content', '/content/posts', '/content/comments',
     '/shop', '/shop/merchants',
     '/system', '/system/config',
-    '/photo-contest', '/photo-contest/pending',
     '/activity', '/activity/orders',
   ];
   for (const path of auditorMenuPaths) {

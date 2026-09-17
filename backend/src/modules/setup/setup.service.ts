@@ -684,7 +684,7 @@ export class SetupService {
     updates: Partial<Record<DeployConfigKey, string>>,
   ) {
     const entries = Object.entries(updates).filter(
-      ([, value]) => value !== undefined,
+      ([ value]) => value !== undefined,
     );
     if (entries.length === 0) return 0;
 
@@ -1979,43 +1979,7 @@ export class SetupService {
         module: "secondhand",
         action: "config",
       },
-      // 打卡管理
-      {
-        code: "punchIn:location:list",
-        name: "查看打卡点列表",
-        module: "punchIn",
-        action: "location:list",
-      },
-      {
-        code: "punchIn:location:create",
-        name: "创建打卡点",
-        module: "punchIn",
-        action: "location:create",
-      },
-      {
-        code: "punchIn:location:update",
-        name: "更新打卡点",
-        module: "punchIn",
-        action: "location:update",
-      },
-      {
-        code: "punchIn:location:delete",
-        name: "删除打卡点",
-        module: "punchIn",
-        action: "location:delete",
-      },
-      {
-        code: "punchIn:record:list",
-        name: "查看打卡记录",
-        module: "punchIn",
-        action: "record:list",
-      },
-      {
-        code: "punchIn:list",
-        name: "查看打卡管理列表",
-        module: "punchIn",
-        action: "list",
-      },
+
       // 评分管理
       {
         code: "rating:view",
@@ -2103,62 +2067,8 @@ export class SetupService {
         module: "share",
         action: "reward",
       },
-      // 网盘资源
-      {
-        code: "netdisk:view",
-        name: "查看网盘资源",
-        module: "netdisk",
-        action: "view",
-      },
-      {
-        code: "netdisk:edit",
-        name: "编辑网盘资源",
-        module: "netdisk",
-        action: "edit",
-      },
-      {
-        code: "netdisk:audit",
-        name: "审核网盘资源",
-        module: "netdisk",
-        action: "audit",
-      },
-      {
-        code: "netdisk:config",
-        name: "网盘配置",
-        module: "netdisk",
-        action: "config",
-      },
-      {
-        code: "netdisk:list",
-        name: "查看网盘列表",
-        module: "netdisk",
-        action: "list",
-      },
-      // 对象匹配
-      {
-        code: "dating:view",
-        name: "查看对象匹配",
-        module: "dating",
-        action: "view",
-      },
-      {
-        code: "dating:audit",
-        name: "审核对象匹配",
-        module: "dating",
-        action: "audit",
-      },
-      {
-        code: "dating:config",
-        name: "配置对象匹配",
-        module: "dating",
-        action: "config",
-      },
-      {
-        code: "dating:list",
-        name: "查看对象匹配列表",
-        module: "dating",
-        action: "list",
-      },
+
+
       // 笔记付费置顶
       {
         code: "topup:package:list",
@@ -2505,31 +2415,7 @@ export class SetupService {
         module: "sticker",
         action: "delete",
       },
-      // 爆照评选
-      {
-        code: "photoContest:view",
-        name: "查看爆照评选",
-        module: "photoContest",
-        action: "view",
-      },
-      {
-        code: "photoContest:audit",
-        name: "审核爆照评选",
-        module: "photoContest",
-        action: "audit",
-      },
-      {
-        code: "photoContest:config",
-        name: "配置爆照评选",
-        module: "photoContest",
-        action: "config",
-      },
-      {
-        code: "photoContest:list",
-        name: "查看爆照评选列表",
-        module: "photoContest",
-        action: "list",
-      },
+
       // A/B 测试
       {
         code: "abtest:view",
@@ -2590,21 +2476,7 @@ export class SetupService {
         module: "notification",
         action: "binding:unbind",
       },
-      // 打卡
-      { code: "punch:view", name: "查看打卡", module: "punch", action: "view" },
-      { code: "punch:edit", name: "编辑打卡", module: "punch", action: "edit" },
-      {
-        code: "punch:audit",
-        name: "审核打卡",
-        module: "punch",
-        action: "audit",
-      },
-      {
-        code: "punch:config",
-        name: "打卡配置",
-        module: "punch",
-        action: "config",
-      },
+
       // 推荐
       {
         code: "recommend:view",

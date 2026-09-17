@@ -11,6 +11,8 @@ import {
   isApprovedPlaceVerificationCoordinate,
   isRiderCollectedCalibrationPoint,
   isImageEvidenceAttachment,
+  routeArtworkGeometryState,
+  shouldShowLocalRequestError,
   objectGeometryPolyline,
   objectTypesForTaskType,
   reviewComparisonRows,
@@ -22,6 +24,45 @@ import {
   taskTypeLabel,
   toCollectorOption,
 } from './campusMapCollectionModel.mjs'
+
+test('运营人员可以在画师图和真实路线画布之间切换', () => {
+  const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
+  const header = readFileSync(new URL('./CampusMapWorkbenchHeader.vue', import.meta.url), 'utf8')
+
+  assert.match(header, />画师图</)
+  assert.match(header, />真实路线</)
+  assert.match(painter, /v-if="editorMode === 'amap'"/)
+  assert.match(painter, /ref="amapMapRef"/)
+  assert.doesNotMatch(painter, /function handleEditorModeChange[\s\S]{0,180}editorMode\.value = 'image'/)
+  assert.doesNotMatch(painter, /watch\(\[form, editorMode,/)
+})
+
+test('真实路线画布拒绝把画师比例坐标当成 GCJ-02 经纬度', async () => {
+  const model = await import('./campusMapCollectionModel.mjs')
+
+  assert.equal(typeof model.isValidGcj02Coordinate, 'function')
+  assert.equal(model.isValidGcj02Coordinate({ longitude: 106.5001, latitude: 29.6001 }), true)
+  assert.equal(model.isValidGcj02Coordinate({ longitude: 0.5, latitude: 0.5 }), false)
+  assert.equal(model.isValidGcj02Coordinate({ longitude: 500, latitude: 300 }), false)
+  assert.equal(model.isValidGcj02Coordinate({ longitude: Number.NaN, latitude: 29.6 }), false)
+})
+
+test('真实路线画布可以只显示已审核的骑手实采线', async () => {
+  const model = await import('./campusMapCollectionModel.mjs')
+  const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
+
+  assert.equal(typeof model.isVerifiedRiderRoute, 'function')
+  assert.equal(model.isVerifiedRiderRoute({ sourceProperties: {
+    collectionSource: 'rider_app_approved',
+    verificationStatus: 'verified',
+  } }), true)
+  assert.equal(model.isVerifiedRiderRoute({ sourceProperties: {
+    collectionSource: 'admin_planned',
+    verificationStatus: 'pending_collection',
+  } }), false)
+  assert.match(painter, /只看已审核实采/)
+  assert.match(painter, /visibleAmapRoutes/)
+})
 
 test('round-trips server-controlled rider route metadata through the visual editor', () => {
   const painter = readFileSync(new URL('../RegionCampusMapPainter.vue', import.meta.url), 'utf8')
@@ -212,6 +253,77 @@ test('builds selective place promotion payload and never promotes unselected med
     buildReviewPayload({ decision: 'approved', note: '只改地址', applyFields: ['address'], promoteAttachmentIds: ['photo-1'] }, object).promoteAttachmentIds,
     [],
   )
+})
+
+test('carries an explicit publish decision only for an approved road review', () => {
+  assert.deepEqual(
+    buildReviewPayload({
+      decision: 'approved',
+      note: '路线证据合格并随本版上线',
+      applyFields: ['geometry'],
+      publishRoute: true,
+    }, { objectType: 'road' }),
+    {
+      decision: 'approved',
+      note: '路线证据合格并随本版上线',
+      targetPlaceId: undefined,
+      applyFields: ['geometry'],
+      promoteAttachmentIds: [],
+      publishRoute: true,
+    },
+  )
+
+  const placePayload = buildReviewPayload({
+    decision: 'approved',
+    note: '地点通过',
+    applyFields: ['location'],
+    publishRoute: true,
+  }, { objectType: 'place_verification' })
+  assert.equal(Object.hasOwn(placePayload, 'publishRoute'), false)
+})
+
+test('describes approved real routes without inventing artwork geometry', () => {
+  assert.deepEqual(routeArtworkGeometryState({
+    sourceProperties: { collectionSource: 'rider_app_approved' },
+    points: [
+      { longitude: 106.5, latitude: 29.6 },
+      { longitude: 106.6, latitude: 29.7 },
+    ],
+  }), {
+    approvedRiderRoute: true,
+    hasArtworkGeometry: false,
+    needsArtworkGeometry: true,
+  })
+  assert.deepEqual(routeArtworkGeometryState({
+    sourceProperties: {
+      collectionSource: 'rider_app_approved',
+      artworkGeometry: {
+        type: 'LineString',
+        coordinates: [[120, 300], [180, 420]],
+      },
+    },
+  }), {
+    approvedRiderRoute: true,
+    hasArtworkGeometry: true,
+    needsArtworkGeometry: false,
+  })
+  assert.deepEqual(routeArtworkGeometryState({
+    sourceProperties: { collectionSource: 'rider_app_approved' },
+    points: [
+      { xRatio: 0.2, yRatio: 0.3 },
+      { xRatio: 0.4, yRatio: 0.5 },
+    ],
+  }), {
+    approvedRiderRoute: true,
+    hasArtworkGeometry: true,
+    needsArtworkGeometry: false,
+  })
+})
+
+test('does not duplicate request errors already shown by the request layer', () => {
+  assert.equal(shouldShowLocalRequestError({ userMessage: '服务端错误已展示' }), false)
+  assert.equal(shouldShowLocalRequestError(new Error('网络失败')), true)
+  assert.equal(shouldShowLocalRequestError(null), true)
 })
 
 test('defaults road approval to geometry and media and exposes route evidence', () => {

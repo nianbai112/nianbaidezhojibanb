@@ -14,9 +14,11 @@ test('campus map cockpit keeps workflow actions compact while exposing draft sav
   }
   assert.match(actionBar, /v-for="stage in releaseCockpit\.stages"/)
   assert.match(actionBar, /class="release-stage"/)
-  for (const label of ['补地点', '派采集', '保存草稿', '发布本批']) {
+  // Current committed UI calls this "继续采集"; verify its action as well as text.
+  for (const label of ['补地点', '继续采集', '保存草稿', '发布本批']) {
     assert.match(actionBar, new RegExp(label))
   }
+  assert.match(actionBar, /@click="\$emit\('run-action', 'collection'\)">继续采集<\/el-button>/)
   for (const oldPeer of ['>导入 CAD<', '>刷新<', '>高级<', '>预览<', '>版本历史<', '>停用<']) {
     assert.doesNotMatch(actionBar, new RegExp(`<el-button[^>]*${oldPeer}`))
   }

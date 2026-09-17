@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 
 export interface PushMessagePayload {
+  platform?: string;
   title: string;
   content: string;
   data?: Record<string, any>;
@@ -44,29 +45,45 @@ export class PushService {
     try {
       const authToken = await this.authToken(creds);
       if (!authToken) return false;
+      const title = String(payload.title || '').slice(0, 32);
+      const content = String(payload.content || '').slice(0, 100);
+      const data = JSON.stringify(payload.data || {});
       const body = {
         request_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         audience: { cid: [clientId] },
         settings: { ttl: 24 * 60 * 60 * 1000 },
-        push_message: {
-          notification: {
-            title: String(payload.title || '').slice(0, 50),
-            body: String(payload.content || '').slice(0, 120),
-            click_type: 'payload',
-            payload: JSON.stringify(payload.data || {}),
-          },
+        push_message: payload.platform?.toLowerCase() === 'ios'
+          ? { transmission: JSON.stringify({ title, content, payload: payload.data || {} }) }
+          : { notification: { title, body: content, click_type: 'payload', payload: data } },
+        // https://docs.getui.com/getui/server/rest_v2/common_args/
+        // Android 离线点击先打开首页，由前台查询补齐订单与待转单。
+        push_channel: {
+          ios: { type: 'notify', payload: data, aps: { alert: { title, body: content }, sound: 'default', 'content-available': 0 } },
+          android: { ups: {
+            notification: { title, body: content, click_type: 'startapp' },
+            ...(this.config.get('UNI_PUSH_ANDROID_OPTIONS')
+              ? { options: JSON.parse(this.config.get<string>('UNI_PUSH_ANDROID_OPTIONS') || '{}') } : {}),
+          } },
         },
       };
       const response = await fetch(`https://restapi.getui.com/v2/${creds.appId}/push/single/cid`, {
         method: 'POST',
+        signal: AbortSignal.timeout(10000),
         headers: { 'Content-Type': 'application/json', token: authToken },
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        this.logger.warn(`uni-push 单推失败: ${response.status} ${await response.text().catch(() => '')}`);
+        this.logger.warn(`uni-push 单推失败: HTTP ${response.status}`);
         return false;
       }
-      return true;
+      const result: any = await response.json().catch(() => null);
+      if (result?.code !== 0) {
+        this.logger.warn(`uni-push 业务拒绝: code=${result?.code ?? 'invalid_response'}`);
+        return false;
+      }
+      const statuses = Object.values(result.data || {}).flatMap((value) =>
+        value && typeof value === 'object' ? Object.values(value) : [value]);
+      return statuses.some((status) => ['successed_online', 'successed_offline'].includes(String(status)));
     } catch (error: any) {
       this.logger.warn(`uni-push 单推异常: ${error?.message || 'unknown'}`);
       return false;
@@ -78,11 +95,12 @@ export class PushService {
     const sign = createHash('sha256').update(`${creds.appKey}${timestamp}${creds.masterSecret}`).digest('hex');
     const response = await fetch(`https://restapi.getui.com/v2/${creds.appId}/auth`, {
       method: 'POST',
+      signal: AbortSignal.timeout(10000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sign, timestamp, appkey: creds.appKey }),
     });
     if (!response.ok) return null;
     const result: any = await response.json().catch(() => null);
-    return result?.data?.token || null;
+    return result?.code === 0 ? result?.data?.token || null : null;
   }
 }

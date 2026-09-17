@@ -31,7 +31,7 @@
                   <ul>
                     <li>前往 <strong>微信公众平台</strong>（mp.weixin.qq.com）注册服务号</li>
                     <li>完成微信认证（企业认证约需 300 元/年）</li>
-                    <li>认证完成后，模板消息功能自动开启</li>
+                    <li>完成认证后，在公众平台确认模板消息权限和匹配的服务类目</li>
                   </ul>
                   <el-button size="small" @click="openUrl('https://mp.weixin.qq.com')">打开微信公众平台 →</el-button>
                 </div>
@@ -39,15 +39,15 @@
             </el-step>
 
             <!-- Step 2 -->
-            <el-step title="绑定微信开放平台（获取 UnionID）">
+            <el-step title="绑定用户身份（专属二维码 / UnionID）">
               <template #description>
                 <div class="step-body">
-                  <p>UnionID 是同一微信用户在同一开放平台下的唯一标识，用于打通小程序用户与服务号用户的身份。<strong>不绑定则无法识别用户是同一个人。</strong></p>
+                  <p>系统支持登录用户的专属二维码绑定服务号身份。需要自动关联时，还可把小程序与服务号绑定到同一个微信开放平台账号，通过 UnionID 关联。</p>
                   <ul>
                     <li>前往 <strong>微信开放平台</strong>（open.weixin.qq.com）登录或注册</li>
                     <li>进入「管理中心」→「公众账号」，点击「绑定公众账号」</li>
-                    <li>同样路径下，绑定本产品的小程序（AppID 需一致）</li>
-                    <li>绑定后，同一用户在小程序和服务号中的 UnionID 相同</li>
+                    <li>把本产品的小程序绑定到同一个开放平台账号；小程序和服务号各有自己的 AppID</li>
+                    <li>使用 UnionID 自动关联前，应确认两端能够获取 UnionID；专属二维码绑定不依赖此条件</li>
                   </ul>
                   <el-button size="small" @click="openUrl('https://open.weixin.qq.com')">打开微信开放平台 →</el-button>
                 </div>
@@ -102,7 +102,7 @@
             <el-step title="填写系统配置并保存">
               <template #description>
                 <div class="step-body">
-                  <p>将以下信息从微信公众平台复制到此处并保存，系统即可开始发送消息。</p>
+                  <p>保存服务号凭据后，还需完成模板配置、场景开关与用户关注绑定；实际送达请查看发送日志。</p>
                   <el-form :model="configForm" label-width="160px" class="config-form">
                     <el-form-item label="AppID（服务号）">
                       <el-input v-model="configForm.appId" placeholder="wx开头的字符串，在「设置」→「帐号信息」中查看" />
@@ -111,10 +111,10 @@
                       <el-input v-model="configForm.appSecret" type="password" show-password placeholder="在「设置」→「基本配置」中生成" />
                     </el-form-item>
                     <el-form-item label="Token（消息校验）">
-                      <el-input v-model="configForm.token" placeholder="自定义字符串，需与公众平台配置一致" />
+                      <el-input v-model="configForm.token" type="password" show-password placeholder="自定义字符串，需与公众平台配置一致" />
                     </el-form-item>
                     <el-form-item label="EncodingAESKey">
-                      <el-input v-model="configForm.aesKey" placeholder="43位随机字符串，需与公众平台配置一致" />
+                      <el-input v-model="configForm.aesKey" type="password" show-password placeholder="43位随机字符串，需与公众平台配置一致" />
                     </el-form-item>
                     <el-form-item>
                       <el-button type="primary" :loading="savingConfig" @click="saveConfig">保存配置</el-button>
@@ -154,7 +154,7 @@
                 </div>
                 <div class="scene-ctrl">
                   <el-tag size="small" type="info">立即发送</el-tag>
-                  <el-switch v-model="s.enabled" @change="saveScene(s)" />
+                  <el-switch v-model="s.enabled" :disabled="s.key === 'community_circle_new'" @change="saveScene(s)" />
                 </div>
               </div>
             </div>
@@ -176,7 +176,7 @@
                   <el-tag size="small" :type="s.strategy === 'immediate' ? 'info' : 'warning'">
                     {{ s.strategyLabel }}
                   </el-tag>
-                  <el-switch v-model="s.enabled" @change="saveScene(s)" />
+                  <el-switch v-model="s.enabled" :disabled="s.key === 'community_circle_new'" @change="saveScene(s)" />
                 </div>
               </div>
             </div>
@@ -200,11 +200,11 @@
                 <span class="tpl-scene-desc">{{ row.desc }}</span>
               </div>
               <div class="tpl-status-tags">
-                <el-tag v-if="row.supportsOfficial !== false" :type="row.templateId ? 'success' : 'info'" size="small">
-                  服务号{{ row.templateId ? '已配置' : '待配置' }}
+                <el-tag v-if="row.supportsOfficial !== false" :type="row.officialConnection?.type || 'info'" size="small">
+                  服务号 · {{ row.officialConnection?.label || '检查中' }}
                 </el-tag>
-                <el-tag v-if="row.supportsMiniProgram" :type="row.miniTemplateId ? 'success' : 'info'" size="small">
-                  小程序{{ row.miniTemplateId ? '已配置' : '待配置' }}
+                <el-tag v-if="row.supportsMiniProgram" :type="row.miniConnection?.type || 'info'" size="small">
+                  小程序 · {{ row.miniConnection?.label || '检查中' }}
                 </el-tag>
               </div>
             </div>
@@ -216,8 +216,8 @@
                   <el-tag size="small" type="info">系统托管</el-tag>
                 </div>
                 <div class="managed-template-summary">
-                  <span class="managed-template-state">{{ row.templateId ? '已接入' : '待开发配置' }}</span>
-                  <span>模板标识和字段映射已隐藏，运营误操作不会影响通知发送。</span>
+                  <span class="managed-template-state">{{ row.officialConnection?.label || '检查中' }}</span>
+                  <span>{{ row.officialConnection?.note || '正在读取模板配置。' }}</span>
                 </div>
               </section>
 
@@ -227,8 +227,8 @@
                   <el-tag size="small" type="info">系统托管</el-tag>
                 </div>
                 <div class="managed-template-summary">
-                  <span class="managed-template-state">{{ row.miniTemplateId ? '已接入' : '待开发配置' }}</span>
-                  <span>订阅模板字段由发布配置托管，运营端无需输入变量名。</span>
+                  <span class="managed-template-state">{{ row.miniConnection?.label || '检查中' }}</span>
+                  <span>{{ row.miniConnection?.note || '正在读取模板配置。' }}</span>
                 </div>
               </section>
             </div>
@@ -288,7 +288,7 @@
           <el-select v-model="logFilters.status" placeholder="状态" clearable style="width:120px" @change="loadLogs">
             <el-option label="发送成功" value="success" />
             <el-option label="发送失败" value="failed" />
-            <el-option label="待发送" value="pending" />
+            <el-option label="等待微信回执" value="pending" />
           </el-select>
           <el-date-picker
             v-model="logFilters.dateRange"
@@ -370,6 +370,8 @@ import {
   testWechatOfficialToken,
 } from '@/api/admin'
 
+import { describeWechatTemplateState } from './wechatTemplateState.mjs'
+
 const activeTab = ref('setup')
 
 // ===== 接入状态 =====
@@ -394,6 +396,7 @@ function copyText(text: string) {
 }
 
 const suggestedTemplates = [
+  { scene: '骑手新订单', name: '新订单通知（生活服务／跑腿）', keywords: '订单编号、订单金额、服务名称、下单时间、服务地址' },
   { scene: '跑腿接单通知', name: '服务订单状态通知', keywords: '订单编号、骑手姓名、预计时间、备注' },
   { scene: '跑腿取货/送达', name: '配送状态更新通知', keywords: '配送状态、地点、时间、提示语' },
   { scene: '跑腿异常', name: '订单异常提醒', keywords: '异常原因、处理建议、联系方式' },
@@ -448,16 +451,17 @@ async function testConnection() {
 const globalEnabled = ref(false)
 
 const errandScenes = ref([
-  { key: 'errand_accepted', name: '骑手已接单', desc: '订单被骑手接受时推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
-  { key: 'errand_picked', name: '骑手已取货', desc: '骑手到达取件地点并取货后推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
-  { key: 'errand_delivered', name: '订单已完成', desc: '骑手确认送达后推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
-  { key: 'errand_abnormal', name: '订单异常', desc: '订单遇到取消、超时等异常时推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'new_errand_order', name: '骑手新订单', desc: '通知同校区符合接单条件的兼职骑手和官方骑手', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'errand_accepted', name: '骑手已接单', desc: '订单被骑手接受时推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'errand_picked', name: '骑手已取货', desc: '骑手到达取件地点并取货后推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'errand_delivered', name: '订单送达/完成', desc: '送达待收货、用户确认收货或系统自动完成时推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'errand_abnormal', name: '订单异常', desc: '退款处理及结果通知；超时风险目前仅进入后台异常记录', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
 ])
 
 const communityScenes = ref([
-  { key: 'community_at', name: '@提醒', desc: '帖子或评论中被@时推送', enabled: true, strategy: 'immediate', strategyLabel: '立即发送' },
-  { key: 'community_reply', name: '收到回复', desc: '有人回复我的帖子或评论', enabled: true, strategy: 'merge', strategyLabel: '限频推送' },
-  { key: 'community_like', name: '收到点赞汇总', desc: '累计满阈值时推送一条汇总', enabled: true, strategy: 'threshold', strategyLabel: '阈值汇总' },
+  { key: 'community_at', name: '@提醒', desc: '帖子或评论中被@时推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'community_reply', name: '收到回复', desc: '有人回复我的帖子或评论', enabled: false, strategy: 'merge', strategyLabel: '限频推送' },
+  { key: 'community_like', name: '收到点赞汇总', desc: '累计满阈值时推送一条汇总', enabled: false, strategy: 'threshold', strategyLabel: '阈值汇总' },
   { key: 'community_circle_new', name: '关注圈子新内容（预留）', desc: '当前未接入业务触发，请保持关闭', enabled: false, strategy: 'daily', strategyLabel: '未启用' },
 ])
 
@@ -484,6 +488,11 @@ async function saveScene(s: any) {
 // ===== 消息模板 =====
 // 运营端只展示场景和接入状态。模板 ID、变量名、字段映射和跳转路径不下发为可编辑表单。
 const templateRows = ref<any[]>([
+  {
+    key: 'new_errand_order', scene: '跑腿骑手新订单',
+    desc: '新订单通知（生活服务／跑腿），接收者为合格的兼职骑手和官方骑手',
+    templateId: '', supportsOfficial: true, supportsMiniProgram: false,
+  },
   {
     key: 'takeaway_order_status',
     scene: '外卖订单状态',
@@ -530,7 +539,7 @@ const templateRows = ref<any[]>([
   {
     key: 'errand_delivered',
     scene: '订单已完成',
-    desc: '骑手确认送达后推送',
+    desc: '送达待收货与确认完成时推送',
     templateId: '',
     supportsMiniProgram: true,
     miniTemplateId: '',
@@ -538,8 +547,17 @@ const templateRows = ref<any[]>([
   {
     key: 'errand_abnormal',
     scene: '订单异常',
-    desc: '订单取消、退款、超时等异常由服务号持续通知',
+    desc: '退款处理和结果通过服务号通知；超时风险目前记录在后台',
     templateId: '',
+  },
+  {
+    key: 'welfare_draw',
+    scene: '校园抽奖结果',
+    desc: '报名用户主动订阅后接收开奖提醒，未配置模板时仍保留站内结果',
+    templateId: '',
+    supportsOfficial: false,
+    supportsMiniProgram: true,
+    miniTemplateId: '',
   },
   {
     key: 'post_audit_result',
@@ -710,36 +728,38 @@ async function loadNotifySettings() {
   globalEnabled.value = settings.globalEnabled === true
   const scenes = settings.scenes && typeof settings.scenes === 'object' ? settings.scenes : {}
   for (const scene of allScenes.value) {
-    if (typeof scenes[scene.key] === 'boolean') scene.enabled = scenes[scene.key]
+    scene.enabled = scene.key !== 'community_circle_new' && scenes[scene.key] === true
   }
   if (settings.antispam && typeof settings.antispam === 'object') {
     antispamForm.value = { ...antispamForm.value, ...settings.antispam }
   }
 }
 
+async function loadTemplatePages(platformType: string) {
+  const records: any[] = []
+  for (let page = 1; ; page++) {
+    const res: any = await fetchWechatTemplates({ platformType, page, pageSize: 100 })
+    const data = res?.data || res || {}
+    const list = data.list || []
+    records.push(...list)
+    if (list.length < 100 || records.length >= Number(data.total || Infinity)) return records
+  }
+}
+
 async function loadTemplates() {
-  const [officialRes, miniRes]: any[] = await Promise.all([
-    fetchWechatTemplates({ platformType: 'official', page: 1, pageSize: 100 }),
-    fetchWechatTemplates({ platformType: 'miniprogram', page: 1, pageSize: 100 }),
+  const results = await Promise.allSettled([
+    loadTemplatePages('official'),
+    loadTemplatePages('miniprogram'),
   ])
-  const list = officialRes?.list || officialRes?.data?.list || []
-  const miniList = miniRes?.list || miniRes?.data?.list || []
   for (const row of templateRows.value as any[]) {
-    const saved = list.find((item: any) => item.templateType === row.key && !item.regionId)
-      || list.find((item: any) => item.templateType === row.key)
-    if (saved) {
-      row.id = saved.id
-      row.templateId = saved.templateId || ''
-    }
-    if (row.supportsMiniProgram) {
-      const miniSaved = miniList.find((item: any) => item.templateType === row.key && !item.regionId)
-        || miniList.find((item: any) => item.templateType === row.key)
-      if (miniSaved) {
-        row.miniTemplateConfigId = miniSaved.id
-        row.miniTemplateId = miniSaved.templateId || ''
-      }
+    for (const [index, field] of [[0, 'officialConnection'], [1, 'miniConnection']] as const) {
+      const result = results[index]
+      row[field] = result.status === 'fulfilled'
+        ? describeWechatTemplateState(result.value.filter((item: any) => item.templateType === row.key))
+        : describeWechatTemplateState([], 'failed')
     }
   }
+  if (results.some(result => result.status === 'rejected')) throw new Error('模板配置读取失败')
 }
 
 onMounted(async () => {
@@ -821,7 +841,7 @@ onMounted(async () => {
 .tpl-platform-section + .tpl-platform-section { border-top: 1px solid var(--el-border-color-lighter); padding-top: 18px; }
 .tpl-platform-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
 .managed-template-summary { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 8px; background: var(--el-fill-color-light); color: var(--el-text-color-secondary); font-size: 12px; }
-.managed-template-state { color: var(--el-color-success); font-weight: 600; white-space: nowrap; }
+.managed-template-state { color: var(--el-text-color-primary); font-weight: 600; white-space: nowrap; }
 .tpl-mini-section { background: var(--el-color-primary-light-9); margin: 0 -6px -4px; padding: 14px 6px 4px; border-radius: 8px; }
 
 .antispam-wrap { padding: 4px 0; }

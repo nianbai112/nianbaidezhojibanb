@@ -12,6 +12,7 @@ import {
   UpdatePageConfigDto,
   UpdateRewardPunishDto,
   ResolveRiskEventDto,
+  RepairErrandCouponDto,
 } from './dto/errand-admin.dto'
 
 @ApiTags('Admin - Errand & Rider')
@@ -79,6 +80,20 @@ export class ErrandAdminController {
   @ApiOperation({ summary: '取消订单' })
   cancelOrder(@Param('id') id: string, @Body() dto: CancelOrderDto, @CurrentUser('sub') operatorId: string) {
     return this.service.cancelOrder(id, dto, operatorId)
+  }
+
+  @Get('admin/errand/orders/:id/coupon-repair')
+  @RequirePermission('errand:view')
+  @ApiOperation({ summary: '核查历史退款订单的优惠券归还情况' })
+  getCouponRepair(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
+    return this.service.getCouponRepair(id, operatorId)
+  }
+
+  @Post('admin/errand/orders/:id/coupon-repair')
+  @RequirePermission('errand:config')
+  @ApiOperation({ summary: '补回全额退款订单仍占用的优惠券' })
+  repairCoupon(@Param('id') id: string, @Body() dto: RepairErrandCouponDto, @CurrentUser('sub') operatorId: string) {
+    return this.service.repairCoupon(id, dto, operatorId)
   }
 
   @Post('admin/errand/orders/:id/assign')

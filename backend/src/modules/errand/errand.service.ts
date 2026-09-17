@@ -1,3 +1,7 @@
+import { buildErrandDispatchPayload } from './errand-new-order-notification';
+import { couponDiscountAmount as calculateCouponDiscount } from '../../common/coupon-policy';
+import { errandPlatformFee, errandRiderIncome } from '../../common/commission';
+import { assertCouponCampaignRules } from './errand-transaction-guards';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
@@ -39,13 +43,14 @@ import {
 } from './errand-order-taking-policy';
 import { ErrandQuoteResult, ErrandQuoteService } from './errand-quote.service';
 import { ErrandLifecycleService } from './errand-lifecycle.service';
-import { poolErrandProjection, publicErrandProjection } from './errand-privacy';
+import { poolErrandProjection, poolShopProjection, publicErrandProjection } from './errand-privacy';
 import { enforceErrandAssignmentGuard } from './errand-assignment-guard';
+import { restoreErrandOrderCoupon } from './errand-coupon-restoration';
+import { assertErrandGenderChangeAllowed, errandDeliveryRequirementFields, errandRiderGenderMatches, normalizeErrandDeliveryRequirements } from './errand-delivery-requirements';
 import {
-  errandCampaignDayKey,
   lockErrandAssignee,
-  releaseErrandCampaignBudget,
   reserveErrandCampaignBudget,
+  resolveActiveCouponCampaign,
 } from './errand-transaction-guards';
 
 @Injectable()
@@ -262,8 +267,10 @@ export class ErrandService {
 
   private buildMiniOrderRemark(dto: any, tasks: any[], meta: any) {
     const build = (payload: any) => JSON.stringify(payload)
+    const deliveryRequirements = normalizeErrandDeliveryRequirements(dto)
     const riskAssessment = this.compactRiskAssessment(meta.riskAssessment)
     const base = {
+      ...deliveryRequirements,
       source: 'mini_program',
       service_type: dto?.service_type,
       base_price: meta.basePrice,
@@ -295,6 +302,7 @@ export class ErrandService {
     if (first.length <= 180) return first
 
     return build({
+      ...deliveryRequirements,
       source: 'mini_program',
       service_type: dto?.service_type,
       task_count: tasks.length,
@@ -445,26 +453,7 @@ export class ErrandService {
   }
 
   private buildDispatchOrderPayload(order: any) {
-    const remark = this.parseOrderRemark(order)
-    const payload = {
-      type: 'errand',
-      status: miniErrandStatus(order?.status || 'pending_accept'),
-      raw_status: order?.status,
-      service_type: internalErrandTypeToMini(order?.type),
-      delivery_mode: remark.delivery_mode || remark.deliveryMode || 'immediate',
-      delivery_time: remark.delivery_time || order?.deliverTime || order?.createdAt,
-      delivery_address: order?.deliverAddress,
-      address: order?.deliverAddress,
-      details: this.rawOrderTasks(order),
-      tasks: this.rawOrderTasks(order),
-    }
-    const riskAssessment = remark.risk_assessment || assessErrandRisk(payload)
-    return {
-      ...payload,
-      risk_assessment: riskAssessment,
-      errand_risk: riskAssessment,
-      dispatch_constraints: riskAssessment?.dispatch_constraints,
-    }
+    return buildErrandDispatchPayload(order, this.rawOrderTasks(order));
   }
 
   private buildRiskInput(dto: any = {}, tasks: any[] = [], extra: any = {}) {
@@ -972,6 +961,7 @@ export class ErrandService {
       phone: rider.phone || user?.phone || '',
       avatar: user?.avatar || '/static/logo.jpg',
       nickname: user?.nickname || rider.realName || '骑手',
+      gender: user?.profile?.gender || 'UNKNOWN',
       anonymous: 0,
       is_anonymous: false,
       isAnonymous: false,
@@ -1102,6 +1092,7 @@ export class ErrandService {
 
   private filterErrandRowsForApprovedRider(rows: any[], identity: any, now = new Date()) {
     return rows.filter((row) => {
+      if (!errandRiderGenderMatches(row, identity?.user?.profile?.gender)) return false
       if (row?.userId && row.userId === identity?.user?.id) return false
       const eligibility = assessApprovedRiderFallbackEligibility({
         policy: identity.policy,
@@ -1141,6 +1132,7 @@ export class ErrandService {
       this.prisma.user.findUnique({
         where: { id: userId },
         include: {
+          profile: { select: { gender: true } },
           studentVerify: {
             select: {
               status: true,
@@ -1238,6 +1230,7 @@ export class ErrandService {
     }
     if (!identity?.canTakeOrders) return []
     return rows.filter((row) => {
+      if (!errandRiderGenderMatches(row, identity?.user?.profile?.gender)) return false
       if (row?.userId && row.userId === identity?.user?.id) return false
       if (!identity?.regionId || row?.regionId !== identity.regionId) return false
       const policy = identity.policy
@@ -1258,6 +1251,28 @@ export class ErrandService {
       })
       return eligibility.allowed
     })
+  }
+
+  private async getEligibleErrandPoolPage(where: any, include: any, identity: any, page: number, pageSize: number) {
+    if (!identity?.canTakeOrders) return { rows: [], total: 0 };
+    const rows: any[] = [];
+    let total = 0;
+    let skip = 0;
+    // ponytail: metadata-based policies require a scan; use indexed columns if the waiting pool becomes large.
+    while (true) {
+      const batch = await this.prisma.errandOrder.findMany({
+        where, include, skip, take: 200,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const eligible = this.filterErrandRowsForOrderTaking(batch, identity);
+      for (const order of eligible) {
+        if (total >= (page - 1) * pageSize && total < page * pageSize) rows.push(order);
+        total += 1;
+      }
+      if (batch.length < 200) break;
+      skip += batch.length;
+    }
+    return { rows, total };
   }
 
   private async ensureOrdinaryReceiverRecord(tx: any, userId: string, order: any, user: any, existingRider: any) {
@@ -1382,75 +1397,15 @@ export class ErrandService {
   }
 
   private couponDiscountAmount(coupon: any, amount: number) {
-    const value = this.money(coupon?.value);
-    if (amount <= 0 || value <= 0) return 0;
-    const type = String(coupon?.type || '').toUpperCase();
-    if (type === 'DISCOUNT') {
-      if (value <= 0 || value >= 10) return 0;
-      return this.money(amount - amount * (value / 10));
-    }
-    return Math.min(value, amount);
+    return calculateCouponDiscount(coupon, amount);
   }
 
   private async resolveCouponCampaign(db: any, couponId: string) {
-    const config = await db.config.findUnique({ where: { key: 'marketing_campaigns_config' } }).catch(() => null);
-    const value = config?.value as any;
-    const list = Array.isArray(value?.list) ? value.list : Array.isArray(value) ? value : [];
-    const now = new Date();
-    const campaign = list.find((item: any) => {
-      if (!item || item.status !== 'active') return false;
-      if (String(item.couponId || '') !== String(couponId)) return false;
-      if (item.startAt && now < new Date(item.startAt)) return false;
-      if (item.endAt && now > new Date(item.endAt)) return false;
-      return true;
-    }) || null;
-    return campaign
-      ? { ...campaign, id: String(campaign.id || `coupon:${couponId}`) }
-      : null;
+    return resolveActiveCouponCampaign(db, couponId);
   }
 
   private async assertErrandCampaignRules(db: any, campaign: any, userId: string, couponId: string, discountAmount: number) {
-    if (!campaign || discountAmount <= 0) return;
-    if (campaign.firstOrderOnly) {
-      const orderCount = await db.errandOrder.count({
-        where: { userId, status: { notIn: ['cancelled', 'refunded'] } },
-      });
-      if (orderCount > 0) throw new BadRequestException('该活动仅限跑腿首单使用');
-    }
-    if (campaign.newUserOnly) {
-      const user = await db.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
-      const days = Number(campaign.newUserDays || 7);
-      if (!user || Date.now() - user.createdAt.getTime() > days * 24 * 60 * 60 * 1000) {
-        throw new BadRequestException('该活动仅限新用户使用');
-      }
-    }
-    const baseWhere: any = {
-      status: { not: 'cancelled' },
-      OR: [
-        { campaignId: campaign.id },
-        { sourceType: 'coupon', sourceId: couponId },
-      ],
-    };
-    const [totalAgg, todayAgg, userAgg] = await Promise.all([
-      db.subsidyLedger.aggregate({ where: baseWhere, _sum: { amount: true } }),
-      db.subsidyLedger.aggregate({ where: { ...baseWhere, createdAt: { gte: this.dayStart() } }, _sum: { amount: true } }),
-      db.subsidyLedger.aggregate({ where: { ...baseWhere, userId }, _sum: { amount: true }, _count: true }),
-    ]);
-    const totalSpent = Number(totalAgg?._sum?.amount || 0);
-    const todaySpent = Number(todayAgg?._sum?.amount || 0);
-    const userSpent = Number(userAgg?._sum?.amount || 0);
-    if (Number(campaign.totalBudget || 0) > 0 && totalSpent + discountAmount > Number(campaign.totalBudget)) {
-      throw new BadRequestException('活动总预算已不足');
-    }
-    if (Number(campaign.dailyBudget || 0) > 0 && todaySpent + discountAmount > Number(campaign.dailyBudget)) {
-      throw new BadRequestException('活动今日预算已不足');
-    }
-    if (Number(campaign.perUserBudget || 0) > 0 && userSpent + discountAmount > Number(campaign.perUserBudget)) {
-      throw new BadRequestException('已达到个人活动补贴上限');
-    }
-    if (Number(campaign.userLimit || 0) > 0 && Number(userAgg?._count || 0) >= Number(campaign.userLimit)) {
-      throw new BadRequestException('已达到个人活动参与次数上限');
-    }
+    return assertCouponCampaignRules(db, campaign, userId, couponId, discountAmount, 'errand');
   }
 
   private errandCouponUnavailableReason(coupon: any, amount: number, regionId?: string) {
@@ -1510,43 +1465,7 @@ export class ErrandService {
   }
 
   private async restoreErrandOrderCoupon(db: any, order: any) {
-    const usedCoupon = await db.couponReceive.findFirst({
-      where: { userId: order.userId, orderNo: order.orderNo, status: 'used' },
-    });
-    if (!usedCoupon) return;
-    // AUD-P1-065: 原子释放优惠券（只有已使用的才能被释放，防止并发重复释放）
-    const released = await db.couponReceive.updateMany({
-      where: { id: usedCoupon.id, status: 'used' },
-      data: { status: 'unused', usedAt: null, orderNo: null },
-    });
-    if (released.count === 0) return; // 优惠券已被释放或状态异常，安全跳过
-    await db.coupon.update({
-      where: { id: usedCoupon.couponId },
-      data: { usedCount: { decrement: 1 } },
-    });
-    const campaignLedger = await db.subsidyLedger.findFirst({
-      where: {
-        sourceType: 'coupon',
-        orderType: 'errand_order',
-        orderId: order.id,
-        campaignId: { not: null },
-        status: { not: 'cancelled' },
-      },
-      select: { id: true, campaignId: true, userId: true, amount: true, createdAt: true },
-    });
-    const cancelled = await db.subsidyLedger.updateMany({
-      where: { sourceType: 'coupon', orderType: 'errand_order', orderId: order.id, status: { not: 'cancelled' } },
-      data: { status: 'cancelled' },
-    });
-    if (campaignLedger && cancelled.count > 0) {
-      const dayKey = errandCampaignDayKey(campaignLedger.createdAt)
-      await releaseErrandCampaignBudget(db, {
-        campaignId: String(campaignLedger.campaignId),
-        userId: String(campaignLedger.userId || order.userId),
-        amount: Number(campaignLedger.amount || 0),
-        dayKey,
-      })
-    }
+    return restoreErrandOrderCoupon(db, order);
   }
 
   async getAvailableCoupons(userId: string, query: any = {}) {
@@ -1555,23 +1474,39 @@ export class ErrandService {
     const page = Math.max(1, Number(query?.page || 1));
     const limit = Math.max(1, Math.min(50, Number(query?.limit || 50)));
     const receives = await this.prisma.couponReceive.findMany({
-      where: { userId, status: 'unused' },
-      include: { coupon: true },
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
+      where: { userId, status: 'unused', coupon: { businessScope: { in: ['all', 'errand'] }, merchantId: null } },
+      include: { coupon: true }, orderBy: { createdAt: 'desc' },
     });
-    const formatted = receives.map(item => this.formatErrandCouponReceive(item, amount, regionId));
-    const list = formatted.filter(item => item.usable);
+    const checks = new Map<string, Promise<string>>();
+    const formatted = [];
+    for (const receive of receives) {
+      const item = this.formatErrandCouponReceive(receive, amount, regionId);
+      if (item.usable) {
+        if (!checks.has(receive.couponId)) checks.set(receive.couponId, (async () => {
+          try {
+            const campaign = await this.resolveCouponCampaign(this.prisma, receive.couponId);
+            await this.assertErrandCampaignRules(this.prisma, campaign, userId, receive.couponId, item.discount_amount);
+            return '';
+          } catch (error) {
+            if (error instanceof BadRequestException) return error.message;
+            throw error;
+          }
+        })());
+        item.reason = (await checks.get(receive.couponId))!;
+        item.usable = !item.reason;
+        if (!item.usable) item.discount_amount = 0;
+      }
+      formatted.push(item);
+    }
+    const usable = formatted.filter(item => item.usable);
+    const list = usable.slice((page - 1) * limit, page * limit);
     return {
       success: true,
       data: {
-        list,
-        usable: list,
-        unavailable: formatted.filter(item => !item.usable),
-        usable_count: list.length,
-        total: formatted.length,
-        amount,
+        list, usable: list,
+        unavailable: formatted.filter(item => !item.usable).slice((page - 1) * limit, page * limit),
+        usable_count: usable.length, total: usable.length, page, limit,
+        total_pages: Math.max(1, Math.ceil(usable.length / limit)), amount,
       },
     };
   }
@@ -1600,12 +1535,13 @@ export class ErrandService {
       regionId,
     );
     const memberDiscount = await this.resolveErrandMemberDiscount(userId, orderPrice);
+    memberDiscount.amount = this.money(Math.min(memberDiscount.amount, Math.max(0, orderPrice - couponBenefit.discountAmount)));
     const couponDiscount = this.money(couponBenefit.discountAmount);
     const memberDiscountAmount = this.money(memberDiscount.amount);
     const payAmount = this.money(Math.max(
-      orderPrice + rawQuote.tip - couponDiscount - memberDiscountAmount,
+      orderPrice - couponDiscount - memberDiscountAmount,
       0,
-    ));
+    ) + rawQuote.tip);
     const quote: ErrandQuoteResult = {
       ...rawQuote,
       couponDiscount,
@@ -1625,6 +1561,7 @@ export class ErrandService {
   }
 
   async quoteOrder(userId: string, dto: any) {
+    normalizeErrandDeliveryRequirements(dto);
     const { quote } = await this.buildOrderQuote(userId, dto);
     return { success: true, data: quote };
   }
@@ -1639,6 +1576,7 @@ export class ErrandService {
   }
 
   private async createOrderUnlocked(userId: string, dto: any) {
+    dto = { ...dto, ...normalizeErrandDeliveryRequirements(dto) };
     const orderNo = `ERR${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const tasks = Array.isArray(dto?.tasks) ? dto.tasks : []
     const firstTask = tasks[0] || {}
@@ -1780,16 +1718,19 @@ export class ErrandService {
 		    const order = await this.prisma.$transaction(async (tx) => {
       await lockErrandAssignee(tx, `order-create:${userId}`)
       let activeCampaign = couponBenefit.campaign
+      let campaignTime: Date | undefined
       if (couponBenefit.campaign && couponBenefit.discountAmount > 0) {
         activeCampaign = await this.resolveCouponCampaign(tx, couponBenefit.coupon.id)
         if (!activeCampaign) {
           throw new BadRequestException('营销活动状态已变化，请重新确认订单')
         }
+        campaignTime = new Date()
         await reserveErrandCampaignBudget(
           tx,
           activeCampaign,
           userId,
           couponBenefit.discountAmount,
+          campaignTime,
         )
         await this.assertErrandCampaignRules(
           tx,
@@ -1889,6 +1830,7 @@ export class ErrandService {
             receiverType: 'rider',
             amount: couponBenefit.discountAmount,
             status: 'pending',
+            ...(campaignTime ? { createdAt: campaignTime } : {}),
             description: `${couponBenefit.campaign?.title ? `活动${couponBenefit.campaign.title}，` : ''}跑腿优惠券核销：${couponBenefit.coupon.name}`,
             metadata: {
               couponReceiveId: couponBenefit.receive.id,
@@ -1902,7 +1844,7 @@ export class ErrandService {
           },
         });
       }
-      if (memberDiscount.benefitKey) {
+      if (memberDiscount.benefitKey && memberDiscount.amount > 0) {
         await this.membershipService.consumeBenefitWithDb(userId, memberDiscount.benefitKey, {
           targetType: 'errand_order',
           targetId: created.id,
@@ -1928,7 +1870,7 @@ export class ErrandService {
         });
       }
       return created;
-    }).catch((error: any) => {
+    }, { isolationLevel: 'ReadCommitted' }).catch((error: any) => {
       if (error?.code === 'P2000') {
         throw new BadRequestException('跑腿订单信息太长了，请缩短备注、取件码或地址后再提交')
       }
@@ -2039,7 +1981,11 @@ export class ErrandService {
           data: { status: 'pending_accept', payChannel: 'balance', payTime: now },
         });
       });
-      await this.notifyAvailableRiders(updated);
+      try { await this.notifyAvailableRiders(updated); }
+      catch (error: any) {
+        // Payment is committed. The periodic reconciliation recovers missing notices.
+        this.logger.warn(`余额支付后跑腿通知待补偿 order=${updated.id}: ${error?.message || error}`);
+      }
       return { success: true, message: '支付成功，等待骑手接单', data: updated };
     }
 
@@ -2087,6 +2033,24 @@ export class ErrandService {
     const [formatted] = await this.formatMiniOrders([order], {
       receiptCodeViewerId: userId,
     });
+    let receiptBlockedReason = order.userId !== userId
+      ? '仅下单用户可确认收货'
+      : order.status !== 'arrived'
+        ? '订单尚未送达或已结束，不能确认收货'
+        : ['refunding', 'refunded'].includes(order.refundStatus)
+          ? '订单退款处理中或已退款，不能确认收货'
+          : '';
+    if (!receiptBlockedReason) {
+      const appeal = await this.prisma.orderAppeal.findFirst({
+        where: {
+          orderId,
+          orderType: { in: ['errand', 'errand_order'] },
+          status: { notIn: ['resolved', 'rejected', 'closed', 'cancelled', 'completed'] },
+        },
+        select: { id: true },
+      });
+      if (appeal) receiptBlockedReason = '订单售后处理中，暂不能确认收货';
+    }
     const deliveryTrack = await this.getDeliveryTrack(order);
     const viewerIsAssignee = order.riderId === userId;
     const settlementHold = (order as any).settlementHold;
@@ -2108,6 +2072,11 @@ export class ErrandService {
       success: true,
       data: {
         ...formatted,
+        order_lifecycle: {
+          fulfillment_status: order.status,
+          refund_status: order.refundStatus,
+          receipt_action: { allowed: !receiptBlockedReason, reason: receiptBlockedReason },
+        },
         delivery_track: deliveryTrack,
         viewer_role: viewerIsAssignee ? 'assignee' : 'publisher',
         rider_earning_status: earningStatus,
@@ -2228,6 +2197,10 @@ export class ErrandService {
     if (!['pending_pay', 'pending_accept'].includes(order.status)) {
       throw new BadRequestException('订单已被接单或已结束，不能直接取消');
     }
+    if (order.refundStatus && order.refundStatus !== 'none') {
+      throw new BadRequestException('订单已有退款，请等待退款结果');
+    }
+    const needsRefund = order.status !== 'pending_pay' && Number(order.payAmount || 0) > 0;
     const reason = String(dto?.reason || dto?.cancel_reason || '用户取消').trim().slice(0, 120);
     const updated = await this.prisma.$transaction(async (tx) => {
       // SEC-P0-B3: 条件更新 —— 取消锁与接单锁 key 不同，必须用带 status/riderId 守卫的 updateMany
@@ -2238,24 +2211,30 @@ export class ErrandService {
           id: orderId,
           userId,
           riderId: null,
-          status: { in: ['pending_pay', 'pending_accept'] },
+          // A payment callback changing pending_pay to pending_accept must force a retry.
+          // Otherwise a paid order could follow the no-refund cancellation branch.
+          status: order.status,
+          refundStatus: 'none',
         },
         data: {
           status: 'cancelled',
           cancelReason: reason || '用户取消',
           cancelTime: new Date(),
-          refundStatus: order.status === 'pending_pay' ? order.refundStatus : 'refunding',
+          refundStatus: needsRefund ? 'refunding' : 'none',
         },
       });
       if (claimed.count !== 1) {
         throw new BadRequestException('订单已被接单或已结束，不能直接取消');
       }
-      await this.restoreErrandOrderCoupon(tx, order);
-      await this.membershipService.restoreBenefitUsagesForTarget('errand_order', order.id, tx);
-      await tx.subsidyLedger.updateMany({
-        where: { sourceType: 'membership', orderType: 'errand_order', orderId: order.id },
-        data: { status: 'cancelled' },
-      }).catch(() => undefined);
+      // Paid cancellations return benefits only when the payment refund succeeds.
+      if (!needsRefund) {
+        await this.restoreErrandOrderCoupon(tx, order);
+        await this.membershipService.restoreBenefitUsagesForTarget('errand_order', order.id, tx);
+        await tx.subsidyLedger.updateMany({
+          where: { sourceType: 'membership', orderType: 'errand_order', orderId: order.id },
+          data: { status: 'cancelled' },
+        });
+      }
       return tx.errandOrder.findUniqueOrThrow({
         where: { id: orderId },
         include: {
@@ -2285,7 +2264,7 @@ export class ErrandService {
       },
     });
     let refundDispatchFailed = false;
-    if (order.status !== 'pending_pay') {
+    if (needsRefund) {
       await this.paymentService.refund({
         bizType: 'errand_order', bizId: order.id, amount: Number(order.payAmount || 0),
         reason: reason || '用户取消', operatorId: userId,
@@ -2296,7 +2275,7 @@ export class ErrandService {
     }
     return {
       success: true,
-      message: order.status === 'pending_pay'
+      message: !needsRefund
         ? '订单已取消'
         : refundDispatchFailed ? '订单已取消，退款发起失败，平台将跟进处理' : '订单已取消，退款处理中',
       data: formatted,
@@ -2829,6 +2808,7 @@ export class ErrandService {
     }
 
     const amount = Number(order.payAmount || 0);
+    if (amount === 0) return this.cancelOrder(orderId, userId, dto);
     const claimed = await this.prisma.errandOrder.updateMany({
       where: { id: order.id, userId, status: 'pending_accept', riderId: null, refundStatus: 'none' },
       data: { refundStatus: 'refunding', refundAmount: amount },
@@ -2863,6 +2843,13 @@ export class ErrandService {
     rows: any[],
     options: { receiptCodeViewerId?: string } = {},
   ) {
+    const feeConfig = rows.length ? await this.prisma.bizFeeConfig.findUnique({ where: { bizType: 'errand_order' } }) : null;
+    const completedIds = rows.filter(row => row.status === 'completed').map(row => row.id);
+    const settledItems = completedIds.length ? await this.prisma.riderSettlementItem.findMany({
+      where: { orderType: 'errand', orderId: { in: completedIds }, settlement: { status: { not: 'REJECTED' } } },
+      select: { orderId: true, payableAmount: true },
+    }) : [];
+    const settledIncome = new Map(settledItems.map(item => [item.orderId, Number(item.payableAmount)]));
     const orderIds = rows.map(row => row?.id).filter(Boolean)
     const shouldLoadTasks = rows.some(row => !Array.isArray(row?.tasks))
     const taskRows = shouldLoadTasks && orderIds.length
@@ -2919,6 +2906,8 @@ export class ErrandService {
       })
       const user = row.User || row.user || null
       const payAmount = this.numberValue(row.payAmount, 0)
+      const platformFee = row.status === 'completed' ? this.numberValue(row.platformFee, 0) : errandPlatformFee(row, feeConfig);
+      const riderIncome = settledIncome.get(row.id) ?? errandRiderIncome({ ...row, platformFee });
       const rider = row.RegionRider ? this.publicRiderProfile(row.RegionRider) : null
       const finalReceiverType = row.riderId
         ? (row.RegionRider
@@ -2944,6 +2933,7 @@ export class ErrandService {
         subType: miniType,
         type: 'errand',
         raw_type: row.type,
+        ...errandDeliveryRequirementFields(row),
         region_id: row.regionId || '',
         status: displayStatus,
         raw_status: row.status,
@@ -2956,7 +2946,7 @@ export class ErrandService {
         receipt_confirmed_at: row.receiptConfirmedAt || null,
         receipt_confirmed_by: row.receiptConfirmedBy || '',
         settlement_eligible_at: row.settlementEligibleAt || null,
-        payment_status: row.status === 'pending_pay' ? 'unpaid' : 'paid',
+        payment_status: row.payTime ? 'paid' : 'unpaid',
         title: row.title,
         description: row.description || '',
         total_amount: payAmount.toFixed(2),
@@ -2964,7 +2954,9 @@ export class ErrandService {
         amount: payAmount,
         price: this.numberValue(row.price, 0),
         tip: this.numberValue(row.tip, 0),
-        platform_delivery_fee: (this.numberValue(row.price, 0) + this.numberValue(row.tip, 0)).toFixed(2),
+        platform_delivery_fee: riderIncome.toFixed(2),
+        rider_income: riderIncome.toFixed(2),
+        platform_fee: (settledIncome.has(row.id) ? Math.max(0, this.numberValue(row.price, 0) + this.numberValue(row.tip, 0) - riderIncome) : platformFee).toFixed(2),
         base_delivery_fee: this.numberValue(row.price, 0).toFixed(2),
         potential_fee_bonus: '0.00',
         potential_fee_penalty: '0.00',
@@ -3033,6 +3025,7 @@ export class ErrandService {
       const user = row.user || {};
       const serviceType = row.businessType === 'dorm_shop' ? 'dorm_shop' : 'food_delivery';
       const deliveryMode = row.deliveryMode || 'platform_rider';
+      const riderDeliveryFee = Math.max(this.numberValue(row.originalFreightAmount, 0), this.numberValue(row.freightAmount, 0));
       const displayStatus = ['refunding', 'refunded'].includes(String(row.refundStatus || 'none'))
         ? String(row.refundStatus)
         : row.status === 'PAID'
@@ -3074,15 +3067,16 @@ export class ErrandService {
         raw_status: row.status,
         refund_status: row.refundStatus || 'none',
         refund_amount: this.numberValue(row.refundAmount, 0).toFixed(2),
-        payment_status: row.status === 'PENDING_PAY' ? 'unpaid' : 'paid',
+        payment_status: row.payTime ? 'paid' : 'unpaid',
         title: row.businessType === 'dorm_shop' ? '宿舍小店配送' : '外卖配送',
         description,
         total_amount: this.numberValue(row.payAmount, 0).toFixed(2),
         pay_amount: this.numberValue(row.payAmount, 0),
         amount: this.numberValue(row.payAmount, 0),
-        price: this.numberValue(row.freightAmount, 0),
+        price: riderDeliveryFee,
         tip: 0,
-        platform_delivery_fee: this.numberValue(row.freightAmount, 0).toFixed(2),
+        platform_delivery_fee: riderDeliveryFee.toFixed(2),
+        base_delivery_fee: riderDeliveryFee.toFixed(2),
         delivery_time: row.deliverTime || row.createdAt,
         delivery_address: row.receiverAddress,
         address: row.receiverAddress,
@@ -3122,6 +3116,7 @@ export class ErrandService {
         remarks: row.remark || '',
         created_at: row.createdAt,
         assigned_time: row.acceptTime,
+        pickup_time: row.pickupTime || null,
         updated_at: row.updatedAt,
       };
     });
@@ -3130,8 +3125,8 @@ export class ErrandService {
 	  async getUserOrders(userId: string, query: any) {
 	    const { page = 1, limit = 20, filter_type } = query;
 	    const regionId = this.cleanRegionId(query?.region_id ?? query?.regionId)
-	    const pageNo = Number(page) || 1
-	    const pageSize = Number(limit || query?.pageSize || 20) || 20
+	    const pageNo = Math.max(1, Math.floor(this.numberValue(page, 1)))
+	    const pageSize = Math.min(100, Math.max(1, Math.floor(this.numberValue(limit || query?.pageSize || 20, 20))))
 	    const filterType = String(filter_type || '').trim()
 	    const where: any = {}
 	    if (regionId) where.regionId = regionId
@@ -3140,6 +3135,7 @@ export class ErrandService {
 	      identity = await this.getOrderTakingIdentity(userId, { region_id: regionId })
 	      if (identity.regionId) where.regionId = identity.regionId
 	      where.status = 'pending_accept'
+	      where.payTime = { not: null }
 	      where.riderId = null
 	      where.userId = { not: userId }
 	      where.refundStatus = { notIn: ['refunding', 'refunded'] }
@@ -3164,15 +3160,11 @@ export class ErrandService {
 	    let rows: any[] = []
 	    let total = 0
 	    if (filterType === 'pending_orders') {
-	      const candidates = await this.prisma.errandOrder.findMany({
-	        where: identity?.regionId ? where : { id: '__never__' },
-	        take: Math.max(pageNo * pageSize * 4, pageSize),
-	        orderBy: { createdAt: 'desc' },
-	        include,
-	      })
-	      const filtered = this.filterErrandRowsForOrderTaking(candidates, identity)
-	      total = filtered.length
-	      rows = filtered.slice((pageNo - 1) * pageSize, pageNo * pageSize)
+      const pool = await this.getEligibleErrandPoolPage(
+        identity?.regionId ? where : { id: '__never__' }, include, identity, pageNo, pageSize,
+      );
+      rows = pool.rows;
+      total = pool.total;
 	    } else {
 	      const result = await Promise.all([
 	        this.prisma.errandOrder.findMany({
@@ -3229,72 +3221,7 @@ export class ErrandService {
   }
 
   private async notifyAvailableRiders(order: any) {
-    const regionId = this.cleanRegionId(order?.regionId);
-    if (!regionId) return;
-
-    const orderForDispatch = await this.prisma.errandOrder.findUnique({
-      where: { id: order.id },
-      include: { tasks: true },
-    }).catch(() => null);
-    const policy = await this.getOrderTakingPolicy(regionId)
-    const fallbackEligibility = assessApprovedRiderFallbackEligibility({
-      policy,
-      order: orderForDispatch || order,
-      now: new Date(),
-    })
-    if (!fallbackEligibility.allowed) return
-
-    const riders = await this.prisma.regionRider.findMany({
-      where: {
-        regionId,
-        verifyStatus: 'approved',
-        status: 'online',
-        notificationStatus: { not: false },
-      },
-      select: { userId: true },
-    });
-    if (!riders.length) return;
-
-    const dispatchOrder = this.buildDispatchOrderPayload(orderForDispatch || order);
-    // PERF-P0-01: 批量计算所有骑手在途单量，避免 N+1 扇出（原来每个骑手 2 次 count，
-    // 一次派单 = 2×骑手数 个并发查询；高并发下会瞬间打满连接池）。改为 2 次 groupBy。
-    const activeCountByRider = await this.getActiveOrderCountsByRider(
-      riders.map((rider) => rider.userId),
-    );
-    const riderAssessments = riders.map((rider) => {
-      const count = activeCountByRider.get(rider.userId) || 0;
-      const context = { active_orders_count: count, activeOrdersCount: count };
-      const assessment = assessErrandDispatch({ order: dispatchOrder, rider: context });
-      return { rider, assessment };
-    });
-    const sortedAssessments = riderAssessments.sort((a, b) => b.assessment.score - a.assessment.score);
-    const recommendedAssessments = sortedAssessments.filter((item) => item.assessment.canAccept);
-    const notifyTargets = recommendedAssessments.length ? recommendedAssessments : sortedAssessments;
-    const title = '有新的跑腿订单待接单';
-    const content = `${this.serviceTitle(order.type)} ${this.numberValue(order.payAmount, 0).toFixed(2)}元，点击查看接单大厅`;
-    const results = await Promise.allSettled(notifyTargets.map(({ rider, assessment }) => this.notifyService.createAndDispatch({
-      userId: rider.userId,
-      regionId,
-      type: 'delivery',
-      scene: 'new_errand_order',
-      title,
-      content,
-      data: {
-        orderId: order.id,
-        orderNo: order.orderNo,
-        serviceType: internalErrandTypeToMini(order.type),
-        amount: this.numberValue(order.payAmount, 0),
-        dispatch_source: 'backend',
-        dispatch_score: assessment.score,
-        dispatch_risk_level: assessment.riskLevel,
-        dispatch_reason: assessment.reasonText,
-      },
-      linkType: 'page',
-      linkValue: '/pages/tabbar/RunErrands/RunErrands',
-      channelMask: { inApp: true, websocket: true, push: true },
-    })));
-    const failed = results.filter((item) => item.status === 'rejected').length;
-    if (failed) this.logger.warn(`跑腿新单通知部分失败 order=${order.id} failed=${failed}`);
+    return this.notifyService.notifyAvailableErrandRiders(order.id);
   }
 
   async getPageConfig(regionId: string) {
@@ -3331,8 +3258,8 @@ export class ErrandService {
   }
 
 	  async getDeliveryOrdersList(userId: string, query: any) {
-	    const page = Number(query?.page || 1) || 1
-	    const pageSize = Number(query?.pageSize || query?.limit || 20) || 20
+	    const page = Math.max(1, Math.floor(this.numberValue(query?.page || 1, 1)))
+	    const pageSize = Math.min(100, Math.max(1, Math.floor(this.numberValue(query?.pageSize || query?.limit || 20, 20))))
 	    const rawStatus = String(query?.status || 'awaiting_delivery')
 	    const normalizedStatus = this.normalizeMiniOrderStatus(rawStatus)
 	    const type: string = String(query?.type || 'all')
@@ -3342,6 +3269,10 @@ export class ErrandService {
 	    const where: any = regionId ? { regionId } : { id: '__never__' }
 	    const includeErrand = type === 'errand' || type === 'all';
 	    const includeShopOrders = identity.role === 'approved_rider' && (type === 'all' || type === 'delivery' || type === 'takeaway' || type === 'dorm_shop');
+    // Merge the same prefix of both sources before paging; paging each source loses the discarded half.
+    const combinedSources = includeErrand && includeShopOrders;
+    const sourcePage = combinedSources ? 1 : page;
+    const sourceLimit = combinedSources ? page * pageSize : pageSize;
 	    if (!includeErrand && !includeShopOrders) {
 	      return {
 	        success: true,
@@ -3356,6 +3287,7 @@ export class ErrandService {
     }
     if (normalizedStatus === 'pending_accept') {
       where.status = 'pending_accept'
+      where.payTime = { not: null }
       where.riderId = null
 	      where.userId = { not: userId }
 	      where.refundStatus = { notIn: ['refunding', 'refunded'] }
@@ -3408,39 +3340,22 @@ export class ErrandService {
 	    let rows: any[] = []
 	    let errandTotal = 0
 	    let awaitingErrand = 0
-	    if (includeErrand && normalizedStatus === 'pending_accept' && identity.role === 'ordinary_user') {
-	      const candidates = await this.prisma.errandOrder.findMany({
-	        where,
-	        take: Math.max(page * pageSize * 4, pageSize),
-	        orderBy: { createdAt: 'desc' },
-	        include: errandInclude,
-	      })
-	      const filtered = this.filterErrandRowsForOrderTaking(candidates, identity)
-	      awaitingErrand = filtered.length
-	      errandTotal = filtered.length
-	      rows = filtered.slice((page - 1) * pageSize, page * pageSize)
-	    } else if (includeErrand && normalizedStatus === 'pending_accept' && identity.role === 'approved_rider') {
-	      const candidates = await this.prisma.errandOrder.findMany({
-	        where,
-	        take: Math.max(page * pageSize * 4, pageSize),
-	        orderBy: { createdAt: 'desc' },
-	        include: errandInclude,
-	      })
-	      const filtered = this.filterErrandRowsForApprovedRider(candidates, identity)
-	      awaitingErrand = filtered.length
-	      errandTotal = filtered.length
-	      rows = filtered.slice((page - 1) * pageSize, page * pageSize)
+    if (includeErrand && normalizedStatus === 'pending_accept') {
+      const pool = await this.getEligibleErrandPoolPage(where, errandInclude, identity, sourcePage, sourceLimit);
+      rows = pool.rows;
+      awaitingErrand = pool.total;
+      errandTotal = pool.total;
 	    } else {
 	      const result = await Promise.all([
 	        this.prisma.errandOrder.findMany({
 	          where: includeErrand ? where : { id: '__never__' },
-	          skip: (page - 1) * pageSize,
-	          take: pageSize,
-	          orderBy: { createdAt: 'desc' },
+	          skip: (sourcePage - 1) * sourceLimit,
+	          take: sourceLimit,
+	          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
 	          include: errandInclude,
 	        }),
 	        this.prisma.errandOrder.count({ where: includeErrand ? where : { id: '__never__' } }),
-	        this.prisma.errandOrder.count({ where: includeErrand ? { regionId, userId: { not: userId }, status: 'pending_accept', riderId: null, refundStatus: { notIn: ['refunding', 'refunded'] } } : { id: '__never__' } }),
+	        this.prisma.errandOrder.count({ where: includeErrand ? { regionId, userId: { not: userId }, status: 'pending_accept', payTime: { not: null }, riderId: null, refundStatus: { notIn: ['refunding', 'refunded'] } } : { id: '__never__' } }),
 	      ])
 	      rows = result[0]
 	      errandTotal = result[1]
@@ -3449,9 +3364,9 @@ export class ErrandService {
     const [shopRows, shopTotal, awaitingShop, receivedErrand, receivedShop, pickedUpErrand, pickedUpShop, deliveredErrand, deliveredShop] = await Promise.all([
 	      this.prisma.order.findMany({
 	        where: includeShopOrders ? shopWhere : { id: '__never__' },
-	        skip: (page - 1) * pageSize,
-	        take: pageSize,
-	        orderBy: { createdAt: 'desc' },
+	        skip: (sourcePage - 1) * sourceLimit,
+	        take: sourceLimit,
+	        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
 	        include: {
           merchant: { select: { id: true, name: true, regionId: true, address: true, phone: true, logo: true, latitude: true, longitude: true, businessType: true } },
 	          user: { select: { id: true, nickname: true, avatar: true, phone: true } },
@@ -3470,12 +3385,13 @@ export class ErrandService {
 	    const formattedRows = [
 	      ...(await this.formatMiniOrders(rows)),
 	      ...(await this.formatShopOrdersForRider(shopRows)),
-	    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+	    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime() || String(b.id).localeCompare(String(a.id)));
+    const pageRows = formattedRows.slice(combinedSources ? (page - 1) * pageSize : 0, combinedSources ? page * pageSize : pageSize);
 	    const dispatchRows = normalizedStatus === 'pending_accept' && identity.role === 'approved_rider'
-	      ? enrichErrandOrdersForDispatch(formattedRows, { rider: await this.getRiderDispatchContext(userId) })
-	      : formattedRows;
+	      ? enrichErrandOrdersForDispatch(pageRows, { rider: await this.getRiderDispatchContext(userId) })
+	      : pageRows;
 	    const visibleRows = normalizedStatus === 'pending_accept'
-        ? dispatchRows.map(row => row.type === 'errand' ? poolErrandProjection(row) : row)
+        ? dispatchRows.map(row => row.type === 'errand' ? poolErrandProjection(row) : poolShopProjection(row))
         : dispatchRows;
 	    const total = errandTotal + shopTotal;
 	    return {
@@ -3550,7 +3466,7 @@ export class ErrandService {
   async getRiderInfo(userId: string) {
     const rider = await this.prisma.regionRider.findUnique({
       where: { userId },
-      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
+      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
     });
     if (!rider) return null;
     const stats = await this.getOrderStats(userId);
@@ -3562,6 +3478,10 @@ export class ErrandService {
   }
 
   async updateRiderInfo(userId: string, dto: any) {
+    const gender = dto?.gender;
+    if (gender !== undefined && !['MALE', 'FEMALE', 'UNKNOWN'].includes(gender)) {
+      throw new BadRequestException('性别参数不合法');
+    }
     const existing = await this.prisma.regionRider.findUnique({
       where: { userId },
       select: { verifyStatus: true, realName: true, idCard: true },
@@ -3601,11 +3521,25 @@ export class ErrandService {
       ]);
       if (activeErrands + activeShopOrders > 0) throw new BadRequestException('还有进行中的订单，完成后才能下线');
     }
-    const rider = await this.prisma.regionRider.update({
+    const updateArgs = {
       where: { userId },
       data,
-      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
-    });
+      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
+    };
+    const rider = gender === undefined
+      ? await this.prisma.regionRider.update(updateArgs)
+      : await this.prisma.$transaction(async (tx) => {
+        await lockErrandAssignee(tx, userId);
+        await assertErrandGenderChangeAllowed(tx, userId, gender);
+        await tx.userProfile.upsert({ where: { userId }, update: { gender }, create: { userId, gender } });
+        return tx.regionRider.update(updateArgs);
+      });
+    if (gender !== undefined) {
+      await Promise.all([
+        this.redis.delPattern(`user:profile:${userId}:*`).catch(() => undefined),
+        this.redis.delPattern(`user:profile:v2:${userId}:*`).catch(() => undefined),
+      ]);
+    }
     return this.formatRiderInfo(rider, true);
   }
 
@@ -3810,6 +3744,9 @@ export class ErrandService {
     if (!order) throw new NotFoundException('订单不存在');
     if (order.riderId !== userId) throw new BadRequestException('无权转出该订单');
     if (order.status !== 'accepted') throw new BadRequestException('仅未取货订单可转单');
+    if (['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))) {
+      throw new BadRequestException('订单退款处理中，不能转单');
+    }
     const target = await this.prisma.regionRider.findFirst({
       where: { OR: [{ id: dto?.target_rider_id }, { userId: dto?.target_rider_id }] },
     });
@@ -3841,7 +3778,21 @@ export class ErrandService {
       }
       throw new BadRequestException('目标骑手不属于订单区域');
     }
-    return this.prisma.transferRequest.create({ data: { orderId, fromRiderId: userId, toRiderId: target.userId } });
+    const transfer = await this.prisma.transferRequest.create({ data: { orderId, fromRiderId: userId, toRiderId: target.userId } });
+    await this.notifyTransfer(target.userId, transfer.id, 'rider_transfer_request', '有待接收的转单', '请在订单页查看并选择接收或拒绝。');
+    return transfer;
+  }
+
+  private async notifyTransfer(userId: string, transferId: string, scene: string, title: string, content: string) {
+    if (!this.notifyService?.createAndDispatch) return;
+    try {
+      await this.notifyService.createAndDispatch({
+        userId, type: 'delivery', scene, title, content,
+        data: { transferId }, linkType: 'page', linkValue: '/pages/orders/orders',
+      });
+    } catch (error) {
+      this.logger.warn(`转单通知未送达: ${transferId}`);
+    }
   }
 
   async getTransferRequests(userId: string) {
@@ -3865,13 +3816,20 @@ export class ErrandService {
     return {
       success: true,
       total_requests: requests.length,
-      requests: requests.map(item => {
+      requests: requests.filter(item => {
+        const order = orderMap.get(item.orderId)
+        return order?.riderId === item.fromRiderId && order.status === 'accepted' && !['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))
+      }).map(item => {
         const order = orderMap.get(item.orderId)
         const fromRider = this.publicRiderProfile(riderMap.get(item.fromRiderId))
         return {
           id: item.id,
           order: order ? {
             id: order.id,
+            order_no: order.orderNo,
+            title: order.title,
+            pickup_address: order.pickupAddress,
+            description: order.description || '',
             delivery_address: order.deliverAddress,
             delivery_contact: order.deliverContact || '用户',
             delivery_phone: order.deliverPhone || '',
@@ -3897,7 +3855,8 @@ export class ErrandService {
   }
 
   private async respondToTransferUnlocked(transferId: string, userId: string, dto: any) {
-    const action = dto?.action === 'accept' ? 'accepted' : 'rejected'
+    if (!['accept', 'reject'].includes(dto?.action)) throw new BadRequestException('请选择接收或拒绝转单');
+    const action = dto.action === 'accept' ? 'accepted' : 'rejected'
     const transfer = await this.prisma.transferRequest.findUnique({ where: { id: transferId } });
     if (!transfer) throw new NotFoundException('转单请求不存在');
     if (transfer.toRiderId !== userId) throw new BadRequestException('无权处理该转单请求');
@@ -3907,7 +3866,7 @@ export class ErrandService {
       if (!order) throw new NotFoundException('订单不存在')
       await enforceErrandAssignmentGuard(this.prisma, order, userId, '接收转单')
     }
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await lockErrandAssignee(tx, userId)
       const currentTransfer = await tx.transferRequest.findUnique({ where: { id: transferId } })
       if (!currentTransfer || currentTransfer.toRiderId !== userId || currentTransfer.status !== 'pending') {
@@ -3919,6 +3878,9 @@ export class ErrandService {
           tx.regionRider.findUnique({ where: { userId } }),
         ])
         if (!currentOrder) throw new NotFoundException('订单不存在')
+        if (['refunding', 'refunded'].includes(String(currentOrder.refundStatus || 'none'))) {
+          throw new BadRequestException('订单退款处理中，不能转单')
+        }
         if (!targetRider || targetRider.verifyStatus !== 'approved' || targetRider.status !== 'online') {
           throw new BadRequestException('骑手状态已变化，请刷新后再接单')
         }
@@ -3941,7 +3903,7 @@ export class ErrandService {
         });
         if (claimed.count !== 1) throw new BadRequestException('骑手状态已变化，请刷新后再接单');
         const moved = await tx.errandOrder.updateMany({
-          where: { id: currentTransfer.orderId, userId: { not: userId }, riderId: currentTransfer.fromRiderId, status: 'accepted' },
+          where: { id: currentTransfer.orderId, userId: { not: userId }, riderId: currentTransfer.fromRiderId, status: 'accepted', refundStatus: { notIn: ['refunding', 'refunded'] } },
           data: { riderId: userId, status: 'accepted', acceptTime: new Date() },
         });
         if (moved.count !== 1) throw new BadRequestException('订单状态已变化，无法转单');
@@ -3960,6 +3922,11 @@ export class ErrandService {
       }
       return { success: true, data: { ...transfer, status: action } };
     });
+    await Promise.all([
+      this.notifyTransfer(transfer.fromRiderId, transferId, 'rider_transfer_resolved', '转单已处理', action === 'accepted' ? '对方已接收订单，请刷新订单列表。' : '对方拒绝了转单，订单仍由你负责。'),
+      this.notifyTransfer(userId, transferId, 'rider_transfer_resolved', '转单已处理', action === 'accepted' ? '你已接收订单，请及时履约。' : '已拒绝本次转单。'),
+    ]);
+    return result;
   }
 
   async getRegionRiders(userId?: string) {

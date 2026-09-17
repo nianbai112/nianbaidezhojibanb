@@ -6,7 +6,7 @@
       </template>
     </PageHeader>
 
-    <SearchPanel @search="loadLogs" @reset="resetFilters">
+    <SearchPanel @search="searchLogs" @reset="resetFilters">
       <el-input v-model="filters.keyword" placeholder="搜索账号/IP" clearable style="width: 200px" />
       <el-select v-model="filters.success" placeholder="状态" clearable style="width: 120px">
         <el-option label="成功" :value="true" />
@@ -24,13 +24,20 @@
           </template>
         </el-table-column>
         <el-table-column prop="failReason" label="失败原因" min-width="150">
-          <template #default="{ row }">{{ row.failReason || '-' }}</template>
+          <template #default="{ row }">{{ row.success ? '登录成功，无失败原因' : (row.failReason || '历史记录未填写失败原因') }}</template>
         </el-table-column>
-        <el-table-column prop="ip" label="IP" width="120" />
-        <el-table-column prop="userAgent" label="设备" min-width="200" show-overflow-tooltip />
-        <el-table-column label="时间" width="160">
+        <el-table-column prop="ip" label="登录 IP 地址" min-width="190">
+          <template #default="{ row }"><span style="white-space: nowrap">{{ ipText(row.ip) }}</span></template>
+        </el-table-column>
+        <el-table-column label="设备情况" min-width="320">
           <template #default="{ row }">
-            <TimeText :time="row.createdAt" />
+            {{ deviceInfo(row.userAgent) }}
+            <details v-if="row.userAgent"><summary>查看原始设备信息</summary><div style="overflow-wrap:anywhere">{{ row.userAgent }}</div></details>
+          </template>
+        </el-table-column>
+        <el-table-column label="登录时间" width="190">
+          <template #default="{ row }">
+            {{ fullTime(row.createdAt) }}
           </template>
         </el-table-column>
       </el-table>
@@ -55,7 +62,7 @@ import { request } from '@/api/request'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchPanel from '@/components/common/SearchPanel.vue'
-import TimeText from '@/components/common/TimeText.vue'
+import { deviceInfo, ipText, fullTime } from './logPresentation.mjs'
 
 const loading = ref(false)
 const logs = ref<any[]>([])
@@ -100,8 +107,9 @@ const resetFilters = () => {
   filters.keyword = ''
   filters.success = undefined
   dateRange.value = []
-  loadLogs()
+  searchLogs()
 }
+const searchLogs = () => { page.value = 1; loadLogs() }
 
 onMounted(() => {
   loadLogs()

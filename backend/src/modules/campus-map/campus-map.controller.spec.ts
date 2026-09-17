@@ -1,12 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException, RequestMethod } from '@nestjs/common';
 import { CampusMapController } from './campus-map.controller';
-import { CampusMapImportService } from './campus-map-import.service';
 import { CampusMapService } from './campus-map.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
 import { UploadService } from '../upload/upload.service';
+import { CampusMapReadGuard } from './campus-map-read.guard';
 
 // 校园地图安全回归：`GET campus-map/active` 曾无任何守卫，任何人可用 region_id
 // 遍历拉取全部校区地图数据（含 inlineData 全量要素坐标与名称）。
@@ -36,14 +36,6 @@ const mockService = {
   disableRegionMap: jest.fn(),
   submitUserCheckIn: jest.fn(),
 };
-const mockImportService = {
-  getConverterStatus: jest.fn(),
-  createImport: jest.fn(),
-  listImports: jest.fn(),
-  getImport: jest.fn(),
-  retryImportJob: jest.fn(),
-  deleteImportJob: jest.fn(),
-};
 const mockScope = {
   assertRegionAccess: jest.fn().mockResolvedValue(undefined),
   regionFieldWhere: jest.fn().mockResolvedValue({}),
@@ -68,7 +60,6 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
       controllers: [CampusMapController],
       providers: [
         { provide: CampusMapService, useValue: mockService },
-        { provide: CampusMapImportService, useValue: mockImportService },
         { provide: AdminDataScopeService, useValue: mockScope },
         { provide: UploadService, useValue: mockUpload },
       ],
@@ -88,6 +79,34 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     const proto = CampusMapController.prototype as any;
     expect(Reflect.getMetadata('path', proto.getActiveMap)).toBe('campus-map/active');
     expect(Reflect.getMetadata('method', proto.getActiveMap)).toBe(RequestMethod.GET);
+  });
+
+  it('Go 校验入口保留 JwtGuard，但不查询地图', () => {
+    const proto = CampusMapController.prototype;
+    expect(Reflect.getMetadata('__guards__', proto.getMapReadAccess)).toContain(JwtGuard);
+    expect(Reflect.getMetadata('__guards__', proto.getMapReadAccess)).toContain(CampusMapReadGuard);
+    expect(typeof Reflect.getMetadata('THROTTLER:TRACKERdefault', proto.getMapReadAccess)).toBe('function');
+    expect(controller.getMapReadAccess()).toEqual({ allowed: true });
+    expect(mockService.getActiveMap).not.toHaveBeenCalled();
+  });
+
+  it('内部快照导出使用独立服务身份且复用公开过滤，不读取后台草稿', async () => {
+    const proto = CampusMapController.prototype;
+    expect(Reflect.getMetadata('__guards__', proto.getMapReadSnapshot)).toContain(CampusMapReadGuard);
+    mockService.getActiveMap.mockResolvedValue({ enabled: false });
+    await expect(controller.getMapReadSnapshot(undefined, 'region-1')).resolves.toEqual({ enabled: false });
+    expect(mockService.getActiveMap).toHaveBeenCalledWith('region-1');
+    expect(mockService.getRegionMap).not.toHaveBeenCalled();
+  });
+
+  it('CAD 导入与转换器接口已经移除，但地图编辑发布接口保留', () => {
+    const proto = CampusMapController.prototype as any;
+    for (const name of ['createImportJob', 'listImportJobs', 'getImportJob', 'retryImportJob', 'deleteImportJob', 'getConverterStatus', 'saveConverterConfig']) {
+      expect(proto[name]).toBeUndefined();
+    }
+    for (const name of ['getAdminRegionMap', 'saveAdminRegionMapDraft', 'publishAdminRegionMapDraft', 'getActiveMap']) {
+      expect(typeof proto[name]).toBe('function');
+    }
   });
 
   it('getActiveMap 已绑定 JwtGuard（不再允许匿名访问）', () => {
@@ -206,11 +225,6 @@ describe('CampusMapController - 公开接口登录校验回归', () => {
     ['发布草稿', (req: any) => (controller as any).publishAdminRegionMapDraft('region-1', { revision: 1 }, req)],
     ['读取版本', (req: any) => (controller as any).listAdminRegionMapVersions('region-1', '1', '20', req)],
     ['回滚版本', (req: any) => (controller as any).rollbackAdminRegionMapVersion('region-1', 'version-1', req)],
-    ['创建导入', (req: any) => (controller as any).createImportJob('region-1', undefined, req)],
-    ['读取导入列表', (req: any) => (controller as any).listImportJobs('region-1', req)],
-    ['读取导入详情', (req: any) => (controller as any).getImportJob('region-1', 'job-1', req)],
-    ['重试导入', (req: any) => (controller as any).retryImportJob('region-1', 'job-1', req)],
-    ['删除导入', (req: any) => (controller as any).deleteImportJob('region-1', 'job-1', req)],
     ['停用地图', (req: any) => (controller as any).disableAdminRegionMap('region-1', req)],
   ])('%s 前先校验管理员区域数据范围', async (_label, invoke) => {
     const req = { user: { sub: 'admin-1' } } as any;

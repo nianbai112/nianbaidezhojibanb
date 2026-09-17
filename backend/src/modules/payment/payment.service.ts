@@ -10,6 +10,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import { errandExtendedConfigKey, normalizeErrandExtendedConfig } from '../errand/errand-config.util';
 import { assessApprovedRiderFallbackEligibility } from '../errand/errand-order-taking-policy';
+import { restoreErrandOrderCoupon } from '../errand/errand-coupon-restoration';
 
 type WxPayRuntimeConfig = {
   appid: string;
@@ -1024,59 +1025,7 @@ export class PaymentService {
   }
 
   private async notifyAvailableErrandRiders(orderId: string) {
-    const order = await this.prisma.errandOrder.findUnique({
-      where: { id: orderId },
-    });
-    if (!order?.regionId) return;
-    const regionId = order.regionId;
-    const savedConfig = await this.prisma.config.findUnique({
-      where: { key: errandExtendedConfigKey(regionId) },
-    }).catch(() => null);
-    const extendedConfig = normalizeErrandExtendedConfig(savedConfig?.value, 0);
-    const fallbackEligibility = assessApprovedRiderFallbackEligibility({
-      policy: extendedConfig.orderTakingPolicy || extendedConfig.order_taking_policy,
-      order,
-      now: new Date(),
-    });
-    if (!fallbackEligibility.allowed) return;
-
-    const riders = await this.prisma.regionRider.findMany({
-      where: {
-        regionId,
-        verifyStatus: 'approved',
-        status: 'online',
-        notificationStatus: { not: false },
-      },
-      select: { userId: true },
-    });
-    if (!riders.length) return;
-
-    const amount = Number(order.payAmount || 0);
-    const title = '有新的跑腿订单待接单';
-    const content = `${this.errandTypeName(order.type)} ${amount.toFixed(2)}元，点击查看接单大厅`;
-    const results = await Promise.allSettled(
-      riders.map((rider) =>
-        this.notifyService.createAndDispatch({
-          userId: rider.userId,
-          regionId,
-          type: 'delivery',
-          scene: 'new_errand_order',
-          title,
-          content,
-          data: {
-            orderId: order.id,
-            orderNo: order.orderNo,
-            serviceType: this.errandMiniType(order.type),
-            amount,
-          },
-          linkType: 'page',
-          linkValue: '/pages/tabbar/RunErrands/RunErrands',
-          channelMask: { inApp: true, websocket: true, push: true },
-        }),
-      ),
-    );
-    const failed = results.filter((item) => item.status === 'rejected').length;
-    if (failed) this.logger.warn(`跑腿新单通知部分失败 order=${order.id} failed=${failed}`);
+    return this.notifyService.notifyAvailableErrandRiders(orderId);
   }
 
   private async notifyShopMerchant(orderId: string) {
@@ -1781,8 +1730,7 @@ export class PaymentService {
           orderId: order.id,
         },
         data: { status: 'cancelled' },
-      })
-      .catch(() => undefined);
+      });
     if (order.status !== 'PAID' || order.merchantAcceptTime || !order.userId || !order.orderNo) return;
     const coupon = await tx.couponReceive.findFirst({
       where: { userId: order.userId, orderNo: order.orderNo, status: 'used' },
@@ -1801,6 +1749,19 @@ export class PaymentService {
       where: { sourceType: 'coupon', orderType: 'order', orderId: order.id },
       data: { status: 'cancelled' },
     });
+  }
+
+  /** Restore benefits in the same transaction that records a successful full refund. */
+  private async restoreErrandOrderBenefits(tx: any, order: any) {
+    if (!order) return;
+    await this.membershipService.restoreBenefitUsagesForTarget('errand_order', order.id, tx);
+    await tx.subsidyLedger.updateMany({
+      where: { sourceType: 'membership', orderType: 'errand_order', orderId: order.id },
+      data: { status: 'cancelled' },
+    });
+    if (!order.userId || !order.orderNo) return;
+
+    await restoreErrandOrderCoupon(tx, order);
   }
 
   async cancelFreeShopOrder(orderId: string, reason: string, operatorId: string, operatorType: 'user' | 'merchant' | 'system') {
@@ -2113,7 +2074,7 @@ export class PaymentService {
         });
         break;
       case 'errand_order':
-        await tx.errandOrder.update({
+        const errandOrder = await tx.errandOrder.update({
           where: { id: bizId },
           data: {
             ...(isFullRefund ? { status: 'refunded' } : {}),
@@ -2161,6 +2122,7 @@ export class PaymentService {
           }
         }
         await this.adjustErrandRiderSettlementForRefund(tx, bizId, refundId, amount);
+        if (isFullRefund) await this.restoreErrandOrderBenefits(tx, errandOrder);
         break;
       case 'second_hand':
         const order = await tx.secondHandOrder.findUnique({
@@ -2582,7 +2544,7 @@ export class PaymentService {
           },
         });
 
-        if (isFullRefund && payment.bizType !== 'order') {
+        if (isFullRefund && !['order', 'errand_order'].includes(payment.bizType)) {
           const membershipTarget = this.getMembershipRefundTarget(payment.bizType);
           if (membershipTarget) {
             await this.membershipService.restoreBenefitUsagesForTarget(membershipTarget.targetType, payment.bizId, tx);
@@ -2594,8 +2556,7 @@ export class PaymentService {
                   orderId: payment.bizId,
                 },
                 data: { status: 'cancelled' },
-              })
-              .catch(() => undefined);
+              });
           }
         }
       }
@@ -3402,7 +3363,7 @@ export class PaymentService {
           await this.markBizRefunded(tx, payment.bizType, payment.bizId, refundAmount, isFullRefund, newRefundedAmount, refundRecord.id);
 
           // 会员权益恢复
-          if (isFullRefund && payment.bizType !== 'order') {
+          if (isFullRefund && !['order', 'errand_order'].includes(payment.bizType)) {
             const membershipTarget = this.getMembershipRefundTarget(payment.bizType);
             if (membershipTarget) {
               await this.membershipService.restoreBenefitUsagesForTarget(membershipTarget.targetType, payment.bizId, tx);
@@ -3414,8 +3375,7 @@ export class PaymentService {
                     orderId: payment.bizId,
                   },
                   data: { status: 'cancelled' },
-                })
-                .catch(() => undefined);
+                });
             }
           }
         });

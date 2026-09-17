@@ -9,7 +9,7 @@
         </div>
       </div>
       <el-tabs v-model="activeTab" class="drawer-tabs">
-        <el-tab-pane v-for="tab in tabs" :key="tab" :label="tab">
+        <el-tab-pane v-for="tab in tabs" :key="tab" :label="tab" :name="tab">
           <div v-if="isAdminDetail" class="detail-scroll">
             <div v-if="tab === '账号信息'" class="section-stack">
               <div class="info-card">
@@ -88,7 +88,7 @@
     </template>
     <template #footer>
       <el-button @click="visible=false">关闭</el-button>
-      <el-button type="primary">保存处理结果</el-button>
+      <el-button v-if="moduleKey !== 'verification'" type="primary">保存处理结果</el-button>
     </template>
   </el-drawer>
 </template>
@@ -130,6 +130,7 @@ const scopeDescription = computed(() => {
   return `该管理员主要负责：${names || '指定区域'}。`
 })
 const labelMap: Record<string, string> = {
+  uid: '用户 UID', cert: '学生证照片', studentCardImage: '学生证照片', studentCertVerifiedAt: '审核时间', studentCertRemark: '审核备注',
   id: 'ID', orderNo: '订单号', flowNo: '流水号', name: '名称', status: '状态',
   createdAt: '创建时间', updatedAt: '更新时间', phone: '手机号', email: '邮箱',
   amount: '金额', price: '价格', total: '合计', quantity: '数量',
@@ -198,6 +199,14 @@ function isImageValue(key: string, value: any) {
 }
 const displayEntries = computed(() => {
   const src = row.value || {}
+  if (moduleKey.value === 'verification') {
+    const keys = activeTab.value === '用户信息'
+      ? ['uid', 'nickname', 'realName', 'school', 'studentNo']
+      : activeTab.value === '审核记录'
+        ? ['status', 'createdAt', 'studentCertVerifiedAt', 'studentCertRemark']
+        : ['cert', 'realName', 'school', 'studentNo', 'status']
+    return keys.map(key => ({ label: key === 'createdAt' ? '申请时间' : formatLabel(key), value: stringify(src[key]), isImage: isImageValue(key, src[key]) }))
+  }
   return Object.entries(src)
     .filter(([k, v]) => !hiddenKeys.has(k) && v !== undefined && v !== null && typeof v !== 'function')
     .slice(0, 20)

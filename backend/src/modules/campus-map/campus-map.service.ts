@@ -23,7 +23,9 @@ const EARTH_METERS_PER_DEGREE = 111_320;
 // 旧路线没有显式服务器 ACK 路口锚点时的兼容合并距离。新采集路线优先按
 // routeEndpointAnchors.key 确定性连接，不再依赖邻近距离猜测拓扑。
 const ROUTE_ENDPOINT_MERGE_METERS = 12;
-const ENTRANCE_ROUTE_CONNECT_METERS = 60;
+// Only snap small GPS differences onto an actually collected road. Never invent
+// an uncollected path between an entrance and a nearby road across a wall/garden.
+const ENTRANCE_ROUTE_CONNECT_METERS = 5;
 // 画师 AI 原文件的 1-38 号地点均已提取文字中心锚点；真实 GCJ-02 坐标仍需现场采集。
 const ILLUSTRATED_ARTWORK_NUMBER_MIN = 1;
 const ILLUSTRATED_ARTWORK_NUMBER_MAX = 38;
@@ -184,7 +186,8 @@ export class CampusMapService {
       const hasPublicNavigationRoute = Boolean(sourceManifest && this.inlineFeatures(sourceManifest).some((feature: any) => {
         const properties = this.asRecord(feature?.properties) || {};
         return feature?.geometry?.type === 'LineString'
-          && String(properties.collectionSource || '') === 'rider_app_approved'
+          && (String(properties.collectionSource || '') === 'rider_app_approved'
+            || Boolean(this.plannedRouteGeometry(sourceManifest!, feature)))
           && properties.public === true
           && properties.pedestrian !== false
           && properties.closed !== true
@@ -770,20 +773,55 @@ export class CampusMapService {
     const requestedRegionId = this.normalizeRegionId(regionId);
     const regionMap = await this.findPublishedMap(requestedRegionId);
     if (this.isPublishedMapEnabled(regionMap)) {
-      return this.attachPublicPlaces(this.toPublishedMap(regionMap, requestedRegionId, requestedRegionId));
+      return this.withReadRevision(await this.attachPublicPlaces(this.toPublishedMap(regionMap, requestedRegionId, requestedRegionId)));
     }
 
     if (requestedRegionId !== GLOBAL_REGION_ID) {
       const globalMap = await this.findPublishedMap(GLOBAL_REGION_ID);
       if (this.isPublishedMapEnabled(globalMap)) {
-        return this.attachPublicPlaces(this.toPublishedMap(globalMap, requestedRegionId, GLOBAL_REGION_ID));
+        return this.withReadRevision(await this.attachPublicPlaces(this.toPublishedMap(globalMap, requestedRegionId, GLOBAL_REGION_ID)));
       }
     }
 
     // Public clients only consume an explicitly published immutable version.
     // Legacy Config rows remain readable by the admin migration surface, but
     // must never silently bypass draft review and publication here.
-    return this.disabledConfig(requestedRegionId, regionMap ? 'not_published' : 'not_configured');
+    return this.withReadRevision(this.disabledConfig(requestedRegionId, regionMap ? 'not_published' : 'not_configured'));
+  }
+
+  async getActiveMapVersion(regionId?: string) {
+    const config = await this.getActiveMap(regionId);
+    return {
+      regionId: config.regionId,
+      enabled: config.enabled,
+      activeVersionId: config.workflow?.activeVersionId || '',
+      readRevision: config.readRevision,
+    };
+  }
+
+  private withReadRevision(config: Record<string, any>): Record<string, any> {
+    const { readRevision: _previous, ...content } = config;
+    const graph = content.navigation?.graph;
+    if (graph && graph.entrancePolicyVersion !== 2
+      && (graph.edges || []).some((edge: any) => edge.source === 'verified_entrance_connector')) {
+      // Read-time safety withdrawal also protects already-published versions.
+      // The immutable version remains intact and can be recompiled by publishing.
+      content.navigation = null;
+      content.navigationUnavailableReason = 'entrance_republish_required';
+      const withoutNavigation = (place: any) => ({ ...place, navigable: false, entranceNodeIds: [] });
+      content.publicPlaces = (content.publicPlaces || []).map(withoutNavigation);
+      content.layers = (content.layers || []).map((layer: any) => {
+        const data = layer.inlineData || layer.data;
+        if (!Array.isArray(data?.features)) return layer;
+        return { ...layer, inlineData: { ...data, features: data.features.map((feature: any) => ({
+          ...feature, properties: withoutNavigation(feature.properties || {}),
+        })) } };
+      });
+    }
+    return {
+      ...content,
+      readRevision: createHash('sha256').update(JSON.stringify(this.canonicalize(content))).digest('hex'),
+    };
   }
 
   async getRegionMap(regionId: string) {
@@ -1185,6 +1223,7 @@ export class CampusMapService {
       regionId,
       title: String(raw.title || '校园地图').trim(),
       mapId,
+      artworkId: String(raw.artworkId || '').trim(),
       version: String(raw.version || new Date().toISOString().slice(0, 10)).trim(),
       assetBaseUrl: String(raw.assetBaseUrl || '').trim(),
       imageMap,
@@ -1231,6 +1270,7 @@ export class CampusMapService {
       sourceRegionId,
       title: String(value.title || '校园地图'),
       mapId: String(value.mapId || `campus-map-${sourceRegionId}`),
+      artworkId: String(value.artworkId || ''),
       version: String(value.version || ''),
       assetBaseUrl: String(value.assetBaseUrl || ''),
       imageMap,
@@ -1260,6 +1300,7 @@ export class CampusMapService {
       sourceRegionId,
       title: String(value.title || '校园地图'),
       mapId: String(value.mapId || ''),
+      artworkId: String(value.artworkId || ''),
       version: String(value.version || ''),
       assetBaseUrl: String(value.assetBaseUrl || ''),
       imageMap: this.normalizeImageMap(value.imageMap || value.backgroundImage || value.baseImage),
@@ -1320,6 +1361,7 @@ export class CampusMapService {
       if (!inlineData || !Array.isArray(inlineData.features)) return layer;
       const features = inlineData.features.filter((feature: any) => {
         const properties = this.asRecord(feature?.properties) || {};
+        if (layer.id === 'operator_routes' && properties.public !== true) return false;
         return isPublicCampusProject(properties);
       });
       return {
@@ -1332,9 +1374,8 @@ export class CampusMapService {
 
   private async attachPublicPlaces(config: Record<string, any>) {
     if (config.enabled !== true) return config;
-    // 版本快照仍是内容来源；活动表只作为“撤回白名单”，不会把尚未发布的新改动
-    // 动态拼进旧版本。这样运营把地点/照片降回待审核后可以即时止血，同时历史
-    // 版本的名称、坐标、路线和样式仍保持不可变。
+    // 正式快照仍是内容来源；活动表只能撤回/收紧通行权限，重新开放仍须发布。
+    // 名称、坐标、新入口和样式不能从草稿动态混入旧版本。
     const sourceRegionId = this.normalizeRegionId(config.sourceRegionId || config.regionId);
     const livePlaces = await this.prisma.campusMapProject.findMany({
       where: {
@@ -1346,6 +1387,11 @@ export class CampusMapService {
         id: true,
         officialNumber: true,
         artworkFeatureKey: true,
+        serviceStatus: true,
+        unavailableMessage: true,
+        navigable: true,
+        coordinateStatus: true,
+        entrances: { select: { id: true, serviceStatus: true } },
         media: {
           where: { isPublic: true, reviewStatus: 'approved' },
           select: { id: true, url: true },
@@ -1383,7 +1429,31 @@ export class CampusMapService {
       const coverPhotoUrl = allowedUrls.has(String(value?.coverPhotoUrl || ''))
         ? String(value.coverPhotoUrl)
         : '';
-      return { ...value, media, publicPhotos, coverPhotoUrl };
+      const serviceStatus = livePlace.serviceStatus && livePlace.serviceStatus !== 'open'
+        && ['open', 'limited'].includes(value.serviceStatus)
+        ? livePlace.serviceStatus : value.serviceStatus;
+      const liveEntrances = new Map((livePlace.entrances || []).map((item: any) => [String(item.id), item]));
+      const entrances = (value.entrances || []).map((entrance: any) => {
+        const liveEntrance: any = liveEntrances.get(String(entrance.id));
+        const withdrawn = Array.isArray(livePlace.entrances) && !liveEntrance;
+        const status = withdrawn ? 'closed'
+          : liveEntrance?.serviceStatus && liveEntrance.serviceStatus !== 'open'
+            && ['open', 'limited'].includes(entrance.serviceStatus)
+            ? liveEntrance.serviceStatus : entrance.serviceStatus;
+        return { ...entrance, serviceStatus: status,
+          nodeId: ['open', 'limited'].includes(status) ? entrance.nodeId : null };
+      });
+      const openNodes = new Set(entrances.map((entrance: any) => entrance.nodeId).filter(Boolean));
+      const navigable = value.navigable === true && livePlace.navigable !== false
+        && ['open', 'limited'].includes(serviceStatus)
+        && (!livePlace.coordinateStatus || livePlace.coordinateStatus === 'verified')
+        && (value.entranceNodeIds || []).some((id: string) => openNodes.has(id));
+      return { ...value, media, publicPhotos, coverPhotoUrl, serviceStatus, navigable,
+        entrances: navigable ? entrances : entrances.map((entrance: any) => ({ ...entrance, nodeId: null })),
+        unavailableMessage: serviceStatus !== value.serviceStatus
+          ? String(livePlace.unavailableMessage || '').trim().slice(0, 120) : value.unavailableMessage,
+        entranceNodeIds: navigable ? (value.entranceNodeIds || []).filter((id: string) => openNodes.has(id)) : [],
+      };
     };
     const publicPlaces = (Array.isArray(config.publicPlaces) ? config.publicPlaces : [])
       .map((place: any) => {
@@ -1411,7 +1481,16 @@ export class CampusMapService {
         featureCount: features.length,
       };
     });
-    return { ...config, layers, publicPlaces };
+    const graph = this.asRecord(config.navigation?.graph);
+    let navigation = config.navigation;
+    if (graph) {
+      const allowedEntranceNodes = new Set(publicPlaces.flatMap((place: any) => place.entranceNodeIds || []));
+      const nodes = Object.fromEntries(Object.entries(graph.nodes || {}).filter(([id, node]: [string, any]) =>
+        !(node?.kind === 'entrance' || node?.placeId || node?.entranceId) || allowedEntranceNodes.has(id)));
+      const edges = (graph.edges || []).filter((edge: any) => nodes[edge.a] && nodes[edge.b]);
+      navigation = { ...config.navigation, graph: { ...graph, nodes, edges } };
+    }
+    return { ...config, navigation, layers, publicPlaces };
   }
 
   private async buildPublishedPlaceCatalog(tx: any, regionId: string) {
@@ -1438,6 +1517,7 @@ export class CampusMapService {
       officialNumber: place.officialNumber,
       officialName: place.officialName,
       title: place.displayName || place.officialName,
+      engineeringAlias: place.engineeringAlias || '',
       semanticType: place.semanticType,
       constructionStatus: place.constructionStatus,
       serviceStatus: place.serviceStatus,
@@ -1475,8 +1555,38 @@ export class CampusMapService {
         serviceStatus: entrance.serviceStatus,
         isPrimary: entrance.isPrimary,
         address: entrance.addressDescription,
+        sourceType: entrance.sourceType,
       })),
     }));
+  }
+
+  // 规划路线必须有真实 GCJ-02 几何；插画像素不能作为导航坐标。
+  private plannedRouteGeometry(manifest: Record<string, any>, feature: any) {
+    const properties = this.asRecord(feature?.properties) || {};
+    if (properties.sourceObjectId || properties.sourceSessionId
+      || String(properties.id || '').startsWith('collection-route-')
+      || (properties.collectionSource && properties.collectionSource !== 'admin_planned')) return null;
+    const geometry = isNativeGcj02Manifest(manifest)
+      ? this.asRecord(feature?.geometry)
+      : this.asRecord(properties.plannedGeometryGcj02);
+    const coordinates = geometry?.type === 'LineString' && Array.isArray(geometry.coordinates)
+      ? geometry.coordinates : [];
+    if (coordinates.length < 2 || coordinates.some((point: any) => !Array.isArray(point)
+      || !this.isValidPublicCoordinate(point[0], point[1])
+      || Number(point[0]) < 73 || Number(point[0]) > 136
+      || Number(point[1]) < 3 || Number(point[1]) > 54)) return null;
+    const points = coordinates.map((point: any) => [Number(point[0]), Number(point[1])]);
+    if (!points.slice(1).some((point: number[]) => gcjDistanceMeters(
+      { longitude: points[0][0], latitude: points[0][1] },
+      { longitude: point[0], latitude: point[1] },
+    ) >= 0.3)) return null;
+    return { type: 'LineString', coordinates: points };
+  }
+
+  private isPublishedNavigationEdge(edge: any) {
+    return edge?.verificationStatus === 'verified'
+      || (edge?.verificationStatus === 'planned' && edge?.publicationApproved === true
+        && ['admin_planned', 'planned_entrance_connector'].includes(edge?.source));
   }
 
   private async reconcileApprovedRouteFeatures(
@@ -1535,6 +1645,7 @@ export class CampusMapService {
       : [];
     const approvedById = new Map(approvedObjects.map((object: any) => [String(object.id), object]));
     const serverControlledKeys = [
+      'publicationApproved',
       'collectionSource',
       'sourceObjectId',
       'sourceSessionId',
@@ -1557,6 +1668,27 @@ export class CampusMapService {
       const cleanProperties = { ...properties };
       serverControlledKeys.forEach((key) => delete cleanProperties[key]);
       feature.properties = cleanProperties;
+
+      // 管理员的发布动作确认规划路线；实采身份仍只能由采集对象表恢复。
+      const isManualRoute = !sourceObjectId && !properties.sourceSessionId
+        && (!properties.collectionSource || properties.collectionSource === 'admin_planned');
+      if (isManualRoute) {
+        const plannedGeometry = this.plannedRouteGeometry(manifest, feature);
+        if (!plannedGeometry) {
+          if (properties.public === true) {
+            throw new BadRequestException(`规划路线“${properties.title || properties.id || '未命名'}”缺少有效 GCJ-02 坐标，请在真实地图上绘制或补充规划坐标后发布`);
+          }
+          return;
+        }
+        Object.assign(cleanProperties, {
+          collectionSource: 'admin_planned', verificationStatus: 'planned',
+          publicationApproved: true, plannedGeometryGcj02: plannedGeometry,
+          sourceGeometryGcj02: plannedGeometry, coordinateType: 'gcj02',
+          accessible: properties.accessible === true || properties.wheelchair === true,
+          wheelchair: properties.accessible === true || properties.wheelchair === true,
+        });
+        return;
+      }
 
       const object: any = approvedById.get(sourceObjectId);
       const geometry = this.asRecord(object?.geometry);
@@ -1701,7 +1833,7 @@ export class CampusMapService {
       .find((layer: any) => String(layer?.id || '').toLowerCase() === 'operator_routes');
     const routeData = this.asRecord(routeLayer?.inlineData || routeLayer?.data);
     const routeFeatures = Array.isArray(routeData?.features) ? routeData.features : [];
-    // 路网完全由当前草稿内已审核的骑手路线重新编译；不能沿用旧版本的缓存图。
+    // 路网由本次发布确认的规划路线和已审核实采路线重编译，不能沿用缓存图。
     if (!routeFeatures.length) return null;
 
     const nodes: Record<string, any> = {};
@@ -1720,6 +1852,8 @@ export class CampusMapService {
       sourceId: string,
       endpoint: string,
       anchor: { key: string; point: GcjPoint } | null = null,
+      excludedNodeId = '',
+      routingLevel = '0',
     ) => {
       if (anchor) {
         const existingAnchorNodeId = anchorNodeIds.get(anchor.key);
@@ -1734,15 +1868,18 @@ export class CampusMapService {
           gcj02: [anchor.point.longitude, anchor.point.latitude],
           kind: 'route_endpoint',
           anchorKey: anchor.key,
+          routingLevel,
         };
         routeNodeIds.push(anchoredNodeId);
         anchorNodeIds.set(anchor.key, anchoredNodeId);
         return anchoredNodeId;
       }
-      const nearbyId = routeNodeIds.find((nodeId) => gcjDistanceMeters(nodePoint(nodeId), point) <= ROUTE_ENDPOINT_MERGE_METERS);
+      const nearbyId = routeNodeIds.find((nodeId) => nodeId !== excludedNodeId
+        && nodes[nodeId].routingLevel === routingLevel
+        && gcjDistanceMeters(nodePoint(nodeId), point) <= ROUTE_ENDPOINT_MERGE_METERS);
       if (nearbyId) return nearbyId;
       const nodeId = safeId('route-node', `${sourceId}:${endpoint}:${point.longitude.toFixed(7)}:${point.latitude.toFixed(7)}`);
-      nodes[nodeId] = { gcj02: [point.longitude, point.latitude], kind: 'route_endpoint' };
+      nodes[nodeId] = { gcj02: [point.longitude, point.latitude], kind: 'route_endpoint', routingLevel };
       routeNodeIds.push(nodeId);
       return nodeId;
     };
@@ -1767,9 +1904,9 @@ export class CampusMapService {
     const preparedRoutes = routeFeatures.flatMap((feature: any, index: number) => {
       const properties = this.asRecord(feature?.properties) || {};
       const riderApproved = String(properties.collectionSource || '') === 'rider_app_approved';
-      // 只有经服务端采集对象表重新对账的骑手路线才能进入公开导航图。
-      // 单独写 verificationStatus=verified 的导入 JSON 不是可验证证据。
-      if (!riderApproved) return [];
+      const plannedApproved = properties.collectionSource === 'admin_planned'
+        && properties.verificationStatus === 'planned' && properties.publicationApproved === true;
+      if (!riderApproved && !plannedApproved) return [];
       // 发布路网只承载当前允许公众步行的路线。受限、关闭或施工路线即使已经审核，
       // 也不能成为入口“已接入”的假证据，否则小程序路由引擎会在运行时过滤它。
       if (properties.public !== true
@@ -1789,17 +1926,18 @@ export class CampusMapService {
       const routeAnchors = this.asRecord(properties.routeEndpointAnchors);
       const startAnchor = Number(routeAnchors?.version) === 1 ? readRouteAnchor(routeAnchors?.start) : null;
       const endAnchor = Number(routeAnchors?.version) === 1 ? readRouteAnchor(routeAnchors?.end) : null;
-      return [{ properties, coordinates, sourceId, startAnchor, endAnchor }];
+      const routingLevel = String(properties.level ?? (properties.bridge === true ? 'bridge' : properties.tunnel === true ? 'tunnel' : '0'));
+      return [{ properties, coordinates, sourceId, startAnchor, endAnchor, routingLevel }];
     });
 
     // 先注册全部可信锚点，再吸附没有锚点的历史路线。否则“旧路线在前、新锚点在后”
     // 会产生两个节点，而倒序又会合并，导致同一份数据仅因数组顺序不同而发布出不同路网。
-    preparedRoutes.forEach(({ sourceId, startAnchor, endAnchor }) => {
-      if (startAnchor) findOrCreateRouteNode(startAnchor.point, sourceId, 'start', startAnchor);
-      if (endAnchor) findOrCreateRouteNode(endAnchor.point, sourceId, 'end', endAnchor);
+    preparedRoutes.forEach(({ sourceId, startAnchor, endAnchor, routingLevel }) => {
+      if (startAnchor) findOrCreateRouteNode(startAnchor.point, sourceId, 'start', startAnchor, '', routingLevel);
+      if (endAnchor) findOrCreateRouteNode(endAnchor.point, sourceId, 'end', endAnchor, '', routingLevel);
     });
 
-    preparedRoutes.forEach(({ properties, coordinates, sourceId, startAnchor, endAnchor }) => {
+    preparedRoutes.forEach(({ properties, coordinates, sourceId, startAnchor, endAnchor, routingLevel }) => {
       const navigableCoordinates = coordinates.slice();
       if (startAnchor) {
         if (gcjDistanceMeters(startAnchor.point, navigableCoordinates[0]) > 0.3) {
@@ -1816,23 +1954,30 @@ export class CampusMapService {
           navigableCoordinates[lastIndex] = endAnchor.point;
         }
       }
-      const a = findOrCreateRouteNode(navigableCoordinates[0], sourceId, 'start', startAnchor);
-      const b = findOrCreateRouteNode(navigableCoordinates[navigableCoordinates.length - 1], sourceId, 'end', endAnchor);
+      const a = findOrCreateRouteNode(navigableCoordinates[0], sourceId, 'start', startAnchor, '', routingLevel);
+      // 短规划路段的两端不能被吸成同一个节点，否则有效道路会在发布时消失。
+      const b = findOrCreateRouteNode(navigableCoordinates[navigableCoordinates.length - 1], sourceId, 'end', endAnchor,
+        properties.collectionSource === 'admin_planned' ? a : '', routingLevel);
       if (a === b) return;
+      navigableCoordinates[0] = nodePoint(a);
+      navigableCoordinates[navigableCoordinates.length - 1] = nodePoint(b);
       const edge = {
         id: safeId('route-edge', sourceId),
         a,
         b,
         lengthM: pathLength(navigableCoordinates),
         coordinates: navigableCoordinates.map((point) => [point.longitude, point.latitude]),
-        verificationStatus: 'verified',
+        verificationStatus: properties.collectionSource === 'admin_planned' ? 'planned' : 'verified',
+        publicationApproved: true,
         // 能进入这里的路线已经通过上面的显式公开筛选。
         public: true,
         pedestrian: properties.pedestrian !== false,
         wheelchair: properties.wheelchair === true || properties.accessible === true,
         stairs: properties.stairs === true,
         construction: properties.construction === true,
-        source: 'rider_collection_approved',
+        source: properties.collectionSource === 'admin_planned' ? 'admin_planned' : 'rider_collection_approved',
+        routingLevel,
+        sourceRouteId: String(properties.id || sourceId),
         sourceObjectId: properties.sourceObjectId || null,
       };
       edges.push(edge);
@@ -1840,6 +1985,69 @@ export class CampusMapService {
     });
 
     if (!routeEdges.length) return null;
+
+    const splitEdge = (edge: any, cuts: { offset: number; nodeId: string }[]) => {
+      if (!cuts.length) return [edge];
+      const coordinates = edge.pointCoordinates as GcjPoint[];
+      const offsets = [0];
+      coordinates.slice(1).forEach((point, index) => offsets.push(offsets[index] + gcjDistanceMeters(coordinates[index], point)));
+      const boundaries = [{ offset: 0, nodeId: edge.a },
+        ...cuts.slice().sort((left, right) => left.offset - right.offset || left.nodeId.localeCompare(right.nodeId)),
+        { offset: offsets[offsets.length - 1], nodeId: edge.b }];
+      return boundaries.slice(1).flatMap((end, index) => {
+        const start = boundaries[index];
+        if (start.nodeId === end.nodeId) return [];
+        const points = [nodePoint(start.nodeId),
+          ...coordinates.filter((_, pointIndex) => offsets[pointIndex] > start.offset
+            && offsets[pointIndex] < end.offset), nodePoint(end.nodeId)];
+        return [{ ...edge, id: safeId('route-edge', `${edge.id}:${start.nodeId}:${end.nodeId}`),
+          a: start.nodeId, b: end.nodeId,
+          coordinates: points.map((point) => [point.longitude, point.latitude]),
+          pointCoordinates: points, lengthM: pathLength(points), geometryAdjustment: 'junction_snap',
+        }];
+      });
+    };
+
+    // 旧版只合并道路两端，支路落在主路中段时仍被算作断路。沿主路切分，
+    // 复用已有路口节点；只吸附端点，不自动连通两条线的几何交叉（如天桥）。
+    // ponytail: 校园发布时 O(端点数 × 线段数)，超过 2 万道路再加空间索引。
+    const nodeLevels = new Map<string, Set<string>>();
+    routeEdges.forEach((edge) => [edge.a, edge.b].forEach((id) => {
+      if (!nodeLevels.has(id)) nodeLevels.set(id, new Set());
+      nodeLevels.get(id)!.add(edge.routingLevel);
+    }));
+    const splitRouteEdges: any[] = [];
+    routeEdges.forEach((edge) => {
+      const coordinates = edge.pointCoordinates as GcjPoint[];
+      const offsets = [0];
+      coordinates.slice(1).forEach((point, index) => {
+        offsets.push(offsets[index] + gcjDistanceMeters(coordinates[index], point));
+      });
+      const cuts: { offset: number; nodeId: string; segmentIndex: number }[] = [];
+      routeNodeIds.forEach((nodeId) => {
+        if (nodeId === edge.a || nodeId === edge.b) return;
+        // 已签名的采集路口按锚点连接，不把它自动拖到另一条附近道路。
+        if (nodes[nodeId].anchorKey) return;
+        if (!nodeLevels.get(nodeId)?.has(edge.routingLevel)) return;
+        let closest: { distanceM: number; offset: number; segmentIndex: number } | null = null;
+        coordinates.slice(1).forEach((end, index) => {
+          const projection = projectGcjToSegment(nodePoint(nodeId), coordinates[index], end);
+          const offset = offsets[index] + (offsets[index + 1] - offsets[index]) * projection.t;
+          if (offset < ROUTE_ENDPOINT_MERGE_METERS
+            || offsets[offsets.length - 1] - offset < ROUTE_ENDPOINT_MERGE_METERS) return;
+          if (!closest || projection.distanceM < closest.distanceM) {
+            closest = { distanceM: projection.distanceM, offset, segmentIndex: index };
+          }
+        });
+        const match = closest as { distanceM: number; offset: number; segmentIndex: number } | null;
+        if (match && match.distanceM <= ROUTE_ENDPOINT_MERGE_METERS) {
+          cuts.push({ offset: match.offset, nodeId, segmentIndex: match.segmentIndex });
+        }
+      });
+      splitRouteEdges.push(...splitEdge(edge, cuts));
+    });
+    routeEdges.splice(0, routeEdges.length, ...splitRouteEdges);
+    edges.splice(0, edges.length, ...splitRouteEdges.map(({ pointCoordinates: _points, ...edge }) => edge));
 
     const closestRouteSegment = (point: GcjPoint) => {
       let best: any = null;
@@ -1855,6 +2063,7 @@ export class CampusMapService {
       return best;
     };
 
+    const entranceCuts = new Map<string, { offset: number; nodeId: string }[]>();
     (Array.isArray(places) ? places : []).forEach((place: any) => {
       const entranceNodeIds: string[] = [];
       if (place?.navigable !== true || !['open', 'limited'].includes(String(place.serviceStatus || ''))) {
@@ -1869,47 +2078,56 @@ export class CampusMapService {
         if (!closest || closest.distanceM > ENTRANCE_ROUTE_CONNECT_METERS) return;
         const entranceId = safeId('entrance-node', entrance.id || `${place.id}:${entranceIndex}`);
         nodes[entranceId] = {
-          gcj02: [point.longitude, point.latitude],
+          gcj02: [closest.point.longitude, closest.point.latitude],
           kind: 'entrance',
           placeId: String(place.id || ''),
           entranceId: String(entrance.id || ''),
+          destinationKind: entrance.sourceType === 'admin_planned_road_access' ? 'road_access' : 'entrance',
+          destinationName: String(entrance.name || ''),
+          destinationNotice: entrance.sourceType === 'admin_planned_road_access' ? String(entrance.address || '') : '',
         };
         entranceNodeIds.push(entranceId);
         entrance.nodeId = entranceId;
 
         const projection = closest.point as GcjPoint;
         const routeCoordinates = closest.edge.pointCoordinates as GcjPoint[];
-        const toA = dedupeConsecutiveGcj([point, projection]
-          .concat(routeCoordinates.slice(0, closest.segmentIndex + 1).reverse()));
-        const toB = dedupeConsecutiveGcj([point, projection]
-          .concat(routeCoordinates.slice(closest.segmentIndex + 1)));
-        [
-          { destination: closest.edge.a, suffix: 'a', coordinates: toA },
-          { destination: closest.edge.b, suffix: 'b', coordinates: toB },
-        ].forEach((connector) => {
-          if (connector.destination === entranceId || connector.coordinates.length < 2) return;
-          edges.push({
-            id: safeId('entrance-edge', `${entranceId}:${closest.edge.id}:${connector.suffix}`),
-            a: entranceId,
-            b: connector.destination,
-            lengthM: pathLength(connector.coordinates),
-            coordinates: connector.coordinates.map((coordinate) => [coordinate.longitude, coordinate.latitude]),
-            verificationStatus: 'verified',
-            public: true,
-            pedestrian: true,
-            wheelchair: closest.edge.wheelchair === true,
-            stairs: false,
-            construction: false,
-            source: 'verified_entrance_connector',
-          });
+        let junctionId = [closest.edge.a, closest.edge.b].find((id) => gcjDistanceMeters(nodePoint(id), projection) < 0.05);
+        if (!junctionId) {
+          const cuts = entranceCuts.get(closest.edge.id) || [];
+          junctionId = cuts.find((cut) => gcjDistanceMeters(nodePoint(cut.nodeId), projection) < 0.05)?.nodeId;
+          if (!junctionId) {
+            junctionId = safeId('route-access-node', `${closest.edge.id}:${projection.longitude.toFixed(8)}:${projection.latitude.toFixed(8)}`);
+            nodes[junctionId] = { gcj02: [projection.longitude, projection.latitude], kind: 'route_junction' };
+            cuts.push({ nodeId: junctionId, offset: pathLength(routeCoordinates.slice(0, closest.segmentIndex + 1))
+              + gcjDistanceMeters(routeCoordinates[closest.segmentIndex], projection) });
+            entranceCuts.set(closest.edge.id, cuts);
+          }
+        }
+        // 入口是路口旁的独立叶节点。关闭地点只移除叶节点，不会切断公共道路。
+        // 道路在投影处切分，两个中段入口之间可以直达，无须绕到道路端点。
+        nodes[entranceId].gcj02 = [...nodes[junctionId].gcj02];
+        const plannedEntrance = closest.edge.verificationStatus === 'planned'
+          || entrance.sourceType === 'admin_planned_road_access';
+        edges.push({
+          id: safeId('entrance-edge', entranceId), a: entranceId, b: junctionId, lengthM: 0,
+          coordinates: [[...nodes[junctionId].gcj02], [...nodes[junctionId].gcj02]],
+          verificationStatus: plannedEntrance ? 'planned' : 'verified', publicationApproved: true,
+          public: true, pedestrian: true,
+          wheelchair: closest.edge.wheelchair === true && closest.edge.stairs !== true,
+          stairs: closest.edge.stairs === true, construction: false,
+          source: plannedEntrance ? 'planned_entrance_connector' : 'verified_entrance_connector',
         });
       });
       place.entranceNodeIds = entranceNodeIds;
     });
+    const entranceEdges = edges.filter((edge) => !edge.sourceRouteId);
+    const finalRoads = routeEdges.flatMap((edge) => splitEdge(edge, entranceCuts.get(edge.id) || []));
+    edges.splice(0, edges.length, ...finalRoads.map(({ pointCoordinates: _points, ...edge }) => edge), ...entranceEdges);
 
     return {
       graph: {
         coordinateSystem: 'GCJ-02',
+        entrancePolicyVersion: 2,
         generatedFrom: 'approved_operator_routes_and_published_entrances',
         generatedAt: new Date().toISOString(),
         nodes,
@@ -1926,7 +2144,7 @@ export class CampusMapService {
       !Array.isArray(place.entranceNodeIds) || place.entranceNodeIds.length === 0);
     if (disconnectedPlace) {
       throw new BadRequestException(
-        `地点“${disconnectedPlace.title || disconnectedPlace.officialName || disconnectedPlace.id}”已开启导航，但没有可连接到已审核校园路线的开放入口`,
+        `地点“${disconnectedPlace.title || disconnectedPlace.officialName || disconnectedPlace.id}”已开启导航，但没有可连接到公开校园路线的开放入口；请调整规划线或补采道路，入口距道路须在 ${ENTRANCE_ROUTE_CONNECT_METERS} 米内`,
       );
     }
 
@@ -1934,7 +2152,7 @@ export class CampusMapService {
     const nodes = this.asRecord(graph?.nodes) || {};
     const edges = (Array.isArray(graph?.edges) ? graph.edges : []).filter((edge: any) =>
       edge?.public === true
-      && edge?.verificationStatus === 'verified'
+      && this.isPublishedNavigationEdge(edge)
       && edge?.pedestrian !== false
       && edge?.closed !== true
       && edge?.construction !== true
@@ -1956,7 +2174,7 @@ export class CampusMapService {
       place.entranceNodeIds.some((nodeId: unknown) => !referencedNodeIds.has(String(nodeId))));
     if (unlinkedEntrancePlace) {
       throw new BadRequestException(
-        `地点“${unlinkedEntrancePlace.title || unlinkedEntrancePlace.officialName || unlinkedEntrancePlace.id}”的开放入口不在已审核校园导航图中`,
+        `地点“${unlinkedEntrancePlace.title || unlinkedEntrancePlace.officialName || unlinkedEntrancePlace.id}”的开放入口不在已发布校园导航图中`,
       );
     }
     if (referencedNodeIds.size <= 1) return;
@@ -1972,7 +2190,7 @@ export class CampusMapService {
       });
     }
     if (visited.size !== referencedNodeIds.size) {
-      throw new BadRequestException('已审核校园路线之间存在断点，请让骑手在路口分段补采并连接后再发布');
+      throw new BadRequestException('公开校园路线之间存在断点，请在路口连接规划线或分段补采后再发布');
     }
   }
 
@@ -1981,7 +2199,7 @@ export class CampusMapService {
     const graph = this.asRecord(this.asRecord(navigation)?.graph);
     const hasPublicRoute = (Array.isArray(graph?.edges) ? graph.edges : []).some((edge: any) =>
       edge?.public === true
-      && edge?.verificationStatus === 'verified'
+      && this.isPublishedNavigationEdge(edge)
       && edge?.pedestrian !== false
       && edge?.closed !== true
       && edge?.construction !== true);
@@ -1993,10 +2211,12 @@ export class CampusMapService {
       .filter((place: any) => {
         const artworkX = Number(place?.artworkAnchorX);
         const artworkY = Number(place?.artworkAnchorY);
-        const hasExplicitArtworkAnchor = Number.isFinite(artworkX)
+        const hasExplicitArtworkAnchor = [place?.artworkAnchorX, place?.artworkAnchorY]
+          .every((value) => value !== null && value !== undefined && value !== '')
+          && Number.isFinite(artworkX)
           && Number.isFinite(artworkY)
-          && artworkX > minX && artworkX < maxX
-          && artworkY > minY && artworkY < maxY;
+          && artworkX >= minX && artworkX <= maxX
+          && artworkY >= minY && artworkY <= maxY;
         const officialNumber = Number(place?.officialNumber);
         const hasBuiltInArtworkAnchor = Number.isInteger(officialNumber)
           && officialNumber >= ILLUSTRATED_ARTWORK_NUMBER_MIN
@@ -2018,6 +2238,18 @@ export class CampusMapService {
     }
   }
 
+  private publicSearchAliases(place: any) {
+    const categoryAliases: Record<string, string[]> = {
+      canteen: ['食堂', '餐厅'], sports: ['操场', '运动场'],
+      dormitory: ['宿舍', '寝室', '学生公寓'], parking: ['停车场'], library: ['图书馆'],
+    };
+    return [...new Set([
+      String(place.officialName || ''),
+      ...String(place.engineeringAlias || '').split(/[，,；;、\n]/),
+      ...(categoryAliases[String(place.semanticType)] || []),
+    ].map((item) => item.trim()).filter(Boolean))].slice(0, 20);
+  }
+
   private publicPlaceSnapshots(value: any) {
     if (!Array.isArray(value)) return [];
     return value
@@ -2029,6 +2261,7 @@ export class CampusMapService {
         officialNumber: Number(place.officialNumber),
         officialName: String(place.officialName || place.title || ''),
         title: String(place.title || place.officialName || ''),
+        aliases: this.publicSearchAliases(place),
         semanticType: String(place.semanticType || 'building'),
         constructionStatus: String(place.constructionStatus || 'built'),
         serviceStatus: String(place.serviceStatus || 'unknown'),

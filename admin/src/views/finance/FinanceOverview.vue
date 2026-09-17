@@ -57,7 +57,7 @@
               <template v-if="cfg.bizType === 'order'">
                 <div class="fee-region-hint">
                   <el-icon><InfoFilled /></el-icon>
-                  外卖按区域单独配置，见下方「外卖区域费率」
+                  外卖与宿舍小店共用校区商家费率
                 </div>
               </template>
               <template v-else-if="editingBiz === cfg.bizType">
@@ -86,7 +86,7 @@
               <template v-else>
                 <div class="fee-current-row">
                   <span class="fee-rate-big">{{ cfg.rate > 0 ? (cfg.rate * 100).toFixed(2) + '%' : '0%' }}<span v-if="cfg.fixedFee > 0" class="fee-fixed">+¥{{ cfg.fixedFee }}/单</span></span>
-                  <el-button size="small" link type="primary" @click="startBizEdit(cfg)">修改</el-button>
+                  <el-button v-if="canConfigureFees" size="small" link type="primary" @click="startBizEdit(cfg)">修改</el-button>
                 </div>
               </template>
             </div>
@@ -168,7 +168,7 @@
           </el-table>
 
           <!-- 外卖区域费率 -->
-          <div class="sub-section-title" style="margin-top:24px">外卖区域费率配置</div>
+          <div class="sub-section-title" style="margin-top:24px">校区商家费率：外卖 / 宿舍小店</div>
           <el-table :data="regionRates" stripe size="small" :default-sort="{ prop: 'totalPlatformFee', order: 'descending' }">
             <el-table-column prop="regionName" label="区域" min-width="110" />
             <el-table-column label="费率" width="280">
@@ -180,7 +180,7 @@
                     <el-button size="small" type="primary" :loading="savingRegion === row.regionId" @click="saveRegion(row)">保存</el-button>
                     <el-button size="small" @click="editingRegion = null">取消</el-button>
                   </template>
-                  <el-button v-else size="small" link type="primary" @click="startRegionEdit(row)">修改</el-button>
+                  <el-button v-else-if="canConfigureFees" size="small" link type="primary" @click="startRegionEdit(row)">修改</el-button>
                 </div>
               </template>
             </el-table-column>
@@ -435,6 +435,10 @@ import { InfoFilled } from '@element-plus/icons-vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
 import { request } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
+const canConfigureFees = computed(() => ['super_admin', 'SUPER_ADMIN', '超级管理员'].includes(auth.user.role) || auth.permissions.includes('finance:config'))
 
 // ── 日期范围 ──
 const dateRange = ref<any>(null)
@@ -514,6 +518,7 @@ const editingRegionRate = ref(0)
 const savingRegion = ref<string | null>(null)
 
 function previewFee(rate: number, fixed: number) {
+  if (!editingBizEnabled.value) return '0.00'
   return Math.max(0, Math.min(Math.round((100 * (rate / 100) + fixed) * 100) / 100, 100)).toFixed(2)
 }
 function startBizEdit(cfg: any) {
@@ -561,16 +566,19 @@ function regionRateTag(row: any) {
 
 async function loadCommission() {
   try {
-    const [ov, feeRes]: any[] = await Promise.all([
+    const [overviewResult, configResult] = await Promise.allSettled([
       request.get('/admin/finance/commission-overview', { params: getDateParams() }),
       request.get('/admin/config/biz-fee-configs'),
     ])
+    if (overviewResult.status === 'rejected') throw overviewResult.reason
+    const ov: any = overviewResult.value
+    const feeRes: any = configResult.status === 'fulfilled' ? configResult.value : null
     commissionSummary.value = ov?.summary || {}
     bizBreakdown.value = ov?.bizBreakdown || []
     regionRates.value = ov?.regionRates || []
-    feeConfigs.value = (feeRes?.data || ov?.feeConfigs || []).map((c: any) => ({ ...c, rate: Number(c.rate || 0), fixedFee: Number(c.fixedFee || 0) }))
+    feeConfigs.value = (feeRes?.data || ov?.feeConfigs || []).map((c: any) => ({ ...c, label: c.bizType === 'order' ? '外卖 / 宿舍小店' : c.label, rate: Number(c.rate || 0), fixedFee: Number(c.fixedFee || 0) }))
     recalc()
-  } catch {}
+  } catch (e: any) { ElMessage.error(e?.message || '加载抽成配置失败') }
 }
 
 // ── 抽成计算器 ──
@@ -587,10 +595,10 @@ function recalc() {
   } else if (calcBizType.value === 'order') {
     const w = regionRates.value.reduce((a, r) => ({ f: a.f + (r.totalPlatformFee || 0), a: a.a + (r.totalAmount || 0) }), { f: 0, a: 0 })
     rate = w.a > 0 ? w.f / w.a : 0
-    remark = '外卖按区域费率，此处为各区域加权平均值，实际以区域配置为准'
+    remark = '外卖与宿舍小店按校区费率结算，此处为期间实际平均费率'
   } else {
     const cfg = feeConfigs.value.find(c => c.bizType === calcBizType.value)
-    if (cfg) { rate = Number(cfg.rate || 0); fixedFee = Number(cfg.fixedFee || 0); remark = cfg.remark || '' }
+    if (cfg) { rate = cfg.enabled ? Number(cfg.rate || 0) : 0; fixedFee = cfg.enabled ? Number(cfg.fixedFee || 0) : 0; remark = cfg.enabled ? cfg.remark || '' : '该业务抽成已关闭' }
   }
   const fee = Math.max(0, Math.min(Math.round((amount * rate + fixedFee) * 100) / 100, amount))
   calcResult.value = { platformFee: fee, payout: Math.max(0, amount - fee), rateDisplay: (rate * 100).toFixed(2) + '%', fixedFee, remark }

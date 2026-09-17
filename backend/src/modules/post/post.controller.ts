@@ -212,20 +212,20 @@ export class PostController {
     return this.postService.mySquats(userId, query);
   }
 
-  @Get('api/post-votes/meta')
+  @Get(['post-votes/meta', 'api/post-votes/meta'])
   @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '投票元信息' })
   getVoteMeta(@Query('post_id') postId: string, @CurrentUser('sub') userId?: string) {
     return this.postService.getVoteMeta(postId, userId);
   }
 
-  @Get('api/post-votes/stats')
+  @Get(['post-votes/stats', 'api/post-votes/stats'])
   @ApiOperation({ summary: '投票统计' })
   getVoteStats(@Query('post_id') postId: string) {
     return this.postService.getVoteStats(postId);
   }
 
-  @Post('api/post-votes/vote')
+  @Post(['post-votes/vote', 'api/post-votes/vote'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '投票' })
@@ -233,7 +233,7 @@ export class PostController {
     return this.postService.vote(userId, dto);
   }
 
-  @Post('api/post-votes/unvote')
+  @Post(['post-votes/unvote', 'api/post-votes/unvote'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '取消投票' })
@@ -241,7 +241,7 @@ export class PostController {
     return this.postService.unvote(userId, dto);
   }
 
-  @Post('api/post-votes/create-options')
+  @Post(['post-votes/create-options', 'api/post-votes/create-options'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '创建投票选项' })
@@ -249,7 +249,7 @@ export class PostController {
     return this.postService.createVoteOptions(userId, dto);
   }
 
-  @Post('api/post-votes/settings/upsert')
+  @Post(['post-votes/settings/upsert', 'api/post-votes/settings/upsert'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '投票设置' })

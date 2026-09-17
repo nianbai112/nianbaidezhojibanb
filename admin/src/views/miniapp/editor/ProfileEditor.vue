@@ -1,5 +1,5 @@
 <template>
-  <div class="rte">
+  <div class="rte profile-editor" :class="{ 'drawer-editing': editing === 'drawer' }">
     <!-- ===== 顶部工具条 ===== -->
     <div class="rte-toolbar">
       <div class="rte-left">
@@ -259,7 +259,7 @@
             </template>
 
             <template v-else-if="editing === 'drawer'">
-              <div class="pp-title">我的侧边栏 <span class="pp-sub">只允许选择已有页面</span></div>
+              <div class="pp-title">我的侧边栏</div>
               <div class="pp-list">
                 <div v-for="(g, gi) in drawerGroups" :key="g.id || gi" class="pp-item">
                   <el-input v-model="g.title" placeholder="分组标题" size="small" @input="markDirty('drawer')" />
@@ -271,23 +271,44 @@
                         <el-icon :class="{ dim: ii === g.items.length - 1 }" @click="moveDrawerItem(gi, ii, 1)"><Bottom /></el-icon>
                       </div>
                     </div>
-                    <el-input v-model="it.title" placeholder="入口名称" size="small" @input="markDirty('drawer')" />
-                    <div class="pp-link">
-                      <el-select v-model="it.icon" size="small" placeholder="图标" style="flex: 1" @change="markDirty('drawer')">
+                    <label class="drawer-field-label">入口名称</label>
+                    <el-input v-model="it.title" aria-label="入口名称" placeholder="入口名称" @input="markDirty('drawer')" />
+                    <div class="drawer-path-field">
+                      <label class="drawer-field-label">图标</label>
+                      <el-radio-group :model-value="drawerIconType(it)" size="small" aria-label="图标类型" @change="it.iconType = $event; markDirty('drawer')">
+                        <el-radio-button value="builtin">内置图标</el-radio-button>
+                        <el-radio-button value="image">自定义图片</el-radio-button>
+                      </el-radio-group>
+                      <template v-if="drawerIconType(it) === 'image'">
+                        <ImageUploadBox :model-value="drawerIconPreview(it.iconImage)" class="drawer-icon-upload" scene="region-profile-icon" shape="square" accept="image/png,image/jpeg,image/webp" :max-size="2" placeholder="上传图标" @update:model-value="it.iconImage = $event; markDirty('drawer')" />
+                        <el-input v-model="it.iconImage" aria-label="图标图片地址" placeholder="https://... 或 /static/..." clearable @input="markDirty('drawer')" />
+                      </template>
+                      <el-select v-else v-model="it.icon" aria-label="内置图标" filterable placeholder="选择图标" @change="markDirty('drawer')">
                         <el-option v-for="ic in drawerIcons" :key="ic.value" :label="ic.label" :value="ic.value" />
                       </el-select>
-                      <el-select v-model="it.permission" size="small" style="flex: 1" @change="markDirty('drawer')">
+                    </div>
+                    <div class="drawer-path-field">
+                      <label class="drawer-field-label">可见用户</label>
+                      <el-select v-model="it.permission" aria-label="可见用户" @change="markDirty('drawer')">
                         <el-option label="所有用户" value="all" />
                         <el-option label="商家" value="merchant" />
                         <el-option label="骑手" value="rider" />
                         <el-option label="区域管理员" value="manager" />
                       </el-select>
                     </div>
-                    <div class="pp-link">
-                      <el-select v-model="it.path" size="small" placeholder="选择页面" style="flex: 1" @change="markDirty('drawer')">
+                    <div class="drawer-path-field">
+                      <div class="drawer-path-heading">
+                        <span>跳转页面</span>
+                        <el-switch v-model="it.enabled" size="small" inline-prompt active-text="显示" inactive-text="隐藏" @change="markDirty('drawer')" />
+                      </div>
+                      <el-radio-group :model-value="drawerPathMode(it)" size="small" aria-label="跳转方式" @change="setDrawerPathMode(it, $event)">
+                        <el-radio-button value="preset">常用页面</el-radio-button>
+                        <el-radio-button value="custom">自定义路径</el-radio-button>
+                      </el-radio-group>
+                      <el-input v-if="drawerPathMode(it) === 'custom'" v-model="it.path" aria-label="自定义页面路径" placeholder="/pagesA/coupon/coupon?type=1" clearable @input="markDirty('drawer')" />
+                      <el-select v-else v-model="it.path" aria-label="常用页面" filterable placeholder="选择页面" @change="markDirty('drawer')">
                         <el-option v-for="p in drawerPages" :key="p.path" :label="p.label" :value="p.path" />
                       </el-select>
-                      <el-switch v-model="it.enabled" size="small" inline-prompt active-text="显示" inactive-text="隐藏" @change="markDirty('drawer')" />
                     </div>
                   </div>
                 </div>
@@ -395,6 +416,7 @@ const visual = ref<any>({ enabled: true, image: '' })
 const entryItems = ref<any[]>([])
 const quickItems = ref<any[]>([])
 const drawerGroups = ref<any[]>([])
+const drawerPathModes = ref(new Map<any, string>())
 const tabbarConfig = ref<any>({ type: 'bottom', color: '#8A8A8A', selectedColor: '#36A853', backgroundColor: '#ffffff', messageBadgeStyle: 'bubble', list: [] })
 
 const posts = ref<any[]>([])
@@ -423,8 +445,28 @@ const defaultProfileQuickActions = () => ({ items: [
 
 const quickIcons = [{ label: '发布笔记', value: 'icon-bianji' }, { label: '订单', value: 'icon-dingdan2' }, { label: '跑腿', value: 'icon-qishoupeisong' }, { label: '票券', value: 'icon-bill' }, { label: '收藏', value: 'icon-aixin4' }, { label: '浏览记录', value: 'icon-eye' }, { label: '评论', value: 'icon-comment-circle-o' }, { label: '账号认证', value: 'icon-user-o' }, { label: '我的称号', value: 'icon-huangguan' }]
 const quickTones = [{ label: '草绿', value: 'green' }, { label: '橙色', value: 'orange' }, { label: '蓝色', value: 'blue' }, { label: '黄色', value: 'yellow' }, { label: '浅绿', value: 'green-soft' }, { label: '紫色', value: 'purple' }, { label: '金色', value: 'gold' }]
-const drawerPages = [{ label: '我的钱包', path: '/pagesA/wallet/wallet' }, { label: '浏览记录', path: '/pages/auth/BrowsingHistory/BrowsingHistory' }, { label: '活动中心', path: '/pagesA/selection/list/list?tabIndex=0' }, { label: '我的报名', path: '/pagesA/selection/list/list?tabIndex=1' }, { label: '我的票券', path: '/pagesA/ticket-wallet/ticket-wallet' }, { label: '我的买入', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=buyer' }, { label: '我的卖出', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=seller' }, { label: '收货地址', path: '/pages/address/address' }, { label: '我的认证', path: '/pages/auth/StudentCertification/StudentCertification' }, { label: '我的会员', path: '/pagesA/MemberCenter/MemberCenter' }]
+const drawerPages = [{ label: '我的钱包', path: '/pagesA/wallet/wallet' }, { label: '浏览记录', path: '/pages/auth/BrowsingHistory/BrowsingHistory' }, { label: '福利抽奖', path: '/pagesA/welfare/index' }, { label: '我的抽奖', path: '/pagesA/welfare/mine' }, { label: '活动中心', path: '/pagesA/selection/list/list?tabIndex=0' }, { label: '我的报名', path: '/pagesA/selection/list/list?tabIndex=1' }, { label: '我的票券', path: '/pagesA/ticket-wallet/ticket-wallet' }, { label: '我的买入', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=buyer' }, { label: '我的卖出', path: '/pagesC/SecondHand/MySecondHand/MySecondHand?tab=orders&role=seller' }, { label: '收货地址', path: '/pages/address/address' }, { label: '我的认证', path: '/pages/auth/StudentCertification/StudentCertification' }, { label: '我的会员', path: '/pagesA/MemberCenter/MemberCenter' }]
 const drawerIcons = [{ label: '钱包', value: 'icon-qianbao' }, { label: '浏览记录', value: 'icon-clock-o' }, { label: '活动', value: 'icon-flag-o' }, { label: '报名', value: 'icon-description' }, { label: '票券', value: 'icon-bill' }, { label: '买入', value: 'icon-goods-collect-o' }, { label: '卖出', value: 'icon-shop-o' }, { label: '收货地址', value: 'icon-location-o' }, { label: '账号认证', value: 'icon-user-o' }, { label: '会员', value: 'icon-vip' }]
+const drawerIconType = (item: any) => item.iconType === 'image' || (!item.iconType && item.iconImage) ? 'image' : 'builtin'
+const isDrawerIconImage = (value: string) => /^(?:https?:\/\/[^\s/]+\/[^\s]*|\/(?:static|uploads)\/[^\s]+)$/.test(String(value || '').trim())
+const drawerIconPreview = (value: string) => {
+  const path = String(value || '').trim()
+  if (!isDrawerIconImage(path)) return ''
+  return path.startsWith('/static/') ? `/miniapp-static/${path.slice(8)}` : path
+}
+const drawerPathMode = (item: any) => drawerPathModes.value.get(item) || (drawerPages.some(page => page.path === item.path) ? 'preset' : 'custom')
+const setDrawerPathMode = (item: any, mode: unknown) => {
+  drawerPathModes.value.set(item, String(mode))
+  if (mode === 'preset' && !drawerPages.some(page => page.path === item.path)) {
+    item.path = ''
+    markDirty('drawer')
+  }
+}
+const drawerPayload = () => ({ groups: drawerGroups.value.map(group => ({ ...group,
+  items: (group.items || []).map((item: any) => ({ ...item, path: String(item.path || '').trim(),
+    ...(item.iconImage !== undefined ? { iconImage: String(item.iconImage || '').trim() } : {}),
+  })),
+})) })
 
 // ============ 主题 ============
 const themeVars = ref<Record<string, string>>({})
@@ -564,6 +606,7 @@ async function loadAll(retryOnDedupe = true) {
   if (!regionId.value) return
   loading.value = true
   editing.value = ''
+  drawerPathModes.value.clear()
   dirty.value = new Set()
   themeDirtyKeys.value = new Set()
   const rid = regionId.value
@@ -633,7 +676,7 @@ const buildDecorSnapshot = () => {
   const base = parseSettings(region.value?.settings)
   const settings: any = { ...base }
   settings.profileVisual = { ...visual.value }
-  settings.profileDrawer = { groups: drawerGroups.value }
+  settings.profileDrawer = drawerPayload()
   settings.profileQuickActions = { items: quickItems.value.map((it, i) => ({ ...it, sortOrder: i })) }
   return {
     regionPayload: {
@@ -658,7 +701,25 @@ async function snapshotDecorVersion(note: string) {
 }
 
 async function saveAll() {
-  if (!dirty.value.size) return
+  if (saving.value || !dirty.value.size) return
+  if (dirty.value.has('drawer')) {
+    for (const group of drawerGroups.value) {
+      for (const item of group.items || []) {
+        if (item.enabled === false) continue
+        if (drawerIconType(item) === 'image' && !isDrawerIconImage(item.iconImage)) {
+          ElMessage.warning(`请为“${item.title || '菜单入口'}”上传图标或填写有效的图片地址`)
+          startEdit('drawer')
+          return
+        }
+        const path = String(item.path || '').trim()
+        if (!/^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)+(?:\?[^\s#]*)?$/.test(path)) {
+          ElMessage.warning(`请为“${item.title || '菜单入口'}”填写以 / 开头的小程序页面路径`)
+          startEdit('drawer')
+          return
+        }
+      }
+    }
+  }
   saving.value = true
   // 记录本次要落库的 dirty key（成功后 dirty 清空，快照备注仍需要）
   const savingKeys = new Set(dirty.value)
@@ -677,7 +738,7 @@ async function saveAll() {
       const base = parseSettings(region.value?.settings)
       const settings: any = { ...base }
       if (dirty.value.has('visual')) settings.profileVisual = { ...visual.value }
-      if (dirty.value.has('drawer')) settings.profileDrawer = { groups: drawerGroups.value }
+      if (dirty.value.has('drawer')) settings.profileDrawer = drawerPayload()
       if (dirty.value.has('quick')) {
         settings.profileQuickActions = { items: quickItems.value.map((it, i) => ({ ...it, sortOrder: i })) }
       }
@@ -1267,6 +1328,26 @@ onMounted(() => {
   flex-direction: column;
   gap: 6px;
 }
+.drawer-editing .rte-body { grid-template-columns: minmax(0, 1fr) 440px; }
+.drawer-editing .pp-item { gap: 14px; padding: 0 0 18px; background: transparent; border: 0; border-bottom: 1px solid var(--mx-border); border-radius: 0; }
+.drawer-editing .pp-drawer-row { padding: 14px; gap: 12px; }
+.drawer-editing .pp-item-head { gap: 12px; min-width: 0; }
+.drawer-editing .pp-item-head b { min-width: 0; overflow-wrap: anywhere; }
+.drawer-editing .pp-item-ops { flex-shrink: 0; }
+.drawer-editing .pp-link { gap: 10px; }
+.drawer-editing .pp-link .el-select { min-width: 0; }
+.drawer-path-field { display: grid; gap: 10px; min-width: 0; }
+.drawer-field-label { font-size: 12px; color: var(--mx-sub); }
+.drawer-icon-upload { max-width: 100%; border-radius: 8px; }
+.drawer-icon-upload :deep(.upload-trigger) { min-height: 76px; padding: 12px; }
+.drawer-icon-upload :deep(.preview-image) { height: 112px; aspect-ratio: auto; object-fit: contain; padding: 12px 0 36px; box-sizing: border-box; }
+.drawer-icon-upload :deep(.preview-actions) { display: none; }
+.drawer-icon-upload :deep(.preview-meta) { padding: 4px 8px; bottom: 6px; }
+.drawer-path-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--mx-sub); }
+.drawer-path-field .el-select { width: 100%; }
+.drawer-path-field .el-radio-group { display: flex; }
+.drawer-path-field :deep(.el-radio-button) { flex: 1; }
+.drawer-path-field :deep(.el-radio-button__inner) { width: 100%; box-sizing: border-box; }
 .pp-tabrow {
   display: flex;
   align-items: center;
@@ -1302,8 +1383,15 @@ onMounted(() => {
 .tp-color-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 
 @media (max-width: 1200px) {
-  .rte-body { grid-template-columns: 1fr; }
+  .rte-body, .drawer-editing .rte-body { grid-template-columns: minmax(0, 1fr); }
   .rte-props { position: static; max-height: none; }
+}
+@media (max-width: 600px) {
+  .drawer-editing .rte-toolbar { flex-wrap: wrap; gap: 12px; }
+  .drawer-editing .rte-left { width: 100%; min-width: 0; }
+  .drawer-editing .rte-left .el-select { max-width: 60%; flex-shrink: 0; }
+  .drawer-editing .rte-right { width: 100%; justify-content: flex-end; gap: 8px; }
+  .drawer-editing .rte-right :deep(.el-button + .el-button) { margin-left: 0; }
 }
 </style>
 

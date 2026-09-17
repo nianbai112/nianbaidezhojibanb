@@ -47,7 +47,6 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   "activity",
   "activities",
   "marketing",
-  "explosivesel",
   "topnotes",
   "config",
   "region",
@@ -76,6 +75,8 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   "layout",
   "miniapp-static",
   "rankings",
+  "agreements",
+  "post-votes",
 ];
 
 const MINI_PROGRAM_ROOT_PREFIXES = new Set(MINI_PROGRAM_ROOT_PREFIX_LIST);

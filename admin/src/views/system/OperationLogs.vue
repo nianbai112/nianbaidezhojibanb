@@ -7,7 +7,7 @@
       </template>
     </PageHeader>
 
-    <SearchPanel @search="loadLogs" @reset="resetFilters">
+    <SearchPanel @search="searchLogs" @reset="resetFilters">
       <el-input v-model="filters.keyword" placeholder="搜索操作内容" clearable style="width: 200px" />
       <el-select v-model="filters.module" placeholder="模块" clearable style="width: 120px">
         <el-option label="区域" value="region" />
@@ -18,6 +18,8 @@
         <el-option label="内容" value="content" />
         <el-option label="财务" value="finance" />
         <el-option label="系统" value="system" />
+        <el-option label="系统配置" value="config" />
+        <el-option label="底部导航" value="region_tabbar" />
       </el-select>
       <el-select v-model="filters.action" placeholder="操作类型" clearable style="width: 120px">
         <el-option label="新增" value="create" />
@@ -51,7 +53,10 @@
                 <el-tag :type="getActionType(row.action)" size="small" effect="plain">{{ getActionLabel(row.action) }}</el-tag>
                 <span>{{ describeTarget(row) }}</span>
               </div>
-              <div v-if="formatPlainDetail(row.detail, row)" class="summary-detail">{{ formatPlainDetail(row.detail, row) }}</div>
+              <div v-for="(change, index) in operationChanges(row.detail)" :key="index" class="change-line">
+                <strong>{{ change.label }}：</strong><template v-if="change.before !== undefined">{{ change.before }} → </template>{{ change.after }}
+              </div>
+              <div v-if="!operationChanges(row.detail).length" class="muted-text">{{ row.detail?.before !== undefined ? '保存时没有字段变化' : '历史记录未保存修改内容' }}</div>
             </div>
           </template>
         </el-table-column>
@@ -77,10 +82,12 @@
             <span v-else class="muted-text">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="ip" label="IP" width="120" />
-        <el-table-column label="时间" width="160">
+        <el-table-column prop="ip" label="操作 IP 地址" min-width="200">
+          <template #default="{ row }"><span class="ip-address">{{ ipText(row.ip) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作时间" width="190">
           <template #default="{ row }">
-            <TimeText :time="row.createdAt" />
+            {{ fullTime(row.createdAt) }}
           </template>
         </el-table-column>
       </el-table>
@@ -106,7 +113,7 @@ import { request } from '@/api/request'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchPanel from '@/components/common/SearchPanel.vue'
-import TimeText from '@/components/common/TimeText.vue'
+import { moduleName, actionName, operationChanges, ipText, fullTime } from './logPresentation.mjs'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -191,8 +198,8 @@ const alertStatusLabels: Record<string, string> = { pending: '待处理', proces
 const alertStatusTypes: Record<string, string> = { pending: 'danger', processing: 'warning', resolved: 'success', ignored: 'info' }
 
 const normalizeKey = (value: string) => String(value || '').trim().replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase()
-const getModuleLabel = (module: string) => moduleLabels[normalizeKey(module)] || module
-const getActionLabel = (action: string) => actionLabels[normalizeKey(action)] || action
+const getModuleLabel = (module: string) => moduleLabels[normalizeKey(module)] || moduleName(module)
+const getActionLabel = (action: string) => actionLabels[normalizeKey(action)] || actionName(action)
 const getActionType = (action: string) => actionTypes[normalizeKey(action)] || ''
 const getRiskLabel = (level: string) => riskLabels[level] || level || '普通'
 const getRiskType = (level: string) => riskTypes[level] || 'info'
@@ -221,6 +228,7 @@ const detailValue = (detail: any, keys: string[]) => {
 }
 
 const describeTarget = (row: any) => {
+  if (row.targetType === 'config') return `配置：${moduleName(row.targetId)}`
   const targetType = getModuleLabel(row.targetType || row.module || '')
   const targetId = row.targetId || detailValue(row.detail, ['id', 'regionId', 'userId', 'activityId', 'popupId'])
   if (!targetId) return '未记录具体对象'
@@ -228,60 +236,13 @@ const describeTarget = (row: any) => {
 }
 
 const formatPlainDetail = (detail: any, row?: any) => {
-  if (!detail) return ''
-  if (typeof detail === 'string') return detail === '-' ? '' : detail
-  if (typeof detail !== 'object') return String(detail)
-  const moduleKey = normalizeKey(row?.module || '')
-  if (moduleKey.includes('tabbar') && Array.isArray(detail.list)) {
-    const names = detail.list.map((item: any) => item?.name).filter(Boolean).join('、')
-    return `调整了底部导航，共 ${detail.list.length} 项${names ? `：${names}` : ''}`
-  }
-  if (moduleKey.includes('activity')) {
-    const title = detail.title || detail.name || detail.activityName
-    const start = detail.startTime || detail.startedAt
-    const end = detail.endTime || detail.endedAt
-    return [title ? `活动「${title}」` : '', start || end ? `时间：${start || '-'} 至 ${end || '-'}` : ''].filter(Boolean).join('，')
-  }
-  if (moduleKey.includes('popup')) {
-    const title = detail.title || detail.name
-    const region = detail.regionName || detail.regionId
-    return [title ? `权益卡片「${title}」` : '', region ? `区域：${region}` : ''].filter(Boolean).join('，')
-  }
-  if (moduleKey.includes('user') || normalizeKey(row?.action || '').startsWith('grant')) {
-    const amount = detail.amount ? `${detail.amount}元` : ''
-    const quantity = detail.quantity ? `${detail.quantity}份` : ''
-    const benefit = detail.benefitName || detail.benefitKey
-    const reason = detail.reason
-    return [benefit ? `权益：${benefit}` : '', amount ? `金额：${amount}` : '', quantity ? `数量：${quantity}` : '', reason ? `原因：${reason}` : ''].filter(Boolean).join('，')
-  }
-  const readable: Record<string, string> = {
-    title: '标题',
-    name: '名称',
-    status: '状态',
-    reason: '原因',
-    amount: '金额',
-    quantity: '数量',
-    regionId: '区域',
-    userId: '用户',
-    durationDays: '有效天数',
-    benefitKey: '权益',
-    page: '页面',
-    path: '路径',
-  }
-  const parts = Object.entries(detail)
-    .filter(([, value]) => value !== undefined && value !== null && value !== '' && typeof value !== 'object')
-    .slice(0, 4)
-    .map(([key, value]) => `${readable[key] || key}：${String(value)}`)
-  if (parts.length) return parts.join('，')
-  try {
-    return JSON.stringify(detail).substring(0, 80)
-  } catch {
-    return ''
-  }
+  return operationChanges(detail).map((change) => `${change.label}：${change.before !== undefined ? `${change.before} → ` : ''}${change.after}`).join('；')
 }
 
 const buildPlainSummary = (row: any) => {
   const operator = row.operatorDisplayName || row.adminDisplayName || row.adminName || '后台管理员'
+  if (normalizeKey(row.action) === 'update_app_capabilities') return `${operator}修改了小程序功能开关`
+  if (normalizeKey(row.action) === 'update_app_review_mode') return `${operator}修改了小程序审核配置`
   const moduleName = getModuleLabel(row.module)
   const actionName = getActionLabel(row.action)
   const detail = row.detail || {}
@@ -324,8 +285,10 @@ const resetFilters = () => {
   filters.riskLevel = ''
   filters.alertStatus = ''
   dateRange.value = []
-  loadLogs()
+  searchLogs()
 }
+
+const searchLogs = () => { page.value = 1; loadLogs() }
 
 const gotoAlert = (row: any) => {
   router.push({ path: '/dashboard/alerts', query: { type: 'operation', status: row.alertStatus || 'pending', businessId: row.id } })
@@ -351,6 +314,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.change-line { margin-top: 6px; line-height: 1.7; overflow-wrap: anywhere; }
+.ip-address { white-space: nowrap; }
 .page-container { padding: 24px; }
 .muted-text { color: #94a3b8; }
 .table-footer { padding: 16px; display: flex; justify-content: flex-end; }

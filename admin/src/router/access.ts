@@ -53,7 +53,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/merchant/printers', any: ['printer:list'] },
   { prefix: '/merchant/price-adjustments', any: ['system:config'] },
   { prefix: '/merchant/product-collection', any: ['product:view'] },
-  { prefix: '/merchant/region-settings', any: ['system:config'] },
+  { prefix: '/merchant/region-settings', any: ['merchant:config'] },
   { prefix: '/merchant/dorm-shop-audit', any: ['merchant:audit'] },
   { prefix: '/merchant', any: ['merchant:view'] },
 
@@ -71,6 +71,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/finance/withdrawals', any: ['withdraw:view', 'withdraw:audit', 'finance:view'] },
   { prefix: '/finance', any: ['finance:view'] },
 
+  { prefix: '/marketing/welfare', any: ['activity:view'] },
   { prefix: '/marketing/coupons', any: ['coupon:view', 'marketing:view'] },
   { prefix: '/marketing/group-buys', any: ['groupbuy:view', 'marketing:view'] },
   { prefix: '/marketing/share', any: ['share:view', 'marketing:view'] },
@@ -79,16 +80,11 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/marketing', any: ['marketing:view', 'activity:view'] },
   { prefix: '/growth/ranking', any: ['ranking:list', 'marketing:view'] },
 
-  { prefix: '/features/dating', any: ['dating:view'] },
-  { prefix: '/features/netdisk', any: ['netdisk:view'] },
-  { prefix: '/features/checkin-map', any: ['punch:view', 'punchIn:list'] },
   { prefix: '/features/rating', any: ['rating:view'] },
   { prefix: '/features/second-hand', any: ['secondhand:view'] },
-  { prefix: '/features/photo-vote', any: ['photoContest:view'] },
   { prefix: '/features/clubs', any: ['club:list'] },
 
   { prefix: '/analytics', any: ['analytics:view'] },
-  { prefix: '/tracking', any: ['analytics:view'] },
   { prefix: '/recommend', any: ['recommend:view'] },
   { prefix: '/ab-tests', any: ['abtest:view'] },
   { prefix: '/ai', any: ['ai:view'] },
@@ -107,13 +103,12 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
 
   // 数据与智能 tab 化入口（P3）：沿用原各域权限
   { prefix: '/insights/business', any: ['analytics:view'] },
-  { prefix: '/insights/tracking', any: ['analytics:view'] },
   { prefix: '/insights/recommend', any: ['recommend:view', 'abtest:view'] },
   { prefix: '/insights/ai', any: ['ai:view'] },
 
   // 其余 tab 化入口（P3 剩余批）：权限取各子页并集
   { prefix: '/merchant/dorm-center', any: ['merchant:view', 'merchant:audit', 'product:view', 'order:view'] },
-  { prefix: '/merchant/config', any: ['system:config', 'product:view', 'printer:list'] },
+  { prefix: '/merchant/config', any: ['system:config', 'merchant:config', 'product:view', 'printer:list'] },
   { prefix: '/mall/promo', any: ['mall:view', 'marketing:view'] },
   { prefix: '/mall/settings', any: ['mall:view', 'product:view'] },
   { prefix: '/errand/setup', any: ['errand:config:view', 'errand:item-size:view', 'errand:view'] },
@@ -156,10 +151,10 @@ const LEGACY_MENU_ALIASES: Record<string, string[]> = {
   '/system/settings': ['/system/config'],
   '/system/mini-program-paths': ['/miniapp/pages'],
   '/features/second-hand': ['/second-hand/products'],
+  '/marketing/welfare': ['/marketing/activities'],
   '/marketing/share': ['/share/activity'],
   // 数据与智能 tab 化入口：按后端旧菜单路径匹配（P3）
   '/insights/business': ['/analytics/overview', '/analytics/users', '/analytics'],
-  '/insights/tracking': ['/tracking/events', '/tracking'],
   '/insights/recommend': ['/recommend/dashboard', '/recommend', '/ab-tests'],
   '/insights/ai': ['/ai/dashboard', '/ai'],
   // 其余 tab 化入口（P3 剩余批）

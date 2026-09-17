@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { LoggerService } from '../common/services/logger.service';
 import { PrismaService } from '../common/services/prisma.service';
 import { PrismaClientKnownRequestError, PrismaClientValidationError } from '@prisma/client/runtime/library';
+import { clientIp } from '../common/request-context';
 
 @Catch()
 @Injectable()
@@ -64,7 +65,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
           requestId: request.headers['x-request-id'] as string || undefined,
           userId: user?.isAdmin ? undefined : user?.sub,
           adminId: user?.isAdmin ? user?.sub : undefined,
-          ip: request.ip || (request.headers['x-forwarded-for'] as string) || undefined,
+          ip: clientIp(request),
           userAgent: request.headers['user-agent'] as string || undefined,
           path: request.url,
           method: request.method,

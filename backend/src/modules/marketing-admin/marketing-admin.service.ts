@@ -1,3 +1,4 @@
+import { assertCouponConfiguration } from '../../common/coupon-policy';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { NotifyService } from '../notify/notify.service';
@@ -212,7 +213,9 @@ export class MarketingAdminService {
       exchange: 'EXCHANGE',
       EXCHANGE: 'EXCHANGE',
     };
-    return map[String(type || '').trim()] || 'DISCOUNT';
+    const normalized = map[String(type || '').trim()];
+    if (!normalized) throw new BadRequestException('优惠券类型不合法');
+    return normalized;
   }
 
   private normalizeCouponBusinessScope(scope: any) {
@@ -227,13 +230,13 @@ export class MarketingAdminService {
     if (startAt && endAt && endAt.getTime() < startAt.getTime()) {
       throw new BadRequestException('优惠券结束时间不能早于开始时间');
     }
-    return {
+    const payload = {
       name: data.name ?? current?.name,
       type: data.type !== undefined ? this.normalizeCouponType(data.type) : current?.type ?? 'DISCOUNT',
-      value: this.toNumber(data.value ?? current?.value, 0),
-      minAmount: this.toNumber(data.minAmount ?? current?.minAmount, 0),
-      totalCount: this.toInt(data.totalCount ?? current?.totalCount, 0, 0),
-      limitPerUser: this.toInt(data.limitPerUser ?? current?.limitPerUser, 1, 1),
+      value: Number(data.value ?? current?.value ?? 0),
+      minAmount: Number(data.minAmount ?? current?.minAmount ?? 0),
+      totalCount: Number(data.totalCount ?? current?.totalCount ?? 0),
+      limitPerUser: Number(data.limitPerUser ?? current?.limitPerUser ?? 1),
       startAt,
       endAt,
       status: data.status ?? current?.status ?? 'active',
@@ -244,6 +247,9 @@ export class MarketingAdminService {
       regionId: data.regionId !== undefined ? this.nullableString(data.regionId) : current?.regionId,
       merchantId: data.merchantId !== undefined ? this.nullableString(data.merchantId) : current?.merchantId,
     };
+    assertCouponConfiguration({ ...current, ...payload,
+      startAt: data.startAt ?? payload.startAt, endAt: data.endAt ?? payload.endAt });
+    return payload;
   }
 
   private normalizeActivityPayload(data: any, current?: any): any {
@@ -433,9 +439,13 @@ export class MarketingAdminService {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('优惠券不存在');
 
-    const updated = await this.prisma.coupon.update({
-      where: { id },
-      data: this.normalizeCouponPayload(data, coupon),
+    const payload = this.normalizeCouponPayload(data, coupon);
+    const updated = await this.prisma.$transaction(async tx => {
+      const saved = await tx.coupon.updateMany({
+        where: { id, receivedCount: { lte: payload.totalCount } }, data: payload,
+      });
+      if (saved.count !== 1) throw new BadRequestException('已领取数量发生变化，总量不能小于已领取数量，请刷新后重试');
+      return tx.coupon.findUnique({ where: { id } });
     });
 
     await this.logOperation(operatorId, 'update', 'coupon', id, ip);
@@ -445,6 +455,7 @@ export class MarketingAdminService {
   async updateCouponStatus(id: string, status: string, operatorId: string) {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('优惠券不存在');
+    if (status === 'active') assertCouponConfiguration(coupon);
 
     await this.prisma.coupon.update({
       where: { id },

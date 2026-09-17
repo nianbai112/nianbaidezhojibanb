@@ -6,6 +6,7 @@
         <el-button v-if="isSuperAdmin" type="danger" plain @click="confirmRestart">重启服务</el-button>
       </template>
     </PageHeader>
+    <el-alert v-if="pageErrors.length" :title="pageErrors.join('；')" type="error" :closable="false" show-icon />
 
     <div class="status-cards">
       <el-card v-for="s in statusItems" :key="s.key" shadow="hover" class="status-card">
@@ -54,13 +55,13 @@
         <div class="log-header">
           <span>服务器日志</span>
           <div class="log-filters">
-            <el-select v-model="logFilters.level" clearable placeholder="级别" style="width: 100px" @change="loadLogs">
-              <el-option label="error" value="error" />
-              <el-option label="warn" value="warn" />
-              <el-option label="info" value="info" />
+            <el-select v-model="logFilters.level" clearable placeholder="级别" style="width: 100px" @change="searchLogs">
+              <el-option label="错误" value="error" />
+              <el-option label="警告" value="warn" />
+              <el-option label="普通信息" value="info" />
             </el-select>
-            <el-input v-model="logFilters.keyword" placeholder="关键词" clearable style="width: 160px" @keyup.enter="loadLogs" />
-            <el-button @click="loadLogs" size="small">搜索</el-button>
+            <el-input v-model="logFilters.keyword" placeholder="关键词" clearable style="width: 160px" @keyup.enter="searchLogs" />
+            <el-button @click="searchLogs" size="small">搜索</el-button>
             <el-button v-if="isSuperAdmin" type="warning" plain size="small" @click="confirmCleanup">清理日志</el-button>
           </div>
         </div>
@@ -68,10 +69,10 @@
       <el-table :data="logs" v-loading="logLoading" stripe size="small" max-height="400">
         <el-table-column prop="level" label="级别" width="80">
           <template #default="{ row }">
-            <el-tag :type="row.level === 'error' ? 'danger' : row.level === 'warn' ? 'warning' : 'info'" size="small">{{ row.level }}</el-tag>
+            <el-tag :type="row.level === 'error' ? 'danger' : row.level === 'warn' ? 'warning' : 'info'" size="small">{{ levelLabels[row.level] || '普通信息' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="module" label="模块" width="120" />
+        <el-table-column prop="module" label="模块" width="120"><template #default="{ row }">{{ moduleName(row.module) }}</template></el-table-column>
         <el-table-column prop="message" label="消息" min-width="300" show-overflow-tooltip />
         <el-table-column prop="path" label="路径" width="200" show-overflow-tooltip />
         <el-table-column prop="createdAt" label="时间" width="180">
@@ -98,6 +99,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Monitor, CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { request } from '@/api/request'
+import { moduleName } from './logPresentation.mjs'
 
 const loading = ref(false)
 const logLoading = ref(false)
@@ -106,6 +108,13 @@ const health = ref<any>({})
 const logs = ref<any[]>([])
 const logPagination = reactive({ page: 1, pageSize: 20, total: 0 })
 const logFilters = reactive({ level: '', keyword: '' })
+const errors = reactive({ overview: '', health: '', logs: '' })
+const pageErrors = computed(() => Object.values(errors).filter(Boolean))
+const levelLabels: Record<string, string> = { error: '错误', warn: '警告', info: '普通信息' }
+function loadError(section: keyof typeof errors, label: string, error: any) {
+  if (error?.__silent || error?.code === 'ERR_CANCELED') return
+  errors[section] = `${label}加载失败：${error?.message || '服务异常'}`
+}
 
 const isSuperAdmin = computed(() => {
   try {
@@ -152,20 +161,24 @@ function formatUptime(seconds: number) {
 }
 
 async function loadOverview() {
+  errors.overview = ''
   try {
     const res: any = await request.get('/admin/ops/overview')
     overview.value = res
-  } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
+  } catch (e: any) { loadError('overview', '监控概览', e) }
 }
 
 async function loadHealth() {
+  errors.health = ''
   try {
     const res: any = await request.get('/admin/ops/health')
     health.value = res
-  } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
+  } catch (e: any) { loadError('health', '健康检查', e) }
 }
 
 async function loadLogs() {
+  if (logLoading.value) return
+  errors.logs = ''
   logLoading.value = true
   try {
     const params = { ...logFilters, page: logPagination.page, pageSize: logPagination.pageSize }
@@ -173,17 +186,18 @@ async function loadLogs() {
     logs.value = res.list || []
     logPagination.total = res.total || 0
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
-    logs.value = []
+    loadError('logs', '服务器日志', e)
   } finally {
     logLoading.value = false
   }
 }
 
 function loadAll() {
+  if (loading.value) return
   loading.value = true
   Promise.all([loadOverview(), loadHealth(), loadLogs()]).finally(() => { loading.value = false })
 }
+function searchLogs() { logPagination.page = 1; loadLogs() }
 
 async function confirmRestart() {
   try {

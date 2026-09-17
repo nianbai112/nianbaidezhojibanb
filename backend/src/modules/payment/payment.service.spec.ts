@@ -28,7 +28,8 @@ const createService = () => {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     coupon: { update: jest.fn() },
-    subsidyLedger: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    subsidyLedger: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([]) },
+    marketingCampaignBudgetCounter: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     merchantSettlement: {
       findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -111,6 +112,154 @@ const createService = () => {
   );
   return { prisma, service, tx, membershipService, notifyService };
 };
+
+const createErrandRefundService = (channel = 'balance') => {
+  const fixture = createService();
+  const { prisma, tx, service } = fixture;
+  const order = { id: 'errand-1', userId: 'user-1', orderNo: 'ERR-1', status: 'pending_accept', refundStatus: 'none' };
+  const payment = { id: 'payment-1', paymentNo: 'PAY-1', orderNo: order.orderNo, userId: order.userId,
+    bizType: 'errand_order', bizId: order.id, amount: 10, refundedAmount: 0, channel, status: 'paid' };
+  const receive: any = { id: 'receive-1', couponId: 'coupon-1', userId: order.userId, orderNo: order.orderNo, status: 'used', usedAt: new Date() };
+  const ledger = { id: 'ledger-1', campaignId: 'campaign-1', userId: order.userId, amount: 2, createdAt: new Date('2026-09-10T17:00:00Z'), status: 'pending' };
+  let usedCount = 1;
+  const refunds: any[] = [];
+  prisma.paymentOrder.findFirst.mockImplementation(async () => ({ ...payment }));
+  prisma.paymentRefund.create.mockImplementation(async ({ data }: any) => {
+    const row = { id: `refund-${refunds.length + 1}`, ...data };
+    refunds.push(row);
+    return { ...row };
+  });
+  prisma.paymentRefund.findFirst.mockImplementation(async ({ where }: any) => refunds.find(row => row.refundNo === where.refundNo));
+  prisma.paymentRefund.findUnique.mockImplementation(async ({ where }: any) => refunds.find(row => row.id === where.id));
+  const updateRefund = async ({ where, data }: any) => {
+    const row = refunds.find(row => row.id === where.id);
+    const statuses = typeof where.status === 'string' ? [where.status] : where.status?.in || [];
+    if (!row || !statuses.includes(row.status)) return { count: 0 };
+    Object.assign(row, data);
+    return { count: 1 };
+  };
+  tx.paymentRefund.updateMany.mockImplementation(updateRefund);
+  prisma.paymentRefund.updateMany.mockImplementation(updateRefund);
+  tx.paymentOrder.findUnique.mockImplementation(async () => ({ ...payment }));
+  tx.paymentOrder.update.mockImplementation(async ({ data }: any) => Object.assign(payment, data));
+  tx.errandOrder.update.mockImplementation(async ({ data }: any) => ({ ...Object.assign(order, data) }));
+  prisma.errandOrder.findUnique.mockImplementation(async () => ({ ...order }));
+  tx.couponReceive.findFirst.mockImplementation(async ({ where }: any) =>
+    Object.entries(where).every(([key, value]) => receive[key] === value) ? { ...receive } : null);
+  tx.couponReceive.updateMany.mockImplementation(async ({ where, data }: any) => {
+    if (!Object.entries(where).every(([key, value]) => receive[key] === value)) return { count: 0 };
+    Object.assign(receive, data);
+    return { count: 1 };
+  });
+  tx.coupon.update.mockImplementation(async ({ data }: any) => { usedCount -= data.usedCount.decrement; });
+  tx.subsidyLedger.findMany.mockImplementation(async () => ledger.status === 'cancelled' ? [] : [{ ...ledger }]);
+  tx.subsidyLedger.updateMany.mockImplementation(async ({ where, data }: any) => {
+    if (where.id !== ledger.id || ledger.status === 'cancelled') return { count: 0 };
+    Object.assign(ledger, data);
+    return { count: 1 };
+  });
+  jest.spyOn(service as any, 'notifyShopRefundSuccess').mockResolvedValue(undefined);
+  jest.spyOn(service as any, 'notifyShopRefundProcessing').mockResolvedValue(undefined);
+  return { ...fixture, order, payment, receive, ledger, refunds, usedCount: () => usedCount };
+};
+
+describe('PaymentService errand refund coupon restoration', () => {
+  it.each(['balance', 'wx_pay'])('restores the coupon and budget after a full %s refund succeeds', async channel => {
+    const fixture = createErrandRefundService(channel);
+    const { service, tx, receive, ledger, usedCount, membershipService } = fixture;
+    jest.spyOn(service as any, 'getWxPayConfig').mockResolvedValue({});
+    const wxRequest = jest.spyOn(service as any, 'wxPayRequest').mockResolvedValue({ status: 'SUCCESS', refund_id: 'WX-1' });
+    await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 10, reason: '用户退款' });
+    expect(receive).toMatchObject({ status: 'unused', orderNo: null, usedAt: null });
+    expect(usedCount()).toBe(0);
+    expect(ledger.status).toBe('cancelled');
+    expect(membershipService.restoreBenefitUsagesForTarget).toHaveBeenCalledTimes(1);
+    expect(membershipService.restoreBenefitUsagesForTarget).toHaveBeenCalledWith('errand_order', 'errand-1', tx);
+    expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledTimes(3);
+    expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { spent: { decrement: 2 }, uses: { decrement: 1 } },
+    }));
+    expect(JSON.stringify(tx.marketingCampaignBudgetCounter.updateMany.mock.calls)).toContain('day:2026-09-11');
+    if (channel === 'balance') expect(wxRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps a processing refund coupon used, then restores it exactly once on repeated callbacks', async () => {
+    const { service, tx, receive, ledger, usedCount, membershipService } = createErrandRefundService('wx_pay');
+    jest.spyOn(service as any, 'getWxPayConfig').mockResolvedValue({});
+    jest.spyOn(service as any, 'wxPayRequest').mockResolvedValue({ status: 'PROCESSING', refund_id: 'WX-1' });
+    const result = await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 10, reason: '用户退款' });
+    expect(receive.status).toBe('used');
+    expect(ledger.status).toBe('pending');
+    expect(tx.coupon.update).not.toHaveBeenCalled();
+    await (service as any).handleRefundSuccess(result.refundNo, 'WX-1');
+    await (service as any).handleRefundSuccess(result.refundNo, 'WX-1');
+    expect(receive.status).toBe('unused');
+    expect(usedCount()).toBe(0);
+    expect(tx.coupon.update).toHaveBeenCalledTimes(1);
+    expect(membershipService.restoreBenefitUsagesForTarget).toHaveBeenCalledTimes(1);
+    expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('restores only when cumulative partial refunds reach the full payment', async () => {
+    const { service, tx, receive, usedCount, membershipService } = createErrandRefundService();
+    await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 4, reason: '部分退款' });
+    expect(receive.status).toBe('used');
+    expect(usedCount()).toBe(1);
+    expect(membershipService.restoreBenefitUsagesForTarget).not.toHaveBeenCalled();
+    expect(tx.marketingCampaignBudgetCounter.updateMany).not.toHaveBeenCalled();
+    await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 6, reason: '剩余退款' });
+    expect(receive.status).toBe('unused');
+    expect(usedCount()).toBe(0);
+  });
+
+  it('keeps the coupon used when refund submission fails', async () => {
+    const { service, tx, receive, usedCount } = createErrandRefundService('wx_pay');
+    jest.spyOn(service as any, 'getWxPayConfig').mockRejectedValue(new Error('微信退款配置不可用'));
+    await expect(service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 10, reason: '退款' }))
+      .rejects.toThrow('微信退款配置不可用');
+    expect(receive.status).toBe('used');
+    expect(usedCount()).toBe(1);
+    expect(tx.coupon.update).not.toHaveBeenCalled();
+    expect(tx.subsidyLedger.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('restores benefits once on manual completion of a processing refund', async () => {
+    const { service, receive, usedCount, membershipService } = createErrandRefundService('wx_pay');
+    jest.spyOn(service as any, 'getWxPayConfig').mockResolvedValue({});
+    jest.spyOn(service as any, 'wxPayRequest').mockResolvedValue({ status: 'PROCESSING', refund_id: 'WX-1' });
+    await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 10, reason: '退款' });
+    await service.completeRefundById('refund-1');
+    await service.completeRefundById('refund-1');
+    expect(receive.status).toBe('unused');
+    expect(usedCount()).toBe(0);
+    expect(membershipService.restoreBenefitUsagesForTarget).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not release a reused coupon when a delayed refund races with another order', async () => {
+    const { service, tx, receive, usedCount } = createErrandRefundService();
+    tx.couponReceive.findFirst.mockImplementationOnce(async () => {
+      const stale = { ...receive };
+      receive.orderNo = 'ERR-NEW';
+      return stale;
+    });
+    await service.refund({ bizType: 'errand_order', bizId: 'errand-1', amount: 10, reason: '退款' });
+    expect(receive).toMatchObject({ orderNo: 'ERR-NEW', status: 'used' });
+    expect(usedCount()).toBe(1);
+    expect(tx.coupon.update).not.toHaveBeenCalled();
+  });
+
+  it('claims a coupon and campaign ledger once even if restoration runs concurrently', async () => {
+    const { service, tx, order, receive, usedCount } = createErrandRefundService();
+    await Promise.all([
+      (service as any).restoreErrandOrderBenefits(tx, order),
+      (service as any).restoreErrandOrderBenefits(tx, order),
+    ]);
+    expect(receive.status).toBe('unused');
+    expect(usedCount()).toBe(0);
+    expect(tx.coupon.update).toHaveBeenCalledTimes(1);
+    expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe('PaymentService terminal state and retry identity', () => {
   it('moves a paid self-unban request into the admin review queue without directly unbanning', async () => {
@@ -1173,7 +1322,7 @@ describe('PaymentService refund terminal failures', () => {
   });
 
   it('reopens an unrefunded errand and notifies its buyer when its refund callback fails', async () => {
-    const { prisma, service, notifyService } = createService();
+    const { prisma, service, notifyService, tx } = createService();
     prisma.paymentRefund.findFirst.mockResolvedValue({
       paymentId: 'payment-1',
       payment: {
@@ -1186,6 +1335,8 @@ describe('PaymentService refund terminal failures', () => {
     });
 
     await (service as any).handleRefundFailure('REF-1', 'CLOSED');
+    expect(tx.couponReceive.updateMany).not.toHaveBeenCalled();
+    expect(tx.marketingCampaignBudgetCounter.updateMany).not.toHaveBeenCalled();
 
     expect(prisma.errandOrder.update).toHaveBeenCalledWith({
       where: { id: 'errand-1' },

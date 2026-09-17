@@ -1,9 +1,47 @@
 import { SystemConfigService } from './system-config.service';
+import { validateSync } from 'class-validator';
+import { SaveAppCapabilityConfigDto } from './dto/app-review-mode.dto';
 
 jest.mock('axios', () => ({ get: jest.fn() }));
 const axios = require('axios');
 
 describe('SystemConfigService storage config', () => {
+  it('round-trips the guest browsing switch and keeps it disabled when an older admin omits it', async () => {
+    let stored: any = { enabled: true };
+    const prisma = {
+      config: {
+        findUnique: jest.fn(async () => ({ value: stored })),
+        upsert: jest.fn(async ({ update }) => { stored = update.value; return { value: stored }; }),
+      },
+      adminOperationLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new SystemConfigService(prisma as any, {} as any);
+    expect((await service.getAppReviewMode()).data.allowGuestBrowsing).toBe(true);
+    await service.saveAppReviewMode({ ...service.getDefaultAppReviewMode(), allowGuestBrowsing: false }, 'admin-1');
+    expect((await service.getAppReviewMode()).data.allowGuestBrowsing).toBe(false);
+    const legacyDto: Record<string, unknown> = service.getDefaultAppReviewMode();
+    delete legacyDto.allowGuestBrowsing;
+    await service.saveAppReviewMode(legacyDto, 'admin-1');
+    expect((await service.getAppReviewMode()).data.allowGuestBrowsing).toBe(false);
+    expect(prisma.adminOperationLog.create).toHaveBeenCalledTimes(2);
+    await service.saveAppReviewMode({ ...legacyDto, allowGuestBrowsing: true }, 'admin-1');
+    expect((await service.getAppReviewMode()).data.allowGuestBrowsing).toBe(true);
+  });
+
+  it('accepts legacy DTOs and boolean guest switches but rejects strings and null', () => {
+    const service = new SystemConfigService({} as any, {} as any);
+    const legacyDto: Record<string, unknown> = service.getDefaultAppReviewMode();
+    delete legacyDto.allowGuestBrowsing;
+    for (const value of [undefined, true, false]) {
+      const dto = Object.assign(new SaveAppCapabilityConfigDto(), legacyDto, { allowGuestBrowsing: value });
+      expect(validateSync(dto)).toHaveLength(0);
+    }
+    for (const value of ['false', 0, null]) {
+      const dto = Object.assign(new SaveAppCapabilityConfigDto(), legacyDto, { allowGuestBrowsing: value });
+      expect(validateSync(dto).some(error => error.property === 'allowGuestBrowsing')).toBe(true);
+    }
+  });
+
   it('normalizes and persists all-user app capabilities with the real previous value in the audit log', async () => {
     const prisma = {
       config: {
@@ -23,7 +61,7 @@ describe('SystemConfigService storage config', () => {
       hideTopup: true,
       hideVirtualGoods: true,
       hideShareInvite: true,
-      hideDating: true,
+      hideDating: false,
       placeholderText: '  当前业务暂未开放  ',
       unknown: 'discard-me',
     }, 'admin-1', '127.0.0.1')).resolves.toMatchObject({
@@ -32,6 +70,7 @@ describe('SystemConfigService storage config', () => {
     });
 
     const saved = prisma.config.upsert.mock.calls[0][0].update.value;
+    expect(saved.hideDating).toBe(true);
     expect(saved).not.toHaveProperty('unknown');
     expect(prisma.adminOperationLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ action: 'UPDATE_APP_CAPABILITIES' }),

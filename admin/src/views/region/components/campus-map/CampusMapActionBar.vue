@@ -39,7 +39,7 @@
           <el-button :icon="MoreFilled" aria-label="更多运维操作" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="import">导入 CAD</el-dropdown-item>
+
               <el-dropdown-item command="catalog">地点档案全量管理</el-dropdown-item>
               <el-dropdown-item command="preview">小程序预览</el-dropdown-item>
               <el-dropdown-item command="versions">版本历史与回滚</el-dropdown-item>

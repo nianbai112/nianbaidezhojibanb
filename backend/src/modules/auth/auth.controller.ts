@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard } from '../../guards/admin.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
+import { clientIp } from '../../common/request-context';
 
 @ApiTags('认证')
 @Controller()
@@ -13,13 +14,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   private getClientIp(req: Request) {
-    const forwarded = req.headers['x-forwarded-for'];
-    const realIp = req.headers['x-real-ip'];
-    const cfIp = req.headers['cf-connecting-ip'];
-    const raw = Array.isArray(forwarded)
-      ? forwarded[0]
-      : forwarded || realIp || cfIp || req.ip || '';
-    return String(raw).split(',')[0].trim();
+    return clientIp(req) || '';
   }
 
   // ============ 小程序接口 ============

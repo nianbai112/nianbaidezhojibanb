@@ -96,13 +96,19 @@ ON DUPLICATE KEY UPDATE `spent` = VALUES(`spent`), `uses` = VALUES(`uses`), `upd
 
 INSERT INTO `marketing_campaign_budget_counters` (`id`, `campaignId`, `scopeKey`, `spent`, `uses`, `version`, `updatedAt`)
 SELECT
-  CONCAT(`campaignId`, ':day:', DATE_FORMAT(CONVERT_TZ(`createdAt`, '+00:00', '+08:00'), '%Y-%m-%d')),
-  `campaignId`,
-  CONCAT('day:', DATE_FORMAT(CONVERT_TZ(`createdAt`, '+00:00', '+08:00'), '%Y-%m-%d')),
-  SUM(`amount`), COUNT(*), 1, CURRENT_TIMESTAMP(3)
-FROM `subsidy_ledgers`
-WHERE `campaignId` IS NOT NULL AND `status` <> 'cancelled'
-GROUP BY `campaignId`, DATE_FORMAT(CONVERT_TZ(`createdAt`, '+00:00', '+08:00'), '%Y-%m-%d')
+  CONCAT(daily.`campaignId`, ':day:', daily.`dayKey`),
+  daily.`campaignId`,
+  CONCAT('day:', daily.`dayKey`),
+  daily.`spent`, daily.`uses`, 1, CURRENT_TIMESTAMP(3)
+FROM (
+  SELECT
+    `campaignId`,
+    DATE_FORMAT(CONVERT_TZ(`createdAt`, '+00:00', '+08:00'), '%Y-%m-%d') AS `dayKey`,
+    SUM(`amount`) AS `spent`, COUNT(*) AS `uses`
+  FROM `subsidy_ledgers`
+  WHERE `campaignId` IS NOT NULL AND `status` <> 'cancelled'
+  GROUP BY `campaignId`, `dayKey`
+) AS daily
 ON DUPLICATE KEY UPDATE `spent` = VALUES(`spent`), `uses` = VALUES(`uses`), `updatedAt` = CURRENT_TIMESTAMP(3);
 
 INSERT INTO `marketing_campaign_budget_counters` (`id`, `campaignId`, `scopeKey`, `spent`, `uses`, `version`, `updatedAt`)

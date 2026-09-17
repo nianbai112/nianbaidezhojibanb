@@ -69,63 +69,23 @@ export class ActivityController {
     return this.activityService.getClubOrders(clubId, query);
   }
 
-  @Get('explosivesel/competitions')
-  getCompetitions(@Query() query: any) {
-    return this.activityService.getCompetitions(query);
-  }
+  
 
-  @Post('explosivesel/competitions')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createCompetition(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.activityService.createCompetition(userId, dto);
-  }
+  
 
-  @Get('explosivesel/competitions/:competitionId')
-  getCompetitionInfo(@Param('competitionId') competitionId: string) {
-    return this.activityService.getCompetitionInfo(competitionId);
-  }
+  
 
-  @Post('explosivesel/photos')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  submitPhoto(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.activityService.submitPhoto(userId, dto);
-  }
+  
 
-  @Get('explosivesel/photos/competition/:competitionId')
-  getCompetitionPhotos(@Param('competitionId') competitionId: string) {
-    return this.activityService.getCompetitionPhotos(competitionId);
-  }
+  
 
-  @Get('explosivesel/photos/:photoId')
-  getPhotoDetail(@Param('photoId') photoId: string) {
-    return this.activityService.getPhotoDetail(photoId);
-  }
+  
 
-  @Post('explosivesel/votes/:photoId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  voteForPhoto(@Param('photoId') photoId: string, @CurrentUser('sub') userId: string) {
-    return this.activityService.voteForPhoto(photoId, userId);
-  }
+  
 
-  @Post('explosivesel/ratings/:photoId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  ratePhoto(@Param('photoId') photoId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.activityService.ratePhoto(photoId, userId, dto);
-  }
+  
 
-  @Delete('explosivesel/ratings/:ratingId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  deleteRating(@Param('ratingId') ratingId: string, @CurrentUser('sub') userId: string) {
-    return this.activityService.deleteRating(ratingId, userId);
-  }
+  
 
-  @Get('explosivesel/ratings/photo/:photoId')
-  getPhotoRatings(@Param('photoId') photoId: string, @Query() query: any) {
-    return this.activityService.getPhotoRatings(photoId, query);
-  }
+  
 }

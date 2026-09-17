@@ -1,10 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
 
 export class SaveAppCapabilityConfigDto {
   @ApiProperty()
   @IsBoolean()
   enabled!: boolean;
+
+  @ApiProperty({ required: false, default: true, description: '总控开启时允许游客先浏览首页，登录和学生认证仍保护专属操作' })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsBoolean()
+  allowGuestBrowsing?: boolean;
 
   @ApiProperty()
   @IsBoolean()

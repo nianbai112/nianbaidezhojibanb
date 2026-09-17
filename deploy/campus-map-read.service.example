@@ -1,0 +1,31 @@
+[Unit]
+Description=Lingmeng Campus Map Read Service
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/lingmeng/campus-map-read
+ExecStart=/opt/lingmeng/campus-map-read/campus-map-read
+EnvironmentFile=/etc/lingmeng/campus-map-read.env
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=12
+KillSignal=SIGTERM
+MemoryHigh=224M
+MemoryMax=256M
+CPUQuota=100%
+TasksMax=256
+LimitNOFILE=4096
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

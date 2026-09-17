@@ -155,81 +155,29 @@ export class OperationController {
     return this.operationService.getSigninRewards(regionId, userId, query);
   }
 
-  @Get('api/punchIn/config/:regionId')
-  getPunchInConfig(@Param('regionId') regionId: string) {
-    return this.operationService.getPunchInConfig(regionId);
-  }
+  
 
-  @Get('api/punchIn/check-in/status/:regionId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getPunchInStatus(@Param('regionId') regionId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.getPunchInStatus(regionId, userId);
-  }
+  
 
-  @Post('api/punchIn/check-in')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  punchInCheckIn(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.punchInCheckIn(userId, dto);
-  }
+  
 
-  @Get('api/punchIn/location')
-  getPunchInLocations(@Query() query: any) {
-    return this.operationService.getPunchInLocations(query);
-  }
+  
 
-  @Get('api/punchIn/location/:locationId')
-  getPunchInLocationDetail(@Param('locationId') locationId: string) {
-    return this.operationService.getPunchInLocationDetail(locationId);
-  }
+  
 
-  @Put('api/punchIn/location/:locationId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  updatePunchInLocation(@Param('locationId') locationId: string, @Body() dto: any) {
-    return this.operationService.updatePunchInLocation(locationId, dto);
-  }
+  
 
-  @Get('api/punchIn/comment/location/:locationId')
-  getPunchInComments(@Param('locationId') locationId: string, @Query() query: any) {
-    return this.operationService.getPunchInComments(locationId, query);
-  }
+  
 
-  @Post('api/punchIn/comment')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createPunchInComment(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.createPunchInComment(userId, dto);
-  }
+  
 
-  @Get('api/punchIn/wishlist')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getWishlist(@CurrentUser('sub') userId: string) {
-    return this.operationService.getWishlist(userId);
-  }
+  
 
-  @Post('api/punchIn/wishlist/:locationId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  addWishlist(@Param('locationId') locationId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.addWishlist(locationId, userId, dto);
-  }
+  
 
-  @Post('api/punchIn/wishlist')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  addWishlistFromBody(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.addWishlistFromBody(userId, dto);
-  }
+  
 
-  @Delete('api/punchIn/wishlist/:locationId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  removeWishlist(@Param('locationId') locationId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.removeWishlist(locationId, userId);
-  }
+  
 
   @Get('api/rating/categories/:regionId')
   getRatingCategories(@Param('regionId') regionId: string, @Query() query: any) {
@@ -282,60 +230,23 @@ export class OperationController {
     return this.operationService.createRatingReply(userId, dto);
   }
 
-  @Get('api/netdisk/categories')
-  getNetDiskCategories(@Query() query: any) {
-    return this.operationService.getNetDiskCategories(query);
-  }
+  
 
-  @Get('api/netdisk/resources')
-  getNetDiskResources(@Query() query: any) {
-    return this.operationService.getNetDiskResources(query);
-  }
+  
 
-  @Get('api/netdisk/resources/:id')
-  getNetDiskResourceDetail(@Param('id') id: string) {
-    return this.operationService.getNetDiskResourceDetail(id);
-  }
+  
 
-  @Get('api/netdisk/comments')
-  getNetDiskComments(@Query() query: any) {
-    return this.operationService.getNetDiskComments(query);
-  }
+  
 
-  @Post('api/netdisk/comments')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createNetDiskComment(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.createNetDiskComment(userId, dto);
-  }
+  
 
-  @Post('api/netdisk/favorites/:resourceId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  favoriteNetDisk(@Param('resourceId') resourceId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.favoriteNetDisk(resourceId, userId);
-  }
+  
 
-  @Delete('api/netdisk/favorites/:resourceId')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  unfavoriteNetDisk(@Param('resourceId') resourceId: string, @CurrentUser('sub') userId: string) {
-    return this.operationService.unfavoriteNetDisk(resourceId, userId);
-  }
+  
 
-  @Get('api/netdisk/my-favorites')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getNetDiskFavorites(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getNetDiskFavorites(userId, query);
-  }
+  
 
-  @Post('api/netdisk/reports')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  reportNetDisk(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.reportNetDisk(userId, dto);
-  }
+  
 
   @Get('api/sticker-categories')
   getStickerCategories() {
@@ -466,12 +377,12 @@ export class OperationController {
     return this.operationService.deleteContact(id, userId);
   }
 
-  @Get('api/agreements/:type')
+  @Get(['agreements/:type', 'api/agreements/:type'])
   getAgreementDocument(@Param('type') type: string, @Query() query: any) {
     return this.operationService.getAgreementDocument(type, query);
   }
 
-  @Post('api/agreements/consent')
+  @Post(['agreements/consent', 'api/agreements/consent'])
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
   acceptAgreement(@CurrentUser('sub') userId: string, @Body() dto: any) {
@@ -532,71 +443,25 @@ export class OperationController {
     return this.operationService.getRegionCustomPages(regionId, query);
   }
 
-  @Get('api/dating/config/region/:regionId')
-  getDatingConfig(@Param('regionId') regionId: string) {
-    return this.operationService.getDatingConfig(regionId);
-  }
+  
 
-  @Get('api/dating/profile')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getDatingProfile(@CurrentUser('sub') userId: string) {
-    return this.operationService.getDatingProfile(userId);
-  }
+  
 
-  @Post('api/dating/profile')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createOrUpdateDatingProfile(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.createOrUpdateDatingProfile(userId, dto);
-  }
+  
 
-  @Get('api/dating/profile/list')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getDatingProfileList(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getDatingProfileList(userId, query);
-  }
+  
 
-  @Post('api/dating/matches/action')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  datingMatchAction(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.datingMatchAction(userId, dto);
-  }
+  
 
-  @Get('api/dating/packages')
-  getDatingPackages(@Query() query: any) {
-    return this.operationService.getDatingPackages(query);
-  }
+  
 
-  @Post('api/dating/orders/payment/pay')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  createDatingOrder(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.createDatingOrder(userId, dto);
-  }
+  
 
-  @Get('api/dating/matches/me')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getMyDatingMatches(@CurrentUser('sub') userId: string, @Query() query: any) {
-    return this.operationService.getMyDatingMatches(userId, query);
-  }
+  
 
-  @Post('api/dating/reports')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  reportDatingUser(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.reportDatingUser(userId, dto);
-  }
+  
 
-  @Post('api/dating/block')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  blockDatingUser(@CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.operationService.blockDatingUser(userId, dto);
-  }
+  
 
   @Get('api/groupbuy/packages')
   getGroupBuyPackages(@Query() query: any) {

@@ -1,3 +1,4 @@
+import { currentRequestMetadata } from '../../common/request-context';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
@@ -14,6 +15,8 @@ import {
 } from './dto/user.dto';
 import { Gender, RoleType, UserStatus } from '@prisma/client';
 import * as crypto from 'crypto';
+import { assertErrandGenderChangeAllowed } from '../errand/errand-delivery-requirements';
+import { lockErrandAssignee } from '../errand/errand-transaction-guards';
 
 @Injectable()
 export class UserService {
@@ -885,10 +888,15 @@ export class UserService {
     const wechat = dto.wechat_account ?? dto.wechatAccount;
     const birthday = this.normalizeBirthday(dto.birthday);
 
+    if (phone !== undefined) {
+      const current = await this.prisma.user.findUnique({ where: { id: userId }, select: { phone: true } });
+      if (String(phone).trim() !== (current?.phone || '')) {
+        throw new BadRequestException('绑定或更换登录手机号请通过微信手机号授权，不能在个人资料中直接修改');
+      }
+    }
     const userData: Record<string, any> = {};
     if (dto.nickname !== undefined) userData.nickname = dto.nickname;
     if (dto.avatar !== undefined) userData.avatar = dto.avatar;
-    if (phone !== undefined) userData.phone = phone;
 
     const profileData: Record<string, any> = {};
     if (normalizedGender !== undefined) profileData.gender = normalizedGender;
@@ -901,18 +909,29 @@ export class UserService {
     if (wechat !== undefined) profileData.wechat = wechat;
     if (birthday !== undefined) profileData.birthday = birthday;
 
-    if (Object.keys(userData).length > 0) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: userData,
+    const save = async (db: any) => {
+      if (Object.keys(userData).length > 0) {
+        await db.user.update({
+          where: { id: userId },
+          data: userData,
+        });
+      }
+      if (Object.keys(profileData).length > 0) {
+        await db.userProfile.upsert({
+          where: { userId },
+          update: profileData,
+          create: { userId, ...profileData },
+        });
+      }
+    };
+    if (normalizedGender !== undefined) {
+      await this.prisma.$transaction(async (tx) => {
+        await lockErrandAssignee(tx, userId);
+        await assertErrandGenderChangeAllowed(tx, userId, normalizedGender);
+        await save(tx);
       });
-    }
-    if (Object.keys(profileData).length > 0) {
-      await this.prisma.userProfile.upsert({
-        where: { userId },
-        update: profileData,
-        create: { userId, ...profileData },
-      });
+    } else {
+      await save(this.prisma);
     }
     await this.clearProfileCache(userId);
     return this.getProfile(userId);
@@ -1727,10 +1746,10 @@ export class UserService {
   async cancelAccount(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, deletedAt: true },
     });
     if (!user) throw new NotFoundException('用户不存在');
-    if (user.status === 'DELETED') throw new BadRequestException('账号已注销');
+    if (user.status === 'DELETED' || user.deletedAt) throw new BadRequestException('账号已注销');
 
     // 检查未完订单（普通订单/商城/跑腿/二手）
     const [pendingShopOrder, pendingMallOrder, pendingErrandOrder, pendingSecondHandOrder] =
@@ -1784,9 +1803,10 @@ export class UserService {
 
     // 执行注销：置 DELETED + deletedAt + 清除 refresh token
     const now = new Date();
+    const { ip, ua } = currentRequestMetadata();
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: userId },
+      const deleted = await tx.user.updateMany({
+        where: { id: userId, status: user.status, deletedAt: null },
         data: {
           status: 'DELETED' as any,
           deletedAt: now,
@@ -1796,6 +1816,7 @@ export class UserService {
           phone: null,
         },
       });
+      if (deleted.count !== 1) throw new BadRequestException('账号状态已变化，请刷新后重试');
       // AUD-P1-181: 脱敏用户档案资料
       await tx.userProfile.updateMany({
         where: { userId },
@@ -1811,6 +1832,13 @@ export class UserService {
           grade: null,
           dormitory: null,
           birthday: null,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId, action: 'DELETE', module: 'user', targetId: userId,
+          detail: { source: 'user_self_cancel', beforeStatus: user.status, afterStatus: 'DELETED' },
+          ip, ua, createdAt: now,
         },
       });
     });

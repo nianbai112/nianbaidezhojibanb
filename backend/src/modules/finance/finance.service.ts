@@ -74,15 +74,19 @@ export class FinanceService {
 
   private payoutAccountKey(value: unknown) {
     const text = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
-    const digits = text.replace(/\D/g, '');
-    if (digits.length >= 7) return digits.length > 11 ? digits.slice(-11) : digits;
     if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) return text;
-    if (/^[a-z0-9._-]{6,}$/.test(text)) return text;
+    if (/^\+?86(1\d{10})$/.test(text)) return text.replace(/^\+?86/, '');
+    if (/^[a-z0-9._-]{6,100}$/.test(text)) return text;
     return '';
   }
 
   private async assertWithdrawRiskClear(tx: any, userId: string, account: string) {
     const accountKey = this.payoutAccountKey(account);
+    const accountVariants = /^1\d{10}$/.test(accountKey) ? [accountKey, `86${accountKey}`, `+86${accountKey}`] : [accountKey];
+    const provider = String(process.env.DB_PROVIDER || process.env.DATABASE_PROVIDER || '').toLowerCase();
+    const isMysql = provider.includes('mysql') || String(process.env.DATABASE_URL || '').startsWith('mysql://');
+    // MySQL uses the column collation and does not accept Prisma's PostgreSQL-only mode option.
+    const accountFilter = { in: accountVariants, ...(isMysql ? {} : { mode: 'insensitive' }) };
     if (accountKey) {
       // Reuse the database mutex table to serialize registration of the same
       // payout account across different users.
@@ -126,13 +130,13 @@ export class FinanceService {
       accountKey ? tx.withdraw.findFirst({
         where: {
           userId: { not: userId },
-          account: accountKey,
+          account: accountFilter,
           status: { in: ['PENDING', 'PROCESSING', 'SUCCESS'] },
         },
         select: { id: true },
       }) : null,
       accountKey ? tx.regionRider.findFirst({
-        where: { userId: { not: userId }, alipayAccount: accountKey },
+        where: { userId: { not: userId }, alipayAccount: accountFilter },
         select: { id: true },
       }) : null,
     ]);
@@ -145,7 +149,10 @@ export class FinanceService {
   }
 
   private normalizeWithdraw(dto: any): WithdrawDto {
-    const amount = Number(dto?.amount);
+    const amountText = String(dto?.amount ?? '').trim();
+    const [whole, fraction = ''] = amountText.split('.');
+    const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+    const amount = cents / 100;
     const rawChannel = String(dto?.channel || dto?.withdraw_type || '').trim().toUpperCase();
     const channel = rawChannel === 'WECHAT' || rawChannel === 'WX' ? PaymentChannel.WX_PAY
       : rawChannel === 'ALIPAY' ? PaymentChannel.ALI_PAY
@@ -153,16 +160,17 @@ export class FinanceService {
     const rawAccount = String(
       dto?.account || dto?.receiver_mobile || dto?.wechat_mobile || dto?.receiver_name || dto?.wechat_name || dto?.wx_name || '',
     ).trim();
-    const account = this.payoutAccountKey(rawAccount);
+    const account = rawAccount;
+    const validAccount = !/\s/.test(account) && Boolean(this.payoutAccountKey(account));
     const realName = String(dto?.realName || dto?.receiver_name || '').trim();
 
-    if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) !== amount * 100) {
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isSafeInteger(cents) || cents <= 0) {
       throw new BadRequestException('提现金额必须为正数且最多两位小数');
     }
     if (channel !== PaymentChannel.WX_PAY && channel !== PaymentChannel.ALI_PAY) {
       throw new BadRequestException('不支持的提现渠道');
     }
-    if (!account) throw new BadRequestException('请填写可核验的手机号、邮箱或收款账号，不能仅填写姓名');
+    if (!validAccount) throw new BadRequestException('请填写可核验的手机号、邮箱或收款账号，不能仅填写姓名');
     if (account.length > 100) throw new BadRequestException('收款账号不能超过 100 个字符');
     if (!realName) throw new BadRequestException('收款人姓名不能为空');
     if (realName.length > 50) throw new BadRequestException('收款人姓名不能超过 50 个字符');

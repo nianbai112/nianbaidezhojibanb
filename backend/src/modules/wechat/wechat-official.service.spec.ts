@@ -312,9 +312,9 @@ describe('WechatOfficialService template notification delivery', () => {
           pagepath: 'pagesA/order/detail?id=order-1',
         },
         data: expect.objectContaining({
-          thing1: { value: 'ORDER-1' },
-          time2: { value: expect.any(String) },
-          thing3: { value: '订单已送达' },
+          character_string13: { value: 'ORDER-1' },
+          time5: { value: expect.any(String) },
+          thing7: { value: '订单已送达' },
         }),
       }),
       { timeout: 10000 },
@@ -450,8 +450,8 @@ describe('WechatOfficialService template notification delivery', () => {
       expect.any(String),
       expect.objectContaining({ data: {
         character_string1: { value: 'ERR-1' },
-        character_string2: { value: '测试骑手' },
-        time3: { value: '2026-08-30 22:05' },
+        thing4: { value: '测试骑手' },
+        time6: { value: '2026-08-30 22:05' },
       } }),
       { timeout: 10000 },
     );
@@ -492,7 +492,7 @@ describe('WechatOfficialService template notification delivery', () => {
       expect.any(String),
       expect.objectContaining({ data: expect.objectContaining({
         character_string1: { value: 'ERR-1' },
-        character_string2: { value: '测试骑手' },
+        thing4: { value: '测试骑手' },
       }) }),
       { timeout: 10000 },
     );
@@ -514,7 +514,7 @@ describe('WechatOfficialService template notification delivery', () => {
       data: { orderNo: 'ERR-1' },
     })).resolves.toEqual({
       success: false,
-      error: '服务号模板字段缺少业务数据: character_string2, time3',
+      error: '服务号模板字段缺少业务数据: thing4, time6',
     });
     expect(post).not.toHaveBeenCalled();
     post.mockRestore();

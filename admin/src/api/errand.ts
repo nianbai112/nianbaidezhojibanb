@@ -58,11 +58,33 @@ export async function fetchErrandOrders(params: any = {}) {
 }
 
 export async function fetchErrandOrderDetail(id: string) {
-  return request.get(`/admin/errand/orders/${id}`)
+  return request.get(`/admin/errand/orders/${id}`, { params: { checkedAt: Date.now() } })
 }
 
 export async function fetchErrandOrderTimeline(id: string) {
-  return request.get(`/admin/errand/orders/${id}/timeline`)
+  return request.get(`/admin/errand/orders/${id}/timeline`, { params: { checkedAt: Date.now() } })
+}
+
+export interface ErrandCouponRepairPreview {
+  orderId: string
+  orderNo: string
+  refundStatus: string
+  paidAmount: number
+  couponDiscount: number
+  refundedAmount: number
+  eligible: boolean
+  status: string
+  reason: string
+  coupon: { receiveId: string; name: string; expiresAt: string | null; expired: boolean } | null
+}
+
+export async function fetchErrandCouponRepair(id: string) {
+  // Each operator-requested check must read current refund evidence, including immediately after a repair.
+  return request.get<any, ErrandCouponRepairPreview>(`/admin/errand/orders/${id}/coupon-repair`, { params: { checkedAt: Date.now() } })
+}
+
+export async function repairErrandCoupon(id: string, note: string) {
+  return request.post<any, { restored: boolean; message: string }>(`/admin/errand/orders/${id}/coupon-repair`, { note })
 }
 
 export async function assignErrandOrder(id: string, riderId: string) {

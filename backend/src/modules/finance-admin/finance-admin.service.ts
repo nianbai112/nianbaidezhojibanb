@@ -1,5 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { errandRiderIncome } from '../../common/commission';
+import type { ErrandSettlementHold } from '@prisma/client';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { errandExtendedConfigKey } from '../errand/errand-config.util';
@@ -391,7 +393,7 @@ export class FinanceAdminService {
           regionId: o.regionId || null,
           title: o.title,
           userName: o.User?.nickname || o.User?.phone || '-',
-          amount: this.toNumber(o.price) + this.toNumber(o.tip),
+          amount: errandRiderIncome(o),
           price: this.toNumber(o.price),
           tip: this.toNumber(o.tip),
           marketingBenefit: this.toNumber(o.couponDiscount) > 0,
@@ -425,6 +427,17 @@ export class FinanceAdminService {
           };
         }),
     ];
+
+    if (includeCovered && errandOrders.length) {
+      const items = await this.prisma.riderSettlementItem.findMany({
+        where: { orderType: 'errand', orderId: { in: errandOrders.map(order => order.id) }, settlement: { status: { not: 'REJECTED' } } },
+        select: { orderId: true, payableAmount: true },
+      });
+      const amounts = new Map(items.map(item => [item.orderId, this.toNumber(item.payableAmount)]));
+      for (const earning of earnings) {
+        if (earning.source === 'errand' && amounts.has(earning.orderId)) earning.amount = amounts.get(earning.orderId)!;
+      }
+    }
 
     return earnings
       .filter(e => e.amount > 0)
@@ -1652,6 +1665,8 @@ export class FinanceAdminService {
 
     const errandIds = completedOrders.filter(item => item.source === 'errand').map(item => item.orderId);
     const itemKeys = completedOrders.map(item => ({ orderType: item.source, orderId: item.orderId }));
+    // Keep the empty branch typed so Promise.all does not produce a never[] union.
+    const emptyHolds: Pick<ErrandSettlementHold, 'orderId' | 'status'>[] = [];
     const [openAppeals, openRisks, existingItems, holds, marketingLedgers] = await Promise.all([
       errandIds.length ? this.prisma.orderAppeal.findMany({
         where: {
@@ -1675,7 +1690,7 @@ export class FinanceAdminService {
       errandIds.length ? this.prisma.errandSettlementHold.findMany({
         where: { orderId: { in: errandIds } },
         select: { orderId: true, status: true },
-      }) : [],
+      }) : emptyHolds,
       errandIds.length ? this.prisma.subsidyLedger.findMany({
         where: { orderType: 'errand_order', orderId: { in: errandIds }, status: { not: 'cancelled' } },
         select: { orderId: true },
@@ -2368,9 +2383,19 @@ export class FinanceAdminService {
       }),
       this.prisma.errandOrder.findMany({
         where: { status: 'completed', completeTime: { gte: start, lte: end } },
-        select: { platformFee: true, payAmount: true, completeTime: true },
+        select: { id: true, platformFee: true, payAmount: true, completeTime: true },
       }),
     ]);
+    const paidErrandItems = errandOrders.length ? await this.prisma.riderSettlementItem.findMany({
+      where: { orderType: 'errand', orderId: { in: errandOrders.map(order => order.id) }, settlement: { status: 'PAID' } },
+      select: { orderId: true, deliveryFeeAmount: true, tipAmount: true, rewardAmount: true, penaltyAmount: true, payableAmount: true },
+    }) : [];
+    const collectedFees = new Map(paidErrandItems.map(item => [item.orderId, Math.max(0, Math.round((
+      this.toNumber(item.deliveryFeeAmount) + this.toNumber(item.tipAmount) + this.toNumber(item.rewardAmount)
+      - this.toNumber(item.penaltyAmount) - this.toNumber(item.payableAmount)
+    ) * 100) / 100)]));
+    // Historical rows recorded a fee without withholding it. Count only money actually deducted.
+    const actualErrandFees = errandOrders.map(order => ({ ...order, platformFee: Math.min(this.toNumber(order.platformFee), collectedFees.get(order.id) || 0) }));
 
     // ── 4. 其他业务：PaymentOrder 按 bizType 分组（充值/置顶/活动/拼团/交友/二手/会员） ──
     const otherBizTypes = ['recharge', 'topup', 'activity_order', 'group_buy_order', 'dating_order', 'second_hand_order', 'membership'];
@@ -2395,7 +2420,7 @@ export class FinanceAdminService {
 
     // 外卖
     bizBreakdown.push({
-      bizType: 'order', label: '外卖订单',
+      bizType: 'order', label: '外卖 / 宿舍小店',
       rate: 0, fixedFee: 0, enabled: true, // 外卖按区域费率，这里显示综合实际费率
       totalAmount: deliveryTotal.amount, totalPlatformFee: deliveryTotal.platformFee, orderCount: deliveryTotal.count,
     });
@@ -2409,7 +2434,7 @@ export class FinanceAdminService {
     const errandFee = feeMap.get('errand_order') || { rate: 0, fixedFee: 0, enabled: false };
     bizBreakdown.push({
       bizType: 'errand_order', label: '跑腿订单', ...errandFee,
-      totalAmount: this.toNumber(errandAgg._sum.payAmount), totalPlatformFee: this.toNumber(errandAgg._sum.platformFee), orderCount: errandAgg._count,
+      totalAmount: this.toNumber(errandAgg._sum.payAmount), totalPlatformFee: actualErrandFees.reduce((sum, order) => sum + Number(order.platformFee), 0), orderCount: errandAgg._count,
     });
     // 其他业务
     for (const row of otherPayments) {
@@ -2448,13 +2473,13 @@ export class FinanceAdminService {
     };
     for (const r of dailySettlements) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.amount), r.createdAt);
     for (const r of mallOrders) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.payAmount), r.payTime!);
-    for (const r of errandOrders) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.payAmount), r.completeTime!);
+    for (const r of actualErrandFees) addToTrend(this.toNumber(r.platformFee), this.toNumber(r.payAmount), r.completeTime!);
     const dailyTrend = Array.from(dayTrendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
     // ── 8. 各业务费率配置（含默认值） ──
     const defaultConfigs: Record<string, any> = {
-      order: { label: '外卖订单', rate: 0, fixedFee: 0, enabled: true, remark: '按区域独立配置，在区域配置页修改' },
-      errand_order: { label: '跑腿订单', rate: 0.05, fixedFee: 0, enabled: true, remark: '' },
+      order: { label: '外卖 / 宿舍小店', rate: 0, fixedFee: 0, enabled: true, remark: '按校区商家结算金额与校区费率计算' },
+      errand_order: { label: '跑腿订单', rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按实付金额计算，扣除抽成后计入骑手收入' },
       mall_order: { label: '商城订单', rate: 0.03, fixedFee: 0, enabled: true, remark: '' },
       group_buy_order: { label: '拼团订单', rate: 0.03, fixedFee: 0, enabled: false, remark: '' },
       recharge: { label: '余额充值', rate: 0, fixedFee: 0, enabled: false, remark: '充值全额归平台，无需抽成配置' },
@@ -2486,7 +2511,7 @@ export class FinanceAdminService {
   }
 
   async updateRegionCommissionRate(regionId: string, commissionRate: number, operatorId?: string) {
-    if (commissionRate < 0 || commissionRate > 1) {
+    if (typeof commissionRate !== 'number' || !Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 1) {
       throw new BadRequestException('抽成比例必须在 0～1 之间（如 0.05 表示 5%）');
     }
     const region = await this.prisma.region.findUnique({ where: { id: regionId } });

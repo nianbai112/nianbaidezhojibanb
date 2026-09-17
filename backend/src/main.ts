@@ -14,6 +14,7 @@ import {
 } from "./common/middleware/mini-program-api-compat";
 import { mallAdminApiCompatMiddleware } from "./common/middleware/mall-admin-api-compat";
 import { resolveCorsOrigin, resolveListenHost } from "./config/setup-cors";
+import { requestContextMiddleware } from "./common/request-context";
 
 async function bootstrap() {
   process.env.SERVICE_ROLE ||= "api";
@@ -22,6 +23,9 @@ async function bootstrap() {
     rawBody: true,
   });
   app.enableShutdownHooks();
+  app.getHttpAdapter().getInstance().set('trust proxy',
+    (process.env.TRUST_PROXY_CIDRS || 'loopback').split(',').map((value) => value.trim()).filter(Boolean));
+  app.use(requestContextMiddleware);
 
   // 微信公众号安全模式使用 XML 回调；Nest 默认只解析 JSON/urlencoded。
   // 必须在通用 body parser 之前保留 XML 字符串，供 msg_signature 验签和 AES 解密。

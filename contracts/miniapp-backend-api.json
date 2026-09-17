@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-08-30T12:37:46.560Z",
+  "generatedAt": "2026-09-05T07:44:46.618Z",
   "roots": {
     "miniappRoot": "/Users/nianbaidediannao/Desktop/前端文件",
     "backendRoot": "/Users/nianbaidediannao/Desktop/后端后台本地测试版/backend"
   },
   "stats": {
     "miniappRequests": 441,
-    "backendRoutes": 2070,
+    "backendRoutes": 2061,
     "matchedMiniappRequests": 441,
     "unmatchedMiniappRequests": 0,
-    "unmatchedNonAdminBackendRoutes": 608
+    "unmatchedNonAdminBackendRoutes": 609
   },
   "unmatchedMiniappRequests": [],
   "unmatchedNonAdminBackendRoutes": [
@@ -827,7 +827,7 @@
       "method": "GET",
       "path": "/auth/admin/captcha",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 94
+      "line": 89
     },
     {
       "method": "GET",
@@ -839,19 +839,19 @@
       "method": "GET",
       "path": "/auth/admin/mfa/status",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 260
+      "line": 255
     },
     {
       "method": "GET",
       "path": "/auth/admin/profile",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 219
+      "line": 214
     },
     {
       "method": "GET",
       "path": "/auth/admin/qr/status",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 137
+      "line": 132
     },
     {
       "method": "GET",
@@ -885,15 +885,33 @@
     },
     {
       "method": "GET",
+      "path": "/campus-map/read-access",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 45
+    },
+    {
+      "method": "GET",
+      "path": "/campus-map/read-snapshot",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 54
+    },
+    {
+      "method": "GET",
       "path": "/campus-map/site",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 58
+      "line": 88
+    },
+    {
+      "method": "GET",
+      "path": "/campus-map/site/version",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 40
     },
     {
       "method": "GET",
       "path": "/captcha",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 87
+      "line": 82
     },
     {
       "method": "GET",
@@ -1830,6 +1848,12 @@
       "path": "/partner-app/shop-staff/invitations",
       "file": "backend/src/modules/shop/shop.controller.ts",
       "line": 148
+    },
+    {
+      "method": "GET",
+      "path": "/platform/app-capabilities",
+      "file": "backend/src/modules/system-config/system-config.controller.ts",
+      "line": 629
     },
     {
       "method": "GET",
@@ -2925,18 +2949,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/tracking/batch",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 60
-    },
-    {
-      "method": "POST",
-      "path": "/api/tracking/events",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 33
-    },
-    {
-      "method": "POST",
       "path": "/api/user-guidance/admin/batch-status",
       "file": "backend/src/modules/admin/api-compat.controller.ts",
       "line": 644
@@ -2993,55 +3005,55 @@
       "method": "POST",
       "path": "/auth/admin/login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 117
+      "line": 112
     },
     {
       "method": "POST",
       "path": "/auth/admin/logout",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 203
+      "line": 198
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/disable",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 252
+      "line": 247
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/enable",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 244
+      "line": 239
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/setup",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 236
+      "line": 231
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/cancel",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 145
+      "line": 140
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/create",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 129
+      "line": 124
     },
     {
       "method": "POST",
       "path": "/auth/admin/refresh",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 189
+      "line": 184
     },
     {
       "method": "POST",
       "path": "/auth/admin/reset-password",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 227
+      "line": 222
     },
     {
       "method": "POST",
@@ -3053,13 +3065,13 @@
       "method": "POST",
       "path": "/auth/phone/login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 67
+      "line": 62
     },
     {
       "method": "POST",
       "path": "/auth/phone/send-code",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 58
+      "line": 53
     },
     {
       "method": "POST",
@@ -3399,12 +3411,6 @@
     },
     {
       "method": "POST",
-      "path": "/tracking/batch",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 52
-    },
-    {
-      "method": "POST",
       "path": "/transfer/request/:orderId",
       "file": "backend/src/modules/errand/errand.controller.ts",
       "line": 221
@@ -3437,7 +3443,7 @@
       "method": "POST",
       "path": "/wx-auth/phone-one-tap-login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 48
+      "line": 43
     },
     {
       "method": "POST",
@@ -3668,7 +3674,7 @@
       "path": "/addresses/:param",
       "rawPath": "/addresses/${addressId}?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 1397,
+      "line": 1404,
       "matchedPath": "/addresses/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3682,7 +3688,7 @@
       "path": "/api/contacts/:param",
       "rawPath": "/api/contacts/${id}",
       "file": "api/lmapi.js",
-      "line": 3419,
+      "line": 3426,
       "matchedPath": "/api/contacts/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3696,7 +3702,7 @@
       "path": "/api/mall/admin/categories/:param",
       "rawPath": "/api/mall/admin/categories/${id}",
       "file": "api/lmapi.js",
-      "line": 3447,
+      "line": 3454,
       "matchedPath": "/mall/admin/categories/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3710,7 +3716,7 @@
       "path": "/api/mall/admin/products/:param",
       "rawPath": "/api/mall/admin/products/${id}",
       "file": "api/lmapi.js",
-      "line": 3487,
+      "line": 3494,
       "matchedPath": "/mall/products/admin/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3724,7 +3730,7 @@
       "path": "/api/mall/cart/item/:param",
       "rawPath": "/api/mall/cart/item/${id}",
       "file": "api/lmapi.js",
-      "line": 3532,
+      "line": 3539,
       "matchedPath": "/api/mall/cart/item/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3738,7 +3744,7 @@
       "path": "/api/mall/favorites",
       "rawPath": "/api/mall/favorites",
       "file": "api/lmapi.js",
-      "line": 3738,
+      "line": 3745,
       "matchedPath": "/api/mall/favorites",
       "matchedBackend": {
         "method": "DELETE",
@@ -3752,7 +3758,7 @@
       "path": "/api/mall/favorites/:param",
       "rawPath": "/api/mall/favorites/${productId}",
       "file": "api/lmapi.js",
-      "line": 3733,
+      "line": 3740,
       "matchedPath": "/api/mall/favorites/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3766,7 +3772,7 @@
       "path": "/api/mall/freight/admin/template/:param",
       "rawPath": "/api/mall/freight/admin/template/${id}",
       "file": "api/lmapi.js",
-      "line": 3711,
+      "line": 3718,
       "matchedPath": "/mall/freight/admin/template/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3780,7 +3786,7 @@
       "path": "/api/mall/products/admin/sku/:param",
       "rawPath": "/api/mall/products/admin/sku/${skuId}",
       "file": "api/lmapi.js",
-      "line": 3504,
+      "line": 3511,
       "matchedPath": "/mall/products/admin/sku/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3794,7 +3800,7 @@
       "path": "/api/mall/promotions/admin/:param",
       "rawPath": "/api/mall/promotions/admin/${id}",
       "file": "api/lmapi.js",
-      "line": 3677,
+      "line": 3684,
       "matchedPath": "/mall/promotions/admin/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3808,7 +3814,7 @@
       "path": "/api/mall/service/admin/staff/:param",
       "rawPath": "/api/mall/service/admin/staff/${id}",
       "file": "api/lmapi.js",
-      "line": 3762,
+      "line": 3769,
       "matchedPath": "/api/mall/service/admin/staff/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3822,7 +3828,7 @@
       "path": "/api/netdisk/favorites/:param",
       "rawPath": "/api/netdisk/favorites/${resourceId}",
       "file": "api/lmapi.js",
-      "line": 3333,
+      "line": 3340,
       "matchedPath": "/api/netdisk/favorites/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3836,7 +3842,7 @@
       "path": "/api/punchIn/wishlist/:param",
       "rawPath": "/api/punchIn/wishlist/${locationId}",
       "file": "api/lmapi.js",
-      "line": 2969,
+      "line": 2976,
       "matchedPath": "/api/punchIn/wishlist/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3850,7 +3856,7 @@
       "path": "/categories/:param",
       "rawPath": "/categories/${categoryId}",
       "file": "api/lmapi.js",
-      "line": 1987,
+      "line": 1994,
       "matchedPath": "/categories/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3864,7 +3870,7 @@
       "path": "/circle-members/:param/:param",
       "rawPath": "/circle-members/${circleId}/${userId}",
       "file": "api/lmapi.js",
-      "line": 1915,
+      "line": 1922,
       "matchedPath": "/circle-members/:param/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3878,7 +3884,7 @@
       "path": "/circles/:param/topic-headers/:param",
       "rawPath": "/circles/${circleId}/topic-headers/${headerId}",
       "file": "api/lmapi.js",
-      "line": 345,
+      "line": 352,
       "matchedPath": "/circles/:param/topic-headers/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3892,7 +3898,7 @@
       "path": "/circles/:param/topic-headers/:param/topics/:param",
       "rawPath": "/circles/${circleId}/topic-headers/${headerId}/topics/${topicId}",
       "file": "api/lmapi.js",
-      "line": 350,
+      "line": 357,
       "matchedPath": "/circles/:param/topic-headers/:param/topics/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3906,7 +3912,7 @@
       "path": "/comments/:param",
       "rawPath": "/comments/${commentId}",
       "file": "api/lmapi.js",
-      "line": 1060,
+      "line": 1067,
       "matchedPath": "/comments/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3920,7 +3926,7 @@
       "path": "/delivery-products/:param",
       "rawPath": "/delivery-products/${productId}",
       "file": "api/lmapi.js",
-      "line": 2143,
+      "line": 2150,
       "matchedPath": "/delivery-products/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3934,7 +3940,7 @@
       "path": "/explosivesel/ratings/:param",
       "rawPath": "/explosivesel/ratings/${ratingId}",
       "file": "api/lmapi.js",
-      "line": 1937,
+      "line": 1944,
       "matchedPath": "/explosivesel/ratings/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3948,7 +3954,7 @@
       "path": "/likes/:param",
       "rawPath": "/likes/${postId}",
       "file": "api/lmapi.js",
-      "line": 1173,
+      "line": 1180,
       "matchedPath": "/likes/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3962,7 +3968,7 @@
       "path": "/likes/user-views",
       "rawPath": "/likes/user-views",
       "file": "api/lmapi.js",
-      "line": 547,
+      "line": 554,
       "matchedPath": "/likes/user-views",
       "matchedBackend": {
         "method": "DELETE",
@@ -3976,7 +3982,7 @@
       "path": "/merchants/printer-config/:param",
       "rawPath": "/merchants/printer-config/${printerId}",
       "file": "api/lmapi.js",
-      "line": 2180,
+      "line": 2187,
       "matchedPath": "/merchants/printer-config/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -3990,7 +3996,7 @@
       "path": "/messages/delete-chat-history",
       "rawPath": "/messages/delete-chat-history",
       "file": "api/lmapi.js",
-      "line": 2194,
+      "line": 2201,
       "matchedPath": "/messages/delete-chat-history",
       "matchedBackend": {
         "method": "DELETE",
@@ -4004,7 +4010,7 @@
       "path": "/messages/group/:param",
       "rawPath": "/messages/group/${groupId}",
       "file": "api/lmapi.js",
-      "line": 2906,
+      "line": 2913,
       "matchedPath": "/messages/group/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4018,7 +4024,7 @@
       "path": "/messages/group/:param/history",
       "rawPath": "/messages/group/${groupId}/history",
       "file": "api/lmapi.js",
-      "line": 2901,
+      "line": 2908,
       "matchedPath": "/messages/group/:param/history",
       "matchedBackend": {
         "method": "DELETE",
@@ -4032,7 +4038,7 @@
       "path": "/notifications/:param",
       "rawPath": "/notifications/${notificationId}",
       "file": "api/lmapi.js",
-      "line": 2616,
+      "line": 2623,
       "matchedPath": "/notifications/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4046,7 +4052,7 @@
       "path": "/posts/:param",
       "rawPath": "/posts/${postId}",
       "file": "api/lmapi.js",
-      "line": 1125,
+      "line": 1132,
       "matchedPath": "/posts/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4060,7 +4066,7 @@
       "path": "/posts/:param/co-creators/:param",
       "rawPath": "/posts/${postId}/co-creators/${userId}",
       "file": "api/lmapi.js",
-      "line": 1105,
+      "line": 1112,
       "matchedPath": "/posts/:param/co-creators/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4074,7 +4080,7 @@
       "path": "/product-options/:param/batch",
       "rawPath": "/product-options/${productId}/batch",
       "file": "api/lmapi.js",
-      "line": 2708,
+      "line": 2715,
       "matchedPath": "/product-options/:param/batch",
       "matchedBackend": {
         "method": "DELETE",
@@ -4088,7 +4094,7 @@
       "path": "/regions/:param/content-item/:param",
       "rawPath": "/regions/${regionId}/content-item/${itemId}",
       "file": "api/lmapi.js",
-      "line": 975,
+      "line": 982,
       "matchedPath": "/regions/:param/content-item/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4102,7 +4108,7 @@
       "path": "/shopping-cart/clear",
       "rawPath": "/shopping-cart/clear",
       "file": "api/lmapi.js",
-      "line": 1270,
+      "line": 1277,
       "matchedPath": "/shopping-cart/clear",
       "matchedBackend": {
         "method": "DELETE",
@@ -4116,7 +4122,7 @@
       "path": "/shopping-cart/delete",
       "rawPath": "/shopping-cart/delete",
       "file": "api/lmapi.js",
-      "line": 1264,
+      "line": 1271,
       "matchedPath": "/shopping-cart/delete",
       "matchedBackend": {
         "method": "DELETE",
@@ -4130,7 +4136,7 @@
       "path": "/specs/option/:param",
       "rawPath": "/specs/option/${optionId}",
       "file": "api/lmapi.js",
-      "line": 2148,
+      "line": 2155,
       "matchedPath": "/specs/option/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4144,7 +4150,7 @@
       "path": "/squats/:param",
       "rawPath": "/squats/${postId}",
       "file": "api/lmapi.js",
-      "line": 3143,
+      "line": 3150,
       "matchedPath": "/squats/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4158,7 +4164,7 @@
       "path": "/user-followers/:param",
       "rawPath": "/user-followers/${userId}",
       "file": "api/lmapi.js",
-      "line": 557,
+      "line": 564,
       "matchedPath": "/user-followers/:param",
       "matchedBackend": {
         "method": "DELETE",
@@ -4172,7 +4178,7 @@
       "path": "/activity/clubs/:param",
       "rawPath": "/activity/clubs/${clubId}",
       "file": "api/lmapi.js",
-      "line": 2557,
+      "line": 2564,
       "matchedPath": "/activity/clubs/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4186,7 +4192,7 @@
       "path": "/activity/clubs/:param/members",
       "rawPath": "/activity/clubs/${club_id}/members?page=${page}&size=${size}",
       "file": "api/lmapi.js",
-      "line": 2577,
+      "line": 2584,
       "matchedPath": "/activity/clubs/:param/members",
       "matchedBackend": {
         "method": "GET",
@@ -4200,7 +4206,7 @@
       "path": "/activity/orders/club/:param",
       "rawPath": "/activity/orders/club/${club_id}?${queryString}",
       "file": "api/lmapi.js",
-      "line": 2596,
+      "line": 2603,
       "matchedPath": "/activity/orders/club/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4214,7 +4220,7 @@
       "path": "/activity/orders/my",
       "rawPath": "/activity/orders/my?page=${page}&size=${size}",
       "file": "api/lmapi.js",
-      "line": 2542,
+      "line": 2549,
       "matchedPath": "/activity/orders/my",
       "matchedBackend": {
         "method": "GET",
@@ -4228,7 +4234,7 @@
       "path": "/activity/tickets/my",
       "rawPath": "/activity/tickets/my?page=${page}&size=${size}",
       "file": "api/lmapi.js",
-      "line": 2547,
+      "line": 2554,
       "matchedPath": "/activity/tickets/my",
       "matchedBackend": {
         "method": "GET",
@@ -4242,7 +4248,7 @@
       "path": "/addresses",
       "rawPath": "/addresses?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 1380,
+      "line": 1387,
       "matchedPath": "/addresses",
       "matchedBackend": {
         "method": "GET",
@@ -4256,7 +4262,7 @@
       "path": "/addresses/specified/detail/:param",
       "rawPath": "/addresses/specified/detail/${addressId}",
       "file": "api/lmapi.js",
-      "line": 2114,
+      "line": 2121,
       "matchedPath": "/addresses/specified/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4270,7 +4276,7 @@
       "path": "/AnonymousIdentity/random",
       "rawPath": "/AnonymousIdentity/random",
       "file": "api/lmapi.js",
-      "line": 985,
+      "line": 992,
       "matchedPath": "/AnonymousIdentity/random",
       "matchedBackend": {
         "method": "GET",
@@ -4284,7 +4290,7 @@
       "path": "/api/agreements/:param${query ",
       "rawPath": "/api/agreements/${encodeURIComponent(type)}${query ?",
       "file": "api/lmapi.js",
-      "line": 2752,
+      "line": 2759,
       "matchedPath": "/api/agreements/:param${query",
       "matchedBackend": {
         "method": "GET",
@@ -4298,7 +4304,7 @@
       "path": "/api/community/:param",
       "rawPath": "/api/community/${communityId}",
       "file": "api/lmapi.js",
-      "line": 3080,
+      "line": 3087,
       "matchedPath": "/api/community/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4312,7 +4318,7 @@
       "path": "/api/contacts/categories/region/:param",
       "rawPath": "/api/contacts/categories/region/${regionId}",
       "file": "api/lmapi.js",
-      "line": 3383,
+      "line": 3390,
       "matchedPath": "/api/contacts/categories/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4326,7 +4332,7 @@
       "path": "/api/contacts/my",
       "rawPath": "/api/contacts/my${qs}",
       "file": "api/lmapi.js",
-      "line": 3402,
+      "line": 3409,
       "matchedPath": "/api/contacts/my",
       "matchedBackend": {
         "method": "GET",
@@ -4340,7 +4346,7 @@
       "path": "/api/current/rider",
       "rawPath": "/api/current/rider",
       "file": "api/lmapi.js",
-      "line": 1005,
+      "line": 1012,
       "matchedPath": "/api/current/rider",
       "matchedBackend": {
         "method": "GET",
@@ -4354,7 +4360,7 @@
       "path": "/api/current/rider/orders/stats",
       "rawPath": "/api/current/rider/orders/stats",
       "file": "api/lmapi.js",
-      "line": 1012,
+      "line": 1019,
       "matchedPath": "/api/current/rider/orders/stats",
       "matchedBackend": {
         "method": "GET",
@@ -4368,7 +4374,7 @@
       "path": "/api/dating/config/region/:param",
       "rawPath": "/api/dating/config/region/${regionId}",
       "file": "api/lmapi.js",
-      "line": 3063,
+      "line": 3070,
       "matchedPath": "/api/dating/config/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4382,7 +4388,7 @@
       "path": "/api/dating/matches/me",
       "rawPath": "/api/dating/matches/me${queryString}",
       "file": "api/lmapi.js",
-      "line": 3046,
+      "line": 3053,
       "matchedPath": "/api/dating/matches/me",
       "matchedBackend": {
         "method": "GET",
@@ -4396,7 +4402,7 @@
       "path": "/api/dating/packages",
       "rawPath": "/api/dating/packages${queryString}",
       "file": "api/lmapi.js",
-      "line": 3026,
+      "line": 3033,
       "matchedPath": "/api/dating/packages",
       "matchedBackend": {
         "method": "GET",
@@ -4410,7 +4416,7 @@
       "path": "/api/dating/profile",
       "rawPath": "/api/dating/profile",
       "file": "api/lmapi.js",
-      "line": 3037,
+      "line": 3044,
       "matchedPath": "/api/dating/profile",
       "matchedBackend": {
         "method": "GET",
@@ -4424,7 +4430,7 @@
       "path": "/api/dating/profile/list",
       "rawPath": "/api/dating/profile/list${queryString}",
       "file": "api/lmapi.js",
-      "line": 2862,
+      "line": 2869,
       "matchedPath": "/api/dating/profile/list",
       "matchedBackend": {
         "method": "GET",
@@ -4438,7 +4444,7 @@
       "path": "/api/delivery-orders/distribution/list",
       "rawPath": "/api/delivery-orders/distribution/list",
       "file": "api/lmapi.js",
-      "line": 2119,
+      "line": 2126,
       "matchedPath": "/api/delivery-orders/distribution/list",
       "matchedBackend": {
         "method": "GET",
@@ -4452,7 +4458,7 @@
       "path": "/api/groupbuy/packages",
       "rawPath": "/api/groupbuy/packages",
       "file": "api/lmapi.js",
-      "line": 3008,
+      "line": 3015,
       "matchedPath": "/api/groupbuy/packages",
       "matchedBackend": {
         "method": "GET",
@@ -4466,7 +4472,7 @@
       "path": "/api/groupbuy/payment/query/:param",
       "rawPath": "/api/groupbuy/payment/query/${orderSn}",
       "file": "api/lmapi.js",
-      "line": 2835,
+      "line": 2842,
       "matchedPath": "/api/groupbuy/payment/query/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4480,7 +4486,7 @@
       "path": "/api/location/:param",
       "rawPath": "/api/location/${riderId}${query}",
       "file": "api/lmapi.js",
-      "line": 2061,
+      "line": 2068,
       "matchedPath": "/api/location/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4494,7 +4500,7 @@
       "path": "/api/mall/cart",
       "rawPath": "/api/mall/cart",
       "file": "api/lmapi.js",
-      "line": 3515,
+      "line": 3522,
       "matchedPath": "/api/mall/cart",
       "matchedBackend": {
         "method": "GET",
@@ -4508,7 +4514,7 @@
       "path": "/api/mall/categories/:param",
       "rawPath": "/api/mall/categories/${id}",
       "file": "api/lmapi.js",
-      "line": 3430,
+      "line": 3437,
       "matchedPath": "/api/mall/categories/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4522,7 +4528,7 @@
       "path": "/api/mall/categories/list",
       "rawPath": "/api/mall/categories/list",
       "file": "api/lmapi.js",
-      "line": 3424,
+      "line": 3431,
       "matchedPath": "/api/mall/categories/list",
       "matchedBackend": {
         "method": "GET",
@@ -4536,7 +4542,7 @@
       "path": "/api/mall/distributor/admin/list",
       "rawPath": "/api/mall/distributor/admin/list",
       "file": "api/lmapi.js",
-      "line": 3778,
+      "line": 3785,
       "matchedPath": "/mall/distributor/admin/list",
       "matchedBackend": {
         "method": "GET",
@@ -4550,7 +4556,7 @@
       "path": "/api/mall/distributor/me",
       "rawPath": "/api/mall/distributor/me",
       "file": "api/lmapi.js",
-      "line": 3773,
+      "line": 3780,
       "matchedPath": "/api/mall/distributor/me",
       "matchedBackend": {
         "method": "GET",
@@ -4564,7 +4570,7 @@
       "path": "/api/mall/favorites/:param",
       "rawPath": "/api/mall/favorites/${productId}",
       "file": "api/lmapi.js",
-      "line": 3728,
+      "line": 3735,
       "matchedPath": "/api/mall/favorites/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4578,7 +4584,7 @@
       "path": "/api/mall/favorites/list",
       "rawPath": "/api/mall/favorites/list",
       "file": "api/lmapi.js",
-      "line": 3716,
+      "line": 3723,
       "matchedPath": "/api/mall/favorites/list",
       "matchedBackend": {
         "method": "GET",
@@ -4592,7 +4598,7 @@
       "path": "/api/mall/freight/template/:param",
       "rawPath": "/api/mall/freight/template/${id}",
       "file": "api/lmapi.js",
-      "line": 3694,
+      "line": 3701,
       "matchedPath": "/api/mall/freight/template/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4606,7 +4612,7 @@
       "path": "/api/mall/freight/templates",
       "rawPath": "/api/mall/freight/templates",
       "file": "api/lmapi.js",
-      "line": 3688,
+      "line": 3695,
       "matchedPath": "/api/mall/freight/templates",
       "matchedBackend": {
         "method": "GET",
@@ -4620,7 +4626,7 @@
       "path": "/api/mall/home/banners",
       "rawPath": "/api/mall/home/banners",
       "file": "api/lmapi.js",
-      "line": 3790,
+      "line": 3797,
       "matchedPath": "/api/mall/home/banners",
       "matchedBackend": {
         "method": "GET",
@@ -4634,7 +4640,7 @@
       "path": "/api/mall/merchants/:param",
       "rawPath": "/api/mall/merchants/${id}",
       "file": "api/lmapi.js",
-      "line": 3823,
+      "line": 3830,
       "matchedPath": "/api/mall/merchants/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4648,7 +4654,7 @@
       "path": "/api/mall/merchants/admin/:param/circles-and-locations",
       "rawPath": "/api/mall/merchants/admin/${id}/circles-and-locations",
       "file": "api/lmapi.js",
-      "line": 3839,
+      "line": 3846,
       "matchedPath": "/mall/merchants/admin/:param/circles-and-locations",
       "matchedBackend": {
         "method": "GET",
@@ -4662,7 +4668,7 @@
       "path": "/api/mall/merchants/admin/:param/stats",
       "rawPath": "/api/mall/merchants/admin/${id}/stats",
       "file": "api/lmapi.js",
-      "line": 3834,
+      "line": 3841,
       "matchedPath": "/mall/merchants/admin/:param/stats",
       "matchedBackend": {
         "method": "GET",
@@ -4676,7 +4682,7 @@
       "path": "/api/mall/merchants/list",
       "rawPath": "/api/mall/merchants/list",
       "file": "api/lmapi.js",
-      "line": 3817,
+      "line": 3824,
       "matchedPath": "/api/mall/merchants/list",
       "matchedBackend": {
         "method": "GET",
@@ -4690,7 +4696,7 @@
       "path": "/api/mall/merchants/merchant/my-orders",
       "rawPath": "/api/mall/merchants/merchant/my-orders",
       "file": "api/lmapi.js",
-      "line": 3578,
+      "line": 3585,
       "matchedPath": "/api/mall/merchants/merchant/my-orders",
       "matchedBackend": {
         "method": "GET",
@@ -4704,7 +4710,7 @@
       "path": "/api/mall/merchants/my-application",
       "rawPath": "/api/mall/merchants/my-application",
       "file": "api/lmapi.js",
-      "line": 3802,
+      "line": 3809,
       "matchedPath": "/api/mall/merchants/my-application",
       "matchedBackend": {
         "method": "GET",
@@ -4718,7 +4724,7 @@
       "path": "/api/mall/orders/:param",
       "rawPath": "/api/mall/orders/${id}",
       "file": "api/lmapi.js",
-      "line": 3549,
+      "line": 3556,
       "matchedPath": "/api/mall/orders/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4732,7 +4738,7 @@
       "path": "/api/mall/orders/my",
       "rawPath": "/api/mall/orders/my",
       "file": "api/lmapi.js",
-      "line": 3543,
+      "line": 3550,
       "matchedPath": "/api/mall/orders/my",
       "matchedBackend": {
         "method": "GET",
@@ -4746,7 +4752,7 @@
       "path": "/api/mall/products/admin/list",
       "rawPath": "/api/mall/products/admin/list",
       "file": "api/lmapi.js",
-      "line": 3458,
+      "line": 3465,
       "matchedPath": "/mall/products/admin/list",
       "matchedBackend": {
         "method": "GET",
@@ -4760,7 +4766,7 @@
       "path": "/api/mall/products/admin/low-stock",
       "rawPath": "/api/mall/products/admin/low-stock",
       "file": "api/lmapi.js",
-      "line": 3509,
+      "line": 3516,
       "matchedPath": "/mall/products/admin/low-stock",
       "matchedBackend": {
         "method": "GET",
@@ -4774,7 +4780,7 @@
       "path": "/api/mall/products/detail/:param",
       "rawPath": "/api/mall/products/detail/${id}",
       "file": "api/lmapi.js",
-      "line": 3464,
+      "line": 3471,
       "matchedPath": "/api/mall/products/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4788,7 +4794,7 @@
       "path": "/api/mall/products/list",
       "rawPath": "/api/mall/products/list",
       "file": "api/lmapi.js",
-      "line": 3452,
+      "line": 3459,
       "matchedPath": "/api/mall/products/list",
       "matchedBackend": {
         "method": "GET",
@@ -4802,7 +4808,7 @@
       "path": "/api/mall/promotions/:param",
       "rawPath": "/api/mall/promotions/${id}",
       "file": "api/lmapi.js",
-      "line": 3660,
+      "line": 3667,
       "matchedPath": "/api/mall/promotions/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4816,7 +4822,7 @@
       "path": "/api/mall/promotions/available",
       "rawPath": "/api/mall/promotions/available",
       "file": "api/lmapi.js",
-      "line": 3682,
+      "line": 3689,
       "matchedPath": "/api/mall/promotions/available",
       "matchedBackend": {
         "method": "GET",
@@ -4830,7 +4836,7 @@
       "path": "/api/mall/promotions/list",
       "rawPath": "/api/mall/promotions/list",
       "file": "api/lmapi.js",
-      "line": 3654,
+      "line": 3661,
       "matchedPath": "/api/mall/promotions/list",
       "matchedBackend": {
         "method": "GET",
@@ -4844,7 +4850,7 @@
       "path": "/api/mall/promotions/merchant/my-list",
       "rawPath": "/api/mall/promotions/merchant/my-list",
       "file": "api/lmapi.js",
-      "line": 3648,
+      "line": 3655,
       "matchedPath": "/api/mall/promotions/merchant/my-list",
       "matchedBackend": {
         "method": "GET",
@@ -4858,7 +4864,7 @@
       "path": "/api/mall/refunds/admin/list",
       "rawPath": "/api/mall/refunds/admin/list",
       "file": "api/lmapi.js",
-      "line": 3601,
+      "line": 3608,
       "matchedPath": "/mall/refunds/admin/list",
       "matchedBackend": {
         "method": "GET",
@@ -4872,7 +4878,7 @@
       "path": "/api/mall/refunds/detail/:param",
       "rawPath": "/api/mall/refunds/detail/${id}",
       "file": "api/lmapi.js",
-      "line": 3596,
+      "line": 3603,
       "matchedPath": "/api/mall/refunds/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4886,7 +4892,7 @@
       "path": "/api/mall/refunds/my",
       "rawPath": "/api/mall/refunds/my",
       "file": "api/lmapi.js",
-      "line": 3590,
+      "line": 3597,
       "matchedPath": "/api/mall/refunds/my",
       "matchedBackend": {
         "method": "GET",
@@ -4900,7 +4906,7 @@
       "path": "/api/mall/reviews/admin/list",
       "rawPath": "/api/mall/reviews/admin/list",
       "file": "api/lmapi.js",
-      "line": 3642,
+      "line": 3649,
       "matchedPath": "/mall/reviews/admin/list",
       "matchedBackend": {
         "method": "GET",
@@ -4914,7 +4920,7 @@
       "path": "/api/mall/reviews/product/:param",
       "rawPath": "/api/mall/reviews/product/${productId}",
       "file": "api/lmapi.js",
-      "line": 3624,
+      "line": 3631,
       "matchedPath": "/api/mall/reviews/product/:param",
       "matchedBackend": {
         "method": "GET",
@@ -4928,7 +4934,7 @@
       "path": "/api/mall/service/admin/staff/list",
       "rawPath": "/api/mall/service/admin/staff/list",
       "file": "api/lmapi.js",
-      "line": 3750,
+      "line": 3757,
       "matchedPath": "/api/mall/service/admin/staff/list",
       "matchedBackend": {
         "method": "GET",
@@ -4942,7 +4948,7 @@
       "path": "/api/netdisk/categories",
       "rawPath": "/api/netdisk/categories${qs}",
       "file": "api/lmapi.js",
-      "line": 3286,
+      "line": 3293,
       "matchedPath": "/api/netdisk/categories",
       "matchedBackend": {
         "method": "GET",
@@ -4956,7 +4962,7 @@
       "path": "/api/netdisk/comments",
       "rawPath": "/api/netdisk/comments${qs}",
       "file": "api/lmapi.js",
-      "line": 3367,
+      "line": 3374,
       "matchedPath": "/api/netdisk/comments",
       "matchedBackend": {
         "method": "GET",
@@ -4970,7 +4976,7 @@
       "path": "/api/netdisk/my-favorites",
       "rawPath": "/api/netdisk/my-favorites${qs}",
       "file": "api/lmapi.js",
-      "line": 3344,
+      "line": 3351,
       "matchedPath": "/api/netdisk/my-favorites",
       "matchedBackend": {
         "method": "GET",
@@ -4984,7 +4990,7 @@
       "path": "/api/netdisk/resources",
       "rawPath": "/api/netdisk/resources${qs}",
       "file": "api/lmapi.js",
-      "line": 3318,
+      "line": 3325,
       "matchedPath": "/api/netdisk/resources",
       "matchedBackend": {
         "method": "GET",
@@ -4998,7 +5004,7 @@
       "path": "/api/netdisk/resources/:param",
       "rawPath": "/api/netdisk/resources/${id}",
       "file": "api/lmapi.js",
-      "line": 3323,
+      "line": 3330,
       "matchedPath": "/api/netdisk/resources/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5012,7 +5018,7 @@
       "path": "/api/note-settings/region/:param",
       "rawPath": "/api/note-settings/region/${regionId}",
       "file": "api/lmapi.js",
-      "line": 2681,
+      "line": 2688,
       "matchedPath": "/api/note-settings/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5026,7 +5032,7 @@
       "path": "/api/post-shares/:param",
       "rawPath": "/api/post-shares/${encodeURIComponent(code)}",
       "file": "api/lmapi.js",
-      "line": 1692,
+      "line": 1699,
       "matchedPath": "/post-shares/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5040,7 +5046,7 @@
       "path": "/api/post-votes/meta",
       "rawPath": "/api/post-votes/meta?post_id=${postId}",
       "file": "api/lmapi.js",
-      "line": 3207,
+      "line": 3214,
       "matchedPath": "/api/post-votes/meta",
       "matchedBackend": {
         "method": "GET",
@@ -5054,7 +5060,7 @@
       "path": "/api/post-votes/stats",
       "rawPath": "/api/post-votes/stats?post_id=${postId}",
       "file": "api/lmapi.js",
-      "line": 3202,
+      "line": 3209,
       "matchedPath": "/api/post-votes/stats",
       "matchedBackend": {
         "method": "GET",
@@ -5068,7 +5074,7 @@
       "path": "/api/punchIn/check-in/status/:param",
       "rawPath": "/api/punchIn/check-in/status/${regionId}",
       "file": "api/lmapi.js",
-      "line": 2943,
+      "line": 2950,
       "matchedPath": "/api/punchIn/check-in/status/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5082,7 +5088,7 @@
       "path": "/api/punchIn/comment/location/:param",
       "rawPath": "/api/punchIn/comment/location/${locationId}?page=${page}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2958,
+      "line": 2965,
       "matchedPath": "/api/punchIn/comment/location/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5096,7 +5102,7 @@
       "path": "/api/punchIn/config/:param",
       "rawPath": "/api/punchIn/config/${regionId}",
       "file": "api/lmapi.js",
-      "line": 3003,
+      "line": 3010,
       "matchedPath": "/api/punchIn/config/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5110,7 +5116,7 @@
       "path": "/api/punchIn/location",
       "rawPath": "/api/punchIn/location?${queryString}",
       "file": "api/lmapi.js",
-      "line": 2998,
+      "line": 3005,
       "matchedPath": "/api/punchIn/location",
       "matchedBackend": {
         "method": "GET",
@@ -5124,7 +5130,7 @@
       "path": "/api/punchIn/location/:param",
       "rawPath": "/api/punchIn/location/${locationId}",
       "file": "api/lmapi.js",
-      "line": 2917,
+      "line": 2924,
       "matchedPath": "/api/punchIn/location/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5138,7 +5144,7 @@
       "path": "/api/rankings",
       "rawPath": "/api/rankings",
       "file": "api/lmapi.js",
-      "line": 1969,
+      "line": 1976,
       "matchedPath": "/api/rankings",
       "matchedBackend": {
         "method": "GET",
@@ -5152,7 +5158,7 @@
       "path": "/api/rating/categories/:param",
       "rawPath": "/api/rating/categories/${regionId}?page=${page}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2809,
+      "line": 2816,
       "matchedPath": "/api/rating/categories/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5166,7 +5172,7 @@
       "path": "/api/rating/categories/detail/:param",
       "rawPath": "/api/rating/categories/detail/${categoryId}",
       "file": "api/lmapi.js",
-      "line": 2784,
+      "line": 2791,
       "matchedPath": "/api/rating/categories/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5180,7 +5186,7 @@
       "path": "/api/rating/items/category/:param",
       "rawPath": "/api/rating/items/category/${categoryId}?${queryParams}",
       "file": "api/lmapi.js",
-      "line": 2779,
+      "line": 2786,
       "matchedPath": "/api/rating/items/category/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5194,7 +5200,7 @@
       "path": "/api/rating/items/detail/:param",
       "rawPath": "/api/rating/items/detail/${itemId}",
       "file": "api/lmapi.js",
-      "line": 2789,
+      "line": 2796,
       "matchedPath": "/api/rating/items/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5208,7 +5214,7 @@
       "path": "/api/rating/items/dynamics/:param",
       "rawPath": "/api/rating/items/dynamics/${itemId}?page=${page}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2804,
+      "line": 2811,
       "matchedPath": "/api/rating/items/dynamics/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5222,7 +5228,7 @@
       "path": "/api/region-custom-pages/regions/:param/pages",
       "rawPath": "/api/region-custom-pages/regions/${encodeURIComponent(regionId)}/pages${qs}",
       "file": "api/lmapi.js",
-      "line": 677,
+      "line": 684,
       "matchedPath": "/api/region-custom-pages/regions/:param/pages",
       "matchedBackend": {
         "method": "GET",
@@ -5236,7 +5242,7 @@
       "path": "/api/region-riders",
       "rawPath": "/api/region-riders",
       "file": "api/lmapi.js",
-      "line": 2027,
+      "line": 2034,
       "matchedPath": "/api/region-riders",
       "matchedBackend": {
         "method": "GET",
@@ -5250,7 +5256,7 @@
       "path": "/api/region/incentives/my-records",
       "rawPath": "/api/region/incentives/my-records?${queryString}",
       "file": "api/lmapi.js",
-      "line": 2104,
+      "line": 2111,
       "matchedPath": "/api/region/incentives/my-records",
       "matchedBackend": {
         "method": "GET",
@@ -5264,7 +5270,7 @@
       "path": "/api/rich-text-content",
       "rawPath": "/api/rich-text-content",
       "file": "api/lmapi.js",
-      "line": 2763,
+      "line": 2770,
       "matchedPath": "/api/rich-text-content",
       "matchedBackend": {
         "method": "GET",
@@ -5278,7 +5284,7 @@
       "path": "/api/rich-text-content/:param",
       "rawPath": "/api/rich-text-content/${id}",
       "file": "api/lmapi.js",
-      "line": 2741,
+      "line": 2748,
       "matchedPath": "/api/rich-text-content/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5292,7 +5298,7 @@
       "path": "/api/rich-text-content/config/region/:param/all-types",
       "rawPath": "/api/rich-text-content/config/region/${regionId}/all-types",
       "file": "api/lmapi.js",
-      "line": 2746,
+      "line": 2753,
       "matchedPath": "/api/rich-text-content/config/region/:param/all-types",
       "matchedBackend": {
         "method": "GET",
@@ -5306,7 +5312,7 @@
       "path": "/api/share/invites",
       "rawPath": "/api/share/invites",
       "file": "api/lmapi.js",
-      "line": 1895,
+      "line": 1902,
       "matchedPath": "/api/share/invites",
       "matchedBackend": {
         "method": "GET",
@@ -5320,7 +5326,7 @@
       "path": "/api/share/settings/:param",
       "rawPath": "/api/share/settings/${regionId}",
       "file": "api/lmapi.js",
-      "line": 1681,
+      "line": 1688,
       "matchedPath": "/api/share/settings/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5334,7 +5340,7 @@
       "path": "/api/simulate-post-actions/status/:param",
       "rawPath": "/api/simulate-post-actions/status/${postId}",
       "file": "api/lmapi.js",
-      "line": 1890,
+      "line": 1897,
       "matchedPath": "/api/simulate-post-actions/status/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5348,7 +5354,7 @@
       "path": "/api/sticker-categories",
       "rawPath": "/api/sticker-categories",
       "file": "api/lmapi.js",
-      "line": 1791,
+      "line": 1798,
       "matchedPath": "/api/sticker-categories",
       "matchedBackend": {
         "method": "GET",
@@ -5362,7 +5368,7 @@
       "path": "/api/transfer/requests",
       "rawPath": "/api/transfer/requests",
       "file": "api/lmapi.js",
-      "line": 2032,
+      "line": 2039,
       "matchedPath": "/api/transfer/requests",
       "matchedBackend": {
         "method": "GET",
@@ -5376,7 +5382,7 @@
       "path": "/api/user-guidance/pages/:param",
       "rawPath": "/api/user-guidance/pages/${regionId}",
       "file": "api/lmapi.js",
-      "line": 2719,
+      "line": 2726,
       "matchedPath": "/api/user-guidance/pages/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5390,7 +5396,7 @@
       "path": "/api/user-management/tags",
       "rawPath": "/api/user-management/tags?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 2724,
+      "line": 2731,
       "matchedPath": "/api/user-management/tags",
       "matchedBackend": {
         "method": "GET",
@@ -5404,7 +5410,7 @@
       "path": "/api/wechat-article/images",
       "rawPath": "/api/wechat-article/images?url=${encodeURIComponent(url)}",
       "file": "api/lmapi.js",
-      "line": 2109,
+      "line": 2116,
       "matchedPath": "/api/wechat-article/images",
       "matchedBackend": {
         "method": "GET",
@@ -5418,7 +5424,7 @@
       "path": "/assistant-tickets/:param",
       "rawPath": "/assistant-tickets/${encodeURIComponent(id)}",
       "file": "api/lmapi.js",
-      "line": 661,
+      "line": 668,
       "matchedPath": "/assistant-tickets/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5432,7 +5438,7 @@
       "path": "/assistant-tickets/my",
       "rawPath": "/assistant-tickets/my${queryString}",
       "file": "api/lmapi.js",
-      "line": 659,
+      "line": 666,
       "matchedPath": "/assistant-tickets/my",
       "matchedBackend": {
         "method": "GET",
@@ -5446,7 +5452,7 @@
       "path": "/auth/admin/bound-user",
       "rawPath": "/auth/admin/bound-user",
       "file": "api/lmapi.js",
-      "line": 3101,
+      "line": 3108,
       "matchedPath": "/auth/admin/bound-user",
       "matchedBackend": {
         "method": "GET",
@@ -5460,7 +5466,7 @@
       "path": "/auth/user/balance-details",
       "rawPath": "/auth/user/balance-details?page=${page}&pageSize=${limit}",
       "file": "api/lmapi.js",
-      "line": 1713,
+      "line": 1720,
       "matchedPath": "/auth/user/balance-details",
       "matchedBackend": {
         "method": "GET",
@@ -5474,7 +5480,7 @@
       "path": "/auth/user/current-ban-status",
       "rawPath": "/auth/user/current-ban-status",
       "file": "api/lmapi.js",
-      "line": 3118,
+      "line": 3125,
       "matchedPath": "/auth/user/current-ban-status",
       "matchedBackend": {
         "method": "GET",
@@ -5488,7 +5494,7 @@
       "path": "/auth/user/nickname-avatar",
       "rawPath": "/auth/user/nickname-avatar",
       "file": "api/lmapi.js",
-      "line": 397,
+      "line": 404,
       "matchedPath": "/auth/user/nickname-avatar",
       "matchedBackend": {
         "method": "GET",
@@ -5502,7 +5508,7 @@
       "path": "/auth/user/privacy-settings",
       "rawPath": "/auth/user/privacy-settings",
       "file": "api/lmapi.js",
-      "line": 2601,
+      "line": 2608,
       "matchedPath": "/auth/user/privacy-settings",
       "matchedBackend": {
         "method": "GET",
@@ -5516,7 +5522,7 @@
       "path": "/auth/user/self-unban-config",
       "rawPath": "/auth/user/self-unban-config",
       "file": "api/lmapi.js",
-      "line": 3123,
+      "line": 3130,
       "matchedPath": "/auth/user/self-unban-config",
       "matchedBackend": {
         "method": "GET",
@@ -5530,7 +5536,7 @@
       "path": "/auth/user/withdrawals/pending-total",
       "rawPath": "/auth/user/withdrawals/pending-total",
       "file": "api/lmapi.js",
-      "line": 3158,
+      "line": 3165,
       "matchedPath": "/auth/user/withdrawals/pending-total",
       "matchedBackend": {
         "method": "GET",
@@ -5544,7 +5550,7 @@
       "path": "/auth/users/region/testimonials/region",
       "rawPath": "/auth/users/region/testimonials/region?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 2214,
+      "line": 2221,
       "matchedPath": "/auth/users/region/testimonials/region",
       "matchedBackend": {
         "method": "GET",
@@ -5558,7 +5564,7 @@
       "path": "/balance-recharge/check-wechat-binding",
       "rawPath": "/balance-recharge/check-wechat-binding",
       "file": "api/lmapi.js",
-      "line": 1740,
+      "line": 1747,
       "matchedPath": "/balance-recharge/check-wechat-binding",
       "matchedBackend": {
         "method": "GET",
@@ -5572,7 +5578,7 @@
       "path": "/balance-recharge/check-wechat-binding",
       "rawPath": "/balance-recharge/check-wechat-binding",
       "file": "api/lmapi.js",
-      "line": 1750,
+      "line": 1757,
       "matchedPath": "/balance-recharge/check-wechat-binding",
       "matchedBackend": {
         "method": "GET",
@@ -5586,7 +5592,7 @@
       "path": "/campus-map/active",
       "rawPath": "/campus-map/active",
       "file": "api/lmapi.js",
-      "line": 734,
+      "line": 740,
       "matchedPath": "/campus-map/active",
       "matchedBackend": {
         "method": "GET",
@@ -5600,7 +5606,7 @@
       "path": "/campus-map/collection/context",
       "rawPath": "/campus-map/collection/context",
       "file": "api/lmapi.js",
-      "line": 771,
+      "line": 778,
       "matchedPath": "/campus-map/collection/context",
       "matchedBackend": {
         "method": "GET",
@@ -5611,10 +5617,24 @@
     },
     {
       "method": "GET",
+      "path": "/campus-map/version",
+      "rawPath": "/campus-map/version",
+      "file": "api/lmapi.js",
+      "line": 743,
+      "matchedPath": "/campus-map/version",
+      "matchedBackend": {
+        "method": "GET",
+        "path": "/campus-map/version",
+        "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+        "line": 32
+      }
+    },
+    {
+      "method": "GET",
       "path": "/circle-members/:param/users",
       "rawPath": "/circle-members/${circleId}/users${query}",
       "file": "api/lmapi.js",
-      "line": 862,
+      "line": 869,
       "matchedPath": "/circle-members/:param/users",
       "matchedBackend": {
         "method": "GET",
@@ -5628,7 +5648,7 @@
       "path": "/circle-members/check/:param",
       "rawPath": "/circle-members/check/${circleId}",
       "file": "api/lmapi.js",
-      "line": 1905,
+      "line": 1912,
       "matchedPath": "/circle-members/check/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5642,7 +5662,7 @@
       "path": "/circle/student-verification/api/verification/me/my",
       "rawPath": "/circle/student-verification/api/verification/me/my",
       "file": "api/lmapi.js",
-      "line": 1208,
+      "line": 1215,
       "matchedPath": "/circle/student-verification/api/verification/me/my",
       "matchedBackend": {
         "method": "GET",
@@ -5656,7 +5676,7 @@
       "path": "/circle/user-titles",
       "rawPath": "/circle/user-titles?${queryString}",
       "file": "api/lmapi.js",
-      "line": 3235,
+      "line": 3242,
       "matchedPath": "/circle/user-titles",
       "matchedBackend": {
         "method": "GET",
@@ -5670,7 +5690,7 @@
       "path": "/circle/user-titles/current",
       "rawPath": "/circle/user-titles/current${query}",
       "file": "api/lmapi.js",
-      "line": 3253,
+      "line": 3260,
       "matchedPath": "/circle/user-titles/current",
       "matchedBackend": {
         "method": "GET",
@@ -5684,7 +5704,7 @@
       "path": "/circle/user-titles/redeem-codes",
       "rawPath": "/circle/user-titles/redeem-codes?code=${encodeURIComponent(code)}",
       "file": "api/lmapi.js",
-      "line": 3270,
+      "line": 3277,
       "matchedPath": "/circle/user-titles/redeem-codes",
       "matchedBackend": {
         "method": "GET",
@@ -5698,7 +5718,7 @@
       "path": "/circle/user-titles/user/:param",
       "rawPath": "/circle/user-titles/user/${userInfo.id}${query}",
       "file": "api/lmapi.js",
-      "line": 3246,
+      "line": 3253,
       "matchedPath": "/circle/user-titles/user/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5712,7 +5732,7 @@
       "path": "/circles/:param",
       "rawPath": "/circles/${circleId}",
       "file": "api/lmapi.js",
-      "line": 1900,
+      "line": 1907,
       "matchedPath": "/circles/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5726,7 +5746,7 @@
       "path": "/circles/:param/group-chat",
       "rawPath": "/circles/${circleId}/group-chat${query}",
       "file": "api/lmapi.js",
-      "line": 874,
+      "line": 881,
       "matchedPath": "/circles/:param/group-chat",
       "matchedBackend": {
         "method": "GET",
@@ -5740,7 +5760,7 @@
       "path": "/circles/:param/pending-members",
       "rawPath": "/circles/${circleId}/pending-members${query}",
       "file": "api/lmapi.js",
-      "line": 914,
+      "line": 921,
       "matchedPath": "/circles/:param/pending-members",
       "matchedBackend": {
         "method": "GET",
@@ -5754,7 +5774,7 @@
       "path": "/circles/:param/topic-headers",
       "rawPath": "/circles/${circleId}/topic-headers?include_topics=${includeTopics ? \"true\" : \"false\"}",
       "file": "api/lmapi.js",
-      "line": 355,
+      "line": 362,
       "matchedPath": "/circles/:param/topic-headers",
       "matchedBackend": {
         "method": "GET",
@@ -5768,7 +5788,7 @@
       "path": "/circles/my/manage",
       "rawPath": "/circles/my/manage${query}",
       "file": "api/lmapi.js",
-      "line": 891,
+      "line": 898,
       "matchedPath": "/circles/my/manage",
       "matchedBackend": {
         "method": "GET",
@@ -5782,7 +5802,7 @@
       "path": "/circles/region/:param",
       "rawPath": "/circles/region/${regionId}${queryString}",
       "file": "api/lmapi.js",
-      "line": 953,
+      "line": 960,
       "matchedPath": "/circles/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5796,7 +5816,7 @@
       "path": "/city-agent/application/current",
       "rawPath": "/city-agent/application/current${query}",
       "file": "api/lmapi.js",
-      "line": 3107,
+      "line": 3114,
       "matchedPath": "/city-agent/application/current",
       "matchedBackend": {
         "method": "GET",
@@ -5810,7 +5830,7 @@
       "path": "/comments/my",
       "rawPath": "/comments/my?page=${page}&pageSize=${pageSize}",
       "file": "api/lmapi.js",
-      "line": 2007,
+      "line": 2014,
       "matchedPath": "/comments/my",
       "matchedBackend": {
         "method": "GET",
@@ -5824,7 +5844,7 @@
       "path": "/comments/v2/post/:param/comments",
       "rawPath": "/comments/v2/post/${postId}/comments?page=${page}&sonPage=${sonPage}&cType=${cType}&pageSize=${pageSize}${targetQuery}",
       "file": "api/lmapi.js",
-      "line": 1994,
+      "line": 2001,
       "matchedPath": "/comments/v2/post/:param/comments",
       "matchedBackend": {
         "method": "GET",
@@ -5838,7 +5858,7 @@
       "path": "/coupons/user/available",
       "rawPath": "/coupons/user/available${queryString ? \"?\" + queryString : \"\"}",
       "file": "api/lmapi.js",
-      "line": 2366,
+      "line": 2373,
       "matchedPath": "/coupons/user/available",
       "matchedBackend": {
         "method": "GET",
@@ -5852,7 +5872,7 @@
       "path": "/coupons/user/my",
       "rawPath": "/coupons/user/my?${queryParams}",
       "file": "api/lmapi.js",
-      "line": 2391,
+      "line": 2398,
       "matchedPath": "/coupons/user/my",
       "matchedBackend": {
         "method": "GET",
@@ -5866,7 +5886,7 @@
       "path": "/dorm-shops/categories_and_products/:param",
       "rawPath": "/dorm-shops/categories_and_products/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1253,
+      "line": 1260,
       "matchedPath": "/dorm-shops/categories_and_products/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5880,7 +5900,7 @@
       "path": "/dorm-shops/region/:param",
       "rawPath": "/dorm-shops/region/${regionId}?page=${page}&pageSize=${pageSize}",
       "file": "api/lmapi.js",
-      "line": 1225,
+      "line": 1232,
       "matchedPath": "/dorm-shops/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5894,7 +5914,7 @@
       "path": "/dorm-shops/view/:param",
       "rawPath": "/dorm-shops/view/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1238,
+      "line": 1245,
       "matchedPath": "/dorm-shops/view/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5908,7 +5928,7 @@
       "path": "/errand/config/get",
       "rawPath": "/errand/config/get?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 2292,
+      "line": 2299,
       "matchedPath": "/errand/config/get",
       "matchedBackend": {
         "method": "GET",
@@ -5922,7 +5942,7 @@
       "path": "/errand/order/available-coupons",
       "rawPath": "/errand/order/available-coupons${queryString ? \"?\" + queryString : \"\"}",
       "file": "api/lmapi.js",
-      "line": 2323,
+      "line": 2330,
       "matchedPath": "/errand/order/available-coupons",
       "matchedBackend": {
         "method": "GET",
@@ -5936,7 +5956,7 @@
       "path": "/errand/order/detail/:param",
       "rawPath": "/errand/order/detail/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2467,
+      "line": 2474,
       "matchedPath": "/errand/order/detail/:param",
       "matchedBackend": {
         "method": "GET",
@@ -5950,7 +5970,7 @@
       "path": "/errand/order/region-completed-orders",
       "rawPath": "/errand/order/region-completed-orders?region_id=${region_id}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2525,
+      "line": 2532,
       "matchedPath": "/errand/order/region-completed-orders",
       "matchedBackend": {
         "method": "GET",
@@ -5964,7 +5984,7 @@
       "path": "/errand/order/user-orders",
       "rawPath": "/errand/order/user-orders?${queryString}",
       "file": "api/lmapi.js",
-      "line": 2516,
+      "line": 2523,
       "matchedPath": "/errand/order/user-orders",
       "matchedBackend": {
         "method": "GET",
@@ -5978,7 +5998,7 @@
       "path": "/errand/page-config/user/region",
       "rawPath": "/errand/page-config/user/region?region_id=${regionId}",
       "file": "api/lmapi.js",
-      "line": 2691,
+      "line": 2698,
       "matchedPath": "/errand/page-config/user/region",
       "matchedBackend": {
         "method": "GET",
@@ -5992,7 +6012,7 @@
       "path": "/explosivesel/competitions",
       "rawPath": "/explosivesel/competitions?${queryString}",
       "file": "api/lmapi.js",
-      "line": 1532,
+      "line": 1539,
       "matchedPath": "/explosivesel/competitions",
       "matchedBackend": {
         "method": "GET",
@@ -6006,7 +6026,7 @@
       "path": "/explosivesel/competitions/:param",
       "rawPath": "/explosivesel/competitions/${competitionId}",
       "file": "api/lmapi.js",
-      "line": 1543,
+      "line": 1550,
       "matchedPath": "/explosivesel/competitions/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6020,7 +6040,7 @@
       "path": "/explosivesel/photos/:param",
       "rawPath": "/explosivesel/photos/${photoId}",
       "file": "api/lmapi.js",
-      "line": 1926,
+      "line": 1933,
       "matchedPath": "/explosivesel/photos/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6034,7 +6054,7 @@
       "path": "/explosivesel/photos/competition/:param",
       "rawPath": "/explosivesel/photos/competition/${competitionId}",
       "file": "api/lmapi.js",
-      "line": 1554,
+      "line": 1561,
       "matchedPath": "/explosivesel/photos/competition/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6048,7 +6068,7 @@
       "path": "/explosivesel/ratings/photo/:param",
       "rawPath": "/explosivesel/ratings/photo/${photoId}?page=${page}&pageSize=${pageSize}",
       "file": "api/lmapi.js",
-      "line": 1942,
+      "line": 1949,
       "matchedPath": "/explosivesel/ratings/photo/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6062,7 +6082,7 @@
       "path": "/likes/user-views",
       "rawPath": "/likes/user-views?page=${page}&pageSize=${pageSize}&order=${order}",
       "file": "api/lmapi.js",
-      "line": 542,
+      "line": 549,
       "matchedPath": "/likes/user-views",
       "matchedBackend": {
         "method": "GET",
@@ -6076,7 +6096,7 @@
       "path": "/marketing/popups/runtime",
       "rawPath": "/marketing/popups/runtime${queryString ? \"?\" + queryString : \"\"}",
       "file": "api/lmapi.js",
-      "line": 2404,
+      "line": 2411,
       "matchedPath": "/marketing/popups/runtime",
       "matchedBackend": {
         "method": "GET",
@@ -6090,7 +6110,7 @@
       "path": "/membership/benefits",
       "rawPath": "/membership/benefits",
       "file": "api/lmapi.js",
-      "line": 1356,
+      "line": 1363,
       "matchedPath": "/membership/benefits",
       "matchedBackend": {
         "method": "GET",
@@ -6104,7 +6124,7 @@
       "path": "/membership/center",
       "rawPath": "/membership/center",
       "file": "api/lmapi.js",
-      "line": 1355,
+      "line": 1362,
       "matchedPath": "/membership/center",
       "matchedBackend": {
         "method": "GET",
@@ -6118,7 +6138,7 @@
       "path": "/merchant/reviews/merchant/:param",
       "rawPath": "/merchant/reviews/merchant/${merchantId}?${queryParams}",
       "file": "api/lmapi.js",
-      "line": 2655,
+      "line": 2662,
       "matchedPath": "/merchant/reviews/merchant/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6132,7 +6152,7 @@
       "path": "/merchants/categories_and_products/:param",
       "rawPath": "/merchants/categories_and_products/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1243,
+      "line": 1250,
       "matchedPath": "/merchants/categories_and_products/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6146,7 +6166,7 @@
       "path": "/merchants/list",
       "rawPath": "/merchants/list?${query.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 1296,
+      "line": 1303,
       "matchedPath": "/merchants/list",
       "matchedBackend": {
         "method": "GET",
@@ -6160,7 +6180,7 @@
       "path": "/merchants/manage/categories_and_products/:param",
       "rawPath": "/merchants/manage/categories_and_products/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1248,
+      "line": 1255,
       "matchedPath": "/merchants/manage/categories_and_products/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6174,7 +6194,7 @@
       "path": "/merchants/my-application",
       "rawPath": "/merchants/my-application${query ? \"?\" + query : \"\"}",
       "file": "api/lmapi.js",
-      "line": 3814,
+      "line": 3821,
       "matchedPath": "/merchants/my-application",
       "matchedBackend": {
         "method": "GET",
@@ -6188,7 +6208,7 @@
       "path": "/merchants/orders/:param",
       "rawPath": "/merchants/orders/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1281,
+      "line": 1288,
       "matchedPath": "/merchants/orders/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6202,7 +6222,7 @@
       "path": "/merchants/printer-config",
       "rawPath": "/merchants/printer-config?merchant_id=${params.merchantId}",
       "file": "api/lmapi.js",
-      "line": 2163,
+      "line": 2170,
       "matchedPath": "/merchants/printer-config",
       "matchedBackend": {
         "method": "GET",
@@ -6216,7 +6236,7 @@
       "path": "/merchants/view/:param",
       "rawPath": "/merchants/view/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1233,
+      "line": 1240,
       "matchedPath": "/merchants/view/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6230,7 +6250,7 @@
       "path": "/messages/group/:param",
       "rawPath": "/messages/group/${groupId}",
       "file": "api/lmapi.js",
-      "line": 2873,
+      "line": 2880,
       "matchedPath": "/messages/group/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6244,7 +6264,7 @@
       "path": "/messages/history",
       "rawPath": "/messages/history",
       "file": "api/lmapi.js",
-      "line": 565,
+      "line": 572,
       "matchedPath": "/messages/history",
       "matchedBackend": {
         "method": "GET",
@@ -6258,7 +6278,7 @@
       "path": "/messages/private-permission",
       "rawPath": "/messages/private-permission?target_user_id=${encodeURIComponent(id)}",
       "file": "api/lmapi.js",
-      "line": 580,
+      "line": 587,
       "matchedPath": "/messages/private-permission",
       "matchedBackend": {
         "method": "GET",
@@ -6272,7 +6292,7 @@
       "path": "/messages/region/private-chat-enabled",
       "rawPath": "/messages/region/private-chat-enabled?region_id=${encodeURIComponent(String(id))}",
       "file": "api/lmapi.js",
-      "line": 599,
+      "line": 606,
       "matchedPath": "/messages/region/private-chat-enabled",
       "matchedBackend": {
         "method": "GET",
@@ -6286,7 +6306,7 @@
       "path": "/miniapp/activity/activities",
       "rawPath": "/miniapp/activity/activities?region_id=${regionId}&page=${page}&size=${size}${my_participation ? \"&my_participation=true\" : \"\"}${searchKeyword ?",
       "file": "api/lmapi.js",
-      "line": 1953,
+      "line": 1960,
       "matchedPath": "/miniapp/activity/activities",
       "matchedBackend": {
         "method": "GET",
@@ -6300,7 +6320,7 @@
       "path": "/miniapp/activity/activities",
       "rawPath": "/miniapp/activity/activities?club_id=${club_id}&page=${page}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2567,
+      "line": 2574,
       "matchedPath": "/miniapp/activity/activities",
       "matchedBackend": {
         "method": "GET",
@@ -6314,7 +6334,7 @@
       "path": "/miniapp/activity/activities/:param",
       "rawPath": "/miniapp/activity/activities/${activityId}",
       "file": "api/lmapi.js",
-      "line": 1947,
+      "line": 1954,
       "matchedPath": "/miniapp/activity/activities/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6328,7 +6348,7 @@
       "path": "/miniapp/activity/activities/:param/participants",
       "rawPath": "/miniapp/activity/activities/${activityId}/participants?page=${page}&size=${size}",
       "file": "api/lmapi.js",
-      "line": 2552,
+      "line": 2559,
       "matchedPath": "/miniapp/activity/activities/:param/participants",
       "matchedBackend": {
         "method": "GET",
@@ -6342,7 +6362,7 @@
       "path": "/notifications/all-details",
       "rawPath": "/notifications/all-details?${queryString}",
       "file": "api/lmapi.js",
-      "line": 438,
+      "line": 445,
       "matchedPath": "/notifications/all-details",
       "matchedBackend": {
         "method": "GET",
@@ -6356,7 +6376,7 @@
       "path": "/official-assistant/messages",
       "rawPath": "/official-assistant/messages?${query.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 639,
+      "line": 646,
       "matchedPath": "/official-assistant/messages",
       "matchedBackend": {
         "method": "GET",
@@ -6370,7 +6390,7 @@
       "path": "/order",
       "rawPath": "/order?${query}",
       "file": "api/lmapi.js",
-      "line": 1327,
+      "line": 1334,
       "matchedPath": "/order",
       "matchedBackend": {
         "method": "GET",
@@ -6384,7 +6404,7 @@
       "path": "/order-appeals/eligible-orders",
       "rawPath": "/order-appeals/eligible-orders${query}",
       "file": "api/lmapi.js",
-      "line": 645,
+      "line": 652,
       "matchedPath": "/order-appeals/eligible-orders",
       "matchedBackend": {
         "method": "GET",
@@ -6398,7 +6418,7 @@
       "path": "/order-appeals/merchant/:param",
       "rawPath": "/order-appeals/merchant/${encodeURIComponent(id)}",
       "file": "api/lmapi.js",
-      "line": 650,
+      "line": 657,
       "matchedPath": "/order-appeals/merchant/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6412,7 +6432,7 @@
       "path": "/order-appeals/my",
       "rawPath": "/order-appeals/my",
       "file": "api/lmapi.js",
-      "line": 648,
+      "line": 655,
       "matchedPath": "/order-appeals/my",
       "matchedBackend": {
         "method": "GET",
@@ -6426,7 +6446,7 @@
       "path": "/order/:param",
       "rawPath": "/order/${orderId}",
       "file": "api/lmapi.js",
-      "line": 1961,
+      "line": 1968,
       "matchedPath": "/order/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6454,7 +6474,7 @@
       "path": "/platform/app-review-mode",
       "rawPath": "/platform/app-review-mode",
       "file": "api/lmapi.js",
-      "line": 4318,
+      "line": 4325,
       "matchedPath": "/platform/app-review-mode",
       "matchedBackend": {
         "method": "GET",
@@ -6468,7 +6488,7 @@
       "path": "/platform/login-page-config",
       "rawPath": "/platform/login-page-config",
       "file": "api/lmapi.js",
-      "line": 706,
+      "line": 713,
       "matchedPath": "/platform/login-page-config",
       "matchedBackend": {
         "method": "GET",
@@ -6482,7 +6502,7 @@
       "path": "/posts/:param",
       "rawPath": "/posts/${id}",
       "file": "api/lmapi.js",
-      "line": 1077,
+      "line": 1084,
       "matchedPath": "/posts/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6496,7 +6516,7 @@
       "path": "/posts/:param/co-creators",
       "rawPath": "/posts/${postId}/co-creators",
       "file": "api/lmapi.js",
-      "line": 1088,
+      "line": 1095,
       "matchedPath": "/posts/:param/co-creators",
       "matchedBackend": {
         "method": "GET",
@@ -6510,7 +6530,7 @@
       "path": "/posts/co-creators/invites",
       "rawPath": "/posts/co-creators/invites${qs}",
       "file": "api/lmapi.js",
-      "line": 1120,
+      "line": 1127,
       "matchedPath": "/posts/co-creators/invites",
       "matchedBackend": {
         "method": "GET",
@@ -6524,7 +6544,7 @@
       "path": "/posts/featured-hot-posts/:param",
       "rawPath": "/posts/featured-hot-posts/${regionId}${queryString}",
       "file": "api/lmapi.js",
-      "line": 3173,
+      "line": 3180,
       "matchedPath": "/posts/featured-hot-posts/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6538,7 +6558,7 @@
       "path": "/posts/hot-posts/:param",
       "rawPath": "/posts/hot-posts/${regionId}",
       "file": "api/lmapi.js",
-      "line": 980,
+      "line": 987,
       "matchedPath": "/posts/hot-posts/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6552,7 +6572,7 @@
       "path": "/posts/my-posts",
       "rawPath": "/posts/my-posts",
       "file": "api/lmapi.js",
-      "line": 1065,
+      "line": 1072,
       "matchedPath": "/posts/my-posts",
       "matchedBackend": {
         "method": "GET",
@@ -6566,7 +6586,7 @@
       "path": "/posts/region-posts/:param/echoes",
       "rawPath": "/posts/region-posts/${encodeURIComponent(regionId)}/echoes",
       "file": "api/lmapi.js",
-      "line": 1040,
+      "line": 1047,
       "matchedPath": "/posts/region-posts/:param/echoes",
       "matchedBackend": {
         "method": "GET",
@@ -6580,7 +6600,7 @@
       "path": "/posts/region-posts/:param/echoes/:param",
       "rawPath": "/posts/region-posts/${encodeURIComponent(regionId)}/echoes/${encodeURIComponent(echoId)}",
       "file": "api/lmapi.js",
-      "line": 1043,
+      "line": 1050,
       "matchedPath": "/posts/region-posts/:param/echoes/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6594,7 +6614,7 @@
       "path": "/product-options/:param/all",
       "rawPath": "/product-options/${productId}/all",
       "file": "api/lmapi.js",
-      "line": 2714,
+      "line": 2721,
       "matchedPath": "/product-options/:param/all",
       "matchedBackend": {
         "method": "GET",
@@ -6608,7 +6628,7 @@
       "path": "/region-signin/:param/config",
       "rawPath": "/region-signin/${regionId}/config",
       "file": "api/lmapi.js",
-      "line": 822,
+      "line": 829,
       "matchedPath": "/region-signin/:param/config",
       "matchedBackend": {
         "method": "GET",
@@ -6622,7 +6642,7 @@
       "path": "/region-signin/:param/signin/status",
       "rawPath": "/region-signin/${regionId}/signin/status",
       "file": "api/lmapi.js",
-      "line": 825,
+      "line": 832,
       "matchedPath": "/region-signin/:param/signin/status",
       "matchedBackend": {
         "method": "GET",
@@ -6636,7 +6656,7 @@
       "path": "/region/home-page-content",
       "rawPath": "/region/home-page-content?status=${status}&region_id=${regionId}&page=${page}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 2284,
+      "line": 2291,
       "matchedPath": "/region/home-page-content",
       "matchedBackend": {
         "method": "GET",
@@ -6650,7 +6670,7 @@
       "path": "/regions",
       "rawPath": "/regions",
       "file": "api/lmapi.js",
-      "line": 682,
+      "line": 689,
       "matchedPath": "/regions",
       "matchedBackend": {
         "method": "GET",
@@ -6664,7 +6684,7 @@
       "path": "/regions/:param/content-items",
       "rawPath": "/regions/${regionId}/content-items",
       "file": "api/lmapi.js",
-      "line": 958,
+      "line": 965,
       "matchedPath": "/regions/:param/content-items",
       "matchedBackend": {
         "method": "GET",
@@ -6678,7 +6698,7 @@
       "path": "/regions/:param/tabbar",
       "rawPath": "/regions/${regionId}/tabbar",
       "file": "api/lmapi.js",
-      "line": 2153,
+      "line": 2160,
       "matchedPath": "/regions/:param/tabbar",
       "matchedBackend": {
         "method": "GET",
@@ -6692,7 +6712,7 @@
       "path": "/regions/search-config",
       "rawPath": "/regions/search-config?region_id=${encodeURIComponent(regionId)}",
       "file": "api/lmapi.js",
-      "line": 729,
+      "line": 736,
       "matchedPath": "/regions/search-config",
       "matchedBackend": {
         "method": "GET",
@@ -6706,7 +6726,7 @@
       "path": "/regions/share-settings/:param",
       "rawPath": "/regions/share-settings/${regionId}",
       "file": "api/lmapi.js",
-      "line": 2158,
+      "line": 2165,
       "matchedPath": "/regions/share-settings/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6720,7 +6740,7 @@
       "path": "/schools",
       "rawPath": "/schools?${params.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 1197,
+      "line": 1204,
       "matchedPath": "/schools",
       "matchedBackend": {
         "method": "GET",
@@ -6734,7 +6754,7 @@
       "path": "/search/global",
       "rawPath": "/search/global?${query.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 310,
+      "line": 326,
       "matchedPath": "/search/global",
       "matchedBackend": {
         "method": "GET",
@@ -6748,7 +6768,7 @@
       "path": "/search/hot-keywords",
       "rawPath": "/search/hot-keywords?${query.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 817,
+      "line": 824,
       "matchedPath": "/search/hot-keywords",
       "matchedBackend": {
         "method": "GET",
@@ -6762,7 +6782,7 @@
       "path": "/second-hand/:param",
       "rawPath": "/second-hand/${id}",
       "file": "api/lmapi.js",
-      "line": 1634,
+      "line": 1641,
       "matchedPath": "/second-hand/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6776,7 +6796,7 @@
       "path": "/second-hand/by-area/:param",
       "rawPath": "/second-hand/by-area/${areaId}",
       "file": "api/lmapi.js",
-      "line": 1618,
+      "line": 1625,
       "matchedPath": "/second-hand/by-area/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6790,7 +6810,7 @@
       "path": "/second-hand/my/orders",
       "rawPath": "/second-hand/my/orders",
       "file": "api/lmapi.js",
-      "line": 1645,
+      "line": 1652,
       "matchedPath": "/second-hand/my/orders",
       "matchedBackend": {
         "method": "GET",
@@ -6804,7 +6824,7 @@
       "path": "/second-hand/my/products",
       "rawPath": "/second-hand/my/products",
       "file": "api/lmapi.js",
-      "line": 1639,
+      "line": 1646,
       "matchedPath": "/second-hand/my/products",
       "matchedBackend": {
         "method": "GET",
@@ -6818,7 +6838,7 @@
       "path": "/shopping-cart/merchant/:param",
       "rawPath": "/shopping-cart/merchant/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1276,
+      "line": 1283,
       "matchedPath": "/shopping-cart/merchant/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6832,7 +6852,7 @@
       "path": "/squats/check/:param",
       "rawPath": "/squats/check/${postId}",
       "file": "api/lmapi.js",
-      "line": 3153,
+      "line": 3160,
       "matchedPath": "/squats/check/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6846,7 +6866,7 @@
       "path": "/squats/user",
       "rawPath": "/squats/user?page=${page}&pageSize=${pageSize}",
       "file": "api/lmapi.js",
-      "line": 3148,
+      "line": 3155,
       "matchedPath": "/squats/user",
       "matchedBackend": {
         "method": "GET",
@@ -6860,7 +6880,7 @@
       "path": "/status/location",
       "rawPath": "/status/location",
       "file": "api/lmapi.js",
-      "line": 3091,
+      "line": 3098,
       "matchedPath": "/status/location",
       "matchedBackend": {
         "method": "GET",
@@ -6874,7 +6894,7 @@
       "path": "/status/location/recommendation",
       "rawPath": "/status/location/recommendation",
       "file": "api/lmapi.js",
-      "line": 3096,
+      "line": 3103,
       "matchedPath": "/status/location/recommendation",
       "matchedBackend": {
         "method": "GET",
@@ -6888,7 +6908,7 @@
       "path": "/topics/:param",
       "rawPath": "/topics/${id}",
       "file": "api/lmapi.js",
-      "line": 1850,
+      "line": 1857,
       "matchedPath": "/topics/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6902,7 +6922,7 @@
       "path": "/topnotes/packages/region/:param",
       "rawPath": "/topnotes/packages/region/${regionId}",
       "file": "api/lmapi.js",
-      "line": 1584,
+      "line": 1591,
       "matchedPath": "/topnotes/packages/region/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6916,7 +6936,7 @@
       "path": "/topnotes/user-orders/:param",
       "rawPath": "/topnotes/user-orders/${userId}",
       "file": "api/lmapi.js",
-      "line": 1608,
+      "line": 1615,
       "matchedPath": "/topnotes/user-orders/:param",
       "matchedBackend": {
         "method": "GET",
@@ -6930,7 +6950,7 @@
       "path": "/user-mentions/search",
       "rawPath": "/user-mentions/search?keyword=${kw}&limit=${limit}",
       "file": "api/lmapi.js",
-      "line": 531,
+      "line": 538,
       "matchedPath": "/user-mentions/search",
       "matchedBackend": {
         "method": "GET",
@@ -6944,7 +6964,7 @@
       "path": "/wechat/official/bind-url",
       "rawPath": "/wechat/official/bind-url",
       "file": "api/lmapi.js",
-      "line": 1745,
+      "line": 1752,
       "matchedPath": "/wechat/official/bind-url",
       "matchedBackend": {
         "method": "GET",
@@ -6958,7 +6978,7 @@
       "path": "/wechat/subscribe-templates",
       "rawPath": "/wechat/subscribe-templates?types=${encodeURIComponent(types.join(\",\"))}",
       "file": "api/lmapi.js",
-      "line": 1348,
+      "line": 1355,
       "matchedPath": "/wechat/subscribe-templates",
       "matchedBackend": {
         "method": "GET",
@@ -6972,7 +6992,7 @@
       "path": "/wxpay/query",
       "rawPath": "/wxpay/query?paymentNo=${encodeURIComponent(paymentNo)}",
       "file": "api/lmapi.js",
-      "line": 1344,
+      "line": 1351,
       "matchedPath": "/wxpay/query",
       "matchedBackend": {
         "method": "GET",
@@ -6986,7 +7006,7 @@
       "path": "/api/mall/admin/categories/:param",
       "rawPath": "/api/mall/admin/categories/${id}",
       "file": "api/lmapi.js",
-      "line": 3441,
+      "line": 3448,
       "matchedPath": "/mall/admin/categories/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7000,7 +7020,7 @@
       "path": "/api/mall/admin/products/:param",
       "rawPath": "/api/mall/admin/products/${id}",
       "file": "api/lmapi.js",
-      "line": 3481,
+      "line": 3488,
       "matchedPath": "/mall/products/admin/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7014,7 +7034,7 @@
       "path": "/api/mall/admin/products/:param/status",
       "rawPath": "/api/mall/admin/products/${id}/status",
       "file": "api/lmapi.js",
-      "line": 3475,
+      "line": 3482,
       "matchedPath": "/mall/products/admin/:param/status",
       "matchedBackend": {
         "method": "PATCH",
@@ -7028,7 +7048,7 @@
       "path": "/api/mall/cart/item/:param",
       "rawPath": "/api/mall/cart/item/${id}",
       "file": "api/lmapi.js",
-      "line": 3526,
+      "line": 3533,
       "matchedPath": "/api/mall/cart/item/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7042,7 +7062,7 @@
       "path": "/api/mall/distributor/admin/:param/review",
       "rawPath": "/api/mall/distributor/admin/${id}/review",
       "file": "api/lmapi.js",
-      "line": 3784,
+      "line": 3791,
       "matchedPath": "/mall/distributor/admin/:param/review",
       "matchedBackend": {
         "method": "PATCH",
@@ -7056,7 +7076,7 @@
       "path": "/api/mall/freight/admin/template/:param",
       "rawPath": "/api/mall/freight/admin/template/${id}",
       "file": "api/lmapi.js",
-      "line": 3705,
+      "line": 3712,
       "matchedPath": "/mall/freight/admin/template/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7070,7 +7090,7 @@
       "path": "/api/mall/merchants/admin/:param",
       "rawPath": "/api/mall/merchants/admin/${id}",
       "file": "api/lmapi.js",
-      "line": 3828,
+      "line": 3835,
       "matchedPath": "/mall/merchants/admin/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7084,7 +7104,7 @@
       "path": "/api/mall/orders/:param/status",
       "rawPath": "/api/mall/orders/${id}/status",
       "file": "api/lmapi.js",
-      "line": 3566,
+      "line": 3573,
       "matchedPath": "/api/mall/orders/:param/status",
       "matchedBackend": {
         "method": "PATCH",
@@ -7098,7 +7118,7 @@
       "path": "/api/mall/products/admin/sku/:param",
       "rawPath": "/api/mall/products/admin/sku/${skuId}",
       "file": "api/lmapi.js",
-      "line": 3498,
+      "line": 3505,
       "matchedPath": "/mall/products/admin/sku/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7112,7 +7132,7 @@
       "path": "/api/mall/promotions/admin/:param",
       "rawPath": "/api/mall/promotions/admin/${id}",
       "file": "api/lmapi.js",
-      "line": 3671,
+      "line": 3678,
       "matchedPath": "/mall/promotions/admin/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7126,7 +7146,7 @@
       "path": "/api/mall/refunds/admin/:param/review",
       "rawPath": "/api/mall/refunds/admin/${id}/review",
       "file": "api/lmapi.js",
-      "line": 3612,
+      "line": 3619,
       "matchedPath": "/mall/refunds/admin/:param/review",
       "matchedBackend": {
         "method": "PATCH",
@@ -7140,7 +7160,7 @@
       "path": "/api/mall/reviews/admin/:param/reply",
       "rawPath": "/api/mall/reviews/admin/${id}/reply",
       "file": "api/lmapi.js",
-      "line": 3630,
+      "line": 3637,
       "matchedPath": "/mall/reviews/admin/:param/reply",
       "matchedBackend": {
         "method": "PATCH",
@@ -7154,7 +7174,7 @@
       "path": "/api/mall/reviews/admin/:param/status",
       "rawPath": "/api/mall/reviews/admin/${id}/status",
       "file": "api/lmapi.js",
-      "line": 3636,
+      "line": 3643,
       "matchedPath": "/mall/reviews/admin/:param/status",
       "matchedBackend": {
         "method": "PATCH",
@@ -7168,7 +7188,7 @@
       "path": "/api/mall/service/admin/staff/:param",
       "rawPath": "/api/mall/service/admin/staff/${id}",
       "file": "api/lmapi.js",
-      "line": 3756,
+      "line": 3763,
       "matchedPath": "/api/mall/service/admin/staff/:param",
       "matchedBackend": {
         "method": "PATCH",
@@ -7182,7 +7202,7 @@
       "path": "/order-appeals/:param/supplement",
       "rawPath": "/order-appeals/${encodeURIComponent(id)}/supplement",
       "file": "api/lmapi.js",
-      "line": 649,
+      "line": 656,
       "matchedPath": "/order-appeals/:param/supplement",
       "matchedBackend": {
         "method": "PATCH",
@@ -7196,7 +7216,7 @@
       "path": "/order/:param/status",
       "rawPath": "/order/${orderId}/status",
       "file": "api/lmapi.js",
-      "line": 1362,
+      "line": 1369,
       "matchedPath": "/order/:param/status",
       "matchedBackend": {
         "method": "PATCH",
@@ -7210,7 +7230,7 @@
       "path": "/activity/orders/create-with-payment",
       "rawPath": "/activity/orders/create-with-payment",
       "file": "api/lmapi.js",
-      "line": 2530,
+      "line": 2537,
       "matchedPath": "/activity/orders/create-with-payment",
       "matchedBackend": {
         "method": "POST",
@@ -7224,7 +7244,7 @@
       "path": "/addresses",
       "rawPath": "/addresses",
       "file": "api/lmapi.js",
-      "line": 1385,
+      "line": 1392,
       "matchedPath": "/addresses",
       "matchedBackend": {
         "method": "POST",
@@ -7238,7 +7258,7 @@
       "path": "/api/agreements/consent",
       "rawPath": "/api/agreements/consent",
       "file": "api/lmapi.js",
-      "line": 2757,
+      "line": 2764,
       "matchedPath": "/api/agreements/consent",
       "matchedBackend": {
         "method": "POST",
@@ -7252,7 +7272,7 @@
       "path": "/api/community/payment/create",
       "rawPath": "/api/community/payment/create",
       "file": "api/lmapi.js",
-      "line": 3085,
+      "line": 3092,
       "matchedPath": "/api/community/payment/create",
       "matchedBackend": {
         "method": "POST",
@@ -7266,7 +7286,7 @@
       "path": "/api/contacts",
       "rawPath": "/api/contacts",
       "file": "api/lmapi.js",
-      "line": 3407,
+      "line": 3414,
       "matchedPath": "/api/contacts",
       "matchedBackend": {
         "method": "POST",
@@ -7280,7 +7300,7 @@
       "path": "/api/dating/block",
       "rawPath": "/api/dating/block",
       "file": "api/lmapi.js",
-      "line": 3057,
+      "line": 3064,
       "matchedPath": "/api/dating/block",
       "matchedBackend": {
         "method": "POST",
@@ -7294,7 +7314,7 @@
       "path": "/api/dating/matches/action",
       "rawPath": "/api/dating/matches/action",
       "file": "api/lmapi.js",
-      "line": 3074,
+      "line": 3081,
       "matchedPath": "/api/dating/matches/action",
       "matchedBackend": {
         "method": "POST",
@@ -7308,7 +7328,7 @@
       "path": "/api/dating/orders/payment/pay",
       "rawPath": "/api/dating/orders/payment/pay",
       "file": "api/lmapi.js",
-      "line": 3031,
+      "line": 3038,
       "matchedPath": "/api/dating/orders/payment/pay",
       "matchedBackend": {
         "method": "POST",
@@ -7322,7 +7342,7 @@
       "path": "/api/dating/profile",
       "rawPath": "/api/dating/profile",
       "file": "api/lmapi.js",
-      "line": 3068,
+      "line": 3075,
       "matchedPath": "/api/dating/profile",
       "matchedBackend": {
         "method": "POST",
@@ -7336,7 +7356,7 @@
       "path": "/api/dating/reports",
       "rawPath": "/api/dating/reports",
       "file": "api/lmapi.js",
-      "line": 3051,
+      "line": 3058,
       "matchedPath": "/api/dating/reports",
       "matchedBackend": {
         "method": "POST",
@@ -7350,7 +7370,7 @@
       "path": "/api/delivery-orders",
       "rawPath": "/api/delivery-orders",
       "file": "api/lmapi.js",
-      "line": 1374,
+      "line": 1381,
       "matchedPath": "/api/delivery-orders",
       "matchedBackend": {
         "method": "POST",
@@ -7364,7 +7384,7 @@
       "path": "/api/groupbuy/payment/create",
       "rawPath": "/api/groupbuy/payment/create",
       "file": "api/lmapi.js",
-      "line": 2829,
+      "line": 2836,
       "matchedPath": "/api/groupbuy/payment/create",
       "matchedBackend": {
         "method": "POST",
@@ -7378,7 +7398,7 @@
       "path": "/api/location",
       "rawPath": "/api/location",
       "file": "api/lmapi.js",
-      "line": 2037,
+      "line": 2044,
       "matchedPath": "/api/location",
       "matchedBackend": {
         "method": "POST",
@@ -7392,7 +7412,7 @@
       "path": "/api/mall/admin/categories/create",
       "rawPath": "/api/mall/admin/categories/create",
       "file": "api/lmapi.js",
-      "line": 3435,
+      "line": 3442,
       "matchedPath": "/mall/admin/categories/create",
       "matchedBackend": {
         "method": "POST",
@@ -7406,7 +7426,7 @@
       "path": "/api/mall/cart/add",
       "rawPath": "/api/mall/cart/add",
       "file": "api/lmapi.js",
-      "line": 3520,
+      "line": 3527,
       "matchedPath": "/api/mall/cart/add",
       "matchedBackend": {
         "method": "POST",
@@ -7420,7 +7440,7 @@
       "path": "/api/mall/distributor/apply",
       "rawPath": "/api/mall/distributor/apply",
       "file": "api/lmapi.js",
-      "line": 3767,
+      "line": 3774,
       "matchedPath": "/api/mall/distributor/apply",
       "matchedBackend": {
         "method": "POST",
@@ -7434,7 +7454,7 @@
       "path": "/api/mall/favorites/add",
       "rawPath": "/api/mall/favorites/add",
       "file": "api/lmapi.js",
-      "line": 3722,
+      "line": 3729,
       "matchedPath": "/api/mall/favorites/add",
       "matchedBackend": {
         "method": "POST",
@@ -7448,7 +7468,7 @@
       "path": "/api/mall/freight/admin/template/create",
       "rawPath": "/api/mall/freight/admin/template/create",
       "file": "api/lmapi.js",
-      "line": 3699,
+      "line": 3706,
       "matchedPath": "/mall/freight/admin/template/create",
       "matchedBackend": {
         "method": "POST",
@@ -7462,7 +7482,7 @@
       "path": "/api/mall/merchants/admin/:param/circle/create",
       "rawPath": "/api/mall/merchants/admin/${id}/circle/create",
       "file": "api/lmapi.js",
-      "line": 3844,
+      "line": 3851,
       "matchedPath": "/mall/merchants/admin/:param/circle/create",
       "matchedBackend": {
         "method": "POST",
@@ -7476,7 +7496,7 @@
       "path": "/api/mall/merchants/apply",
       "rawPath": "/api/mall/merchants/apply",
       "file": "api/lmapi.js",
-      "line": 3796,
+      "line": 3803,
       "matchedPath": "/api/mall/merchants/apply",
       "matchedBackend": {
         "method": "POST",
@@ -7490,7 +7510,7 @@
       "path": "/api/mall/orders/:param/cancel",
       "rawPath": "/api/mall/orders/${id}/cancel",
       "file": "api/lmapi.js",
-      "line": 3572,
+      "line": 3579,
       "matchedPath": "/api/mall/orders/:param/cancel",
       "matchedBackend": {
         "method": "POST",
@@ -7504,7 +7524,7 @@
       "path": "/api/mall/orders/:param/pay",
       "rawPath": "/api/mall/orders/${id}/pay",
       "file": "api/lmapi.js",
-      "line": 3554,
+      "line": 3561,
       "matchedPath": "/api/mall/orders/:param/pay",
       "matchedBackend": {
         "method": "POST",
@@ -7518,7 +7538,7 @@
       "path": "/api/mall/orders/:param/ship",
       "rawPath": "/api/mall/orders/${id}/ship",
       "file": "api/lmapi.js",
-      "line": 3560,
+      "line": 3567,
       "matchedPath": "/api/mall/orders/:param/ship",
       "matchedBackend": {
         "method": "POST",
@@ -7532,7 +7552,7 @@
       "path": "/api/mall/orders/submit",
       "rawPath": "/api/mall/orders/submit",
       "file": "api/lmapi.js",
-      "line": 3537,
+      "line": 3544,
       "matchedPath": "/api/mall/orders/submit",
       "matchedBackend": {
         "method": "POST",
@@ -7546,7 +7566,7 @@
       "path": "/api/mall/products/admin/:param/skus",
       "rawPath": "/api/mall/products/admin/${productId}/skus",
       "file": "api/lmapi.js",
-      "line": 3492,
+      "line": 3499,
       "matchedPath": "/mall/products/admin/:param/skus",
       "matchedBackend": {
         "method": "POST",
@@ -7560,7 +7580,7 @@
       "path": "/api/mall/products/admin/create",
       "rawPath": "/api/mall/products/admin/create",
       "file": "api/lmapi.js",
-      "line": 3469,
+      "line": 3476,
       "matchedPath": "/mall/products/admin/create",
       "matchedBackend": {
         "method": "POST",
@@ -7574,7 +7594,7 @@
       "path": "/api/mall/promotions/admin/create",
       "rawPath": "/api/mall/promotions/admin/create",
       "file": "api/lmapi.js",
-      "line": 3665,
+      "line": 3672,
       "matchedPath": "/mall/promotions/admin/create",
       "matchedBackend": {
         "method": "POST",
@@ -7588,7 +7608,7 @@
       "path": "/api/mall/refunds/:param/cancel",
       "rawPath": "/api/mall/refunds/${id}/cancel",
       "file": "api/lmapi.js",
-      "line": 3607,
+      "line": 3614,
       "matchedPath": "/api/mall/refunds/:param/cancel",
       "matchedBackend": {
         "method": "POST",
@@ -7602,7 +7622,7 @@
       "path": "/api/mall/refunds/apply",
       "rawPath": "/api/mall/refunds/apply",
       "file": "api/lmapi.js",
-      "line": 3584,
+      "line": 3591,
       "matchedPath": "/api/mall/refunds/apply",
       "matchedBackend": {
         "method": "POST",
@@ -7616,7 +7636,7 @@
       "path": "/api/mall/reviews/create",
       "rawPath": "/api/mall/reviews/create",
       "file": "api/lmapi.js",
-      "line": 3618,
+      "line": 3625,
       "matchedPath": "/api/mall/reviews/create",
       "matchedBackend": {
         "method": "POST",
@@ -7630,7 +7650,7 @@
       "path": "/api/mall/service/admin/staff/create",
       "rawPath": "/api/mall/service/admin/staff/create",
       "file": "api/lmapi.js",
-      "line": 3744,
+      "line": 3751,
       "matchedPath": "/api/mall/service/admin/staff/create",
       "matchedBackend": {
         "method": "POST",
@@ -7644,7 +7664,7 @@
       "path": "/api/netdisk/comments",
       "rawPath": "/api/netdisk/comments",
       "file": "api/lmapi.js",
-      "line": 3372,
+      "line": 3379,
       "matchedPath": "/api/netdisk/comments",
       "matchedBackend": {
         "method": "POST",
@@ -7658,7 +7678,7 @@
       "path": "/api/netdisk/favorites/:param",
       "rawPath": "/api/netdisk/favorites/${resourceId}",
       "file": "api/lmapi.js",
-      "line": 3328,
+      "line": 3335,
       "matchedPath": "/api/netdisk/favorites/:param",
       "matchedBackend": {
         "method": "POST",
@@ -7672,7 +7692,7 @@
       "path": "/api/netdisk/reports",
       "rawPath": "/api/netdisk/reports",
       "file": "api/lmapi.js",
-      "line": 3349,
+      "line": 3356,
       "matchedPath": "/api/netdisk/reports",
       "matchedBackend": {
         "method": "POST",
@@ -7686,7 +7706,7 @@
       "path": "/api/post-shares",
       "rawPath": "/api/post-shares",
       "file": "api/lmapi.js",
-      "line": 1686,
+      "line": 1693,
       "matchedPath": "/post-shares",
       "matchedBackend": {
         "method": "POST",
@@ -7700,7 +7720,7 @@
       "path": "/api/post-votes/create-options",
       "rawPath": "/api/post-votes/create-options",
       "file": "api/lmapi.js",
-      "line": 3178,
+      "line": 3185,
       "matchedPath": "/api/post-votes/create-options",
       "matchedBackend": {
         "method": "POST",
@@ -7714,7 +7734,7 @@
       "path": "/api/post-votes/settings/upsert",
       "rawPath": "/api/post-votes/settings/upsert",
       "file": "api/lmapi.js",
-      "line": 3184,
+      "line": 3191,
       "matchedPath": "/api/post-votes/settings/upsert",
       "matchedBackend": {
         "method": "POST",
@@ -7728,7 +7748,7 @@
       "path": "/api/post-votes/unvote",
       "rawPath": "/api/post-votes/unvote",
       "file": "api/lmapi.js",
-      "line": 3196,
+      "line": 3203,
       "matchedPath": "/api/post-votes/unvote",
       "matchedBackend": {
         "method": "POST",
@@ -7742,7 +7762,7 @@
       "path": "/api/post-votes/vote",
       "rawPath": "/api/post-votes/vote",
       "file": "api/lmapi.js",
-      "line": 3190,
+      "line": 3197,
       "matchedPath": "/api/post-votes/vote",
       "matchedBackend": {
         "method": "POST",
@@ -7756,7 +7776,7 @@
       "path": "/api/punchIn/check-in",
       "rawPath": "/api/punchIn/check-in",
       "file": "api/lmapi.js",
-      "line": 2928,
+      "line": 2935,
       "matchedPath": "/api/punchIn/check-in",
       "matchedBackend": {
         "method": "POST",
@@ -7770,7 +7790,7 @@
       "path": "/api/punchIn/comment",
       "rawPath": "/api/punchIn/comment",
       "file": "api/lmapi.js",
-      "line": 2948,
+      "line": 2955,
       "matchedPath": "/api/punchIn/comment",
       "matchedBackend": {
         "method": "POST",
@@ -7784,7 +7804,7 @@
       "path": "/api/punchIn/wishlist",
       "rawPath": "/api/punchIn/wishlist",
       "file": "api/lmapi.js",
-      "line": 2963,
+      "line": 2970,
       "matchedPath": "/api/punchIn/wishlist",
       "matchedBackend": {
         "method": "POST",
@@ -7798,7 +7818,7 @@
       "path": "/api/rating/items",
       "rawPath": "/api/rating/items",
       "file": "api/lmapi.js",
-      "line": 2867,
+      "line": 2874,
       "matchedPath": "/api/rating/items",
       "matchedBackend": {
         "method": "POST",
@@ -7812,7 +7832,7 @@
       "path": "/api/rating/ratings",
       "rawPath": "/api/rating/ratings",
       "file": "api/lmapi.js",
-      "line": 2794,
+      "line": 2801,
       "matchedPath": "/api/rating/ratings",
       "matchedBackend": {
         "method": "POST",
@@ -7826,7 +7846,7 @@
       "path": "/api/rating/replies",
       "rawPath": "/api/rating/replies",
       "file": "api/lmapi.js",
-      "line": 2814,
+      "line": 2821,
       "matchedPath": "/api/rating/replies",
       "matchedBackend": {
         "method": "POST",
@@ -7840,7 +7860,7 @@
       "path": "/api/return-to-pool/:param",
       "rawPath": "/api/return-to-pool/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2497,
+      "line": 2504,
       "matchedPath": "/api/return-to-pool/:param",
       "matchedBackend": {
         "method": "POST",
@@ -7854,7 +7874,7 @@
       "path": "/api/rider/apply",
       "rawPath": "/api/rider/apply",
       "file": "api/lmapi.js",
-      "line": 2611,
+      "line": 2618,
       "matchedPath": "/api/rider/apply",
       "matchedBackend": {
         "method": "POST",
@@ -7868,7 +7888,7 @@
       "path": "/api/share/be-invited",
       "rawPath": "/api/share/be-invited",
       "file": "api/lmapi.js",
-      "line": 1703,
+      "line": 1710,
       "matchedPath": "/api/share/be-invited",
       "matchedBackend": {
         "method": "POST",
@@ -7882,7 +7902,7 @@
       "path": "/api/share/claim-post-share",
       "rawPath": "/api/share/claim-post-share",
       "file": "api/lmapi.js",
-      "line": 1697,
+      "line": 1704,
       "matchedPath": "/api/share/claim-post-share",
       "matchedBackend": {
         "method": "POST",
@@ -7896,7 +7916,7 @@
       "path": "/api/simulate-post-actions",
       "rawPath": "/api/simulate-post-actions",
       "file": "api/lmapi.js",
-      "line": 1000,
+      "line": 1007,
       "matchedPath": "/api/simulate-post-actions",
       "matchedBackend": {
         "method": "POST",
@@ -7910,7 +7930,7 @@
       "path": "/api/stickers/upload",
       "rawPath": "/api/stickers/upload",
       "file": "api/lmapi.js",
-      "line": 1844,
+      "line": 1851,
       "matchedPath": "/api/stickers/upload",
       "matchedBackend": {
         "method": "POST",
@@ -7924,7 +7944,7 @@
       "path": "/api/transfer/request/:param",
       "rawPath": "/api/transfer/request/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2052,
+      "line": 2059,
       "matchedPath": "/api/transfer/request/:param",
       "matchedBackend": {
         "method": "POST",
@@ -7938,7 +7958,7 @@
       "path": "/api/transfer/respond/:param",
       "rawPath": "/api/transfer/respond/${transferId}",
       "file": "api/lmapi.js",
-      "line": 2043,
+      "line": 2050,
       "matchedPath": "/api/transfer/respond/:param",
       "matchedBackend": {
         "method": "POST",
@@ -7952,7 +7972,7 @@
       "path": "/api/user-guidance/save-user-info",
       "rawPath": "/api/user-guidance/save-user-info",
       "file": "api/lmapi.js",
-      "line": 2735,
+      "line": 2742,
       "matchedPath": "/api/user-guidance/save-user-info",
       "matchedBackend": {
         "method": "POST",
@@ -7966,7 +7986,7 @@
       "path": "/api/user-management/tag-relations",
       "rawPath": "/api/user-management/tag-relations",
       "file": "api/lmapi.js",
-      "line": 2729,
+      "line": 2736,
       "matchedPath": "/api/user-management/tag-relations",
       "matchedBackend": {
         "method": "POST",
@@ -7980,7 +8000,7 @@
       "path": "/assistant-tickets",
       "rawPath": "/assistant-tickets",
       "file": "api/lmapi.js",
-      "line": 652,
+      "line": 659,
       "matchedPath": "/assistant-tickets",
       "matchedBackend": {
         "method": "POST",
@@ -7994,7 +8014,7 @@
       "path": "/assistant-tickets/:param/replies",
       "rawPath": "/assistant-tickets/${encodeURIComponent(id)}/replies",
       "file": "api/lmapi.js",
-      "line": 662,
+      "line": 669,
       "matchedPath": "/assistant-tickets/:param/replies",
       "matchedBackend": {
         "method": "POST",
@@ -8008,13 +8028,13 @@
       "path": "/auth/admin/qr/confirm",
       "rawPath": "/auth/admin/qr/confirm",
       "file": "api/lmapi.js",
-      "line": 372,
+      "line": 379,
       "matchedPath": "/auth/admin/qr/confirm",
       "matchedBackend": {
         "method": "POST",
         "path": "/auth/admin/qr/confirm",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 161
+        "line": 156
       }
     },
     {
@@ -8022,13 +8042,13 @@
       "path": "/auth/admin/qr/reject",
       "rawPath": "/auth/admin/qr/reject",
       "file": "api/lmapi.js",
-      "line": 378,
+      "line": 385,
       "matchedPath": "/auth/admin/qr/reject",
       "matchedBackend": {
         "method": "POST",
         "path": "/auth/admin/qr/reject",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 175
+        "line": 170
       }
     },
     {
@@ -8036,13 +8056,13 @@
       "path": "/auth/admin/qr/scan",
       "rawPath": "/auth/admin/qr/scan",
       "file": "api/lmapi.js",
-      "line": 366,
+      "line": 373,
       "matchedPath": "/auth/admin/qr/scan",
       "matchedBackend": {
         "method": "POST",
         "path": "/auth/admin/qr/scan",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 151
+        "line": 146
       }
     },
     {
@@ -8050,7 +8070,7 @@
       "path": "/auth/admin/users/batch-ban-status",
       "rawPath": "/auth/admin/users/batch-ban-status",
       "file": "api/lmapi.js",
-      "line": 3014,
+      "line": 3021,
       "matchedPath": "/auth/admin/users/batch-ban-status",
       "matchedBackend": {
         "method": "POST",
@@ -8064,7 +8084,7 @@
       "path": "/auth/user/cancel-account",
       "rawPath": "/auth/user/cancel-account",
       "file": "api/lmapi.js",
-      "line": 3133,
+      "line": 3140,
       "matchedPath": "/auth/user/cancel-account",
       "matchedBackend": {
         "method": "POST",
@@ -8078,7 +8098,7 @@
       "path": "/auth/user/pay-unban",
       "rawPath": "/auth/user/pay-unban",
       "file": "api/lmapi.js",
-      "line": 3128,
+      "line": 3135,
       "matchedPath": "/auth/user/pay-unban",
       "matchedBackend": {
         "method": "POST",
@@ -8092,7 +8112,7 @@
       "path": "/auth/user/withdraw",
       "rawPath": "/auth/user/withdraw",
       "file": "api/lmapi.js",
-      "line": 1718,
+      "line": 1725,
       "matchedPath": "/auth/user/withdraw",
       "matchedBackend": {
         "method": "POST",
@@ -8106,7 +8126,7 @@
       "path": "/balance-recharge/create",
       "rawPath": "/balance-recharge/create",
       "file": "api/lmapi.js",
-      "line": 1724,
+      "line": 1731,
       "matchedPath": "/balance-recharge/create",
       "matchedBackend": {
         "method": "POST",
@@ -8120,7 +8140,7 @@
       "path": "/campus-map/collection/sessions/:param/finish",
       "rawPath": "/campus-map/collection/sessions/${encodeURIComponent(sessionId)}/finish",
       "file": "api/lmapi.js",
-      "line": 795,
+      "line": 802,
       "matchedPath": "/campus-map/collection/sessions/:param/finish",
       "matchedBackend": {
         "method": "POST",
@@ -8134,7 +8154,7 @@
       "path": "/campus-map/collection/sessions/:param/markers",
       "rawPath": "/campus-map/collection/sessions/${encodeURIComponent(sessionId)}/markers",
       "file": "api/lmapi.js",
-      "line": 789,
+      "line": 796,
       "matchedPath": "/campus-map/collection/sessions/:param/markers",
       "matchedBackend": {
         "method": "POST",
@@ -8148,7 +8168,7 @@
       "path": "/campus-map/collection/tasks/:param/sessions",
       "rawPath": "/campus-map/collection/tasks/${encodeURIComponent(taskId)}/sessions",
       "file": "api/lmapi.js",
-      "line": 777,
+      "line": 784,
       "matchedPath": "/campus-map/collection/tasks/:param/sessions",
       "matchedBackend": {
         "method": "POST",
@@ -8162,13 +8182,13 @@
       "path": "/campus-map/places/:param/check-ins",
       "rawPath": "/campus-map/places/${encodeURIComponent(placeId)}/check-ins",
       "file": "api/lmapi.js",
-      "line": 742,
+      "line": 749,
       "matchedPath": "/campus-map/places/:param/check-ins",
       "matchedBackend": {
         "method": "POST",
         "path": "/campus-map/places/:placeId/check-ins",
         "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-        "line": 32
+        "line": 62
       }
     },
     {
@@ -8176,7 +8196,7 @@
       "path": "/categories",
       "rawPath": "/categories",
       "file": "api/lmapi.js",
-      "line": 1975,
+      "line": 1982,
       "matchedPath": "/categories",
       "matchedBackend": {
         "method": "POST",
@@ -8190,7 +8210,7 @@
       "path": "/circle-members/:param",
       "rawPath": "/circle-members/${circleId}",
       "file": "api/lmapi.js",
-      "line": 1910,
+      "line": 1917,
       "matchedPath": "/circle-members/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8204,7 +8224,7 @@
       "path": "/circle/student-verification/api/verification",
       "rawPath": "/circle/student-verification/api/verification",
       "file": "api/lmapi.js",
-      "line": 1202,
+      "line": 1209,
       "matchedPath": "/circle/student-verification/api/verification",
       "matchedBackend": {
         "method": "POST",
@@ -8218,7 +8238,7 @@
       "path": "/circle/user-titles/redeem-codes/use",
       "rawPath": "/circle/user-titles/redeem-codes/use",
       "file": "api/lmapi.js",
-      "line": 3275,
+      "line": 3282,
       "matchedPath": "/circle/user-titles/redeem-codes/use",
       "matchedBackend": {
         "method": "POST",
@@ -8232,7 +8252,7 @@
       "path": "/circle/user-titles/unwear",
       "rawPath": "/circle/user-titles/unwear${query}",
       "file": "api/lmapi.js",
-      "line": 3265,
+      "line": 3272,
       "matchedPath": "/circle/user-titles/unwear",
       "matchedBackend": {
         "method": "POST",
@@ -8246,7 +8266,7 @@
       "path": "/circle/user-titles/wear/:param",
       "rawPath": "/circle/user-titles/wear/${titleId}",
       "file": "api/lmapi.js",
-      "line": 3258,
+      "line": 3265,
       "matchedPath": "/circle/user-titles/wear/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8260,7 +8280,7 @@
       "path": "/circles",
       "rawPath": "/circles",
       "file": "api/lmapi.js",
-      "line": 841,
+      "line": 848,
       "matchedPath": "/circles",
       "matchedBackend": {
         "method": "POST",
@@ -8274,7 +8294,7 @@
       "path": "/circles/:param/create-group-chat",
       "rawPath": "/circles/${circleId}/create-group-chat${query}",
       "file": "api/lmapi.js",
-      "line": 903,
+      "line": 910,
       "matchedPath": "/circles/:param/create-group-chat",
       "matchedBackend": {
         "method": "POST",
@@ -8288,7 +8308,7 @@
       "path": "/circles/:param/invite",
       "rawPath": "/circles/${circleId}/invite",
       "file": "api/lmapi.js",
-      "line": 847,
+      "line": 854,
       "matchedPath": "/circles/:param/invite",
       "matchedBackend": {
         "method": "POST",
@@ -8302,7 +8322,7 @@
       "path": "/circles/:param/topic-headers/batch-create",
       "rawPath": "/circles/${circleId}/topic-headers/batch-create",
       "file": "api/lmapi.js",
-      "line": 327,
+      "line": 334,
       "matchedPath": "/circles/:param/topic-headers/batch-create",
       "matchedBackend": {
         "method": "POST",
@@ -8316,7 +8336,7 @@
       "path": "/circles/:param/topics",
       "rawPath": "/circles/${circleId}/topics",
       "file": "api/lmapi.js",
-      "line": 333,
+      "line": 340,
       "matchedPath": "/circles/:param/topics",
       "matchedBackend": {
         "method": "POST",
@@ -8330,7 +8350,7 @@
       "path": "/city-agent/applications",
       "rawPath": "/city-agent/applications",
       "file": "api/lmapi.js",
-      "line": 3112,
+      "line": 3119,
       "matchedPath": "/city-agent/applications",
       "matchedBackend": {
         "method": "POST",
@@ -8344,7 +8364,7 @@
       "path": "/comments/:param",
       "rawPath": "/comments/${postId}",
       "file": "api/lmapi.js",
-      "line": 1157,
+      "line": 1164,
       "matchedPath": "/comments/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8358,7 +8378,7 @@
       "path": "/config/ai",
       "rawPath": "/config/ai",
       "file": "api/lmapi.js",
-      "line": 994,
+      "line": 1001,
       "matchedPath": "/config/ai",
       "matchedBackend": {
         "method": "POST",
@@ -8372,7 +8392,7 @@
       "path": "/coupons/user/:param/claim",
       "rawPath": "/coupons/user/${id}/claim",
       "file": "api/lmapi.js",
-      "line": 2371,
+      "line": 2378,
       "matchedPath": "/coupons/user/:param/claim",
       "matchedBackend": {
         "method": "POST",
@@ -8386,7 +8406,7 @@
       "path": "/coupons/user/redeem",
       "rawPath": "/coupons/user/redeem",
       "file": "api/lmapi.js",
-      "line": 2418,
+      "line": 2425,
       "matchedPath": "/coupons/user/redeem",
       "matchedBackend": {
         "method": "POST",
@@ -8400,7 +8420,7 @@
       "path": "/delivery-distance/:param",
       "rawPath": "/delivery-distance/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1313,
+      "line": 1320,
       "matchedPath": "/delivery-distance/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8414,7 +8434,7 @@
       "path": "/errand/order/:param/confirm-receipt",
       "rawPath": "/errand/order/${orderId}/confirm-receipt",
       "file": "api/lmapi.js",
-      "line": 2472,
+      "line": 2479,
       "matchedPath": "/errand/order/:param/confirm-receipt",
       "matchedBackend": {
         "method": "POST",
@@ -8428,7 +8448,7 @@
       "path": "/errand/order/cancel/:param",
       "rawPath": "/errand/order/cancel/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2477,
+      "line": 2484,
       "matchedPath": "/errand/order/cancel/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8442,7 +8462,7 @@
       "path": "/errand/order/create",
       "rawPath": "/errand/order/create",
       "file": "api/lmapi.js",
-      "line": 2297,
+      "line": 2304,
       "matchedPath": "/errand/order/create",
       "matchedBackend": {
         "method": "POST",
@@ -8456,7 +8476,7 @@
       "path": "/errand/order/estimate",
       "rawPath": "/errand/order/estimate",
       "file": "api/lmapi.js",
-      "line": 2309,
+      "line": 2316,
       "matchedPath": "/errand/order/estimate",
       "matchedBackend": {
         "method": "POST",
@@ -8470,7 +8490,7 @@
       "path": "/errand/order/pay",
       "rawPath": "/errand/order/pay",
       "file": "api/lmapi.js",
-      "line": 2431,
+      "line": 2438,
       "matchedPath": "/errand/order/pay",
       "matchedBackend": {
         "method": "POST",
@@ -8484,7 +8504,7 @@
       "path": "/errand/order/quote",
       "rawPath": "/errand/order/quote",
       "file": "api/lmapi.js",
-      "line": 2303,
+      "line": 2310,
       "matchedPath": "/errand/order/quote",
       "matchedBackend": {
         "method": "POST",
@@ -8498,7 +8518,7 @@
       "path": "/errand/order/refund/:param",
       "rawPath": "/errand/order/refund/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2459,
+      "line": 2466,
       "matchedPath": "/errand/order/refund/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8512,7 +8532,7 @@
       "path": "/explosivesel/competitions",
       "rawPath": "/explosivesel/competitions",
       "file": "api/lmapi.js",
-      "line": 1537,
+      "line": 1544,
       "matchedPath": "/explosivesel/competitions",
       "matchedBackend": {
         "method": "POST",
@@ -8526,7 +8546,7 @@
       "path": "/explosivesel/photos",
       "rawPath": "/explosivesel/photos",
       "file": "api/lmapi.js",
-      "line": 1548,
+      "line": 1555,
       "matchedPath": "/explosivesel/photos",
       "matchedBackend": {
         "method": "POST",
@@ -8540,7 +8560,7 @@
       "path": "/explosivesel/ratings/:param",
       "rawPath": "/explosivesel/ratings/${photoId}",
       "file": "api/lmapi.js",
-      "line": 1931,
+      "line": 1938,
       "matchedPath": "/explosivesel/ratings/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8554,7 +8574,7 @@
       "path": "/explosivesel/votes/:param",
       "rawPath": "/explosivesel/votes/${photoId}",
       "file": "api/lmapi.js",
-      "line": 1559,
+      "line": 1566,
       "matchedPath": "/explosivesel/votes/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8568,7 +8588,7 @@
       "path": "/likes/:param",
       "rawPath": "/likes/${postId}",
       "file": "api/lmapi.js",
-      "line": 1168,
+      "line": 1175,
       "matchedPath": "/likes/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8582,7 +8602,7 @@
       "path": "/likes/view/:param",
       "rawPath": "/likes/view/${postId}",
       "file": "api/lmapi.js",
-      "line": 1130,
+      "line": 1137,
       "matchedPath": "/likes/view/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8596,7 +8616,7 @@
       "path": "/marketing/popups/:param/track",
       "rawPath": "/marketing/popups/${id}/track",
       "file": "api/lmapi.js",
-      "line": 2412,
+      "line": 2419,
       "matchedPath": "/marketing/popups/:param/track",
       "matchedBackend": {
         "method": "POST",
@@ -8610,7 +8630,7 @@
       "path": "/membership/orders",
       "rawPath": "/membership/orders",
       "file": "api/lmapi.js",
-      "line": 1357,
+      "line": 1364,
       "matchedPath": "/membership/orders",
       "matchedBackend": {
         "method": "POST",
@@ -8624,7 +8644,7 @@
       "path": "/merchant/reviews",
       "rawPath": "/merchant/reviews",
       "file": "api/lmapi.js",
-      "line": 2660,
+      "line": 2667,
       "matchedPath": "/merchant/reviews",
       "matchedBackend": {
         "method": "POST",
@@ -8638,7 +8658,7 @@
       "path": "/merchants/apply",
       "rawPath": "/merchants/apply",
       "file": "api/lmapi.js",
-      "line": 3807,
+      "line": 3814,
       "matchedPath": "/merchants/apply",
       "matchedBackend": {
         "method": "POST",
@@ -8652,7 +8672,7 @@
       "path": "/merchants/printer-config",
       "rawPath": "/merchants/printer-config",
       "file": "api/lmapi.js",
-      "line": 2168,
+      "line": 2175,
       "matchedPath": "/merchants/printer-config",
       "matchedBackend": {
         "method": "POST",
@@ -8666,7 +8686,7 @@
       "path": "/merchants/sync/region/:param",
       "rawPath": "/merchants/sync/region/${regionId}",
       "file": "api/lmapi.js",
-      "line": 2278,
+      "line": 2285,
       "matchedPath": "/merchants/sync/region/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8680,7 +8700,7 @@
       "path": "/messages/group/:param/leave",
       "rawPath": "/messages/group/${groupId}/leave",
       "file": "api/lmapi.js",
-      "line": 2896,
+      "line": 2903,
       "matchedPath": "/messages/group/:param/leave",
       "matchedBackend": {
         "method": "POST",
@@ -8694,7 +8714,7 @@
       "path": "/messages/recall-message",
       "rawPath": "/messages/recall-message",
       "file": "api/lmapi.js",
-      "line": 2208,
+      "line": 2215,
       "matchedPath": "/messages/recall-message",
       "matchedBackend": {
         "method": "POST",
@@ -8708,7 +8728,7 @@
       "path": "/messages/send",
       "rawPath": "/messages/send",
       "file": "api/lmapi.js",
-      "line": 613,
+      "line": 620,
       "matchedPath": "/messages/send",
       "matchedBackend": {
         "method": "POST",
@@ -8722,7 +8742,7 @@
       "path": "/miniapp/activity/activities/:param/join",
       "rawPath": "/miniapp/activity/activities/${activityId}/join",
       "file": "api/lmapi.js",
-      "line": 2536,
+      "line": 2543,
       "matchedPath": "/miniapp/activity/activities/:param/join",
       "matchedBackend": {
         "method": "POST",
@@ -8736,7 +8756,7 @@
       "path": "/notifications/batch-action",
       "rawPath": "/notifications/batch-action",
       "file": "api/lmapi.js",
-      "line": 473,
+      "line": 480,
       "matchedPath": "/notifications/batch-action",
       "matchedBackend": {
         "method": "POST",
@@ -8750,7 +8770,7 @@
       "path": "/notifications/subscribe-consent",
       "rawPath": "/notifications/subscribe-consent",
       "file": "api/lmapi.js",
-      "line": 1351,
+      "line": 1358,
       "matchedPath": "/notifications/subscribe-consent",
       "matchedBackend": {
         "method": "POST",
@@ -8764,7 +8784,7 @@
       "path": "/order-appeals",
       "rawPath": "/order-appeals",
       "file": "api/lmapi.js",
-      "line": 647,
+      "line": 654,
       "matchedPath": "/order-appeals",
       "matchedBackend": {
         "method": "POST",
@@ -8778,7 +8798,7 @@
       "path": "/order-appeals/:param/merchant-reply",
       "rawPath": "/order-appeals/${encodeURIComponent(id)}/merchant-reply",
       "file": "api/lmapi.js",
-      "line": 651,
+      "line": 658,
       "matchedPath": "/order-appeals/:param/merchant-reply",
       "matchedBackend": {
         "method": "POST",
@@ -8792,7 +8812,7 @@
       "path": "/order/:param",
       "rawPath": "/order/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1307,
+      "line": 1314,
       "matchedPath": "/order/:param",
       "matchedBackend": {
         "method": "POST",
@@ -8806,7 +8826,7 @@
       "path": "/order/:param/merchant/accept",
       "rawPath": "/order/${orderId}/merchant/accept",
       "file": "api/lmapi.js",
-      "line": 2230,
+      "line": 2237,
       "matchedPath": "/order/:param/merchant/accept",
       "matchedBackend": {
         "method": "POST",
@@ -8820,7 +8840,7 @@
       "path": "/order/:param/merchant/complete",
       "rawPath": "/order/${orderId}/merchant/complete",
       "file": "api/lmapi.js",
-      "line": 2240,
+      "line": 2247,
       "matchedPath": "/order/:param/merchant/complete",
       "matchedBackend": {
         "method": "POST",
@@ -8834,7 +8854,7 @@
       "path": "/order/:param/merchant/ready",
       "rawPath": "/order/${orderId}/merchant/ready",
       "file": "api/lmapi.js",
-      "line": 2235,
+      "line": 2242,
       "matchedPath": "/order/:param/merchant/ready",
       "matchedBackend": {
         "method": "POST",
@@ -8848,7 +8868,7 @@
       "path": "/order/wx/notify",
       "rawPath": "/order/wx/notify",
       "file": "api/lmapi.js",
-      "line": 2219,
+      "line": 2226,
       "matchedPath": "/order/wx/notify",
       "matchedBackend": {
         "method": "POST",
@@ -8862,7 +8882,7 @@
       "path": "/post-management/block-author",
       "rawPath": "/post-management/block-author",
       "file": "api/lmapi.js",
-      "line": 1870,
+      "line": 1877,
       "matchedPath": "/post-management/block-author",
       "matchedBackend": {
         "method": "POST",
@@ -8876,7 +8896,7 @@
       "path": "/post-management/dislike",
       "rawPath": "/post-management/dislike",
       "file": "api/lmapi.js",
-      "line": 1861,
+      "line": 1868,
       "matchedPath": "/post-management/dislike",
       "matchedBackend": {
         "method": "POST",
@@ -8890,7 +8910,7 @@
       "path": "/post-management/report",
       "rawPath": "/post-management/report",
       "file": "api/lmapi.js",
-      "line": 1879,
+      "line": 1886,
       "matchedPath": "/post-management/report",
       "matchedBackend": {
         "method": "POST",
@@ -8904,7 +8924,7 @@
       "path": "/posts",
       "rawPath": "/posts",
       "file": "api/lmapi.js",
-      "line": 1082,
+      "line": 1089,
       "matchedPath": "/posts",
       "matchedBackend": {
         "method": "POST",
@@ -8918,7 +8938,7 @@
       "path": "/posts/:param/co-creators/invite",
       "rawPath": "/posts/${postId}/co-creators/invite",
       "file": "api/lmapi.js",
-      "line": 1093,
+      "line": 1100,
       "matchedPath": "/posts/:param/co-creators/invite",
       "matchedBackend": {
         "method": "POST",
@@ -8932,7 +8952,7 @@
       "path": "/posts/:param/co-creators/respond",
       "rawPath": "/posts/${postId}/co-creators/respond",
       "file": "api/lmapi.js",
-      "line": 1099,
+      "line": 1106,
       "matchedPath": "/posts/:param/co-creators/respond",
       "matchedBackend": {
         "method": "POST",
@@ -8946,7 +8966,7 @@
       "path": "/posts/:param/echo-interactions",
       "rawPath": "/posts/${encodeURIComponent(postId)}/echo-interactions",
       "file": "api/lmapi.js",
-      "line": 1046,
+      "line": 1053,
       "matchedPath": "/posts/:param/echo-interactions",
       "matchedBackend": {
         "method": "POST",
@@ -8960,7 +8980,7 @@
       "path": "/product-options/:param/batch",
       "rawPath": "/product-options/${productId}/batch",
       "file": "api/lmapi.js",
-      "line": 2696,
+      "line": 2703,
       "matchedPath": "/product-options/:param/batch",
       "matchedBackend": {
         "method": "POST",
@@ -8974,7 +8994,7 @@
       "path": "/products",
       "rawPath": "/products",
       "file": "api/lmapi.js",
-      "line": 2131,
+      "line": 2138,
       "matchedPath": "/products",
       "matchedBackend": {
         "method": "POST",
@@ -8988,7 +9008,7 @@
       "path": "/region-signin/:param/online-heartbeat",
       "rawPath": "/region-signin/${regionId}/online-heartbeat",
       "file": "api/lmapi.js",
-      "line": 831,
+      "line": 838,
       "matchedPath": "/region-signin/:param/online-heartbeat",
       "matchedBackend": {
         "method": "POST",
@@ -9002,7 +9022,7 @@
       "path": "/region-signin/:param/signin",
       "rawPath": "/region-signin/${regionId}/signin",
       "file": "api/lmapi.js",
-      "line": 828,
+      "line": 835,
       "matchedPath": "/region-signin/:param/signin",
       "matchedBackend": {
         "method": "POST",
@@ -9016,7 +9036,7 @@
       "path": "/regions/:param/content-item",
       "rawPath": "/regions/${regionId}/content-item",
       "file": "api/lmapi.js",
-      "line": 963,
+      "line": 970,
       "matchedPath": "/regions/:param/content-item",
       "matchedBackend": {
         "method": "POST",
@@ -9030,7 +9050,7 @@
       "path": "/regions/:param/select",
       "rawPath": "/regions/${regionId}/select",
       "file": "api/lmapi.js",
-      "line": 723,
+      "line": 730,
       "matchedPath": "/regions/:param/select",
       "matchedBackend": {
         "method": "POST",
@@ -9044,7 +9064,7 @@
       "path": "/second-hand/:param/report",
       "rawPath": "/second-hand/${id}/report",
       "file": "api/lmapi.js",
-      "line": 1663,
+      "line": 1670,
       "matchedPath": "/second-hand/:param/report",
       "matchedBackend": {
         "method": "POST",
@@ -9058,7 +9078,7 @@
       "path": "/second-hand/:param/status",
       "rawPath": "/second-hand/${id}/status",
       "file": "api/lmapi.js",
-      "line": 1657,
+      "line": 1664,
       "matchedPath": "/second-hand/:param/status",
       "matchedBackend": {
         "method": "POST",
@@ -9072,7 +9092,7 @@
       "path": "/second-hand/create",
       "rawPath": "/second-hand/create",
       "file": "api/lmapi.js",
-      "line": 1628,
+      "line": 1635,
       "matchedPath": "/second-hand/create",
       "matchedBackend": {
         "method": "POST",
@@ -9086,7 +9106,7 @@
       "path": "/second-hand/order/create",
       "rawPath": "/second-hand/order/create",
       "file": "api/lmapi.js",
-      "line": 1675,
+      "line": 1682,
       "matchedPath": "/second-hand/order/create",
       "matchedBackend": {
         "method": "POST",
@@ -9100,7 +9120,7 @@
       "path": "/shopping-cart",
       "rawPath": "/shopping-cart",
       "file": "api/lmapi.js",
-      "line": 1258,
+      "line": 1265,
       "matchedPath": "/shopping-cart",
       "matchedBackend": {
         "method": "POST",
@@ -9114,7 +9134,7 @@
       "path": "/squats/:param",
       "rawPath": "/squats/${postId}",
       "file": "api/lmapi.js",
-      "line": 3138,
+      "line": 3145,
       "matchedPath": "/squats/:param",
       "matchedBackend": {
         "method": "POST",
@@ -9128,7 +9148,7 @@
       "path": "/topnotes/cancel-order/:param",
       "rawPath": "/topnotes/cancel-order/${orderId}",
       "file": "api/lmapi.js",
-      "line": 1613,
+      "line": 1620,
       "matchedPath": "/topnotes/cancel-order/:param",
       "matchedBackend": {
         "method": "POST",
@@ -9142,7 +9162,7 @@
       "path": "/topnotes/get-payment-info",
       "rawPath": "/topnotes/get-payment-info",
       "file": "api/lmapi.js",
-      "line": 1595,
+      "line": 1602,
       "matchedPath": "/topnotes/get-payment-info",
       "matchedBackend": {
         "method": "POST",
@@ -9156,7 +9176,7 @@
       "path": "/topnotes/sync-payment/:param",
       "rawPath": "/topnotes/sync-payment/${encodeURIComponent(orderId)}",
       "file": "api/lmapi.js",
-      "line": 1603,
+      "line": 1610,
       "matchedPath": "/topnotes/sync-payment/:param",
       "matchedBackend": {
         "method": "POST",
@@ -9170,7 +9190,7 @@
       "path": "/topnotes/topup-orders",
       "rawPath": "/topnotes/topup-orders",
       "file": "api/lmapi.js",
-      "line": 1589,
+      "line": 1596,
       "matchedPath": "/topnotes/topup-orders",
       "matchedBackend": {
         "method": "POST",
@@ -9181,24 +9201,10 @@
     },
     {
       "method": "POST",
-      "path": "/tracking/events",
-      "rawPath": "/tracking/events",
-      "file": "api/lmapi.js",
-      "line": 318,
-      "matchedPath": "/tracking/events",
-      "matchedBackend": {
-        "method": "POST",
-        "path": "/tracking/events",
-        "file": "backend/src/modules/tracking/tracking.controller.ts",
-        "line": 25
-      }
-    },
-    {
-      "method": "POST",
       "path": "/upload",
       "rawPath": "/upload",
       "file": "api/lmapi.js",
-      "line": 1404,
+      "line": 1411,
       "matchedPath": "/upload",
       "matchedBackend": {
         "method": "POST",
@@ -9212,7 +9218,7 @@
       "path": "/upload/unlimited-qrcode",
       "rawPath": "/upload/unlimited-qrcode",
       "file": "api/lmapi.js",
-      "line": 1443,
+      "line": 1450,
       "matchedPath": "/upload/unlimited-qrcode",
       "matchedBackend": {
         "method": "POST",
@@ -9226,7 +9232,7 @@
       "path": "/upload/upload-video-with-thumbnail",
       "rawPath": "/upload/upload-video-with-thumbnail",
       "file": "api/lmapi.js",
-      "line": 1470,
+      "line": 1477,
       "matchedPath": "/upload/upload-video-with-thumbnail",
       "matchedBackend": {
         "method": "POST",
@@ -9240,7 +9246,7 @@
       "path": "/user-followers/:param",
       "rawPath": "/user-followers/${userId}",
       "file": "api/lmapi.js",
-      "line": 552,
+      "line": 559,
       "matchedPath": "/user-followers/:param",
       "matchedBackend": {
         "method": "POST",
@@ -9254,13 +9260,13 @@
       "path": "/wx-auth/get-phone-number",
       "rawPath": "/wx-auth/get-phone-number",
       "file": "api/lmapi.js",
-      "line": 536,
+      "line": 543,
       "matchedPath": "/wx-auth/get-phone-number",
       "matchedBackend": {
         "method": "POST",
         "path": "/wx-auth/get-phone-number",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 38
+        "line": 33
       }
     },
     {
@@ -9268,13 +9274,13 @@
       "path": "/wx-auth/refresh",
       "rawPath": "/wx-auth/refresh",
       "file": "api/lmapi.js",
-      "line": 169,
+      "line": 178,
       "matchedPath": "/wx-auth/refresh",
       "matchedBackend": {
         "method": "POST",
         "path": "/wx-auth/refresh",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 77
+        "line": 72
       }
     },
     {
@@ -9282,13 +9288,13 @@
       "path": "/wx-auth/wx-mini-login",
       "rawPath": "/wx-auth/wx-mini-login",
       "file": "api/lmapi.js",
-      "line": 360,
+      "line": 367,
       "matchedPath": "/wx-auth/wx-mini-login",
       "matchedBackend": {
         "method": "POST",
         "path": "/wx-auth/wx-mini-login",
         "file": "backend/src/modules/auth/auth.controller.ts",
-        "line": 28
+        "line": 23
       }
     },
     {
@@ -9296,7 +9302,7 @@
       "path": "/wxpay/createOrder",
       "rawPath": "/wxpay/createOrder",
       "file": "api/lmapi.js",
-      "line": 1338,
+      "line": 1345,
       "matchedPath": "/wxpay/createOrder",
       "matchedBackend": {
         "method": "POST",
@@ -9310,7 +9316,7 @@
       "path": "/wxpay/createOrder",
       "rawPath": "/wxpay/createOrder",
       "file": "api/lmapi.js",
-      "line": 2448,
+      "line": 2455,
       "matchedPath": "/wxpay/createOrder",
       "matchedBackend": {
         "method": "POST",
@@ -9324,7 +9330,7 @@
       "path": "/wxpay/merchant-refund",
       "rawPath": "/wxpay/merchant-refund",
       "file": "api/lmapi.js",
-      "line": 2246,
+      "line": 2253,
       "matchedPath": "/wxpay/merchant-refund",
       "matchedBackend": {
         "method": "POST",
@@ -9338,7 +9344,7 @@
       "path": "/wxpay/order-refund/apply",
       "rawPath": "/wxpay/order-refund/apply",
       "file": "api/lmapi.js",
-      "line": 2258,
+      "line": 2265,
       "matchedPath": "/wxpay/order-refund/apply",
       "matchedBackend": {
         "method": "POST",
@@ -9352,7 +9358,7 @@
       "path": "/wxpay/order-refund/cancel-apply",
       "rawPath": "/wxpay/order-refund/cancel-apply",
       "file": "api/lmapi.js",
-      "line": 2264,
+      "line": 2271,
       "matchedPath": "/wxpay/order-refund/cancel-apply",
       "matchedBackend": {
         "method": "POST",
@@ -9366,7 +9372,7 @@
       "path": "/wxpay/printOrder",
       "rawPath": "/wxpay/printOrder",
       "file": "api/lmapi.js",
-      "line": 2270,
+      "line": 2277,
       "matchedPath": "/wxpay/printOrder",
       "matchedBackend": {
         "method": "POST",
@@ -9380,7 +9386,7 @@
       "path": "/wxpay/user-order-refund",
       "rawPath": "/wxpay/user-order-refund",
       "file": "api/lmapi.js",
-      "line": 2252,
+      "line": 2259,
       "matchedPath": "/wxpay/user-order-refund",
       "matchedBackend": {
         "method": "POST",
@@ -9394,7 +9400,7 @@
       "path": "/addresses/:param",
       "rawPath": "/addresses/${addressId}",
       "file": "api/lmapi.js",
-      "line": 1391,
+      "line": 1398,
       "matchedPath": "/addresses/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9408,7 +9414,7 @@
       "path": "/api/contacts/:param",
       "rawPath": "/api/contacts/${id}",
       "file": "api/lmapi.js",
-      "line": 3413,
+      "line": 3420,
       "matchedPath": "/api/contacts/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9422,7 +9428,7 @@
       "path": "/api/delivery-orders/:param",
       "rawPath": "/api/delivery-orders/${orderId}",
       "file": "api/lmapi.js",
-      "line": 1368,
+      "line": 1375,
       "matchedPath": "/api/delivery-orders/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9436,7 +9442,7 @@
       "path": "/api/punchIn/location/:param",
       "rawPath": "/api/punchIn/location/${locationId}",
       "file": "api/lmapi.js",
-      "line": 2922,
+      "line": 2929,
       "matchedPath": "/api/punchIn/location/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9450,7 +9456,7 @@
       "path": "/api/riders/current",
       "rawPath": "/api/riders/current",
       "file": "api/lmapi.js",
-      "line": 1008,
+      "line": 1015,
       "matchedPath": "/api/riders/current",
       "matchedBackend": {
         "method": "PUT",
@@ -9464,7 +9470,7 @@
       "path": "/auth/user/privacy-settings",
       "rawPath": "/auth/user/privacy-settings",
       "file": "api/lmapi.js",
-      "line": 2606,
+      "line": 2613,
       "matchedPath": "/auth/user/privacy-settings",
       "matchedBackend": {
         "method": "PUT",
@@ -9478,7 +9484,7 @@
       "path": "/auth/user/update-profile",
       "rawPath": "/auth/user/update-profile",
       "file": "api/lmapi.js",
-      "line": 402,
+      "line": 409,
       "matchedPath": "/auth/user/update-profile",
       "matchedBackend": {
         "method": "PUT",
@@ -9492,7 +9498,7 @@
       "path": "/campus-map/collection/sessions/:param/batches/:param",
       "rawPath": "/campus-map/collection/sessions/${encodeURIComponent(sessionId)}/batches/${batchNo}",
       "file": "api/lmapi.js",
-      "line": 783,
+      "line": 790,
       "matchedPath": "/campus-map/collection/sessions/:param/batches/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9506,7 +9512,7 @@
       "path": "/categories/:param",
       "rawPath": "/categories/${categoryId}",
       "file": "api/lmapi.js",
-      "line": 1981,
+      "line": 1988,
       "matchedPath": "/categories/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9520,7 +9526,7 @@
       "path": "/circles/:param",
       "rawPath": "/circles/${circleId}",
       "file": "api/lmapi.js",
-      "line": 1920,
+      "line": 1927,
       "matchedPath": "/circles/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9534,7 +9540,7 @@
       "path": "/circles/:param/members/:param/audit",
       "rawPath": "/circles/${circleId}/members/${userId}/audit",
       "file": "api/lmapi.js",
-      "line": 919,
+      "line": 926,
       "matchedPath": "/circles/:param/members/:param/audit",
       "matchedBackend": {
         "method": "PUT",
@@ -9548,7 +9554,7 @@
       "path": "/circles/:param/topic-headers/:param",
       "rawPath": "/circles/${circleId}/topic-headers/${headerId}",
       "file": "api/lmapi.js",
-      "line": 339,
+      "line": 346,
       "matchedPath": "/circles/:param/topic-headers/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9562,7 +9568,7 @@
       "path": "/comments/pin/:param",
       "rawPath": "/comments/pin/${commentId}",
       "file": "api/lmapi.js",
-      "line": 2019,
+      "line": 2026,
       "matchedPath": "/comments/pin/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9576,7 +9582,7 @@
       "path": "/delivery-products/:param",
       "rawPath": "/delivery-products/${productId}",
       "file": "api/lmapi.js",
-      "line": 2137,
+      "line": 2144,
       "matchedPath": "/delivery-products/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9590,7 +9596,7 @@
       "path": "/errand/order/accept/:param",
       "rawPath": "/errand/order/accept/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2492,
+      "line": 2499,
       "matchedPath": "/errand/order/accept/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9604,7 +9610,7 @@
       "path": "/errand/order/rider-status/:param",
       "rawPath": "/errand/order/rider-status/${orderId}",
       "file": "api/lmapi.js",
-      "line": 2483,
+      "line": 2490,
       "matchedPath": "/errand/order/rider-status/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9618,7 +9624,7 @@
       "path": "/merchant/reviews/:param/reply",
       "rawPath": "/merchant/reviews/${id}/reply",
       "file": "api/lmapi.js",
-      "line": 2666,
+      "line": 2673,
       "matchedPath": "/merchant/reviews/:param/reply",
       "matchedBackend": {
         "method": "PUT",
@@ -9632,7 +9638,7 @@
       "path": "/merchants/printer-config/:param",
       "rawPath": "/merchants/printer-config/${printerId}",
       "file": "api/lmapi.js",
-      "line": 2174,
+      "line": 2181,
       "matchedPath": "/merchants/printer-config/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9646,7 +9652,7 @@
       "path": "/merchants/update/:param",
       "rawPath": "/merchants/update/${merchantId}",
       "file": "api/lmapi.js",
-      "line": 1301,
+      "line": 1308,
       "matchedPath": "/merchants/update/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9660,7 +9666,7 @@
       "path": "/messages/conversation/read",
       "rawPath": "/messages/conversation/read",
       "file": "api/lmapi.js",
-      "line": 485,
+      "line": 492,
       "matchedPath": "/messages/conversation/read",
       "matchedBackend": {
         "method": "PUT",
@@ -9674,7 +9680,7 @@
       "path": "/messages/group/:param",
       "rawPath": "/messages/group/${groupId}",
       "file": "api/lmapi.js",
-      "line": 2911,
+      "line": 2918,
       "matchedPath": "/messages/group/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9688,7 +9694,7 @@
       "path": "/messages/read-all",
       "rawPath": "/messages/read-all${query}",
       "file": "api/lmapi.js",
-      "line": 480,
+      "line": 487,
       "matchedPath": "/messages/read-all",
       "matchedBackend": {
         "method": "PUT",
@@ -9702,7 +9708,7 @@
       "path": "/notifications/mark-read-all",
       "rawPath": "/notifications/mark-read-all",
       "file": "api/lmapi.js",
-      "line": 454,
+      "line": 461,
       "matchedPath": "/notifications/mark-read-all",
       "matchedBackend": {
         "method": "PUT",
@@ -9716,7 +9722,7 @@
       "path": "/notifications/mark-read/:param",
       "rawPath": "/notifications/mark-read/${id}",
       "file": "api/lmapi.js",
-      "line": 449,
+      "line": 456,
       "matchedPath": "/notifications/mark-read/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9730,7 +9736,7 @@
       "path": "/notifications/read-all",
       "rawPath": "/notifications/read-all?${query.join(\"&\")}",
       "file": "api/lmapi.js",
-      "line": 464,
+      "line": 471,
       "matchedPath": "/notifications/read-all",
       "matchedBackend": {
         "method": "PUT",
@@ -9744,7 +9750,7 @@
       "path": "/posts/:param",
       "rawPath": "/posts/${postId}",
       "file": "api/lmapi.js",
-      "line": 1148,
+      "line": 1155,
       "matchedPath": "/posts/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9758,7 +9764,7 @@
       "path": "/posts/:param",
       "rawPath": "/posts/${postId}",
       "file": "api/lmapi.js",
-      "line": 1755,
+      "line": 1762,
       "matchedPath": "/posts/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9772,7 +9778,7 @@
       "path": "/product-options/:param/batch",
       "rawPath": "/product-options/${productId}/batch",
       "file": "api/lmapi.js",
-      "line": 2702,
+      "line": 2709,
       "matchedPath": "/product-options/:param/batch",
       "matchedBackend": {
         "method": "PUT",
@@ -9786,7 +9792,7 @@
       "path": "/regions/:param/content-item/:param",
       "rawPath": "/regions/${regionId}/content-item/${itemId}",
       "file": "api/lmapi.js",
-      "line": 969,
+      "line": 976,
       "matchedPath": "/regions/:param/content-item/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9800,7 +9806,7 @@
       "path": "/second-hand/:param",
       "rawPath": "/second-hand/${id}",
       "file": "api/lmapi.js",
-      "line": 1651,
+      "line": 1658,
       "matchedPath": "/second-hand/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9814,7 +9820,7 @@
       "path": "/second-hand/orders/:param/status",
       "rawPath": "/second-hand/orders/${id}/status",
       "file": "api/lmapi.js",
-      "line": 1669,
+      "line": 1676,
       "matchedPath": "/second-hand/orders/:param/status",
       "matchedBackend": {
         "method": "PUT",
@@ -9828,7 +9834,7 @@
       "path": "/topics/:param",
       "rawPath": "/topics/${id}",
       "file": "api/lmapi.js",
-      "line": 1855,
+      "line": 1862,
       "matchedPath": "/topics/:param",
       "matchedBackend": {
         "method": "PUT",
@@ -9903,37 +9909,31 @@
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 428
-    },
-    {
-      "method": "DELETE",
-      "path": "/admin/campus-map/:regionId/imports/:jobId",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 418
+      "line": 385
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 211
+      "line": 241
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/:regionId/places/:placeId/media/:mediaId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 254
+      "line": 284
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/project-catalog/:number",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 111
+      "line": 141
     },
     {
       "method": "DELETE",
       "path": "/admin/campus-map/project-catalog/:number/photos",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 145
+      "line": 175
     },
     {
       "method": "DELETE",
@@ -11139,37 +11139,25 @@
       "method": "GET",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 291
-    },
-    {
-      "method": "GET",
-      "path": "/admin/campus-map/:regionId/imports",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 388
-    },
-    {
-      "method": "GET",
-      "path": "/admin/campus-map/:regionId/imports/:jobId",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 398
+      "line": 303
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/places",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 175
+      "line": 205
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 193
+      "line": 223
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/:regionId/versions",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 344
+      "line": 356
     },
     {
       "method": "GET",
@@ -11197,21 +11185,15 @@
     },
     {
       "method": "GET",
-      "path": "/admin/campus-map/converter/status",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 263
-    },
-    {
-      "method": "GET",
       "path": "/admin/campus-map/project-catalog",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 64
+      "line": 94
     },
     {
       "method": "GET",
       "path": "/admin/campus-map/statuses",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 281
+      "line": 293
     },
     {
       "method": "GET",
@@ -11392,6 +11374,12 @@
       "path": "/admin/config/amap/runtime",
       "file": "backend/src/modules/system-config/system-config.controller.ts",
       "line": 335
+    },
+    {
+      "method": "GET",
+      "path": "/admin/config/app-capabilities",
+      "file": "backend/src/modules/system-config/system-config.controller.ts",
+      "line": 148
     },
     {
       "method": "GET",
@@ -11667,7 +11655,7 @@
       "method": "GET",
       "path": "/admin/errand/abnormal-orders",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 97
+      "line": 98
     },
     {
       "method": "GET",
@@ -11679,7 +11667,7 @@
       "method": "GET",
       "path": "/admin/errand/fee-config",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 113
+      "line": 114
     },
     {
       "method": "GET",
@@ -11691,25 +11679,25 @@
       "method": "GET",
       "path": "/admin/errand/orders",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 62
+      "line": 63
     },
     {
       "method": "GET",
       "path": "/admin/errand/orders/:id",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 69
+      "line": 70
     },
     {
       "method": "GET",
       "path": "/admin/errand/orders/:id/timeline",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 90
+      "line": 91
     },
     {
       "method": "GET",
       "path": "/admin/errand/page-config",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 129
+      "line": 130
     },
     {
       "method": "GET",
@@ -11721,7 +11709,7 @@
       "method": "GET",
       "path": "/admin/errand/reward-punish",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 145
+      "line": 146
     },
     {
       "method": "GET",
@@ -12615,7 +12603,7 @@
       "method": "GET",
       "path": "/admin/profile",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 211
+      "line": 206
     },
     {
       "method": "GET",
@@ -13017,19 +13005,19 @@
       "method": "GET",
       "path": "/admin/riders",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 25
+      "line": 26
     },
     {
       "method": "GET",
       "path": "/admin/riders/:id",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 32
+      "line": 33
     },
     {
       "method": "GET",
       "path": "/admin/riders/:id/records",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 53
+      "line": 54
     },
     {
       "method": "GET",
@@ -13222,36 +13210,6 @@
       "path": "/admin/topup/packages",
       "file": "backend/src/modules/admin/supplement.controller.ts",
       "line": 380
-    },
-    {
-      "method": "GET",
-      "path": "/admin/tracking/events",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 74
-    },
-    {
-      "method": "GET",
-      "path": "/admin/tracking/funnel",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 83
-    },
-    {
-      "method": "GET",
-      "path": "/admin/tracking/page-heatmap",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 101
-    },
-    {
-      "method": "GET",
-      "path": "/admin/tracking/path-analysis",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 92
-    },
-    {
-      "method": "GET",
-      "path": "/admin/tracking/search-keywords",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 110
     },
     {
       "method": "GET",
@@ -14697,7 +14655,7 @@
       "method": "GET",
       "path": "/auth/admin/captcha",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 94
+      "line": 89
     },
     {
       "method": "GET",
@@ -14709,19 +14667,19 @@
       "method": "GET",
       "path": "/auth/admin/mfa/status",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 260
+      "line": 255
     },
     {
       "method": "GET",
       "path": "/auth/admin/profile",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 219
+      "line": 214
     },
     {
       "method": "GET",
       "path": "/auth/admin/qr/status",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 137
+      "line": 132
     },
     {
       "method": "GET",
@@ -14815,15 +14773,39 @@
     },
     {
       "method": "GET",
+      "path": "/campus-map/read-access",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 45
+    },
+    {
+      "method": "GET",
+      "path": "/campus-map/read-snapshot",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 54
+    },
+    {
+      "method": "GET",
       "path": "/campus-map/site",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 58
+      "line": 88
+    },
+    {
+      "method": "GET",
+      "path": "/campus-map/site/version",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 40
+    },
+    {
+      "method": "GET",
+      "path": "/campus-map/version",
+      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
+      "line": 32
     },
     {
       "method": "GET",
       "path": "/captcha",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 87
+      "line": 82
     },
     {
       "method": "GET",
@@ -16153,6 +16135,12 @@
     },
     {
       "method": "GET",
+      "path": "/platform/app-capabilities",
+      "file": "backend/src/modules/system-config/system-config.controller.ts",
+      "line": 629
+    },
+    {
+      "method": "GET",
       "path": "/platform/app-review-mode",
       "file": "backend/src/modules/system-config/system-config.controller.ts",
       "line": 629
@@ -17121,7 +17109,7 @@
       "method": "PATCH",
       "path": "/admin/campus-map/:regionId/places/:placeId/media/:mediaId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 245
+      "line": 275
     },
     {
       "method": "PATCH",
@@ -17707,39 +17695,27 @@
     },
     {
       "method": "POST",
-      "path": "/admin/campus-map/:regionId/imports",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 373
-    },
-    {
-      "method": "POST",
-      "path": "/admin/campus-map/:regionId/imports/:jobId/retry",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 408
-    },
-    {
-      "method": "POST",
       "path": "/admin/campus-map/:regionId/places",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 184
+      "line": 214
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/places/:placeId/media",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 220
+      "line": 250
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/publish",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 330
+      "line": 342
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/:regionId/versions/:versionId/rollback",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 359
+      "line": 371
     },
     {
       "method": "POST",
@@ -17769,19 +17745,19 @@
       "method": "POST",
       "path": "/admin/campus-map/project-catalog/:number/photos",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 126
+      "line": 156
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/project-catalog/release-batch/prepare",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 81
+      "line": 111
     },
     {
       "method": "POST",
       "path": "/admin/campus-map/project-catalog/seed",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 161
+      "line": 191
     },
     {
       "method": "POST",
@@ -17961,7 +17937,7 @@
       "method": "POST",
       "path": "/admin/errand/orders/:id/assign",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 83
+      "line": 84
     },
     {
       "method": "POST",
@@ -17973,7 +17949,7 @@
       "method": "POST",
       "path": "/admin/errand/risk-events/:id/handle",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 104
+      "line": 105
     },
     {
       "method": "POST",
@@ -18021,13 +17997,13 @@
       "method": "POST",
       "path": "/admin/login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 105
+      "line": 100
     },
     {
       "method": "POST",
       "path": "/admin/logout",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 195
+      "line": 190
     },
     {
       "method": "POST",
@@ -18453,7 +18429,7 @@
       "method": "POST",
       "path": "/admin/refresh",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 183
+      "line": 178
     },
     {
       "method": "POST",
@@ -19237,18 +19213,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/tracking/batch",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 60
-    },
-    {
-      "method": "POST",
-      "path": "/api/tracking/events",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 33
-    },
-    {
-      "method": "POST",
       "path": "/api/transfer/request/:orderId",
       "file": "backend/src/modules/errand/errand.controller.ts",
       "line": 221
@@ -19341,73 +19305,73 @@
       "method": "POST",
       "path": "/auth/admin/login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 117
+      "line": 112
     },
     {
       "method": "POST",
       "path": "/auth/admin/logout",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 203
+      "line": 198
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/disable",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 252
+      "line": 247
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/enable",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 244
+      "line": 239
     },
     {
       "method": "POST",
       "path": "/auth/admin/mfa/setup",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 236
+      "line": 231
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/cancel",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 145
+      "line": 140
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/confirm",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 161
+      "line": 156
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/create",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 129
+      "line": 124
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/reject",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 175
+      "line": 170
     },
     {
       "method": "POST",
       "path": "/auth/admin/qr/scan",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 151
+      "line": 146
     },
     {
       "method": "POST",
       "path": "/auth/admin/refresh",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 189
+      "line": 184
     },
     {
       "method": "POST",
       "path": "/auth/admin/reset-password",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 227
+      "line": 222
     },
     {
       "method": "POST",
@@ -19425,13 +19389,13 @@
       "method": "POST",
       "path": "/auth/phone/login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 67
+      "line": 62
     },
     {
       "method": "POST",
       "path": "/auth/phone/send-code",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 58
+      "line": 53
     },
     {
       "method": "POST",
@@ -19491,7 +19455,7 @@
       "method": "POST",
       "path": "/campus-map/places/:placeId/check-ins",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 32
+      "line": 62
     },
     {
       "method": "POST",
@@ -20281,18 +20245,6 @@
     },
     {
       "method": "POST",
-      "path": "/tracking/batch",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 52
-    },
-    {
-      "method": "POST",
-      "path": "/tracking/events",
-      "file": "backend/src/modules/tracking/tracking.controller.ts",
-      "line": 25
-    },
-    {
-      "method": "POST",
       "path": "/transfer/request/:orderId",
       "file": "backend/src/modules/errand/errand.controller.ts",
       "line": 221
@@ -20349,25 +20301,25 @@
       "method": "POST",
       "path": "/wx-auth/get-phone-number",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 38
+      "line": 33
     },
     {
       "method": "POST",
       "path": "/wx-auth/phone-one-tap-login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 48
+      "line": 43
     },
     {
       "method": "POST",
       "path": "/wx-auth/refresh",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 77
+      "line": 72
     },
     {
       "method": "POST",
       "path": "/wx-auth/wx-mini-login",
       "file": "backend/src/modules/auth/auth.controller.ts",
-      "line": 28
+      "line": 23
     },
     {
       "method": "POST",
@@ -20631,31 +20583,25 @@
       "method": "PUT",
       "path": "/admin/campus-map/:regionId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 301
+      "line": 313
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/:regionId/draft",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 311
+      "line": 323
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/:regionId/places/:placeId",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 202
-    },
-    {
-      "method": "PUT",
-      "path": "/admin/campus-map/converter",
-      "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 272
+      "line": 232
     },
     {
       "method": "PUT",
       "path": "/admin/campus-map/project-catalog/:number",
       "file": "backend/src/modules/campus-map/campus-map.controller.ts",
-      "line": 95
+      "line": 125
     },
     {
       "method": "PUT",
@@ -20782,6 +20728,12 @@
       "path": "/admin/config/amap",
       "file": "backend/src/modules/system-config/system-config.controller.ts",
       "line": 343
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/config/app-capabilities",
+      "file": "backend/src/modules/system-config/system-config.controller.ts",
+      "line": 156
     },
     {
       "method": "PUT",
@@ -20955,7 +20907,7 @@
       "method": "PUT",
       "path": "/admin/errand/fee-config",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 120
+      "line": 121
     },
     {
       "method": "PUT",
@@ -20967,13 +20919,13 @@
       "method": "PUT",
       "path": "/admin/errand/orders/:id/cancel",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 76
+      "line": 77
     },
     {
       "method": "PUT",
       "path": "/admin/errand/page-config",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 136
+      "line": 137
     },
     {
       "method": "PUT",
@@ -20985,7 +20937,7 @@
       "method": "PUT",
       "path": "/admin/errand/reward-punish",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 152
+      "line": 153
     },
     {
       "method": "PUT",
@@ -21621,13 +21573,13 @@
       "method": "PUT",
       "path": "/admin/riders/:id/audit",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 39
+      "line": 40
     },
     {
       "method": "PUT",
       "path": "/admin/riders/:id/status",
       "file": "backend/src/modules/errand-admin/errand-admin.controller.ts",
-      "line": 46
+      "line": 47
     },
     {
       "method": "PUT",

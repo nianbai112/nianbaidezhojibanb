@@ -27,7 +27,7 @@ export class WechatController {
     const types = String(rawTypes || '')
       .split(',')
       .map((value) => value.trim())
-      .filter((value) => /^(takeaway_(order_status|merchant_order|rider_order)|errand_(accepted|picked|delivered)|post_(audit_result|comment)|comment_reply)$/.test(value));
+      .filter((value) => /^(takeaway_(order_status|merchant_order|rider_order)|errand_(accepted|picked|delivered)|post_(audit_result|comment)|comment_reply|welfare_draw)$/.test(value));
     if (!types.length) return { list: [] };
     return { list: await this.subscribeService.listEnabledTemplates(types, userId) };
   }

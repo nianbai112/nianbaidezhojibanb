@@ -19,7 +19,7 @@ import {
 } from '../wechat/wechat-template-contracts';
 
 const SECRET_MASK = '******';
-const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|pass$/i;
+const SECRET_FIELD_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|encodingAESKey|aesKey|pass$/i;
 const MINIAPP_PAGE_MANIFEST_FILE = 'miniapp-page-manifest.json';
 const AGREEMENT_DOCUMENT_TYPES = [
   { type: 'TERMS_OF_SERVICE', title: '用户协议', scene: 'login', isRequired: true },
@@ -371,6 +371,8 @@ export class SystemAdminService {
 
   private withMiniappSupplementalPages(list: any[]) {
     const supplemental = [
+      { title: '福利抽奖', fullPath: 'pagesA/welfare/index', group: '营销活动', kind: '常用入口' },
+      { title: '我的抽奖', fullPath: 'pagesA/welfare/mine', group: '营销活动', kind: '常用入口' },
       { title: '活动中心', fullPath: 'pagesA/selection/list/list', group: '营销活动', kind: '常用入口', query: 'tabIndex=0' },
       { title: '活动详情', fullPath: 'pagesA/selection/activity/activity', group: '营销活动', kind: '常用入口', query: 'id=' },
       { title: '分享有礼', fullPath: 'pagesA/news/SharingCourtesy/SharingCourtesy', group: '营销活动', kind: '常用入口' },

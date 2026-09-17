@@ -1,12 +1,32 @@
 import { ExecutionContext } from "@nestjs/common";
 import { lastValueFrom, of, throwError } from "rxjs";
 import { RequestLogInterceptor } from "./request-log.interceptor";
+import { requestContext } from '../common/request-context';
 
 describe("RequestLogInterceptor", () => {
   const contextFor = (request: any) =>
     ({
       switchToHttp: () => ({ getRequest: () => request }),
     }) as ExecutionContext;
+
+  it('records a successful admin mutation when the business handler has no audit writer', async () => {
+    const prisma = { serverLog: { createMany: jest.fn().mockResolvedValue({ count: 1 }) }, adminOperationLog: { create: jest.fn().mockResolvedValue({}) } };
+    const interceptor = new RequestLogInterceptor(prisma as any);
+    const request: any = { method: 'PUT', url: '/admin/configs/miniapp', headers: {}, ip: '203.0.113.1', user: { sub: 'admin-1', isAdmin: true }, body: { enabled: true, appSecret: 'do-not-log' } };
+    await requestContext.run({ request }, () => lastValueFrom(interceptor.intercept(contextFor(request), { handle: () => of({ success: true }) })));
+    expect(prisma.adminOperationLog.create.mock.calls[0][0].data).toMatchObject({ accountId: 'admin-1', ip: '203.0.113.1', detail: { submitted: { enabled: true, appSecret: '已隐藏敏感信息' } } });
+    await interceptor.onModuleDestroy();
+  });
+
+  it('does not duplicate an existing business audit record or label a rejected mutation successful', async () => {
+    const prisma = { serverLog: { createMany: jest.fn().mockResolvedValue({ count: 1 }) }, adminOperationLog: { create: jest.fn() } };
+    const interceptor = new RequestLogInterceptor(prisma as any);
+    const request: any = { method: 'PUT', url: '/admin/configs/miniapp', headers: {}, user: { sub: 'admin-1', isAdmin: true } };
+    await requestContext.run({ request, operationLogged: true }, () => lastValueFrom(interceptor.intercept(contextFor(request), { handle: () => of({ success: true }) })));
+    await requestContext.run({ request }, () => lastValueFrom(interceptor.intercept(contextFor(request), { handle: () => of({ code: 400 }) })));
+    expect(prisma.adminOperationLog.create).not.toHaveBeenCalled();
+    await interceptor.onModuleDestroy();
+  });
 
   it("batches successful admin request logs outside the response path", async () => {
     const prisma = {

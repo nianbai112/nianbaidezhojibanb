@@ -398,6 +398,7 @@ export class OpsService {
     );
 
     return {
+      environment: this.configService.get('NODE_ENV') || 'development',
       cpuUsage: Math.round(cpuUsage * 10000) / 100,
       memoryUsage: Math.round(memoryUsage * 10000) / 100,
       diskUsage,
@@ -434,6 +435,15 @@ export class OpsService {
       userId,
       path,
     } = query;
+    const pageNumber = Number(page);
+    const pageLimit = Number(pageSize);
+    if (!Number.isSafeInteger(pageNumber) || pageNumber < 1 || !Number.isSafeInteger(pageLimit) || pageLimit < 1 || pageLimit > 100) {
+      throw new BadRequestException('日志页码必须为正整数，每页最多 100 条');
+    }
+    if (level && !['info', 'warn', 'error'].includes(level)) throw new BadRequestException('日志级别无效');
+    for (const value of [startTime, endTime]) {
+      if (value && !Number.isFinite(new Date(value).getTime())) throw new BadRequestException('日志筛选时间格式错误');
+    }
     const where: any = {};
 
     if (level) where.level = level;
@@ -456,9 +466,12 @@ export class OpsService {
     const [list, total] = await Promise.all([
       this.prisma.serverLog.findMany({
         where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
+        skip: (pageNumber - 1) * pageLimit,
+        take: pageLimit,
         orderBy: { createdAt: "desc" },
+        // Listing must not load unbounded request bodies / exception stacks.
+        select: { id: true, level: true, module: true, message: true, path: true,
+          ip: true, method: true, statusCode: true, durationMs: true, createdAt: true },
       }),
       this.prisma.serverLog.count({ where }),
     ]);

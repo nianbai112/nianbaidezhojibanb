@@ -864,14 +864,17 @@ export class AuthService {
     // 1. 校验验证码（不区分账号是否存在，统一返回"验证码错误"）
     const captchaRequired = process.env.ADMIN_LOGIN_CAPTCHA_REQUIRED !== 'false';
     if (captchaRequired && (!dto.captchaId || !dto.captcha)) {
+      await this.logAdminLogin('', dto.username, false, '未填写图形验证码', ip, ua);
       throw new BadRequestException('请填写验证码');
     }
     if (dto.captchaId && !dto.captcha) {
+      await this.logAdminLogin('', dto.username, false, '未填写图形验证码', ip, ua);
       throw new BadRequestException('请填写验证码');
     }
     if (dto.captchaId) {
       const captchaValid = await this.verifyCaptcha(dto.captchaId, dto.captcha || '');
       if (!captchaValid) {
+        await this.logAdminLogin('', dto.username, false, '图形验证码错误或已过期', ip, ua);
         throw new BadRequestException('验证码错误');
       }
     }
@@ -923,7 +926,7 @@ export class AuthService {
       // 验证 TOTP code
       const isValid = this.verifyTotpCode(account.mfaSecret, dto.mfaCode);
       if (!isValid) {
-        await this.logAdminLogin(account.id, dto.username, false, 'MFA验证码错误', ip, ua);
+        await this.logAdminLogin(account.id, dto.username, false, '动态安全验证码错误或已过期', ip, ua);
         throw new UnauthorizedException('MFA验证码错误或已过期');
       }
     }
@@ -1818,11 +1821,11 @@ export class AuthService {
     ua?: string,
   ) {
     try {
-      if (accountId) {
-        await this.prisma.adminLoginLog.create({
-          data: { accountId, ip, ua, success, failReason },
-        });
-      }
+      // A failed attempt may have no account. Retain its supplied account name
+      // without attaching it to another administrator's identity.
+      await this.prisma.adminLoginLog.create({
+        data: { accountId: accountId || null, username: String(username || '').slice(0, 191), ip, ua, success, failReason },
+      });
     } catch (e) {
       this.logger.warn(`Failed to log admin login: ${e.message}`);
     }

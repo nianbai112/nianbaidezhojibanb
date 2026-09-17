@@ -181,6 +181,10 @@ watch(
   gap: var(--ds-space-4, 16px);
   align-items: stretch;
 }
+.ds-realedit :deep(.profile-editor.drawer-editing .rte-body) {
+  grid-template-columns: minmax(0, 1fr) 440px;
+}
+.ds-realedit :deep(.profile-editor.drawer-editing .rte-page) { zoom: 1; max-width: 100%; }
 /* 画布区：大圆角卡片，手机屏居中且四周留足空间 */
 .ds-realedit :deep(.rte-canvas) {
   border-radius: var(--ds-radius-card, 10px);
@@ -226,6 +230,17 @@ watch(
 }
 .ds-realedit :deep(.rte-props .el-tab-pane) {
   height: 100%;
+}
+
+@media (max-width: 1100px) {
+  .ds-realedit :deep(.profile-editor.drawer-editing .rte-body) {
+    display: block;
+    overflow-y: auto;
+  }
+  .ds-realedit :deep(.profile-editor.drawer-editing .rte-canvas) { min-height: 320px; max-height: 420px; margin-bottom: 16px; }
+  .ds-realedit :deep(.profile-editor.drawer-editing .rte-props) { min-width: 0; height: auto; min-height: 520px; overflow: visible; }
+  .ds-realedit :deep(.profile-editor.drawer-editing .rte-props .el-tabs__content) { overflow: visible; }
+  .ds-realedit :deep(.profile-editor.drawer-editing .rte-props .el-tab-pane) { height: auto; }
 }
 
 </style>

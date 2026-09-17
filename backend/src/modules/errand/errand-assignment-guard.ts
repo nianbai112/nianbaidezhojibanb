@@ -1,4 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
+import { assertErrandRiderGender } from './errand-delivery-requirements'
+import { errandRiskDescription } from './errand-risk-presentation'
 
 export type ErrandAssignmentRisk = {
   allowed: boolean
@@ -16,7 +18,7 @@ type IdentityProfile = {
   unionid?: string | null
   lastLoginIp?: string | null
   lastLoginDevice?: string | null
-  withdraws?: Array<{ account?: string | null }> | null
+  withdraws?: Array<{ account?: string | null; channel?: string | null }> | null
   studentVerify?: {
     status?: string | null
     idCard?: string | null
@@ -85,20 +87,27 @@ const studentIdentityKeys = (profile?: IdentityProfile | null) => {
     .map(school => `${school}:${studentId}`)
 }
 
-const payoutAccountKey = (value: unknown) => {
-  const text = normalizedText(value).replace(/\s+/g, '')
-  const digits = normalizedDigits(text)
-  if (digits.length >= 7) return `phone:${digits}`
-  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) return `email:${text}`
-  if (/^[a-z0-9._-]{6,}$/.test(text)) return `account:${text}`
+const payoutAccountKey = (value: unknown, channel: string | null = 'ALI_PAY') => {
+  const raw = String(value || '').trim()
+  const provider = normalizedText(channel) || 'ali_pay'
+  // WeChat identifiers are case sensitive; different payment providers do not share account identity.
+  if (provider === 'wx_pay') return /^[A-Za-z0-9_-]{6,}$/.test(raw) ? `wx_pay:account:${raw}` : ''
+  const text = normalizedText(raw)
+  // Match the complete email first. Its digits must never be treated as a phone number.
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) return `${provider}:email:${text}`
+  const phone = text.replace(/[\s-]/g, '')
+  const phoneMatch = phone.match(/^(?:\+?86)?(1[3-9]\d{9})$/)
+  if (phoneMatch) return `${provider}:phone:${phoneMatch[1]}`
+  // Preserve the entire identifier: matching the last 11 digits causes unrelated accounts to collide.
+  if (/^[a-z0-9._-]{6,}$/.test(text)) return `${provider}:account:${text}`
   return ''
 }
 
 const payoutAccountKeys = (profile?: IdentityProfile | null) =>
   [
-    profile?.rider?.alipayAccount,
-    ...(Array.isArray(profile?.withdraws) ? profile!.withdraws!.map(item => item?.account) : []),
-  ].map(payoutAccountKey).filter(Boolean)
+    payoutAccountKey(profile?.rider?.alipayAccount, 'ALI_PAY'),
+    ...(Array.isArray(profile?.withdraws) ? profile!.withdraws!.map(item => payoutAccountKey(item?.account, item?.channel)) : []),
+  ].filter(Boolean)
 
 export function assessErrandAssignmentRisk(input: {
   ownerUserId?: string | null
@@ -205,7 +214,7 @@ async function readIdentityProfile(db: any, userId: string): Promise<IdentityPro
               where: { status: { not: 'REJECTED' } },
               orderBy: { createdAt: 'desc' },
               take: 10,
-              select: { account: true },
+              select: { account: true, channel: true },
             },
             studentVerify: {
               select: {
@@ -300,7 +309,7 @@ export async function recordErrandAssignmentRisk(
         riderId: assigneeUserId || null,
         eventType: risk.eventType,
         eventLevel: risk.eventLevel || 'warning',
-        description: `跑腿订单 ${order.orderNo || order.id} 在${source}环节命中防刷规则：${risk.signals.join(', ') || risk.reasonCode || 'unknown'}。`,
+        description: errandRiskDescription(`跑腿订单 ${order.orderNo || order.id} 在${source}环节命中防刷规则：${risk.signals.join(', ') || risk.reasonCode || 'unknown'}。`),
       },
     })
   } catch (_) {
@@ -314,8 +323,12 @@ export async function enforceErrandAssignmentGuard(
   assigneeUserId: string,
   source: string,
 ) {
+  await assertErrandRiderGender(db, order, assigneeUserId)
   const risk = await inspectErrandAssignmentRisk(db, order, assigneeUserId)
   await recordErrandAssignmentRisk(db, order, assigneeUserId, source, risk)
   if (risk.blocked) throw new BadRequestException(risk.message || '该接单行为已被风控拦截')
+  if (Number(order?.payAmount ?? order?.pay_amount ?? 0) > 0 && !order?.payTime) {
+    throw new BadRequestException('订单尚未确认付款，不能接单、派单或转单')
+  }
   return risk
 }

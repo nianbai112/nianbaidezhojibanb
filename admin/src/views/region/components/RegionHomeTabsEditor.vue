@@ -49,7 +49,6 @@ const props = withDefaults(defineProps<Props>(), {
     { id: '2', name: '二手', enabled: true },
     { id: '3', name: '活动', enabled: true },
     { id: '4', name: '评分', enabled: true },
-    { id: '5', name: '打卡地点', enabled: true }
   ]
 })
 

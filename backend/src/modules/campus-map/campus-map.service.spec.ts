@@ -272,6 +272,47 @@ describe('CampusMapService', () => {
     expect(result).toMatchObject({ enabled: true, workflow: { activeVersion: 1, activeVersionId: 'version-1' } });
   });
 
+  it.each([false, true])('publishes planning roads only when explicitly public: %s', async (isPublic) => {
+    const prisma = makeTransactional();
+    prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1', regionId: 'region-1', versionCounter: 0 });
+    prisma.campusMapDraft.findUnique.mockResolvedValue({
+      id: 'draft-1',
+      mapId: 'map-1',
+      revision: 3,
+      manifest: {
+        enabled: true,
+        mapId: 'campus-map',
+        coordinateSystem: { type: 'amap', source: 'gcj02', unit: 'degree' },
+        layers: [{ id: 'operator_routes', inlineData: { type: 'FeatureCollection', features: [{
+          type: 'Feature', properties: { id: 'manual-road', title: '校园规划路', public: isPublic },
+          geometry: { type: 'LineString', coordinates: [[108.75, 30.97], [108.751, 30.97]] },
+        }] } }],
+      },
+    });
+    prisma.campusMap.update
+      .mockResolvedValueOnce({ id: 'map-1', versionCounter: 1 })
+      .mockResolvedValueOnce({ id: 'map-1', enabled: true, activeVersionId: 'version-1' });
+    prisma.campusMapVersion.create.mockResolvedValue({ id: 'version-1', version: 1 });
+    prisma.campusMapDraft.updateMany.mockResolvedValue({ count: 1 });
+    const service = new CampusMapService(prisma as any);
+
+    expect(typeof (service as any).publishDraft).toBe('function');
+    const result = await (service as any).publishDraft('region-1', 'admin-1', 3);
+
+    const published = prisma.campusMapVersion.create.mock.calls[0][0].data.manifest;
+    if (isPublic) {
+      expect(published.navigation.graph.edges[0]).toMatchObject({ source: 'admin_planned', verificationStatus: 'planned', publicationApproved: true });
+    } else {
+      expect(published.navigation).toBeNull();
+    }
+    expect(prisma.campusMapCollectionObject.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.campusMapVersion.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ mapId: 'map-1', version: 1, publishedBy: 'admin-1' }),
+    }));
+    expect(result).toMatchObject({ enabled: true, workflow: { activeVersion: 1, activeVersionId: 'version-1' } });
+  });
+
   it('reconciles route provenance again when publishing an existing draft', async () => {
     const prisma = makeTransactional();
     prisma.campusMap.findUnique.mockResolvedValue({ id: 'map-1', regionId: 'region-1', versionCounter: 0 });
@@ -841,7 +882,7 @@ describe('CampusMapService', () => {
         }],
         navigation: null,
       },
-      '开放入口不在已审核校园导航图中',
+      '开放入口不在已发布校园导航图中',
     ],
   ])('rejects rollback before activation when %s', async (_label, manifest, expectedMessage) => {
     const prisma = makeTransactional();
@@ -1770,7 +1811,7 @@ describe('CampusMapService', () => {
     expect(() => (service as any).assertPublishedNavigationClosure([{
       id: 'place-7', officialName: '人和楼', title: '人和楼', serviceStatus: 'open',
       navigable: true, entranceNodeIds: [],
-    }])).toThrow('没有可连接到已审核校园路线的开放入口');
+    }])).toThrow('没有可连接到公开校园路线的开放入口');
   });
 
   it('blocks publication when approved route components are not mutually reachable', () => {
@@ -1801,7 +1842,7 @@ describe('CampusMapService', () => {
     };
 
     expect(() => (service as any).assertPublishedNavigationClosure(places, navigation))
-      .toThrow('已审核校园路线之间存在断点');
+      .toThrow('公开校园路线之间存在断点');
   });
 
   it('blocks illustrated navigation publication until three mapped GCJ-02 anchors are non-collinear', () => {
@@ -2201,5 +2242,207 @@ describe('CampusMapService', () => {
       where: { id: 'media-checkin-1' },
       data: expect.objectContaining({ reviewStatus: 'approved', isPublic: true }),
     });
+  });
+});
+
+describe('Campus map public read and entrance safety', () => {
+  it('withdraws a closed place and its entrance edges without changing the immutable version', async () => {
+    const place = { id: 'p', officialNumber: 1, title: '南校门', navigable: true, serviceStatus: 'open',
+      entranceNodeIds: ['entry'], entrances: [{ id: 'e', serviceStatus: 'open', nodeId: 'entry' }], media: [] };
+    const config = { enabled: true, regionId: 'r', publicPlaces: [place], layers: [],
+      navigation: { graph: { entrancePolicyVersion: 2, nodes: { entry: { kind: 'entrance', placeId: 'p' }, a: {}, b: {} },
+        edges: [{ a: 'entry', b: 'a' }, { a: 'a', b: 'b' }] } } };
+    const findMany = jest.fn().mockResolvedValue([{ ...place, coordinateStatus: 'verified', entrances: [{ id: 'e', serviceStatus: 'open' }] }]);
+    const service: any = new CampusMapService({ campusMapProject: { findMany } } as any);
+    const before = service.withReadRevision(await service.attachPublicPlaces(config));
+    findMany.mockResolvedValue([{ ...place, navigable: false, serviceStatus: 'temporarily_closed', unavailableMessage: '施工封闭' }]);
+    const after = service.withReadRevision(await service.attachPublicPlaces(config));
+    expect(after.readRevision).not.toBe(before.readRevision);
+    expect(after.publicPlaces[0]).toMatchObject({ navigable: false, serviceStatus: 'temporarily_closed', unavailableMessage: '施工封闭', entranceNodeIds: [] });
+    expect(after.navigation.graph.nodes.entry).toBeUndefined();
+    expect(after.publicPlaces[0].entrances[0].nodeId).toBeNull();
+    expect(after.navigation.graph.edges).toEqual([{ a: 'a', b: 'b' }]);
+    expect(config.publicPlaces[0].serviceStatus).toBe('open');
+    findMany.mockResolvedValue([{ ...place, entrances: [{ id: 'e', serviceStatus: 'closed' }] }]);
+    const closedEntrance = await service.attachPublicPlaces(config);
+    expect(closedEntrance.publicPlaces[0].entranceNodeIds).toEqual([]);
+    expect(closedEntrance.publicPlaces[0].navigable).toBe(false);
+    expect(closedEntrance.navigation.graph.nodes.entry).toBeUndefined();
+  });
+
+  it('keeps draft roads private and exports search aliases without making hidden places searchable', () => {
+    const service: any = new CampusMapService({} as any);
+    const layers = [{ id: 'operator_routes', inlineData: { features: [
+      { properties: { id: 'draft', public: false } }, { properties: { id: 'approved', public: true } },
+    ] } }];
+    expect(service.publicProjectLayers(layers)[0].inlineData.features.map((f: any) => f.properties.id)).toEqual(['approved']);
+    expect(layers[0].inlineData.features).toHaveLength(2);
+    const result = service.publicPlaceSnapshots([{ id: 'p', officialName: '学生餐厅', engineeringAlias: '一食堂、老食堂',
+      semanticType: 'canteen', publishStatus: 'published', visibilityScope: 'phase1_active', searchable: false }]);
+    expect(result[0].aliases).toEqual(['学生餐厅', '一食堂', '老食堂', '食堂', '餐厅']);
+    expect(result[0].searchable).toBe(false);
+  });
+
+  it('uses a stable content revision and changes it when a place is withdrawn without publishing', async () => {
+    const publicPlace = { id: 'place-7', officialNumber: 7, publishStatus: 'published', visibilityScope: 'phase1_active', media: [] };
+    const prisma = {
+      campusMap: { findUnique: jest.fn().mockResolvedValue({ id: 'map', enabled: true, activeVersionId: 'v16',
+        activeVersion: { id: 'v16', version: 16, manifest: { enabled: true, mapId: 'map', imageMap: { imageUrl: '/campusMap/assets/cqcx-campus-map.svg', width: 2761, height: 2990 }, layers: [], placeCatalog: [publicPlace] } },
+      }) },
+      campusMapProject: { findMany: jest.fn().mockResolvedValue([publicPlace]) },
+    };
+    const service = new CampusMapService(prisma as any);
+    const before = await service.getActiveMap('region-1');
+    expect((await service.getActiveMap('region-1')).readRevision).toBe(before.readRevision);
+    prisma.campusMapProject.findMany.mockResolvedValue([]);
+    const after = await service.getActiveMap('region-1');
+    expect(after.workflow.activeVersionId).toBe(before.workflow.activeVersionId);
+    expect(after.readRevision).not.toBe(before.readRevision);
+    expect(after.publicPlaces).toEqual([]);
+    expect(await service.getActiveMapVersion('region-1')).toEqual({ regionId: 'region-1', enabled: true, activeVersionId: 'v16', readRevision: after.readRevision });
+  });
+
+  it('withdraws unsafe legacy entrance navigation while preserving the published source and browsing data', () => {
+    const service: any = new CampusMapService({} as any);
+    const config: any = { enabled: true, publicPlaces: [{ id: 'p', navigable: true }], layers: [],
+      navigation: { graph: { edges: [{ source: 'verified_entrance_connector' }] } } };
+    const result = service.withReadRevision(config);
+    expect(result.navigation).toBeNull();
+    expect(result.publicPlaces[0].navigable).toBe(false);
+    expect(result.navigationUnavailableReason).toBe('entrance_republish_required');
+    expect(config.navigation.graph.edges).toHaveLength(1);
+    expect(config.publicPlaces[0].navigable).toBe(true);
+  });
+
+  function compile(latitude: number, stairs = false) {
+    const service: any = new CampusMapService({} as any);
+    const places: any[] = [{ id: 'place', title: '入口', serviceStatus: 'open', navigable: true,
+      entrances: [{ id: 'entrance', longitude: 108.7555, latitude, serviceStatus: 'open' }] }];
+    const manifest = { layers: [{ id: 'operator_routes', inlineData: { features: [{ properties: {
+      id: 'road', collectionSource: 'rider_app_approved', public: true, pedestrian: true, wheelchair: true, stairs,
+      sourceGeometryGcj02: { type: 'LineString', coordinates: [[108.755, 30.978], [108.756, 30.978]] },
+    } }] } }] };
+    const navigation = service.compilePublishedNavigation(manifest, places);
+    return { service, places, navigation };
+  }
+
+  it('requires collection to reach the entrance instead of inventing a 33-metre crossing', () => {
+    const { service, places, navigation } = compile(30.9783);
+    expect(places[0].entranceNodeIds).toEqual([]);
+    expect(navigation.graph.edges).toHaveLength(1);
+    expect(() => service.assertPublishedNavigationClosure(places, navigation)).toThrow('调整规划线或补采道路');
+  });
+
+  it('snaps small GPS error onto the collected road without generating off-road coordinates', () => {
+    const { places, navigation } = compile(30.97802);
+    expect(places[0].entranceNodeIds).toHaveLength(1);
+    expect(navigation.graph.entrancePolicyVersion).toBe(2);
+    for (const edge of navigation.graph.edges) {
+      expect(edge.coordinates.every((coordinate: number[]) => Math.abs(coordinate[1] - 30.978) < 1e-10)).toBe(true);
+    }
+  });
+
+  it('accepts explicit artwork anchors on the canvas edge but never treats null as zero', () => {
+    const service: any = new CampusMapService({} as any);
+    const places = [
+      { officialNumber: 41, longitude: 108.755, latitude: 30.978, artworkAnchorX: 0, artworkAnchorY: 100 },
+      { officialNumber: 42, longitude: 108.756, latitude: 30.978, artworkAnchorX: 200, artworkAnchorY: 100 },
+      { officialNumber: 43, longitude: 108.755, latitude: 30.979, artworkAnchorX: 0, artworkAnchorY: 200 },
+    ];
+    const navigation = { graph: { edges: [{ public: true, verificationStatus: 'verified' }] } };
+    expect(() => service.assertIllustratedNavigationCalibration({}, places, navigation)).not.toThrow();
+    expect(() => service.assertIllustratedNavigationCalibration({}, places.map(p => ({ ...p, artworkAnchorX: null })), navigation)).toThrow('至少需要 3 个');
+  });
+
+  it('cannot bypass stair restrictions by routing through an entrance connector', () => {
+    const { navigation } = compile(30.97802, true);
+    const connectors = navigation.graph.edges.filter((edge: any) => edge.source === 'verified_entrance_connector');
+    expect(connectors.length).toBeGreaterThan(0);
+    expect(connectors.every((edge: any) => edge.stairs === true && edge.wheelchair === false)).toBe(true);
+  });
+});
+
+describe('administrator-published planned routes', () => {
+  function fixture(overrides: any = {}, coordinates: any = [[108.75, 30.97], [108.751, 30.97]]) {
+    const service: any = new CampusMapService({} as any);
+    const feature: any = { type: 'Feature', geometry: { type: 'LineString', coordinates },
+      properties: { id: 'planned-main', title: '校园主路', public: true, ...overrides } };
+    const manifest: any = { baseSource: 'amap', coordinateSystem: { type: 'gcj02' },
+      layers: [{ id: 'operator_routes', inlineData: { type: 'FeatureCollection', features: [feature] } }] };
+    const tx = { campusMapCollectionObject: { findMany: jest.fn().mockResolvedValue([]) } };
+    return { service, feature, manifest, tx };
+  }
+
+  it('publishes a manual GCJ route and entrance as planned, without field-verification claims', async () => {
+    const { service, feature, manifest, tx } = fixture({ wheelchair: true });
+    expect(service.compilePublishedNavigation(manifest, [])).toBeNull();
+    await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+    const places = [{ id: 'p', navigable: true, serviceStatus: 'open', entrances: [
+      { id: 'door', longitude: 108.7505, latitude: 30.97002, serviceStatus: 'open' },
+    ] }];
+    const navigation = service.compilePublishedNavigation(manifest, places);
+    expect(feature.properties).toMatchObject({ collectionSource: 'admin_planned', verificationStatus: 'planned', publicationApproved: true });
+    expect(feature.properties.sourceObjectId).toBeUndefined();
+    expect(navigation.graph.edges.length).toBe(3);
+    expect(navigation.graph.edges.every((e: any) => e.verificationStatus === 'planned' && e.publicationApproved)).toBe(true);
+    expect(navigation.graph.edges.some((e: any) => e.source === 'planned_entrance_connector')).toBe(true);
+    expect(() => service.assertPublishedNavigationClosure(places, navigation)).not.toThrow();
+  });
+
+  it.each([[[0, 0], [800, 600]], [[108.75, 30.97], [null, 30.971]], [[108.75, 30.97], [108.75, 30.97]]])(
+    'rejects invalid or zero-length public planning geometry %j', async (a, b) => {
+      const { service, manifest, tx } = fixture({}, [a, b]);
+      await expect(service.reconcileApprovedRouteFeatures(tx, 'r', manifest)).rejects.toThrow('缺少有效 GCJ-02 坐标');
+    });
+
+  it('retains short planned segments instead of merging both ends and dropping the road', async () => {
+    const { service, manifest, tx } = fixture({}, [[108.75, 30.97], [108.75005, 30.97]]);
+    await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+    const navigation = service.compilePublishedNavigation(manifest, []);
+    expect(navigation.graph.edges).toHaveLength(1);
+    expect(navigation.graph.edges[0].a).not.toBe(navigation.graph.edges[0].b);
+    expect(() => service.assertPublishedNavigationClosure([], navigation)).not.toThrow();
+  });
+
+  it('never promotes an invalid claimed rider object through the planning fallback', async () => {
+    const { service, feature, manifest, tx } = fixture({ sourceObjectId: 'rejected-road',
+      collectionSource: 'rider_app_approved', publicationApproved: true, verificationStatus: 'planned',
+      plannedGeometryGcj02: { type: 'LineString', coordinates: [[108.75, 30.97], [108.751, 30.97]] } });
+    await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+    expect(feature.properties.publicationApproved).toBeUndefined();
+    expect(service.compilePublishedNavigation(manifest, [])).toBeNull();
+  });
+
+  it.each([{ public: false }, { closed: true }, { construction: true }, { pedestrian: false }])(
+    'excludes restricted planning roads %j', async (flags) => {
+      const { service, manifest, tx } = fixture(flags);
+      await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+      expect(service.compilePublishedNavigation(manifest, [])).toBeNull();
+    });
+
+  it('keeps disconnected planning roads and distant entrances blocked at publication', async () => {
+    const { service, feature, manifest, tx } = fixture();
+    manifest.layers[0].inlineData.features.push({ ...feature, properties: { ...feature.properties, id: 'isolated' },
+      geometry: { type: 'LineString', coordinates: [[108.755, 30.97], [108.756, 30.97]] } });
+    await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+    const navigation = service.compilePublishedNavigation(manifest, []);
+    expect(() => service.assertPublishedNavigationClosure([], navigation)).toThrow('连接规划线');
+    const places = [{ id: 'far', navigable: true, serviceStatus: 'open', entrances: [
+      { id: 'far-door', longitude: 108.7505, latitude: 30.9701, serviceStatus: 'open' },
+    ] }];
+    const withEntrance = service.compilePublishedNavigation(manifest, places);
+    expect(() => service.assertPublishedNavigationClosure(places, withEntrance)).toThrow('5 米内');
+  });
+
+  it('requires explicit planned GCJ geometry for artwork coordinates and retains stair restrictions', async () => {
+    const { service, feature, manifest, tx } = fixture({ stairs: true, wheelchair: true }, [[100, 100], [300, 100]]);
+    manifest.baseSource = 'image'; manifest.coordinateSystem.type = 'image';
+    await expect(service.reconcileApprovedRouteFeatures(tx, 'r', manifest)).rejects.toThrow('GCJ-02');
+    feature.properties.plannedGeometryGcj02 = { type: 'LineString', coordinates: [[108.75, 30.97], [108.751, 30.97]] };
+    await service.reconcileApprovedRouteFeatures(tx, 'r', manifest);
+    const navigation = service.compilePublishedNavigation(manifest, []);
+    expect(navigation.graph.edges[0]).toMatchObject({ verificationStatus: 'planned', stairs: true });
+    expect(navigation.graph.edges[0].coordinates[0]).toEqual([108.75, 30.97]);
+    expect(() => service.assertIllustratedNavigationCalibration(manifest, [], navigation)).toThrow('3 个分散');
   });
 });

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
+import { errandPlatformFee } from '../../common/commission';
 import { PrismaService } from "../../common/services/prisma.service";
 import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
 import {
@@ -621,35 +622,10 @@ export class ErrandLifecycleService {
         throw new BadRequestException("订单状态已变化，请刷新后重试");
       }
 
-      // 写入平台抽成金额
-      try {
-        const feeConfig = await tx.bizFeeConfig
-          .findUnique({ where: { bizType: "errand_order" } })
-          .catch(() => null);
-        const rate = feeConfig?.enabled ? Number(feeConfig.rate || 0) : 0;
-        const fixedFee = feeConfig?.enabled
-          ? Number(feeConfig.fixedFee || 0)
-          : 0;
-        if (rate > 0 || fixedFee > 0) {
-          const payAmount = Number(order.payAmount || 0);
-          const platformFee = Math.max(
-            0,
-            Math.min(
-              Math.round((payAmount * rate + fixedFee) * 100) / 100,
-              payAmount,
-            ),
-          );
-          if (platformFee > 0) {
-            await tx.errandOrder.update({
-              where: { id: orderId },
-              data: { platformFee },
-            });
-          }
-        }
-      } catch (e: any) {
-        this.logger &&
-          this.logger.warn(`跑腿订单写入 platformFee 失败: ${e.message}`);
-      }
+      // Freeze the fee in the receipt transaction; held payouts reuse this amount.
+      const feeConfig = await tx.bizFeeConfig.findUnique({ where: { bizType: "errand_order" } });
+      const platformFee = errandPlatformFee(order, feeConfig);
+      await tx.errandOrder.update({ where: { id: orderId }, data: { platformFee } });
       await tx.deliveryOrderNode.create({
         data: {
           orderId,
@@ -691,7 +667,7 @@ export class ErrandLifecycleService {
           },
         });
       } else {
-        await this.creditConfirmedRiderIncome(tx, order, now);
+        await this.creditConfirmedRiderIncome(tx, { ...order, platformFee }, now);
       }
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
     });
@@ -715,6 +691,7 @@ export class ErrandLifecycleService {
       regionId: order.regionId,
       deliveryFeeAmount: Number(order.price || 0),
       tipAmount: Number(order.tip || 0),
+      platformFeeAmount: Number(order.platformFee || 0),
       now,
     });
   }
@@ -818,6 +795,7 @@ export class ErrandLifecycleService {
           pickupAddress: order.pickupAddress || "",
           deliveryAddress: order.deliverAddress || "",
           estimatedTime: this.formatWechatTime(occurredAt),
+          pickedAt: this.formatWechatTime(occurredAt),
           finishedAt: this.formatWechatTime(occurredAt),
           remark: isPicked
             ? "骑手已取件，正在配送中"

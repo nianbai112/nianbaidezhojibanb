@@ -3524,6 +3524,122 @@ model ActivityOrder {
   @@map("activity_orders")
 }
 
+// ==================== 校园福利抽奖（独立于已退役的评论抽奖） ====================
+
+model WelfareCampaign {
+  id             String   @id @default(cuid())
+  title          String
+  description    String   @db.Text
+  cover          String? @db.Text
+  mode           String   // instant, scheduled
+  status         String   @default("draft") // draft, published, paused, finished, cancelled
+  regionId       String?
+  requireStudent Boolean  @default(false)
+  memberOnly     Boolean  @default(false)
+  startAt        DateTime
+  endAt          DateTime // instant: end time; scheduled: registration cutoff
+  drawAt         DateTime?
+  claimUntil     DateTime
+  dailyLimit     Int      @default(1)
+  totalLimit     Int      @default(1)
+  maxEntries     Int      @default(10000)
+  entryCount     Int      @default(0)
+  version        Int      @default(0) // increment acquires a database row lock
+  pickupLocation String? @db.Text
+  contact        String?
+  publishedAt    DateTime?
+  drawnAt        DateTime?
+  lastError      String?  @db.Text
+  createdBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  prizes  WelfarePrize[]
+  entries WelfareEntry[]
+  gifts   WelfareGift[]
+  draw    WelfareDraw?
+
+  @@index([status, mode, drawAt])
+  @@index([regionId, status, createdAt])
+  @@map("welfare_campaigns")
+}
+
+model WelfarePrize {
+  id             String   @id @default(cuid())
+  campaignId     String
+  campaign       WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  name           String
+  image          String? @db.Text
+  kind           String   // physical, coupon
+  couponId       String?
+  quantity       Int      // random prize allocation; gifts are additional
+  probabilityBps Int      @default(0) // instant: out of 10,000, exhausted slots become misses
+  issuedCount    Int      @default(0)
+  couponReserved Int      @default(0) // included in Coupon.receivedCount before publication
+  sortOrder      Int      @default(0)
+  entries        WelfareEntry[]
+  gifts          WelfareGift[]
+
+  @@index([campaignId])
+  @@map("welfare_prizes")
+}
+
+model WelfareEntry {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  userId      String
+  nickname    String   @default("同学") // display snapshot, never phone or legal name
+  requestKey  String
+  ordinal     Int      // scheduled: 0; instant: 1..totalLimit
+  dayKey      String   // Asia/Shanghai calendar date
+  source      String   @default("random") // random, gift
+  outcome     String   @default("waiting") // waiting, won, lost, excluded, cancelled
+  prizeId     String?
+  prize       WelfarePrize? @relation(fields: [prizeId], references: [id], onDelete: Restrict)
+  claimStatus String   @default("none") // none, pending, delivered, redeemed
+  claimCode   String?  @unique
+  couponReceiveId String? @unique
+  deliveryError String? @db.Text
+  redeemedBy  String?
+  redeemedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([campaignId, userId, requestKey])
+  @@unique([campaignId, userId, ordinal])
+  @@index([userId, outcome, createdAt])
+  @@index([campaignId, userId, dayKey])
+  @@index([outcome, claimStatus])
+  @@map("welfare_entries")
+}
+
+model WelfareGift {
+  id         String @id @default(cuid())
+  campaignId String
+  campaign   WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  prizeId    String
+  prize      WelfarePrize @relation(fields: [prizeId], references: [id], onDelete: Restrict)
+  userId     String
+  reason     String @db.Text
+  status     String @default("pending") // pending, awarded, skipped
+  @@unique([campaignId, userId])
+  @@map("welfare_gifts")
+}
+
+model WelfareDraw {
+  id             String @id @default(cuid())
+  campaignId     String @unique
+  campaign       WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  candidateCount Int
+  randomWinners  Int
+  giftedCount    Int
+  algorithm      String @default("crypto_random_int_v1")
+  rules          Json
+  createdAt      DateTime @default(now())
+  @@map("welfare_draws")
+}
+
 // ==================== 充值系统 ====================
 
 model TopupPackage {
@@ -5727,8 +5843,9 @@ model AdminOperationLog {
 
 model AdminLoginLog {
   id         String       @id @default(cuid())
-  accountId  String
-  account    AdminAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId  String?
+  account    AdminAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  username   String?
   ip         String?
   ua         String?
   success    Boolean      @default(true)
@@ -6538,30 +6655,6 @@ model UploadRecord {
   @@map("upload_records")
 }
 
-// ==================== P2: 埋点事件系统 ====================
-
-model TrackingEvent {
-  id         String   @id @default(cuid())
-  eventName  String // page_view, button_click, content_expose, content_click, etc.
-  userId     String?
-  sessionId  String?
-  regionId   String?
-  pagePath   String?
-  targetId   String?
-  targetType String?
-  params     Json?
-  ip         String?
-  ua         String?
-  createdAt  DateTime @default(now())
-
-  @@index([eventName, createdAt])
-  @@index([userId, createdAt])
-  @@index([regionId, createdAt])
-  @@index([pagePath, createdAt])
-  @@index([createdAt])
-  @@map("tracking_events")
-}
-
 // ==================== P2: A/B 测试 ====================
 
 model ABTest {
@@ -6775,6 +6868,8 @@ model WechatMessageLog {
   id           String    @id @default(cuid())
   userId       String?
   openid       String?
+  requestIp    String?
+  requestIpSource String?
   platformType String // miniprogram / official
   templateType String
   templateId   String

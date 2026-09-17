@@ -91,7 +91,7 @@ export const menuGroups = [
     title: '财务中心',
     icon: 'Wallet',
     children: [
-      { path: '/finance/overview', title: '财务总览', icon: 'DataLine' },
+      { path: '/finance/overview', title: '财务总览与抽成', icon: 'DataLine' },
       { path: '/finance/merchant-settle', title: '商家结算', icon: 'Shop' },
       { path: '/finance/rider-settle', title: '骑手结算', icon: 'Van' },
       { path: '/finance/settle', title: '结算中心', icon: 'Scale' },
@@ -102,6 +102,7 @@ export const menuGroups = [
     title: '运营与系统',
     icon: 'Operation',
     children: [
+      { path: '/marketing/welfare', title: '福利抽奖', icon: 'Present' },
       { path: '/marketing/center', title: '活动中心', icon: 'Promotion', section: '营销增长' },
       { path: '/marketing/perks', title: '优惠激励', icon: 'Ticket' },
       { path: '/marketing/official-assistant', title: '校园内容', icon: 'Document' },
@@ -111,7 +112,6 @@ export const menuGroups = [
       { path: '/growth/ranking', title: '榜单推荐', icon: 'Trophy' },
       { path: '/insights/business', title: '业务分析', icon: 'DataLine', section: '数据分析' },
       { path: '/analytics/riders', title: '骑手分析', icon: 'Van' },
-      { path: '/insights/tracking', title: '埋点分析', icon: 'Aim' },
       { path: '/system/admins', title: '管理员', icon: 'User', section: '系统运维' },
       { path: '/system/roles', title: '角色权限', icon: 'Lock' },
       { path: '/system/files', title: '文件中心', icon: 'FolderOpened' },

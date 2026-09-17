@@ -206,6 +206,7 @@ export type ReviewCollectionObjectDto = {
   targetPlaceId?: string;
   applyFields?: string[];
   promoteAttachmentIds?: string[];
+  publishRoute?: boolean;
 };
 
 export function parseStartSession(dto: StartCollectionSessionDto) {
@@ -634,7 +635,11 @@ export function parseObjectReview(dto: ReviewCollectionObjectDto) {
   if (promoteAttachmentIds.length && !applyFields.includes("media")) {
     throw new BadRequestException("提升现场照片时必须显式选择 media 合并字段");
   }
-  return { decision, note, targetPlaceId, applyFields, promoteAttachmentIds };
+  if (dto?.publishRoute !== undefined && typeof dto.publishRoute !== "boolean") {
+    throw new BadRequestException("路线公开状态无效");
+  }
+  const publishRoute = dto?.publishRoute === undefined ? undefined : dto.publishRoute;
+  return { decision, note, targetPlaceId, applyFields, promoteAttachmentIds, publishRoute };
 }
 
 function parseCoordinatePair(value: unknown) {

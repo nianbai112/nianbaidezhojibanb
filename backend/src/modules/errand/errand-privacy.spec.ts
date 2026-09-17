@@ -1,4 +1,4 @@
-import { poolErrandProjection, publicErrandProjection } from './errand-privacy';
+import { poolErrandProjection, poolShopProjection, publicErrandProjection } from './errand-privacy';
 
 describe('errand privacy projections', () => {
   const orderWithSecrets = {
@@ -49,3 +49,22 @@ describe('errand privacy projections', () => {
     expect(serialized).not.toContain('user-1');
   });
 });
+
+
+describe('shop pending-pool privacy', () => {
+  it('retains the public pickup and delivery fee while hiding buyer identity, room, and contents', () => {
+    const projected = poolShopProjection({
+      id: 'shop-1', type: 'delivery', merchant_name: '一食堂', merchant_address: '东门商业街',
+      delivery_address: '女生宿舍 308室', delivery_phone: '13800138000', delivery_contact: '张同学',
+      user: { id: 'private-user', nickname: 'private-nickname' },
+      delivery_latitude: 30.123, delivery_longitude: 120.456,
+      details: [{ description: 'private-goods' }], remarks: 'private-remark',
+      platform_delivery_fee: '3.00', receipt_code: '123456', total_amount: '20.00',
+      pickup_latitude: 29.5, pickup_longitude: 106.5,
+    })
+    expect(projected).toMatchObject({ id: 'shop-1', merchant_name: '一食堂', platform_delivery_fee: '3.00', task_count: 1, total_amount: '20.00', latitude: 29.5, longitude: 106.5 })
+    for (const secret of ['308', '13800138000', '张同学', 'private-', '30.123', '123456']) {
+      expect(JSON.stringify(projected)).not.toContain(secret)
+    }
+  })
+})

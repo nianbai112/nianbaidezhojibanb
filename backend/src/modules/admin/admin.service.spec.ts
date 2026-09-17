@@ -33,7 +33,8 @@ const makeTx = () => ({
       activePrismaMock?.user.updateMany(...args),
     ),
   },
-  auditLog: { create: jest.fn().mockResolvedValue({}) },
+  userProfile: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+  auditLog: { create: jest.fn((...args: any[]) => activePrismaMock?.auditLog.create(...args)) },
   withdraw: {
     update: jest.fn().mockResolvedValue({}),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -855,6 +856,21 @@ describe("AdminService", () => {
   });
 
   describe("users", () => {
+    it("returns saved student photos and certification metadata for review", async () => {
+      const submitted = new Date('2026-09-12T12:00:00Z');
+      prisma.user.findMany.mockResolvedValue([{
+        id: 'student-photo-user', nickname: 'student', status: 'ACTIVE', profile: {},
+        studentVerify: { status: 'PENDING', cardImage: 'https://example.com/student-card.jpg', createdAt: submitted, verifiedAt: null, remark: '补充材料' },
+        wallet: { balance: 0 }, createdAt: new Date('2026-01-01'), _count: { posts: 0, follows: 0, followers: 0 },
+      }]);
+      prisma.user.count.mockResolvedValue(1);
+      const result = await service.users({ studentCertStatus: 'pending' });
+      expect(result.list[0]).toEqual(expect.objectContaining({
+        studentCardImage: 'https://example.com/student-card.jpg', studentCertStatus: 'pending',
+        studentCertCreatedAt: submitted, studentCertVerifiedAt: null, studentCertRemark: '补充材料',
+      }));
+      expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ studentVerify: { status: 'PENDING' } }) }));
+    });
     it("should return paginated user list", async () => {
       prisma.user.findMany.mockResolvedValue([
         {
@@ -973,8 +989,8 @@ describe("AdminService", () => {
         "op1",
       );
       expect(result).toMatchObject({ success: true, status: "INACTIVE" });
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: "u1" },
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: "u1", status: undefined, banVersion: undefined, deletedAt: null },
         data: { status: "INACTIVE" },
       });
       expect(userSessionRevocation.revoke).toHaveBeenCalledWith("u1");
@@ -1024,6 +1040,38 @@ describe("AdminService", () => {
         service.setUserStatus("u1", { status: "active" }, "op1"),
       ).rejects.toThrow("请先审核解封申请");
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("deleted account protections and audit", () => {
+    it.each(["active", "disabled", "banned", "deleted"])("rejects %s for a deleted account", async (status) => {
+      prisma.user.findUnique.mockResolvedValue({ id: "u1", status: "DELETED", deletedAt: new Date() });
+      await expect(service.setUserStatus("u1", { status }, "op1")).rejects.toThrow("账号已注销");
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])("blocks the ban endpoint for deleted accounts (%s)", async (banned) => {
+      prisma.user.findUnique.mockResolvedValue({ id: "u1", status: "DELETED" });
+      await expect(service.banUser("u1", { banned }, "op1")).rejects.toThrow("账号已注销");
+    });
+
+    it("refuses to overwrite a concurrent deletion", async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: "u1", status: "ACTIVE", banVersion: 0 });
+      prisma.user.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.setUserStatus("u1", { status: "banned" }, "op1")).rejects.toThrow("账号状态已变化");
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it("records the actual before/after state and propagates audit failure within the transaction", async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: "u1", status: "ACTIVE", banVersion: 0 });
+      prisma.auditLog.create.mockRejectedValue(new Error("audit unavailable"));
+      await expect(service.setUserStatus("u1", { status: "disabled", reason: "人工复核" }, "op1", "192.0.2.8")).rejects.toThrow("audit unavailable");
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+        action: "UPDATE", ip: "192.0.2.8",
+        detail: { source: "admin", beforeStatus: "ACTIVE", afterStatus: "INACTIVE", reason: "人工复核", operatorId: "op1" },
+      }) });
+      expect(userSessionRevocation.revoke).not.toHaveBeenCalled();
     });
   });
 

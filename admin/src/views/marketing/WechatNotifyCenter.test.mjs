@@ -5,8 +5,9 @@ import test from 'node:test'
 const source = fs.readFileSync(new URL('./WechatNotifyCenter.vue', import.meta.url), 'utf8')
 
 test('all implemented order and community subscriptions expose connection status', () => {
-  assert.match(source, /fetchWechatTemplates\(\{ platformType: 'official'/)
-  assert.match(source, /fetchWechatTemplates\(\{ platformType: 'miniprogram'/)
+  assert.match(source, /loadTemplatePages\('official'\)/)
+  assert.match(source, /loadTemplatePages\('miniprogram'\)/)
+  assert.match(source, /fetchWechatTemplates\(\{ platformType, page, pageSize: 100 \}/)
 
   for (const templateType of [
     'takeaway_order_status',
@@ -24,7 +25,7 @@ test('all implemented order and community subscriptions expose connection status
 
   const abnormalRowStart = source.lastIndexOf("key: 'errand_abnormal'")
   const abnormalRow = source.slice(abnormalRowStart, source.indexOf('\n  },', abnormalRowStart) + 5)
-  assert.match(abnormalRow, /服务号持续通知/)
+  assert.match(abnormalRow, /退款处理和结果通过服务号通知/)
   assert.doesNotMatch(abnormalRow, /supportsMiniProgram/)
 })
 

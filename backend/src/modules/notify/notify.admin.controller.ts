@@ -106,8 +106,8 @@ export class NotifyAdminController {
   @Post('wechat-message-logs/:id/retry')
   @RequirePermission('system:config')
   @ApiOperation({ summary: '重试发送失败的消息' })
-  retryWechatMessage(@Param('id') id: string) {
-    return this.notifyService.retryWechatMessage(id);
+  retryWechatMessage(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
+    return this.notifyService.retryWechatMessage(id, operatorId);
   }
 
   // ==================== WebSocket 在线会话 ====================

@@ -1036,7 +1036,7 @@ describe("RiderAppService", () => {
         riderId: "user-1",
         settlement: { status: { not: "REJECTED" } },
       },
-      select: { orderType: true, orderId: true },
+      select: { orderType: true, orderId: true, payableAmount: true },
     });
     for (const [args] of prisma.order.findMany.mock.calls) {
       const whereText = JSON.stringify(args.where);
@@ -1210,4 +1210,36 @@ describe("RiderAppService", () => {
       account: "wx-1",
     });
   });
+  it('partially acknowledges valid points and names rejected points without a database write for them', async () => {
+    const { service, prisma } = createService();
+    const point = { client_id: 'valid', order_id: 'order-1', lat: 30, lng: 120, recorded_at: new Date().toISOString() };
+    const result = await service.updateLocationBatch('user-1', {
+      partial_ack: true, points: [{ ...point, client_id: 'returned', order_id: 'someone-elses-order' }, point],
+    });
+    expect(result.accepted_client_ids).toEqual(['valid']);
+    expect(result.rejected_points).toEqual([expect.objectContaining({ client_id: 'returned', reason: expect.any(String) })]);
+    expect(prisma.riderLocationTrack.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: [expect.objectContaining({ clientId: 'valid' })] }));
+  });
+
+  it('acknowledges an entirely rejected batch without creating tracks or updating live location', async () => {
+    const { service, prisma, errand } = createService();
+    prisma.errandOrder.findMany.mockResolvedValue([]);
+    const result = await service.updateLocationBatch('user-1', { partial_ack: true, points: [
+      { client_id: 'returned', order_id: 'returned-order', lat: 30, lng: 120, recorded_at: new Date().toISOString() },
+    ] });
+    expect(result.accepted_client_ids).toEqual([]);
+    expect(result.rejected_points).toHaveLength(1);
+    expect(prisma.riderLocationTrack.createMany).not.toHaveBeenCalled();
+    expect(errand.updateLocationIfNewer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { features: { orderPool: false } }, { enabled: false }, { maintenance: { enabled: true } },
+  ])('blocks new App claims under an operational stop: %j', async (config) => {
+    const { service, systemConfig, errand } = createService();
+    systemConfig.getRiderAppControlConfig.mockResolvedValue({ data: config } as any);
+    await expect(service.acceptOrder('user-1', 'order-1')).rejects.toThrow('暂停新增接单');
+    expect(errand.acceptOrder).not.toHaveBeenCalled();
+  });
+
 });

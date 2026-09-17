@@ -1,3 +1,4 @@
+import { reserveCouponIssue } from '../../common/coupon-policy';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
@@ -556,7 +557,14 @@ export class MembershipService {
   }
 
   async issueBenefits(userId: string, membership: any, plan: any, db: any = this.db()) {
+    if (typeof db.$transaction === 'function') {
+      return db.$transaction((tx: any) => this.issueBenefits(userId, membership, plan, tx), { isolationLevel: 'ReadCommitted' });
+    }
     if (!membership) return [];
+    const locked = await db.userMembership.updateMany({
+      where: { id: membership.id, userId }, data: { level: { increment: 0 } },
+    });
+    if (locked.count !== 1) throw new NotFoundException('会员记录不存在');
     const existing = await db.membershipBenefitGrant.count({ where: { membershipId: membership.id } });
     if (existing > 0) return [];
     const entitlements = this.normalizeEntitlements(plan?.entitlements, plan?.level || membership.level || 1).filter((item: any) => item.enabled);
@@ -620,10 +628,10 @@ export class MembershipService {
       where: { membershipId: membership.id, benefitKey: 'member_coupon_monthly' },
       orderBy: { createdAt: 'desc' },
     });
+    await reserveCouponIssue(db, coupon.id, userId, quantity);
     await db.couponReceive.createMany({
       data: Array.from({ length: quantity }).map(() => ({ couponId: coupon.id, userId, status: 'unused', sourceMembershipId: membership.id })),
     });
-    await db.coupon.update({ where: { id: coupon.id }, data: { receivedCount: { increment: quantity } } });
     if (grant) {
       await db.membershipBenefitUsage.create({
         data: {
@@ -863,10 +871,10 @@ export class MembershipService {
         },
       });
       await this.db().$transaction(async (tx: any) => {
+        await reserveCouponIssue(tx, coupon.id, userId, quantity);
         await tx.couponReceive.createMany({
           data: Array.from({ length: quantity }).map(() => ({ couponId: coupon.id, userId, status: 'unused' })),
         });
-        await tx.coupon.update({ where: { id: coupon.id }, data: { receivedCount: { increment: quantity } } });
         await tx.membershipBenefitUsage.create({
           data: {
             userId,
@@ -882,7 +890,7 @@ export class MembershipService {
           },
         });
         await tx.membershipBenefitGrant.update({ where: { id: grant.id }, data: { usedQuota: { increment: quantity } } });
-      });
+      }, { isolationLevel: 'ReadCommitted' });
     }
 
     return {

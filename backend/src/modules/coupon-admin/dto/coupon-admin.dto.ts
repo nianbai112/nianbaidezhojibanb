@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsEnum, IsDateString } from 'class-validator'
+import { IsString, IsOptional, IsNumber, IsEnum, IsDateString, IsInt, Min, Max, IsUUID, MaxLength, Matches } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 import { CouponType } from '@prisma/client'
@@ -139,4 +139,20 @@ export class CouponUsageQueryDto {
   @IsOptional()
   @IsDateString()
   endDate?: string
+}
+
+export class RandomCouponGrantDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  count: number
+
+  @IsUUID('4')
+  batchId: string
+
+  @IsString()
+  @MaxLength(200)
+  @Matches(/\S/, { message: '请填写发放原因' })
+  reason: string
 }

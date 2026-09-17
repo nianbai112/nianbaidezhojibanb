@@ -2,6 +2,23 @@ import { publicPlaceMedia } from './campusProjectModel.mjs'
 
 export const APPROVED_PLACE_VERIFICATION_COORDINATE_SOURCE = 'rider_app_place_verification_approved'
 
+export function isValidGcj02Coordinate(point = {}) {
+  const longitude = Number(point?.longitude)
+  const latitude = Number(point?.latitude)
+  return Number.isFinite(longitude)
+    && Number.isFinite(latitude)
+    && longitude >= 73
+    && longitude <= 136
+    && latitude >= 3
+    && latitude <= 54
+}
+
+export function isVerifiedRiderRoute(route = {}) {
+  const properties = route?.sourceProperties || route?.properties || {}
+  return String(properties.collectionSource || '') === 'rider_app_approved'
+    && String(properties.verificationStatus || '') === 'verified'
+}
+
 export function isApprovedPlaceVerificationCoordinate(place = {}) {
   const longitude = Number(place?.longitude)
   const latitude = Number(place?.latitude)
@@ -201,7 +218,41 @@ export function buildReviewPayload(form = {}, object = {}) {
     targetPlaceId: String(form.targetPlaceId || object?.properties?.targetPlaceId || '').trim() || undefined,
     applyFields,
     promoteAttachmentIds: applyFields.includes('media') ? promoteAttachmentIds : [],
+    ...(object?.objectType === 'road' && String(form.decision || 'approved') === 'approved'
+      ? { publishRoute: form.publishRoute === true }
+      : {}),
   }
+}
+
+export function routeArtworkGeometryState(route = {}) {
+  const geometry = route?.artworkGeometry || route?.sourceProperties?.artworkGeometry
+  const coordinates = geometry?.type === 'LineString' && Array.isArray(geometry.coordinates)
+    ? geometry.coordinates
+    : []
+  const hasExplicitArtworkGeometry = coordinates.filter((pair) => (
+    Array.isArray(pair)
+      && pair.length >= 2
+      && Number.isFinite(Number(pair[0]))
+      && Number.isFinite(Number(pair[1]))
+  )).length >= 2
+  const points = Array.isArray(route?.points) ? route.points : []
+  const hasCanvasPoints = points.length >= 2 && points.every((point) => (
+    Number.isFinite(Number(point?.xRatio))
+      && Number.isFinite(Number(point?.yRatio))
+      && !Number.isFinite(Number(point?.longitude))
+      && !Number.isFinite(Number(point?.latitude))
+  ))
+  const hasArtworkGeometry = hasExplicitArtworkGeometry || hasCanvasPoints
+  const approvedRiderRoute = String(route?.sourceProperties?.collectionSource || '') === 'rider_app_approved'
+  return {
+    approvedRiderRoute,
+    hasArtworkGeometry,
+    needsArtworkGeometry: approvedRiderRoute && !hasArtworkGeometry,
+  }
+}
+
+export function shouldShowLocalRequestError(error) {
+  return !error?.userMessage
 }
 
 export function reviewComparisonRows(currentPlace = {}, object = {}) {

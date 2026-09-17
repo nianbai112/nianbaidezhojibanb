@@ -383,6 +383,7 @@ describe('FinanceAdminService rider settlement payout', () => {
   it('keeps historical settlement detail readable after settlement v2 is disabled', async () => {
     const completedAt = new Date('2026-07-17T10:00:00.000Z');
     const prisma: any = {
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([{ orderId: 'errand-1', payableAmount: 8 }]) },
       errandOrder: { findMany: jest.fn().mockResolvedValue([{
         id: 'errand-1', orderNo: 'ERR-1', riderId: 'rider-1', regionId: 'region-1',
         price: 6, tip: 2, completeTime: completedAt, User: {}, RegionRider: {},
@@ -441,6 +442,58 @@ describe('FinanceAdminService rider settlement payout', () => {
     expect(prisma.riderSettlement.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ status: { not: 'REJECTED' } }),
     }));
+  });
+
+  it.each([
+    { name: 'ordinary earning without a hold', hold: undefined, marketing: false, ledger: false, source: 'errand', eligible: true },
+    { name: 'held earning', hold: 'holding', marketing: false, ledger: false, source: 'errand', eligible: false },
+    { name: 'rejected hold', hold: 'rejected', marketing: false, ledger: false, source: 'errand', eligible: false },
+    { name: 'unknown hold state', hold: 'unexpected', marketing: false, ledger: false, source: 'errand', eligible: false },
+    { name: 'released earning', hold: 'released', marketing: false, ledger: false, source: 'errand', eligible: true },
+    { name: 'marketing earning without explicit release', hold: undefined, marketing: true, ledger: false, source: 'errand', eligible: false },
+    { name: 'subsidy ledger without explicit release', hold: undefined, marketing: false, ledger: true, source: 'errand', eligible: false },
+    { name: 'released marketing earning', hold: 'released', marketing: true, ledger: true, source: 'errand', eligible: true },
+    { name: 'non-errand earning with no hold query', hold: undefined, marketing: false, ledger: false, source: 'order', eligible: true },
+  ])('preserves settlement eligibility for $name', async ({ hold, marketing, ledger, source, eligible }) => {
+    const tx: any = {
+      riderSettlement: { create: jest.fn().mockResolvedValue({ id: 'settlement-type-regression' }) },
+      riderSettlementItem: { create: jest.fn().mockResolvedValue({}) },
+      subsidyLedger: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    const prisma: any = {
+      riderSettlement: { findFirst: jest.fn().mockResolvedValue(null) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
+      orderAppeal: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
+      errandSettlementHold: { findMany: jest.fn().mockResolvedValue(hold ? [{ orderId: 'earning-1', status: hold }] : []) },
+      subsidyLedger: { findMany: jest.fn().mockResolvedValue(ledger ? [{ orderId: 'earning-1' }] : []) },
+      $transaction: jest.fn((fn: any) => fn(tx)),
+    };
+    const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
+    jest.spyOn(service as any, 'getCompletedRiderEarnings').mockResolvedValue([{
+      source, orderId: 'earning-1', orderNo: 'TEST-1', riderId: 'rider-1', regionId: 'region-1',
+      amount: 8, price: 6, tip: 2, marketingBenefit: marketing,
+    }]);
+
+    const result = await service.generateRiderSettlements({
+      periodStart: '2026-07-01T00:00:00.000Z', periodEnd: '2026-07-02T00:00:00.000Z', regionId: 'region-1',
+    }, 'admin-1');
+    expect(result.count).toBe(eligible ? 1 : 0);
+    expect(tx.riderSettlementItem.create).toHaveBeenCalledTimes(eligible ? 1 : 0);
+    if (eligible) {
+      expect(tx.riderSettlement.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ payableAmount: 8, status: 'PENDING', orderCount: 1 }),
+      }));
+    } else {
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    }
+    if (source !== 'errand') {
+      expect(prisma.errandSettlementHold.findMany).not.toHaveBeenCalled();
+    } else {
+      expect(prisma.errandSettlementHold.findMany).toHaveBeenCalledWith({
+        where: { orderId: { in: ['earning-1'] } }, select: { orderId: true, status: true },
+      });
+    }
   });
 
   it('adds idempotent review, timeout and night rules to the order settlement amounts', async () => {

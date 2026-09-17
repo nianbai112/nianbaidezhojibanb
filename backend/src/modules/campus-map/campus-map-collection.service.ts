@@ -2665,6 +2665,7 @@ export class CampusMapCollectionService {
       targetPlaceId?: string;
       applyFields: string[];
       promoteAttachmentIds: string[];
+      publishRoute?: boolean;
     },
     adminId: string,
     reviewedAt: Date,
@@ -2700,6 +2701,9 @@ export class CampusMapCollectionService {
     const applyFields = object.objectType === "road" && review.applyFields.length === 0
       ? ["geometry"]
       : review.applyFields;
+    if (object.objectType !== "road" && review.publishRoute === true) {
+      throw new BadRequestException("路线公开决定只能用于道路采集对象");
+    }
     if (applyFields.includes("entrance") && !placeVerification) {
       throw new BadRequestException("主入口只能从完成强证据校验的地点核验对象中合并");
     }
@@ -2717,6 +2721,9 @@ export class CampusMapCollectionService {
       applyFields: [...applyFields].sort(),
       promoteAttachmentIds: [...review.promoteAttachmentIds].sort(),
       requestedTargetId,
+      ...(object.objectType === "road" && review.publishRoute !== undefined
+        ? { publishRoute: review.publishRoute }
+        : {}),
     })).digest("hex");
     const previousApplyResult = object.applyResult
         && typeof object.applyResult === "object"
@@ -3089,6 +3096,7 @@ export class CampusMapCollectionService {
       const index = layer.inlineData.features.findIndex((item: any) => String(item?.properties?.sourceObjectId || item?.properties?.id) === object.id || item?.properties?.id === stableFeatureId);
       const existingPublic = index >= 0
         && layer.inlineData.features[index]?.properties?.public === true;
+      const routePublic = existingPublic || review.publishRoute === true;
       const feature = {
         type: "Feature",
         geometry: { ...object.geometry, coordinates: draftCoordinates },
@@ -3105,9 +3113,9 @@ export class CampusMapCollectionService {
             : String(manifest?.coordinateSystem?.type || manifest?.baseSource || "projected"),
           sourceGeometryGcj02: { type: "LineString", coordinates: authoritativeCoordinates },
           collectionSource: "rider_app_approved",
-          // 审核通过只表示路线数据可信，不代表已经授权给用户端导航。
-          // 新路线默认留在草稿；管理员在整改板块明确开启后才随版本发布。
-          public: existingPublic,
+          // 路线可信性与是否公开是两个决定；新版审核会显式提交 publishRoute。
+          // 旧客户端未提交时沿用草稿原值，避免一次兼容审核意外改变线上范围。
+          public: routePublic,
           routeEndpointAnchors: routeFeatureAnchors,
           collectedAt: object.recordedAt,
           reviewedAt,
@@ -3131,6 +3139,7 @@ export class CampusMapCollectionService {
       };
       audit.routeEndpointAnchors = routeEndpointAnchors;
       audit.routeEvidenceAttachmentIds = evidence.map((attachment: any) => attachment.id);
+      audit.public = routePublic;
     } else {
       if (!requestedTargetId) throw new BadRequestException("地点审核缺少 targetPlaceId");
       const place = await tx.campusMapProject.findFirst({

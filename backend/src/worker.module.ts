@@ -15,6 +15,8 @@ import { PrintModule } from "./modules/print/print.module";
 import { SchedulerModule } from "./modules/scheduler/scheduler.module";
 import { ShopModule } from "./modules/shop/shop.module";
 import { WorkerHeartbeatService } from "./worker-heartbeat.service";
+import { WelfareModule } from "./modules/welfare/welfare.module";
+import { WelfareWorker } from "./modules/welfare/welfare.worker";
 
 @Module({
   imports: [
@@ -44,7 +46,8 @@ import { WorkerHeartbeatService } from "./worker-heartbeat.service";
     ShopModule,
     ErrandModule,
     SchedulerModule,
+    WelfareModule,
   ],
-  providers: [WorkerHeartbeatService],
+  providers: [WorkerHeartbeatService, WelfareWorker],
 })
 export class WorkerModule {}

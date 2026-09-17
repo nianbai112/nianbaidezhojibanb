@@ -66,8 +66,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="270" fixed="right">
           <template #default="{ row }">
+            <el-button v-if="hasEditPermission" size="small" type="primary" plain :disabled="row.status !== 'active'" @click="openRandomGrant(row)">随机发放</el-button>
             <el-button v-if="hasEditPermission" size="small" @click="editCoupon(row)">编辑</el-button>
             <el-button v-if="hasEditPermission" size="small" :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleStatus(row)">
               {{ row.status === 'active' ? '禁用' : '启用' }}
@@ -87,7 +88,7 @@
       </div>
     </div>
 
-    <el-dialog v-model="showDialog" :title="editingCoupon ? '编辑优惠券' : '创建优惠券'" width="640px">
+    <el-dialog v-model="showDialog" :title="editingCoupon ? '编辑优惠券' : '创建优惠券'" width="640px" top="5vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="如：新用户满减券" />
@@ -99,18 +100,19 @@
             <el-option label="兑换券" value="EXCHANGE" />
           </el-select>
         </el-form-item>
+        <p class="coupon-value-hint">{{ form.type === 'DISCOUNT' ? '填写 8 表示八折，20 元商品优惠 4 元' : '减免金额单位为元；最多抵扣可优惠金额' }}</p>
         <div class="dialog-grid">
-          <el-form-item label="面值">
-            <el-input-number v-model="form.value" :min="0" :precision="2" />
+          <el-form-item :label="form.type === 'DISCOUNT' ? '折扣' : '减免金额'" required>
+            <el-input-number v-model="form.value" :min="0.01" :max="form.type === 'DISCOUNT' ? 9.99 : 99999999.99" :precision="2" />
           </el-form-item>
           <el-form-item label="最低消费">
-            <el-input-number v-model="form.minAmount" :min="0" :precision="2" />
+            <el-input-number v-model="form.minAmount" :min="0" :max="99999999.99" :precision="2" />
           </el-form-item>
           <el-form-item label="总量">
-            <el-input-number v-model="form.totalCount" :min="1" />
+            <el-input-number v-model="form.totalCount" :min="Math.max(1, Number(editingCoupon?.receivedCount || 0))" :max="2147483647" :precision="0" />
           </el-form-item>
           <el-form-item label="每人限领">
-            <el-input-number v-model="form.limitPerUser" :min="1" />
+            <el-input-number v-model="form.limitPerUser" :min="1" :max="2147483647" :precision="0" />
           </el-form-item>
         </div>
         <div class="dialog-grid">
@@ -149,13 +151,40 @@
         <el-button type="primary" @click="submitCoupon" :loading="submitting">保存</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="randomDialog" title="随机批量发放优惠券" width="560px" :close-on-click-modal="false" :close-on-press-escape="!randomSaving" :show-close="!randomSaving">
+      <el-alert type="info" :closable="false" title="从全平台正常用户中随机抽取，每人一张；排除机器人和已达限领次数的用户。全平台发放需要超级管理员权限。" />
+      <el-form label-width="100px" style="margin-top: 20px">
+        <el-form-item label="优惠券">{{ randomCoupon?.name }}（{{ displayValue(randomCoupon || {}) }}）</el-form-item>
+        <el-form-item label="适用范围">{{ randomCoupon?.region?.name || '全平台' }} · {{ randomCoupon?.merchant?.name || '不限商家' }} · {{ businessScopeLabel(randomCoupon?.businessScope) }}</el-form-item>
+        <el-form-item label="剩余库存">{{ Math.max(0, Number(randomCoupon?.totalCount || 0) - Number(randomCoupon?.receivedCount || 0)) }}</el-form-item>
+        <el-form-item label="发放人数" required><el-input-number v-model="randomForm.count" :min="1" :max="1000" :precision="0" :disabled="randomLocked" /> 人（每批最多 1000 人）</el-form-item>
+        <el-form-item label="发放原因" required><el-input v-model="randomForm.reason" type="textarea" maxlength="200" show-word-limit :disabled="randomLocked" placeholder="例如：开学随机福利" /></el-form-item>
+      </el-form>
+      <el-alert v-if="randomLocked" type="warning" :closable="false" title="本批次已提交。若未收到结果，请点击“重试本批次”；系统按批次防止重复发放。" />
+      <template #footer>
+        <el-button :disabled="randomSaving" @click="randomDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="randomSaving" @click="submitRandomGrant">{{ randomLocked ? '重试本批次' : '确认随机发放' }}</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="randomResultDialog" title="优惠券发放成功" width="600px" :close-on-click-modal="false">
+      <el-alert type="success" :closable="false" :title="`本批次成功发放 ${randomResult.count} 人，每人一张`" />
+      <p>批次编号：{{ randomResult.batchId }}</p>
+      <el-table :data="randomResultRows" max-height="420" empty-text="此历史批次未保存 UID 明细，可在操作日志中核对用户记录。">
+        <el-table-column prop="uid" label="用户 UID" min-width="160" />
+        <el-table-column label="发放结果" min-width="160">
+          <template #default="{ row }"><el-tag v-if="row.status === 'success'" type="success">发放成功</el-tag></template>
+        </el-table-column>
+      </el-table>
+      <el-pagination v-if="randomResult.recipients.length > 20" v-model:current-page="randomResultPage" :page-size="20" :total="randomResult.recipients.length" layout="total, prev, pager, next" style="margin-top: 16px" />
+      <template #footer><el-button type="primary" @click="randomResultDialog = false">完成</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { computed, reactive, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/api/request'
 import { fetchRegions } from '@/api/admin'
 import { cleanPayload, dateRangeFrom, errorMessage, formatMoney, formatTime, unwrapPage } from './utils'
@@ -163,6 +192,57 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const hasEditPermission = ref(auth.permissions.includes('coupon:view') || auth.permissions.includes('marketing:view'))
+const randomDialog = ref(false)
+const randomResultDialog = ref(false)
+const randomResultPage = ref(1)
+const randomResult = ref<{ batchId: string; count: number; recipients: Array<{ userId: string; uid: number; status: string }> }>({ batchId: '', count: 0, recipients: [] })
+const randomResultRows = computed(() => randomResult.value.recipients.slice((randomResultPage.value - 1) * 20, randomResultPage.value * 20))
+const randomSaving = ref(false)
+const randomLocked = ref(false)
+const randomCoupon = ref<any>(null)
+const randomForm = reactive({ count: 100, reason: '', batchId: '' })
+const pendingKey = (id: string) => `coupon-random-grant:${id}`
+
+function openRandomGrant(row: any) {
+  randomCoupon.value = row
+  const saved = sessionStorage.getItem(pendingKey(row.id))
+  let pending: any = null
+  try { pending = saved ? JSON.parse(saved) : null } catch { /* discard malformed draft */ }
+  Object.assign(randomForm, pending || { count: 100, reason: '', batchId: crypto.randomUUID() })
+  randomLocked.value = !!pending
+  randomDialog.value = true
+}
+
+async function submitRandomGrant() {
+  if (randomSaving.value) return
+  if (!randomForm.reason.trim()) { ElMessage.warning('请填写发放原因'); return }
+  if (!Number.isInteger(randomForm.count) || randomForm.count < 1 || randomForm.count > 1000) { ElMessage.warning('请输入 1 至 1000 的整数人数'); return }
+  randomSaving.value = true
+  try {
+    if (!randomLocked.value) {
+      await ElMessageBox.confirm(`将从全平台正常用户中随机抽取 ${randomForm.count} 人，每人发放一张「${randomCoupon.value.name}」。确认发放？`, '确认本批次', { type: 'warning' })
+    }
+    sessionStorage.setItem(pendingKey(randomCoupon.value.id), JSON.stringify(randomForm))
+    randomLocked.value = true
+    const result: any = await request.post(`/admin/coupons/${randomCoupon.value.id}/random-grant`, { ...randomForm }, { timeout: 75000 })
+    sessionStorage.removeItem(pendingKey(randomCoupon.value.id))
+    randomDialog.value = false
+    randomResult.value = { batchId: result.batchId, count: result.count, recipients: result.recipients || [] }
+    randomResultPage.value = 1
+    randomResultDialog.value = true
+    await loadCoupons()
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    // Explicit validation/authorization failures are safe to correct; network/server
+    // failures retain the request ID because the transaction may have committed.
+    if ([400, 401, 403, 404].includes(error?.response?.status)) {
+      sessionStorage.removeItem(pendingKey(randomCoupon.value.id))
+      randomLocked.value = false
+    }
+    ElMessage.error(errorMessage(error, '未确认发放结果，请重试本批次，勿另建批次重复发放'))
+  } finally { randomSaving.value = false }
+}
+
 const route = useRoute()
 const loading = ref(false)
 const submitting = ref(false)
@@ -187,7 +267,7 @@ const form = reactive({
   name: '',
   type: 'DISCOUNT',
   businessScope: 'all',
-  value: 0,
+  value: 8,
   minAmount: 0,
   totalCount: 100,
   limitPerUser: 1,
@@ -222,7 +302,7 @@ function resetForm() {
     name: '',
     type: 'DISCOUNT',
     businessScope: 'all',
-    value: 0,
+    value: 8,
     minAmount: 0,
     totalCount: 100,
     limitPerUser: 1,
@@ -316,7 +396,7 @@ function editCoupon(coupon: any) {
   editingCoupon.value = coupon
   Object.assign(form, {
     name: coupon.name,
-    type: coupon.type || 'DISCOUNT',
+    type: String(coupon.type || 'DISCOUNT').toUpperCase(),
     businessScope: coupon.businessScope || 'all',
     value: Number(coupon.value || 0),
     minAmount: Number(coupon.minAmount || 0),
@@ -332,12 +412,40 @@ function editCoupon(coupon: any) {
 }
 
 async function submitCoupon() {
+  if (submitting.value) return
   if (!form.name.trim()) {
     ElMessage.warning('请填写优惠券名称')
     return
   }
   if (!form.dateRange?.[0] || !form.dateRange?.[1]) {
     ElMessage.warning('请选择有效期')
+    return
+  }
+  if (!['DISCOUNT', 'FULL_REDUCTION', 'EXCHANGE'].includes(form.type)) {
+    ElMessage.warning('请选择有效的优惠券类型')
+    return
+  }
+  if (!Number.isFinite(form.value) || form.value <= 0 || form.value > 99999999.99 || (form.type === 'DISCOUNT' && form.value >= 10)) {
+    ElMessage.warning(form.type === 'DISCOUNT' ? '折扣必须大于 0 且小于 10，例如 8 表示八折' : '请填写大于 0 的减免金额')
+    return
+  }
+  const validMoney = (value: number) => Number.isFinite(value) && value >= 0 && value <= 99999999.99 && Math.abs(value * 100 - Math.round(value * 100)) < 0.000001
+  if (!validMoney(form.value) || !validMoney(form.minAmount)) {
+    ElMessage.warning('面值和最低消费须为有效金额，最多保留两位小数')
+    return
+  }
+  if (![form.totalCount, form.limitPerUser].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 2147483647) || form.totalCount < Number(editingCoupon.value?.receivedCount || 0)) {
+    ElMessage.warning('总量和每人限领须为正整数，总量不能小于已领取数量')
+    return
+  }
+  const startAt = new Date(form.dateRange[0])
+  const endAt = new Date(form.dateRange[1])
+  if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime())) {
+    ElMessage.warning('请选择有效的起止时间')
+    return
+  }
+  if (endAt.getTime() < startAt.getTime()) {
+    ElMessage.warning('结束时间不能早于开始时间')
     return
   }
   submitting.value = true
@@ -352,8 +460,8 @@ async function submitCoupon() {
       limitPerUser: form.limitPerUser,
       regionId: form.regionId || null,
       merchantId: form.merchantId || null,
-      startAt: form.dateRange[0].toISOString(),
-      endAt: form.dateRange[1].toISOString(),
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
       description: form.description,
     })
     if (editingCoupon.value) {
@@ -452,7 +560,9 @@ onMounted(async () => {
 .data-card { padding: 18px; }
 .scope-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: #94a3b8; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
-.dialog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.coupon-value-hint { margin: -4px 0 12px 100px; color: #64748b; font-size: 12px; line-height: 20px; }
+.dialog-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
+.dialog-grid :deep(.el-input-number) { width: 100%; min-width: 0; }
 @media (max-width: 900px) {
   .filter-card { grid-template-columns: 1fr; }
   .dialog-grid { grid-template-columns: 1fr; }

@@ -1,0 +1,17 @@
+# Place inside the existing nginx http {} context only after review.
+# Safe default: all traffic stays on Nest. These are starting protection budgets,
+# NOT proven school-opening capacity targets.
+map $host $campus_map_read_upstream {
+    default http://127.0.0.1:3000;
+}
+limit_req_zone $server_name zone=campus_map_total:1m rate=200r/s;
+limit_conn_zone $server_name zone=campus_map_connections:1m;
+
+# For an approved 1% canary, REPLACE the map above with this split_clients block.
+# Never configure both under the same output variable.
+# split_clients "${remote_addr}${http_user_agent}${request_id}" $campus_map_read_upstream {
+#     1% http://127.0.0.1:3002;
+#     *  http://127.0.0.1:3000;
+# }
+# After acceptance, use default http://127.0.0.1:3002 in the map.
+# Manual rollback: default http://127.0.0.1:3000; nginx -t, then reload.

@@ -41,6 +41,8 @@ describe('ErrandService dedicated rider App detail', () => {
     service.prisma = {
       errandOrderTask: { findMany: jest.fn().mockResolvedValue([]) },
       errandItemSize: { findMany: jest.fn().mockResolvedValue([]) },
+      bizFeeConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       errandPickupPoint: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const [formatted] = await service.formatMiniOrders([{
@@ -67,6 +69,8 @@ describe('ErrandService dedicated rider App detail', () => {
     service.prisma = {
       errandOrderTask: { findMany: jest.fn().mockResolvedValue([]) },
       errandItemSize: { findMany: jest.fn().mockResolvedValue([]) },
+      bizFeeConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       errandPickupPoint: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const row = {
@@ -95,6 +99,8 @@ describe('ErrandService dedicated rider App detail', () => {
     service.prisma = {
       errandOrderTask: { findMany: jest.fn().mockResolvedValue([]) },
       errandItemSize: { findMany: jest.fn().mockResolvedValue([]) },
+      bizFeeConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       errandPickupPoint: { findMany: jest.fn().mockResolvedValue([{
         id: 'canteen-1', name: '学生餐厅', address: '学生餐厅',
       }]) },

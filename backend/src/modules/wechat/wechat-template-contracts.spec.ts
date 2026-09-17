@@ -8,22 +8,22 @@ describe('backend-managed WeChat template contracts', () => {
     expect(getManagedWechatTemplateContract('official', 'errand_accepted')).toEqual(expect.objectContaining({
       fieldMapping: {
         character_string1: 'orderNo',
-        character_string2: 'riderName',
-        time3: 'estimatedTime',
+        thing4: 'riderName',
+        time6: 'estimatedTime',
       },
-      requiredTemplateKeys: ['character_string1', 'character_string2', 'time3'],
+      requiredTemplateKeys: ['character_string1', 'thing4', 'time6'],
     }));
   });
 
-  it('keeps the existing official picked and delivered defaults in code', () => {
+  it('keeps the verified official picked and delivered fields in code', () => {
     expect(getManagedWechatTemplateContract('official', 'errand_picked')?.fieldMapping).toEqual({
-      thing1: 'orderNo',
-      thing2: 'pickupAddress',
-      time3: 'estimatedTime',
+      character_string1: 'orderNo',
+      thing4: 'riderName',
+      time3: 'pickedAt',
     });
     expect(getManagedWechatTemplateContract('official', 'errand_delivered')).toEqual(expect.objectContaining({
-      fieldMapping: { thing1: 'orderNo', time2: 'finishedAt', thing3: 'remark' },
-      requiredTemplateKeys: ['thing1', 'time2'],
+      fieldMapping: { character_string13: 'orderNo', time5: 'finishedAt', thing7: 'deliveryAddress' },
+      requiredTemplateKeys: ['character_string13', 'time5', 'thing7'],
     }));
   });
 

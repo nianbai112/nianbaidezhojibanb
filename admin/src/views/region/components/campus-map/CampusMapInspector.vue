@@ -253,10 +253,21 @@
         <section v-if="selectedEditableItem.kind === 'route'" class="closure-card route-card">
           <div class="closure-head">
             <div>
-              <strong>道路实采闭环</strong>
-              <small>这条路线会在骑手端高亮，审核通过后才写回地图草稿</small>
+              <strong>路线发布</strong>
+              <small>{{ selectedRouteArtworkState.approvedRiderRoute ? '真实 GCJ-02 轨迹已通过审核，导航使用这条真实路线' : '规划路线具备真实坐标且通过连通性检查后，管理员发布即可参与导航；实地采集可后续补充' }}</small>
             </div>
+            <el-tag :type="selectedEditableItem.item.public ? 'success' : 'info'" size="small">
+              {{ selectedEditableItem.item.public ? '随本版上线' : '留在草稿' }}
+            </el-tag>
           </div>
+          <el-alert
+            v-if="selectedRouteArtworkState.needsArtworkGeometry"
+            type="warning"
+            :closable="false"
+            title="真实路线已保存，但画师图还没有对应线条"
+            description="导航仍使用已审核的真实轨迹；由于未绑定 artworkGeometry，画师矢量图不会叠加这条线，系统也不会把经纬度硬画到 SVG 上。"
+            show-icon
+          />
           <el-form-item label="本次是否公开">
             <el-switch
               v-model="selectedEditableItem.item.public"
@@ -265,7 +276,7 @@
             />
           </el-form-item>
           <el-button type="primary" style="width: 100%" @click="$emit('collectRoute', selectedEditableItem.item)">
-            派骑手采集这条路线
+            补充骑手实地采集（可选）
           </el-button>
         </section>
 
@@ -490,7 +501,7 @@ import {
   uploadCampusMapPlaceMedia,
 } from '@/api/admin'
 import { catalogPlaceId, publicPlaceMedia } from './campusProjectModel.mjs'
-import { isRiderCollectedCalibrationPoint } from './campusMapCollectionModel.mjs'
+import { isRiderCollectedCalibrationPoint, routeArtworkGeometryState } from './campusMapCollectionModel.mjs'
 
 type ReleaseIssue = {
   key: string
@@ -563,6 +574,9 @@ const photoUploading = ref(false)
 const reviewingMediaId = ref('')
 const selectedCalibrationFromRider = computed(() => props.selectedEditableItem?.kind === 'calibration'
   && isRiderCollectedCalibrationPoint(props.selectedEditableItem.item))
+const selectedRouteArtworkState = computed(() => routeArtworkGeometryState(
+  props.selectedEditableItem?.kind === 'route' ? props.selectedEditableItem.item : {},
+))
 const activeStageLabel = computed(() => props.releaseCockpit.stages.find((stage) => stage.key === props.releaseStage)?.label || '全部阶段')
 const visibleIssues = computed(() => {
   const stageIssues = props.releaseCockpit.issues.filter((issue) => issue.stage === props.releaseStage)

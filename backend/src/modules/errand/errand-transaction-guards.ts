@@ -17,6 +17,22 @@ export const errandCampaignDayKey = (date: Date) => {
   return `${read("year")}-${read("month")}-${read("day")}`;
 };
 
+export async function resolveActiveCouponCampaign(db: any, couponId: string) {
+  const config = await db.config.findUnique({ where: { key: 'marketing_campaigns_config' } });
+  const value = config?.value;
+  const list = Array.isArray(value?.list) ? value.list : Array.isArray(value) ? value : [];
+  const linked = list.filter((item: any) => item && String(item.couponId || '') === String(couponId));
+  if (!linked.length) return null;
+  const now = Date.now();
+  const campaign = linked.find((item: any) => item.status === 'active' &&
+    (!item.startAt || now >= new Date(item.startAt).getTime()) &&
+    (!item.endAt || now <= new Date(item.endAt).getTime()));
+  if (!campaign) {
+    throw new BadRequestException('优惠券关联活动未开始、已结束或已停用');
+  }
+  return { ...campaign, id: String(campaign.id || `coupon:${couponId}`) };
+}
+
 /**
  * Serialize every assignment for one assignee inside the caller transaction.
  * This closes the "same user accepts different orders concurrently" gap that
@@ -58,18 +74,21 @@ export async function reserveErrandCampaignBudget(
   if (!campaignId || amount <= 0) return null;
 
   const dayKey = errandCampaignDayKey(now);
+  const dayStart = new Date(`${dayKey}T00:00:00+08:00`);
   const scopes = [
     {
       scopeKey: "total",
       budget: money(campaign.totalBudget),
       usesLimit: 0,
       message: "活动总预算已不足",
+      ledgerWhere: {},
     },
     {
       scopeKey: `day:${dayKey}`,
       budget: money(campaign.dailyBudget),
       usesLimit: 0,
       message: "活动今日预算已不足",
+      ledgerWhere: { createdAt: { gte: dayStart, lt: new Date(dayStart.getTime() + 86400000) } },
     },
     {
       scopeKey: `user:${userId}`,
@@ -78,36 +97,50 @@ export async function reserveErrandCampaignBudget(
         ? 1
         : Math.max(0, Math.floor(Number(campaign.userLimit || 0))),
       message: "已达到个人活动补贴或参与次数上限",
+      ledgerWhere: { userId },
     },
   ];
 
   for (const scope of scopes) {
     const id = campaignCounterId(campaignId, scope.scopeKey);
-    // The update arm is intentional: it obtains the database row lock even
-    // when the counter already exists.
-    const counter = await tx.marketingCampaignBudgetCounter.upsert({
-      where: { id },
-      create: {
+    // Both id and (campaignId, scopeKey) are unique. An upsert targeting only
+    // one constraint can fail on the other when the first requests race.
+    await tx.marketingCampaignBudgetCounter.createMany({
+      data: [{
         id,
         campaignId,
         scopeKey: scope.scopeKey,
         spent: 0,
         uses: 0,
-        version: 1,
-      },
-      update: { version: { increment: 1 } },
+        version: 0,
+      }],
+      skipDuplicates: true,
     });
-    if (scope.budget > 0 && money(counter.spent) + amount > scope.budget) {
+    const counter = await tx.marketingCampaignBudgetCounter.update({
+      where: { id },
+      data: { version: { increment: 1 } },
+    });
+    // All coupon order flows hold the total row lock until commit.
+    // Read committed ledgers after that lock to include legacy shop usage and
+    // cancellations that predate counter maintenance.
+    const ledger = await tx.subsidyLedger.aggregate({
+      where: { campaignId, status: { not: 'cancelled' }, ...scope.ledgerWhere },
+      _sum: { amount: true },
+      _count: true,
+    });
+    const spent = money(ledger?._sum?.amount);
+    const uses = Number(ledger?._count || 0);
+    if (scope.budget > 0 && spent + amount > scope.budget) {
       throw new BadRequestException(scope.message);
     }
-    if (scope.usesLimit > 0 && Number(counter.uses || 0) >= scope.usesLimit) {
+    if (scope.usesLimit > 0 && uses >= scope.usesLimit) {
       throw new BadRequestException(scope.message);
     }
     const consumed = await tx.marketingCampaignBudgetCounter.updateMany({
       where: { id, version: counter.version },
       data: {
-        spent: { increment: amount },
-        uses: { increment: 1 },
+        spent: money(spent + amount),
+        uses: uses + 1,
       },
     });
     if (consumed.count !== 1) {
@@ -188,4 +221,49 @@ export async function findErrandSettlementBlocker(db: any, orderIds: string[]) {
   if (appeal) return { type: "appeal", ...appeal };
   if (risk) return { type: "risk", ...risk };
   return null;
+}
+
+export async function assertCouponCampaignRules(db: any, campaign: any, userId: string, couponId: string, discountAmount: number, orderType: 'shop' | 'errand') {
+  const dayStart = new Date(`${errandCampaignDayKey(new Date())}T00:00:00+08:00`);
+    if (!campaign) return;
+    if (campaign.firstOrderOnly) {
+      const orderCount = orderType === 'errand'
+        ? await db.errandOrder.count({ where: { userId, status: { notIn: ['cancelled', 'refunded'] } } })
+        : await db.order.count({ where: { userId, status: { not: 'CANCELLED' } } });
+      if (orderCount > 0) throw new BadRequestException(orderType === 'errand' ? '该活动仅限跑腿首单使用' : '该活动仅限首单使用');
+    }
+    if (campaign.newUserOnly) {
+      const user = await db.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
+      const days = Number(campaign.newUserDays || 7);
+      if (!user || Date.now() - user.createdAt.getTime() > days * 24 * 60 * 60 * 1000) {
+        throw new BadRequestException('该活动仅限新用户使用');
+      }
+    }
+    const baseWhere: any = {
+      status: { not: 'cancelled' },
+      OR: [
+        { campaignId: campaign.id },
+        { sourceType: 'coupon', sourceId: couponId },
+      ],
+    };
+    const [totalAgg, todayAgg, userAgg] = await Promise.all([
+      db.subsidyLedger.aggregate({ where: baseWhere, _sum: { amount: true } }),
+      db.subsidyLedger.aggregate({ where: { ...baseWhere, createdAt: { gte: dayStart } }, _sum: { amount: true } }),
+      db.subsidyLedger.aggregate({ where: { ...baseWhere, userId }, _sum: { amount: true }, _count: true }),
+    ]);
+    const totalSpent = Number(totalAgg?._sum?.amount || 0);
+    const todaySpent = Number(todayAgg?._sum?.amount || 0);
+    const userSpent = Number(userAgg?._sum?.amount || 0);
+    if (Number(campaign.totalBudget || 0) > 0 && (totalSpent >= Number(campaign.totalBudget) || Math.round((totalSpent + discountAmount) * 100) > Math.round(Number(campaign.totalBudget) * 100))) {
+      throw new BadRequestException('活动总预算已不足');
+    }
+    if (Number(campaign.dailyBudget || 0) > 0 && (todaySpent >= Number(campaign.dailyBudget) || Math.round((todaySpent + discountAmount) * 100) > Math.round(Number(campaign.dailyBudget) * 100))) {
+      throw new BadRequestException('活动今日预算已不足');
+    }
+    if (Number(campaign.perUserBudget || 0) > 0 && (userSpent >= Number(campaign.perUserBudget) || Math.round((userSpent + discountAmount) * 100) > Math.round(Number(campaign.perUserBudget) * 100))) {
+      throw new BadRequestException('已达到个人活动补贴上限');
+    }
+    if (Number(campaign.userLimit || 0) > 0 && Number(userAgg?._count || 0) >= Number(campaign.userLimit)) {
+      throw new BadRequestException('已达到个人活动参与次数上限');
+    }
 }

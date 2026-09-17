@@ -3,6 +3,7 @@ import {
   enforceErrandAssignmentGuard,
   inspectErrandAssignmentRisk,
 } from './errand-assignment-guard'
+import { errandRiskDescription } from './errand-risk-presentation'
 
 describe('errand assignment anti-fraud guard', () => {
   it('always blocks the order owner from taking their own errand', () => {
@@ -108,6 +109,55 @@ describe('errand assignment anti-fraud guard', () => {
       blocked: true,
       reasonCode: 'assignment_risk_check_unavailable',
     }))
+  })
+
+  it.each([
+    ['student13800000010@school-a.edu', 'student13800000010@school-b.edu'],
+    ['student13800000010@school.edu', '13800000010'],
+    ['2088013800000010', '2088913800000010'],
+    ['user13800000010', 'other13800000010'],
+  ])('does not conflate distinct complete payout accounts %s and %s', (left, right) => {
+    const result = assessErrandAssignmentRisk({
+      ownerUserId: 'owner-1', assigneeUserId: 'rider-1', hasMarketingBenefit: true,
+      owner: { rider: { alipayAccount: left } }, assignee: { rider: { alipayAccount: right } },
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.signals).not.toContain('same_payout_account')
+  })
+
+  it('still blocks the same complete Alipay phone across formatting variants', () => {
+    expect(assessErrandAssignmentRisk({
+      ownerUserId: 'owner-1', assigneeUserId: 'rider-1', hasMarketingBenefit: true,
+      owner: { withdraws: [{ channel: 'ALI_PAY', account: '+86 138-0000-0010' }] },
+      assignee: { rider: { alipayAccount: '13800000010' } },
+    })).toMatchObject({ blocked: true, signals: ['same_payout_account'] })
+  })
+
+  it('does not conflate different payout channels or case-sensitive WeChat identities', () => {
+    for (const [leftChannel, rightChannel, left, right] of [
+      ['WX_PAY', 'ALI_PAY', 'account1234567', 'account1234567'],
+      ['WX_PAY', 'WX_PAY', 'oAbcdef1234567', 'oabcdef1234567'],
+    ]) {
+      expect(assessErrandAssignmentRisk({
+        ownerUserId: 'owner-1', assigneeUserId: 'rider-1', hasMarketingBenefit: true,
+        owner: { withdraws: [{ channel: leftChannel, account: left }] },
+        assignee: { withdraws: [{ channel: rightChannel, account: right }] },
+      }).allowed).toBe(true)
+    }
+  })
+
+  it('still blocks identical full email payout accounts', () => {
+    expect(assessErrandAssignmentRisk({
+      ownerUserId: 'owner-1', assigneeUserId: 'rider-1', hasMarketingBenefit: true,
+      owner: { rider: { alipayAccount: ' User13800000010@Example.COM ' } },
+      assignee: { rider: { alipayAccount: 'user13800000010@example.com' } },
+    }).blocked).toBe(true)
+  })
+
+  it('presents the existing payout risk code in Chinese without altering the original record', () => {
+    const original = '跑腿订单 ERR-1 在直接接单环节命中防刷规则：same_payout_account。'
+    expect(errandRiskDescription(original)).toBe('跑腿订单 ERR-1 在直接接单环节命中防刷规则：发布人与接单人使用相同收款账号。')
+    expect(original).toContain('same_payout_account')
   })
 
   it('records and rejects a blocked assignment before any order mutation', async () => {

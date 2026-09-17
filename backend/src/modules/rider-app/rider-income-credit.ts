@@ -7,6 +7,7 @@ export type ConfirmedRiderIncomeInput = {
   regionId?: string | null;
   deliveryFeeAmount: number;
   tipAmount?: number;
+  platformFeeAmount?: number;
   now: Date;
 };
 
@@ -45,8 +46,11 @@ export async function creditConfirmedRiderIncome(
   }
   const deliveryFeeAmount = roundMoney(input.deliveryFeeAmount);
   const tipAmount = roundMoney(input.tipAmount);
-  const payableAmount = roundMoney(deliveryFeeAmount + tipAmount);
-  if (payableAmount <= 0) return { credited: false, reason: "zero_amount" };
+  const grossAmount = roundMoney(deliveryFeeAmount + tipAmount);
+  if (grossAmount <= 0) return { credited: false, reason: "zero_amount" };
+  const platformFeeAmount = input.orderType === "errand"
+    ? Math.min(grossAmount, roundMoney(input.platformFeeAmount)) : 0;
+  const payableAmount = roundMoney(grossAmount - platformFeeAmount);
 
   // Historical orders may already belong to a manually generated PENDING or
   // CONFIRMED settlement. Never credit those again: later manual payment would
@@ -116,7 +120,7 @@ export async function creditConfirmedRiderIncome(
       paidAt: input.now,
       periodKey,
       remark:
-        "确认收货后自动入账；退款或申诉按既有冲正流程处理",
+        "确认收货后按扣除平台抽成的金额自动入账；退款或申诉按既有冲正流程处理",
     },
     update: {
       orderCount: { increment: 1 },
@@ -172,7 +176,7 @@ export async function creditConfirmedRiderIncome(
         amount: netPaidAmount,
         balance: wallet.balance,
         orderNo: input.orderNo || input.orderId,
-        description: `${orderLabel}完成自动入账 ${input.orderNo || input.orderId}${
+        description: `${orderLabel}完成自动入账 ${input.orderNo || input.orderId}${platformFeeAmount ? `（平台抽成 ${platformFeeAmount} 元）` : ""}${
           liabilityRecovered
             ? `（已抵扣退款负债 ${liabilityRecovered} 元）`
             : ""

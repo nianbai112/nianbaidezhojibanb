@@ -1359,18 +1359,7 @@ export class MallAdminService {
       },
     });
 
-    if (dto.sync_create_checkin_location) {
-      await this.prisma.punchInLocation.create({
-        data: {
-          name: merchant.name,
-          address: merchant.address,
-          latitude: merchant.latitude,
-          longitude: merchant.longitude,
-          regionId: merchant.regionId || "",
-          status: "PUBLISHED",
-        },
-      });
-    }
+    
 
     await this.logOperation(operatorId, "create_circle", "mall_merchant", id, "merchant", { circleId: circle.id }, ip);
 
@@ -1770,29 +1759,12 @@ export class MallAdminService {
       take: 10,
     });
 
-    const checkInLocations = await this.prisma.punchInLocation.findMany({
-      where: {
-        name: { contains: merchant.name },
-      },
-      take: 10,
-    });
-
     return {
       circles: circles.map((c) => ({
         id: c.id,
         name: c.name,
         logo: c.icon || "",
         audit_status: c.status === "active" ? "approved" : c.status,
-        check_in_location: checkInLocations.find((l) => l.name.includes(c.name))
-          ? { title: checkInLocations.find((l) => l.name.includes(c.name))!.name }
-          : null,
-      })),
-      check_in_locations: checkInLocations.map((l) => ({
-        id: l.id,
-        title: l.name,
-        address: l.address,
-        latitude: l.latitude,
-        longitude: l.longitude,
       })),
     };
   }

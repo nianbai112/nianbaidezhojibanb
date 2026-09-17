@@ -3,13 +3,17 @@ import { PrismaService } from '../../common/services/prisma.service'
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service'
 import { ErrandService } from '../errand/errand.service'
 import { enforceErrandAssignmentGuard } from '../errand/errand-assignment-guard'
+import { errandDeliveryRequirementFields } from '../errand/errand-delivery-requirements'
 import { lockErrandAssignee } from '../errand/errand-transaction-guards'
+import { inspectRefundedErrandCoupon } from '../errand/errand-refund-coupon-repair'
+import { restoreErrandOrderCoupon } from '../errand/errand-coupon-restoration'
+import { errandRiskDescription } from '../errand/errand-risk-presentation'
 import {
   RiderQueryDto, AuditRiderDto, RiderStatusDto,
   DeliveryOrderQueryDto, AssignOrderDto, CancelOrderDto,
   UpdateFeeConfigDto,
   UpdatePageConfigDto,
-  UpdateRewardPunishDto, ResolveRiskEventDto,
+  UpdateRewardPunishDto, ResolveRiskEventDto, RepairErrandCouponDto,
 } from './dto/errand-admin.dto'
 import {
   ERRAND_EXTENDED_CONFIG_GROUP,
@@ -278,8 +282,10 @@ export class ErrandAdminService {
     const rider = row.RegionRider || row.rider || null
     const remarkData = this.parseOrderRemark(row)
     const tasks = this.formatOrderTasks(row)
+    const { receiptCode, ...safeRow } = row
     return {
-      ...row,
+      ...safeRow,
+      ...errandDeliveryRequirementFields(row),
       user,
       rider,
       remarkData,
@@ -330,7 +336,7 @@ export class ErrandAdminService {
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
-        include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } } },
+        include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
       }),
       this.prisma.regionRider.count({ where }),
     ])
@@ -571,7 +577,7 @@ export class ErrandAdminService {
     const [itemSizes, pickupPoints, deliveryNodes, riskEvents, appeal, refundAttempts, settlementItem, liabilities, settlementHold, review] = await Promise.all([
       itemSizeIds.length ? this.prisma.errandItemSize.findMany({ where: { id: { in: itemSizeIds } } }) : [],
       pickupPointIds.length ? this.prisma.errandPickupPoint.findMany({ where: { id: { in: pickupPointIds } } }) : [],
-      this.prisma.deliveryOrderNode.findMany({ where: { orderId: id, orderType: 'errand' }, orderBy: { createdAt: 'asc' } }).catch(() => []),
+      this.prisma.deliveryOrderNode.findMany({ where: { orderId: id, orderType: 'errand' }, orderBy: { createdAt: 'asc' } }),
       this.prisma.deliveryRiskEvent.findMany({ where: { orderId: id, orderType: 'errand' }, orderBy: { createdAt: 'desc' } }).catch(() => []),
       this.prisma.orderAppeal.findFirst({ where: { orderId: id, orderType: { in: ['errand', 'errand_order'] } }, orderBy: { createdAt: 'desc' } }).catch(() => null),
       this.prisma.paymentRefund.findMany({
@@ -604,7 +610,7 @@ export class ErrandAdminService {
       taskCount: tasks.length,
       taskSummary: this.taskSummary(tasks),
       deliveryNodes,
-      riskEvents,
+      riskEvents: riskEvents.map(event => ({ ...event, description: errandRiskDescription(event.description || event.eventType) })),
       appeal,
       appealHold: appeal && !['resolved', 'rejected', 'closed', 'cancelled'].includes(String(appeal.status)),
       refundAttempts,
@@ -619,6 +625,66 @@ export class ErrandAdminService {
         handleRisk: hasOpenRisk,
       },
     }
+  }
+
+  async getCouponRepair(id: string, operatorId: string) {
+    if (!operatorId) throw new ForbiddenException('需要管理员身份')
+    const order = await this.prisma.errandOrder.findUnique({ where: { id } })
+    if (!order) throw new NotFoundException('订单不存在')
+    await this.assertOrderRegion(order.regionId, operatorId)
+    const base = {
+      orderId: id, orderNo: order.orderNo, refundStatus: order.refundStatus,
+      paidAmount: Number(order.payAmount), couponDiscount: Number(order.couponDiscount || 0),
+      eligible: false, refundedAmount: 0, coupon: null,
+    }
+    if (order.status !== 'refunded' || order.refundStatus !== 'refunded') {
+      return { ...base, status: 'not_refunded', reason: '订单尚未全额退款，不能补回优惠券；退款成功后会自动退券。' }
+    }
+    try {
+      const inspected = await inspectRefundedErrandCoupon(this.prisma, order.orderNo)
+      await this.assertOrderRegion(inspected.order.regionId, operatorId)
+      const receive = inspected.receive
+      return {
+        ...base,
+        eligible: !!receive,
+        refundedAmount: inspected.refundedAmount,
+        status: receive ? 'eligible' : 'no_used_coupon',
+        reason: receive ? '已核实全额退款，优惠券仍被原订单占用，可以补回。' : '未发现该订单占用的优惠券，无需补回。',
+        coupon: receive ? {
+          receiveId: receive.id,
+          name: receive.coupon?.name || '优惠券',
+          expiresAt: receive.coupon?.endAt || null,
+          expired: !!receive.coupon?.endAt && new Date(receive.coupon.endAt).getTime() <= Date.now(),
+        } : null,
+      }
+    } catch (error) {
+      if (!(error instanceof BadRequestException)) throw error
+      return { ...base, status: 'payment_unverified', reason: error.message }
+    }
+  }
+
+  async repairCoupon(id: string, dto: RepairErrandCouponDto, operatorId: string) {
+    if (!operatorId) throw new ForbiddenException('需要管理员身份')
+    const note = typeof dto?.note === 'string' ? dto.note.trim() : ''
+    if (!note || note.length > 500) throw new BadRequestException('请填写 1 至 500 字的补券说明')
+    const order = await this.prisma.errandOrder.findUnique({ where: { id } })
+    if (!order) throw new NotFoundException('订单不存在')
+    await this.assertOrderRegion(order.regionId, operatorId)
+    return this.prisma.$transaction(async tx => {
+      const inspected = await inspectRefundedErrandCoupon(tx, order.orderNo)
+      await this.assertOrderRegion(inspected.order.regionId, operatorId)
+      if (!inspected.receive) return { restored: false, message: '该订单已无占用的优惠券，无需重复补回' }
+      const result = await restoreErrandOrderCoupon(tx, inspected.order)
+      if (!result.couponReceiveId) return { restored: false, message: '优惠券状态已变化，请重新核查' }
+      await tx.adminOperationLog.create({
+        data: {
+          accountId: operatorId, action: 'RESTORE_ERRAND_COUPON', module: 'errand',
+          targetId: id, targetType: 'errand_order',
+          detail: { orderNo: order.orderNo, couponReceiveId: result.couponReceiveId, note, refundedAmount: inspected.refundedAmount },
+        },
+      })
+      return { restored: true, message: '优惠券已补回，保留原有效期', couponReceiveId: result.couponReceiveId }
+    })
   }
 
   async cancelOrder(id: string, dto: CancelOrderDto, operatorId?: string) {
@@ -704,7 +770,7 @@ export class ErrandAdminService {
     const deliveryNodes = await this.prisma.deliveryOrderNode.findMany({
       where: { orderId: id, orderType: 'errand' },
       orderBy: { createdAt: 'asc' },
-    }).catch(() => [])
+    })
     return { ...order, deliveryNodes }
   }
 

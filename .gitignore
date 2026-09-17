@@ -50,3 +50,7 @@ work/
 backend/storage/
 node_modules.stale*/
 .worktrees/
+
+# Generated release payloads, evidence and local browser artifacts
+docs/reports/artifacts/
+.codex-evidence/

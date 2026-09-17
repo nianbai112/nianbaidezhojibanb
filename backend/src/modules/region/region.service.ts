@@ -161,13 +161,7 @@ export class RegionService {
       '活动': '3',
       rating: '4',
       vote: '4',
-      photo_vote: '4',
       '评分': '4',
-      punch: '5',
-      checkin: '5',
-      checkin_map: '5',
-      '打卡': '5',
-      '打卡地点': '5',
     };
     return map[key] || String(index);
   }
@@ -180,9 +174,8 @@ export class RegionService {
       secondhand: '/static/yhq.png',
       activity: '/static/tj.png',
       rating: '/static/v.png',
-      checkin: '/static/icon-weizhi.png',
     };
-    return tabs.map((tab, index) => ({
+    return tabs.filter((tab) => tab && String(tab.id ?? '') !== '5' && !/^(dating|object_matching|netdisk|photo_vote|photo_contest|explosivesel|punch|checkin|checkin_map|对象匹配|爆照评选|网盘|地点打卡|打卡|打卡地点|打卡地图)$/i.test(String(tab.type || tab.pageType || tab.name || ''))).map((tab, index) => ({
       ...tab,
       id: this.getHomeTabId(tab, index),
       icon: tab?.icon || tab?.iconUrl || defaultIconMap[String(tab?.type || '').toLowerCase()] || '/static/logo.jpg',

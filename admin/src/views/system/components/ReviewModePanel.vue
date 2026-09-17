@@ -31,6 +31,23 @@
       :closable="false"
     />
 
+    <div class="glass-card">
+      <div class="card-header">
+        <div class="card-title">首页登录方式</div>
+        <div class="card-subtitle">控制未登录用户进入小程序时的浏览入口</div>
+      </div>
+      <div class="card-body">
+        <div class="switch-item">
+          <div>
+            <div class="switch-label">允许游客浏览首页</div>
+            <div class="switch-desc">开启后，用户可先浏览公开内容，再自行登录；此设置独立于业务总控，正式运营期间同样生效。</div>
+            <div class="form-tip">学生认证、私人消息和交易权限仍按原规则校验。需要发布支持此配置的小程序版本后生效。</div>
+          </div>
+          <el-switch v-model="form.allowGuestBrowsing" aria-label="允许游客浏览首页" />
+        </div>
+      </div>
+    </div>
+
     <!-- 受控业务模块 -->
     <div class="glass-card">
       <div class="card-header">
@@ -87,7 +104,7 @@
         </div>
         <div class="tip-item">
           <span class="tip-num">3</span>
-          <span>配置通过公开接口下发，无需重新打包；已打开的小程序回到前台后会刷新，变更前请完成业务验收。</span>
+          <span>支持动态刷新的客户端发布后，切换配置无需重新打包：启动、返回前台时立即请求，停留前台时每 30 秒检查一次。网络正常且请求成功后生效；旧客户端需先升级，变更前请完成业务验收。</span>
         </div>
         <div class="tip-item">
           <span class="tip-num">4</span>
@@ -118,6 +135,7 @@ const saving = ref(false)
 
 const form = reactive({
   enabled: true,
+  allowGuestBrowsing: true,
   hideDelivery: true,
   hideMall: true,
   hideErrand: true,
@@ -137,7 +155,6 @@ const moduleItems = [
   { key: 'hideVirtualGoods', label: '虚拟商品/积分/会员', impact: 'high', desc: '关闭积分、会员、礼包、成长值和虚拟商品入口' },
   { key: 'hideMall', label: '商城板块', impact: 'mid', desc: '关闭小程序商城浏览和新订单入口，存量订单、退款及经营端继续可用' },
   { key: 'hideShareInvite', label: '分享有礼/邀请奖励', impact: 'mid', desc: '关闭分享奖励和邀请返利入口' },
-  { key: 'hideDating', label: '对象匹配/交友功能', impact: 'high', desc: '关闭交友和匹配类业务入口' },
 ]
 
 async function load() {
@@ -145,6 +162,7 @@ async function load() {
   try {
     const res: any = await request.get('/admin/config/app-capabilities')
     const data = res?.data || res
+    form.allowGuestBrowsing = typeof data?.allowGuestBrowsing === 'boolean' ? data.allowGuestBrowsing : true
     ;(Object.keys(form) as Array<keyof typeof form>).forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(data, key)) form[key] = data[key] as never
     })
@@ -157,9 +175,15 @@ async function load() {
 
 async function save() {
   saving.value = true
+  const submitted = { ...form }
   try {
-    await request.put('/admin/config/app-capabilities', { ...form })
-    ElMessage.success(form.enabled ? '业务能力配置已保存，将对全部小程序用户生效' : '业务能力总控已关闭，全部业务入口恢复开放')
+    const res: any = await request.put('/admin/config/app-capabilities', submitted)
+    const saved = res?.data || res
+    if (saved?.allowGuestBrowsing !== submitted.allowGuestBrowsing) {
+      ElMessage.warning('后端尚未确认游客浏览配置，请部署支持此配置的后端后重新保存')
+      return
+    }
+    ElMessage.success(submitted.enabled ? '业务能力配置已保存，将对全部小程序用户生效' : '业务能力总控已关闭，全部业务入口恢复开放')
   } catch (e: any) {
     ElMessage.error(e?.message || '保存失败')
   } finally {

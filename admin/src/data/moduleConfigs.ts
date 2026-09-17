@@ -64,14 +64,14 @@ export const moduleConfigs: Record<string, ModuleConfig> = {
     sideTitle:'用户运营提醒', sideMetrics:[{title:'待认证用户',desc:'需审核学生材料',value:0,icon:'Checked'},{title:'异常登录',desc:'近24小时多地登录',value:0,icon:'Warning'},{title:'高价值用户流失',desc:'7天未活跃',value:0,icon:'TrendCharts'}], chartTitle:'用户增长趋势', detailTabs:['基础资料','学生认证','订单消费','钱包积分','风控记录']
   },
   verification: {
-    key:'verification', title:'学生认证', subtitle:'审核学生证、校园邮箱、实名资料及人工复核结果。', endpoint:'/user/verification',
+    key:'verification', title:'学生认证', subtitle:'查看学生证照片、核对认证资料并审核申请。', endpoint:'/user/verification',
     stats:[
       {label:'待审核',value:0,delta:'-',tone:'orange',icon:'Clock',key:'pending'},
       {label:'今日通过',value:0,delta:'-',tone:'green',icon:'CircleCheck',key:'todayApproved'},
       {label:'拒绝数量',value:0,delta:'-',tone:'red',icon:'CircleClose',key:'rejected'},
       {label:'累计认证',value:'0',delta:'-',tone:'blue',icon:'Tickets',key:'totalApproved'}
     ],
-    search:[{key:'keyword',label:'姓名/学校',type:'input'},{key:'school',label:'学校',type:'input'},{key:'status',label:'审核状态',type:'select',options:statusOptions},{key:'date',label:'提交时间',type:'daterange'}], actions:['批量通过','批量驳回','导出记录'],
+    search:[{key:'keyword',label:'姓名/学校',type:'input'},{key:'school',label:'学校',type:'input'},{key:'status',label:'审核状态',type:'select',options:[{label:'待审核',value:'pending'},{label:'已通过',value:'approved'},{label:'已驳回',value:'rejected'}]},{key:'date',label:'提交时间',type:'daterange'}], actions:['批量通过','批量驳回','导出记录'],
     columns:[{prop:'user',label:'申请用户',type:'avatar',minWidth:180},{prop:'realName',label:'真实姓名',minWidth:110},{prop:'school',label:'学校',minWidth:170},{prop:'studentNo',label:'学号',minWidth:130},{prop:'cert',label:'材料',type:'image',minWidth:90},{prop:'status',label:'审核状态',type:'tag',minWidth:110},{prop:'createdAt',label:'提交时间',type:'date',minWidth:160}],
     sideTitle:'审核策略', sideMetrics:[{title:'OCR识别失败',desc:'需人工查看',value:0,icon:'Picture'},{title:'重复认证',desc:'同设备多账号',value:0,icon:'Warning'}], chartTitle:'认证通过率', detailTabs:['认证材料','用户信息','审核记录']
   },

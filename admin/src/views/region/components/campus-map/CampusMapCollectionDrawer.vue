@@ -47,6 +47,7 @@
                 <small>{{ formatDate(task.updatedAt) }}</small>
               </button>
               <el-empty v-if="!tasks.length" description="还没有现场采集任务" />
+              <el-pagination v-model:current-page="taskPage" :page-size="50" :total="taskTotal" small layout="prev, pager, next" @current-change="loadTasks" />
             </div>
 
             <section class="task-detail">
@@ -176,13 +177,13 @@
         <el-tab-pane label="对象审核" name="review">
           <div class="toolbar review-toolbar">
             <div class="review-filters">
-              <el-select v-model="reviewFilters.reviewStatus" placeholder="审核状态" clearable style="width: 130px" @change="loadObjects">
+              <el-select v-model="reviewFilters.reviewStatus" placeholder="审核状态" clearable style="width: 130px" @change="resetObjectPage">
                 <el-option v-for="item in reviewStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
               </el-select>
-              <el-select v-model="reviewFilters.taskId" placeholder="按任务筛选" clearable filterable style="width: 210px" @change="loadObjects">
+              <el-select v-model="reviewFilters.taskId" placeholder="按任务筛选" clearable filterable style="width: 210px" @change="resetObjectPage">
                 <el-option v-for="task in tasks" :key="task.id" :label="task.name" :value="task.id" />
               </el-select>
-              <el-select v-model="reviewFilters.objectType" placeholder="采集类型" clearable style="width: 130px" @change="loadObjects">
+              <el-select v-model="reviewFilters.objectType" placeholder="采集类型" clearable style="width: 130px" @change="resetObjectPage">
                 <el-option v-for="item in objectTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
               </el-select>
               <el-button @click="loadObjects">刷新</el-button>
@@ -208,6 +209,7 @@
                 <small>{{ accuracyText(item.accuracy) }} · {{ geometrySummary(item.geometry) }}</small>
               </button>
               <el-empty v-if="!objects.length" description="没有符合条件的采集对象" />
+              <el-pagination v-model:current-page="objectPage" :page-size="50" :total="objectTotal" small layout="prev, pager, next" @current-change="loadObjects" />
             </div>
 
             <section class="session-detail">
@@ -333,7 +335,7 @@
                   <el-button type="warning" @click="openReview('resample')">要求重采</el-button>
                   <el-button type="info" @click="openReview('held')">暂缓</el-button>
                   <el-button type="danger" @click="openReview('void')">作废</el-button>
-                  <small v-if="selectedObject.objectType === 'road'" class="route-threshold-note">即使点击通过，点数、精度、距离或时长不达服务端阈值仍会被拒绝；通过后只写地图草稿。</small>
+                  <small v-if="selectedObject.objectType === 'road'" class="route-threshold-note">即使点击通过，点数、精度、距离或时长不达服务端阈值仍会被拒绝；通过时可明确选择“随本版上线”或“仅写入草稿”。</small>
                 </div>
               </template>
               <el-empty v-else description="选择左侧对象查看详情" />
@@ -498,9 +500,16 @@
             type="warning"
             :closable="false"
             title="此操作只更新地图草稿，不会直接发布"
-            :description="selectedObject?.objectType === 'road' ? '路线仍需通过服务端点数、精度、距离和时长阈值；审核成功后还要回地图工作台人工预览并发布。' : '地点核验采用“真实位置”后，会同时复用该地点的图面锚点自动生成校准点；仍需回地图工作台预览并发布。'"
+            :description="selectedObject?.objectType === 'road' ? '路线仍需通过服务端点数、精度、距离和时长阈值；下方的公开决定会和审核结果一起写入草稿，但仍需回工作台预览并发布。' : '地点核验采用“真实位置”后，会同时复用该地点的图面锚点自动生成校准点；仍需回地图工作台预览并发布。'"
             show-icon
           />
+          <el-form-item v-if="selectedObject?.objectType === 'road'" label="路线公开决定">
+            <el-radio-group v-model="reviewForm.publishRoute">
+              <el-radio-button :value="true">审核通过并随本版上线</el-radio-button>
+              <el-radio-button :value="false">仅写入草稿</el-radio-button>
+            </el-radio-group>
+            <div class="form-help">公开决定与本次审核同一事务保存；后续发布失败不会把路线改回“仅写入草稿”。</div>
+          </el-form-item>
           <el-form-item label="合并到地点档案">
             <el-select v-model="reviewForm.targetPlaceId" filterable clearable placeholder="路线可不绑定地点；地点核验必须选择" style="width: 100%">
               <el-option v-for="place in placeOptions" :key="place.id" :label="place.label" :value="place.id" :disabled="place.selectable === false" />
@@ -586,6 +595,7 @@ import {
   routeDependencyReviewState,
   reviewStatusLabel,
   reviewStatusType,
+  shouldShowLocalRequestError,
   REVIEW_STATUSES,
   taskSessionCount,
   taskTypeLabel,
@@ -613,6 +623,7 @@ const saving = ref(false)
 const activeTab = ref('tasks')
 const tasks = ref<any[]>([])
 const taskTotal = ref(0)
+const taskPage = ref(1)
 const templates = ref<any[]>([])
 const selectedTask = ref<any>(null)
 const selectedSession = ref<any>(null)
@@ -620,12 +631,19 @@ const taskDialogVisible = ref(false)
 const templateDialogVisible = ref(false)
 const objects = ref<any[]>([])
 const objectTotal = ref(0)
+const objectPage = ref(1)
+let scopeRevision = 0
+let taskListRequest = 0
+let taskDetailRequest = 0
+let sessionRequest = 0
+let objectRequest = 0
+let collectorRequest = 0
 const selectedObject = ref<any>(null)
 const reviewDialogVisible = ref(false)
 const reviewFilters = reactive({ reviewStatus: 'pending', taskId: '', objectType: '' })
 const reviewForm = reactive({
   decision: 'approved', note: '', targetPlaceId: '',
-  applyFields: [] as string[], promoteAttachmentIds: [] as string[],
+  applyFields: [] as string[], promoteAttachmentIds: [] as string[], publishRoute: true,
 })
 const collectorLoading = ref(false)
 const collectorOptions = ref<any[]>([])
@@ -720,41 +738,79 @@ const selectedTaskPlaces = computed(() => {
   return placeOptions.value.filter((place: any) => ids.has(place.id) || ids.has(String(place.featureId || '')))
 })
 
-watch(() => props.modelValue, (visible) => {
+watch(() => [props.modelValue, props.regionId], ([visible]) => {
+  scopeRevision += 1
+  saving.value = false
+  collectorOptions.value = []
+  collectorLoading.value = false
+  taskPage.value = 1
+  objectPage.value = 1
+  tasks.value = []
+  objects.value = []
+  templates.value = []
+  taskTotal.value = 0
+  objectTotal.value = 0
+  selectedTask.value = null
+  selectedSession.value = null
+  selectedObject.value = null
+  reviewDialogVisible.value = false
+  taskDialogVisible.value = false
+  templateDialogVisible.value = false
+  reviewFilters.taskId = ''
   if (visible) loadAll()
-})
+}, { immediate: true })
 
 async function loadAll() {
   if (!props.regionId) return
+  const scope = scopeRevision
   loading.value = true
   try {
     await Promise.all([loadTasks(), loadTemplates(), loadObjects(), searchCollectors()])
+  } catch (error: any) {
+    if (scope === scopeRevision && shouldShowLocalRequestError(error)) ElMessage.error(error?.message || '采集数据加载失败')
   } finally {
-    loading.value = false
+    if (scope === scopeRevision) loading.value = false
   }
 }
 
 async function loadTasks() {
-  const data: any = await fetchCampusMapCollectionTasks(props.regionId, { page: 1, pageSize: 100 })
+  if (!props.regionId) return
+  const scope = scopeRevision
+  const request = ++taskListRequest
+  const data: any = await fetchCampusMapCollectionTasks(props.regionId, { page: taskPage.value, pageSize: 50 })
+  if (scope !== scopeRevision || request !== taskListRequest) return
   tasks.value = data.items || []
   taskTotal.value = Number(data.total || tasks.value.length)
-  if (selectedTask.value?.id) await selectTask(selectedTask.value.id)
+  if (tasks.value.some((task) => task.id === selectedTask.value?.id)) await selectTask(selectedTask.value.id)
+  else { ++taskDetailRequest; ++sessionRequest; selectedTask.value = null; selectedSession.value = null }
 }
 
 async function loadTemplates() {
+  const scope = scopeRevision
   const data: any = await fetchCampusMapMarkerTemplates(props.regionId)
+  if (scope !== scopeRevision) return
   templates.value = Array.isArray(data) ? data : []
 }
 
 async function selectTask(taskId: string) {
-  selectedTask.value = await fetchCampusMapCollectionTask(props.regionId, taskId)
+  const scope = scopeRevision
+  const request = ++taskDetailRequest
+  ++sessionRequest
+  selectedTask.value = null
   selectedSession.value = null
+  const data = await fetchCampusMapCollectionTask(props.regionId, taskId)
+  if (scope === scopeRevision && request === taskDetailRequest) selectedTask.value = data
 }
 
 async function openSession(session: any) {
   if (!selectedTask.value) return
+  const scope = scopeRevision
+  const request = ++sessionRequest
+  const taskId = selectedTask.value.id
   activeTab.value = 'sessions'
-  selectedSession.value = await fetchCampusMapCollectionSession(props.regionId, selectedTask.value.id, session.id)
+  selectedSession.value = null
+  const data = await fetchCampusMapCollectionSession(props.regionId, taskId, session.id)
+  if (scope === scopeRevision && request === sessionRequest && selectedTask.value?.id === taskId) selectedSession.value = data
 }
 
 function objectDisplayName(item: any) {
@@ -784,15 +840,26 @@ function qualityDuration(value: any) {
 
 async function loadObjects() {
   if (!props.regionId) return
+  const scope = scopeRevision
+  const request = ++objectRequest
+  selectedObject.value = null
+  reviewDialogVisible.value = false
+  objects.value = []
   const data: any = await fetchCampusMapCollectionObjects(props.regionId, {
     reviewStatus: reviewFilters.reviewStatus || undefined,
     taskId: reviewFilters.taskId || undefined,
     objectType: reviewFilters.objectType || undefined,
-    page: 1,
-    pageSize: 100,
+    page: objectPage.value,
+    pageSize: 50,
   })
+  if (scope !== scopeRevision || request !== objectRequest) return
   objects.value = data?.items || []
   objectTotal.value = Number(data?.total || objects.value.length)
+}
+
+function resetObjectPage() {
+  objectPage.value = 1
+  return loadObjects()
 }
 
 function selectObject(item: any) {
@@ -810,6 +877,7 @@ function openReview(decision: string) {
   reviewForm.note = ''
   reviewForm.targetPlaceId = selectedObjectResolvedTargetId.value
   reviewForm.applyFields = decision === 'approved' ? defaultReviewApplyFields(selectedObject.value || {}) : []
+  reviewForm.publishRoute = decision === 'approved' && selectedObject.value?.objectType === 'road'
   reviewForm.promoteAttachmentIds = decision === 'approved'
     && selectedObject.value?.objectType === 'road'
     ? promotablePhotoAttachments.value.map((item: any) => String(item.id))
@@ -821,9 +889,11 @@ function syncReviewDecision(decision: string | number | boolean | undefined) {
   if (decision !== 'approved') {
     reviewForm.applyFields = []
     reviewForm.promoteAttachmentIds = []
+    reviewForm.publishRoute = false
     return
   }
   reviewForm.applyFields = defaultReviewApplyFields(selectedObject.value || {})
+  reviewForm.publishRoute = selectedObject.value?.objectType === 'road'
   reviewForm.promoteAttachmentIds = selectedObject.value?.objectType === 'road'
     ? promotablePhotoAttachments.value.map((item: any) => String(item.id))
     : []
@@ -831,6 +901,9 @@ function syncReviewDecision(decision: string | number | boolean | undefined) {
 
 async function submitReview() {
   if (!selectedObject.value) return
+  const scope = scopeRevision
+  const selected = selectedObject.value
+  const selectedId = selected.id
   if (selectedObject.value.reviewStatus === 'superseded') return ElMessage.warning('已补采替代的旧对象不能再次审核')
   if (reviewForm.decision === 'approved' && selectedRouteDependency.value.blocked) {
     return ElMessage.warning(selectedRouteDependency.value.title)
@@ -854,12 +927,15 @@ async function submitReview() {
       saving.value = false
       return ElMessage.warning('已勾选现场照片，请至少选择一张要提升的媒体证据')
     }
-    const result: any = await reviewCampusMapCollectionObject(props.regionId, selectedObject.value.id, payload)
+    const result: any = await reviewCampusMapCollectionObject(props.regionId, selectedId, payload)
+    if (scope !== scopeRevision) return
     const response = result?.data || result || {}
     reviewDialogVisible.value = false
-    const selectedId = selectedObject.value.id
-    await loadObjects()
-    selectedObject.value = objects.value.find((item) => item.id === selectedId) || null
+    const refresh = loadObjects()
+    const refreshRequest = objectRequest
+    await refresh
+    if (scope !== scopeRevision) return
+    if (refreshRequest === objectRequest) selectedObject.value = objects.value.find((item) => item.id === selectedId) || null
     if (response?.draftApply?.applied) {
       emit('draftChanged')
       const calibration = response?.draftApply?.calibration
@@ -869,6 +945,8 @@ async function submitReview() {
           : `审核已写入草稿，并生成校准点；当前 ${calibration.pointCount} 个，还需 ${calibration.remainingPointCount} 个分散地点`)
       } else if (calibration?.reason === 'artwork_anchor_missing') {
         ElMessage.warning('真实位置已写入，但该地点尚未绑定图面锚点，暂未生成校准点')
+      } else if (selected.objectType === 'road' && response?.draftApply?.public === true) {
+        ElMessage.success('路线已审核并设为“随本版上线”；工作台将重新加载，请预览后发布')
       } else {
         ElMessage.success('审核已写入地图草稿；工作台将重新加载，请预览后人工发布')
       }
@@ -876,9 +954,9 @@ async function submitReview() {
       ElMessage.success('审核结果已提交')
     }
   } catch (error: any) {
-    if (error?.message) ElMessage.error(error.message)
+    if (scope === scopeRevision && shouldShowLocalRequestError(error)) ElMessage.error(error?.message || '审核提交失败')
   } finally {
-    saving.value = false
+    if (scope === scopeRevision) saving.value = false
   }
 }
 
@@ -940,9 +1018,12 @@ async function saveTask() {
 
 async function searchCollectors(keyword = '') {
   if (!props.regionId) return
+  const scope = scopeRevision
+  const request = ++collectorRequest
   collectorLoading.value = true
   try {
     const data: any = await fetchCampusMapCollectionRiders(props.regionId, keyword)
+    if (scope !== scopeRevision || request !== collectorRequest) return
     const rows = Array.isArray(data) ? data : data?.list || data?.items || []
     const found = rows.map(toCollectorOption).filter((item: any) => item.value)
     const selected = collectorOptions.value.filter((item) => taskForm.collectorUserIds.includes(item.value))
@@ -950,7 +1031,7 @@ async function searchCollectors(keyword = '') {
   } catch {
     // The shared request layer already reports real failures and silently cancels rapid duplicate searches.
   } finally {
-    collectorLoading.value = false
+    if (scope === scopeRevision && request === collectorRequest) collectorLoading.value = false
   }
 }
 

@@ -1,10 +1,10 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common'
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import { JwtGuard } from '../../guards/jwt.guard'
-import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard'
+import { AdminGuard, AdminPermissionGuard, SuperAdminGuard } from '../../guards/admin.guard'
 import { RequirePermission } from '../../decorators/require-permission.decorator'
 import { CouponAdminService } from './coupon-admin.service'
-import { CouponQueryDto, CreateCouponDto, UpdateCouponDto, CouponUsageQueryDto } from './dto/coupon-admin.dto'
+import { CouponQueryDto, CreateCouponDto, UpdateCouponDto, CouponUsageQueryDto, RandomCouponGrantDto } from './dto/coupon-admin.dto'
 
 @ApiTags('Admin - Coupon')
 @ApiBearerAuth()
@@ -60,6 +60,14 @@ export class CouponAdminController {
   @ApiOperation({ summary: '启用/停用优惠券' })
   toggleCouponStatus(@Param('id') id: string) {
     return this.couponAdminService.toggleCouponStatus(id)
+  }
+
+  @Post(':id/random-grant')
+  @UseGuards(SuperAdminGuard)
+  @RequirePermission('coupon:edit')
+  @ApiOperation({ summary: '从全平台正常用户中随机批量发券' })
+  randomGrant(@Param('id') id: string, @Body() dto: RandomCouponGrantDto, @Req() req: any) {
+    return this.couponAdminService.randomGrant(id, dto, req.user.sub, req.ip)
   }
 
   @Post(':id/copy')

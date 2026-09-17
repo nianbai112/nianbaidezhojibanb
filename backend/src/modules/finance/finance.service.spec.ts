@@ -1,10 +1,38 @@
 import { FinanceService } from './finance.service';
 
 describe('FinanceService withdrawal compatibility', () => {
-  it('accepts the mini-program withdrawal fields and freezes the exact balance once', async () => {
+  it.each(['mysql', 'postgresql'])('uses a supported account filter for %s without losing phone variants', async (provider) => {
+    const previousProvider = process.env.DB_PROVIDER;
+    const previousUrl = process.env.DATABASE_URL;
+    process.env.DB_PROVIDER = provider;
+    process.env.DATABASE_URL = `${provider}://test`;
+    try {
+      const tx: any = {
+        errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ version: 1 }) },
+        orderAppeal: { findMany: jest.fn().mockResolvedValue([]) },
+        ...Object.fromEntries(['errandSettlementHold', 'deliveryRiskEvent', 'riderLiability', 'withdraw', 'regionRider']
+          .map(name => [name, { findFirst: jest.fn().mockResolvedValue(null) }])),
+      };
+      await (new FinanceService({} as any, {} as any) as any)
+        .assertWithdrawRiskClear(tx, 'user-1', '+8613800138000');
+      const filter = { in: ['13800138000', '8613800138000', '+8613800138000'],
+        ...(provider === 'postgresql' ? { mode: 'insensitive' } : {}) };
+      expect(tx.withdraw.findFirst.mock.calls[0][0].where.account).toEqual(filter);
+      expect(tx.regionRider.findFirst.mock.calls[0][0].where.alipayAccount).toEqual(filter);
+    } finally {
+      if (previousProvider === undefined) delete process.env.DB_PROVIDER;
+      else process.env.DB_PROVIDER = previousProvider;
+      if (previousUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousUrl;
+    }
+  });
+
+  it.each([
+    [10, '13800138000'], [0.29, 'User1234567@Example.com'], [1.10, '13800138000'], [2.01, 'user1234567@example.com'],
+  ])('freezes the exact amount %s and preserves payout account %s', async (amount, account) => {
     const tx: any = {
       withdraw: {
-        create: jest.fn().mockResolvedValue({ id: 'withdraw-1', amount: 10 }),
+        create: jest.fn().mockResolvedValue({ id: 'withdraw-1', amount }),
         findFirst: jest.fn().mockResolvedValue(null),
       },
       wallet: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -27,14 +55,14 @@ describe('FinanceService withdrawal compatibility', () => {
     } as any);
 
     await expect(service.withdraw('user-1', {
-      amount: 10, withdraw_type: 'wechat', receiver_name: '微信收款人', receiver_mobile: '13800138000',
-    } as any)).resolves.toEqual(expect.objectContaining({ id: 'withdraw-1', amount: 10 }));
+      amount, withdraw_type: 'wechat', receiver_name: '微信收款人', receiver_mobile: account,
+    } as any)).resolves.toEqual(expect.objectContaining({ id: 'withdraw-1', amount }));
 
     expect(tx.withdraw.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      channel: 'WX_PAY', account: '13800138000', realName: '微信收款人',
+      channel: 'WX_PAY', account, realName: '微信收款人',
     }) }));
     expect(tx.wallet.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { userId: 'user-1', balance: { gte: 10 } },
+      where: { userId: 'user-1', balance: { gte: amount } },
     }));
   });
 

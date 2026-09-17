@@ -1127,8 +1127,18 @@ export class OrderCenterService {
         },
       });
       if (order) {
+        const scope = await this.adminDataScope.getAdminContext(operatorId);
+        if (!scope.isSuperAdmin && (!order.regionId || !scope.regionIds.includes(order.regionId))) {
+          throw new ForbiddenException("无权查看该区域跑腿订单");
+        }
+        const deliveryNodes = await this.prisma.deliveryOrderNode.findMany({
+          where: { orderId: id, orderType: "errand" }, orderBy: { createdAt: "asc" },
+        });
+        const { receiptCode, ...safeOrder } = order;
         return {
-          ...order,
+          ...safeOrder,
+          user: order.User,
+          deliveryNodes,
           orderType: "跑腿订单",
           amount: Number(order.payAmount || 0),
         };

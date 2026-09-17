@@ -1,3 +1,7 @@
+import { reserveCouponIssue } from '../../common/coupon-policy';
+import { merchantSettlementBase } from '../../common/commission';
+import { userStatusValue, buildUserStatusHistory } from './user-status-history';
+import { currentRequestMetadata, redactAuditDetail } from '../../common/request-context';
 import {
   Injectable,
   NotFoundException,
@@ -74,14 +78,18 @@ export class AdminService {
     userId: string,
     operatorId?: string,
     reason?: string,
+    recordChange?: (tx: any, user: any) => Promise<void>,
   ) {
     return this.withSelfUnbanUserLock(userId, () =>
       this.prisma.$transaction(async (tx) => {
         const user = await tx.user.findUnique({
           where: { id: userId },
-          select: { id: true, status: true, banVersion: true },
+          select: { id: true, status: true, banVersion: true, deletedAt: true },
         });
         if (!user) throw new NotFoundException("用户不存在");
+        if (user.status === UserStatus.DELETED || user.deletedAt) {
+          throw new BadRequestException("账号已注销，不能通过状态操作恢复或封禁");
+        }
 
         const request = await tx.selfUnbanRequest.findFirst({
           where: {
@@ -130,6 +138,7 @@ export class AdminService {
         if (activated.count !== 1) {
           throw new BadRequestException("账号封禁状态已变化，请刷新后重试");
         }
+        await recordChange?.(tx, user);
         return user;
       }),
     );
@@ -662,13 +671,7 @@ export class AdminService {
       活动: "3",
       rating: "4",
       vote: "4",
-      photo_vote: "4",
       评分: "4",
-      punch: "5",
-      checkin: "5",
-      checkin_map: "5",
-      打卡: "5",
-      打卡地点: "5",
     };
     return map[key] || String(index);
   }
@@ -681,9 +684,8 @@ export class AdminService {
       secondhand: "/static/yhq.png",
       activity: "/static/tj.png",
       rating: "/static/v.png",
-      checkin: "/static/icon-weizhi.png",
     };
-    return tabs.map((tab, index) => ({
+    return tabs.filter((tab) => tab && String(tab.id ?? '') !== '5' && !/^(dating|object_matching|netdisk|photo_vote|photo_contest|explosivesel|punch|checkin|checkin_map|对象匹配|爆照评选|网盘|地点打卡|打卡|打卡地点|打卡地图)$/i.test(String(tab.type || tab.pageType || tab.name || ''))).map((tab, index) => ({
       ...tab,
       id: this.getHomeTabId(tab, index),
       icon:
@@ -1952,14 +1954,14 @@ export class AdminService {
           realName: u.studentVerify?.realName,
           studentId: u.studentVerify?.studentId,
           studentCertStatus: u.studentVerify?.status?.toLowerCase() || "none",
+          studentCardImage: u.studentVerify?.cardImage || null,
+          studentCertCreatedAt: u.studentVerify?.createdAt || null,
+          studentCertVerifiedAt: u.studentVerify?.verifiedAt || null,
+          studentCertRemark: u.studentVerify?.remark || null,
           balance: Math.round(Number(u.wallet?.balance || 0) * 100),
           freezeAmount: Math.round(Number(u.wallet?.freeze || 0) * 100),
-          status:
-            u.status === "ACTIVE"
-              ? "active"
-              : u.status === "BANNED"
-                ? "banned"
-                : "disabled",
+          status: userStatusValue(u.status),
+          deletedAt: u.deletedAt,
           membershipLabel: (u as any).memberships?.[0]?.planName || "",
           membershipExpiredAt: (u as any).memberships?.[0]?.expiredAt || null,
           tags: (u as any).tags || [],
@@ -2378,9 +2380,9 @@ export class AdminService {
       this.safeAdminRead(
         () =>
           this.prisma.auditLog.findMany({
-            where: { userId: id },
+            where: { userId: id, module: "user", action: { in: ["BAN", "UNBAN", "UPDATE", "DELETE"] } },
             orderBy: { createdAt: "desc" },
-            take: 8,
+            take: 50,
           }),
         [] as any[],
       ),
@@ -2640,12 +2642,8 @@ export class AdminService {
       freezeAmount: Math.round(Number(u.wallet?.freeze || 0) * 100),
       totalIn: Math.round(Number(u.wallet?.totalIn || 0) * 100),
       totalOut: Math.round(Number(u.wallet?.totalOut || 0) * 100),
-      status:
-        u.status === "ACTIVE"
-          ? "active"
-          : u.status === "BANNED"
-            ? "banned"
-            : "disabled",
+      status: userStatusValue(u.status),
+      deletedAt: u.deletedAt,
       muteEndAt: u.muteEndAt,
       muteReason: u.muteReason,
       bio: u.profile?.bio,
@@ -2755,6 +2753,7 @@ export class AdminService {
         createdAt: item.createdAt,
       })),
       auditLogs,
+      statusHistory: buildUserStatusHistory(u, auditLogs, operationLogs),
     };
   }
 
@@ -2764,42 +2763,10 @@ export class AdminService {
     operatorId?: string,
     ip?: string,
   ) {
-    const u = await this.prisma.user.findUnique({ where: { id } });
-    if (!u) throw new NotFoundException("用户不存在");
-    if (!dto.banned) {
-      await this.activateUserWithSelfUnbanGuard(id, operatorId, dto.reason);
-    } else {
-      await this.prisma.user.update({
-        where: { id },
-        data: {
-          status: "BANNED",
-          banVersion: { increment: 1 },
-        },
-      });
-    }
-    // 账号不可用后必须同时撤销 refresh 和两类实时连接。
-    if (dto.banned) {
-      await this.revokeUserAccess(id);
-    }
-    await this.clearUserStateCache(id);
-    await this.logOperation(
-      operatorId || "",
-      dto.banned ? "ban" : "unban",
-      "user",
-      id,
-      "user",
-      { reason: dto.reason },
-      ip,
-    );
-    await this.prisma.auditLog.create({
-      data: {
-        userId: id,
-        action: dto.banned ? "BAN" : "UNBAN",
-        module: "user",
-        targetId: id,
-        detail: { reason: dto.reason, operatorId },
-      },
-    });
+    await this.setUserStatus(id, {
+      status: dto.banned ? "banned" : "active",
+      reason: dto.reason,
+    }, operatorId, ip);
     return { success: true };
   }
 
@@ -3124,80 +3091,58 @@ export class AdminService {
     ip?: string,
   ) {
     const status = this.normalizeUserStatus(dto.status);
-    const u = await this.prisma.user.findUnique({ where: { id } });
-    if (!u) throw new NotFoundException("用户不存在");
+    const metadata = currentRequestMetadata();
+    const recordChange = async (tx: any, user: any) => {
+      await tx.auditLog.create({
+        data: {
+          userId: id, module: "user", targetId: id,
+          action: status === UserStatus.DELETED ? AuditAction.DELETE
+            : status === UserStatus.BANNED ? AuditAction.BAN
+            : user.status === UserStatus.BANNED && status === UserStatus.ACTIVE
+              ? AuditAction.UNBAN : AuditAction.UPDATE,
+          detail: {
+            source: "admin", beforeStatus: user.status, afterStatus: status,
+            reason: dto.reason || null, operatorId: operatorId || null,
+          },
+          ip: metadata.ip || ip, ua: metadata.ua,
+        },
+      });
+    };
 
-    // AUD-P1-181: DELETED 状态必须同时设置 deletedAt，脱敏可公开资料
-    const updateData: any = { status };
-    if (status === UserStatus.BANNED) {
-      updateData.banVersion = { increment: 1 };
-    }
-    if (status === "DELETED") {
-      updateData.deletedAt = new Date();
-      updateData.nickname = "已注销用户";
-      updateData.avatar = null;
-      updateData.phone = null;
-    }
-
-    if (status === UserStatus.ACTIVE && u.status !== UserStatus.ACTIVE) {
-      await this.activateUserWithSelfUnbanGuard(id, operatorId, dto.reason);
+    if (status === UserStatus.ACTIVE) {
+      await this.activateUserWithSelfUnbanGuard(id, operatorId, dto.reason, recordChange);
     } else {
-      await this.prisma.user.update({
-        where: { id },
-        data: updateData,
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({ where: { id } });
+        if (!user) throw new NotFoundException("用户不存在");
+        if (user.status === UserStatus.DELETED || user.deletedAt) {
+          throw new BadRequestException("账号已注销，不能通过状态操作恢复或封禁");
+        }
+        const data: any = { status };
+        if (status === UserStatus.BANNED) data.banVersion = { increment: 1 };
+        if (status === UserStatus.DELETED) {
+          Object.assign(data, { deletedAt: new Date(), nickname: "已注销用户", avatar: null, phone: null });
+        }
+        const changed = await tx.user.updateMany({
+          where: { id, status: user.status, banVersion: user.banVersion, deletedAt: null },
+          data,
+        });
+        if (changed.count !== 1) throw new BadRequestException("账号状态已变化，请刷新后重试");
+        if (status === UserStatus.DELETED) {
+          await tx.userProfile.updateMany({
+            where: { userId: id },
+            data: {
+              bio: null, wechat: null, qq: null, email: null, realName: null,
+              idCard: null, school: null, major: null, grade: null, dormitory: null, birthday: null,
+            },
+          });
+        }
+        await recordChange(tx, user);
       });
     }
-
-    // AUD-P1-181: DELETED 时脱敏用户档案资料
-    if (status === "DELETED") {
-      await this.prisma.userProfile
-        .updateMany({
-          where: { userId: id },
-          data: {
-            bio: null,
-            wechat: null,
-            qq: null,
-            email: null,
-            realName: null,
-            idCard: null,
-            school: null,
-            major: null,
-            grade: null,
-            dormitory: null,
-            birthday: null,
-          },
-        })
-        .catch(() => undefined);
-    }
-    // 非 ACTIVE 用户不能保留 refresh 或实时会话。
-    if (status !== "ACTIVE") {
-      await this.revokeUserAccess(id);
-    }
+    if (status !== UserStatus.ACTIVE) await this.revokeUserAccess(id);
     await this.clearUserStateCache(id);
-    await this.logOperation(
-      operatorId || "",
-      "status",
-      "user",
-      id,
-      "user",
-      { status, reason: dto.reason },
-      ip,
-    );
-    const auditAction =
-      status === UserStatus.BANNED
-        ? AuditAction.BAN
-        : u.status === UserStatus.BANNED && status === UserStatus.ACTIVE
-          ? AuditAction.UNBAN
-          : AuditAction.UPDATE;
-    await this.prisma.auditLog.create({
-      data: {
-        userId: id,
-        action: auditAction,
-        module: "user",
-        targetId: id,
-        detail: { status, reason: dto.reason, operatorId },
-      },
-    });
+    await this.logOperation(operatorId || "", "status", "user", id, "user", { status, reason: dto.reason }, ip);
     return { success: true, status };
   }
 
@@ -7955,35 +7900,7 @@ export class AdminService {
           refundStatus: true,
         },
       });
-      const amount = completedOrders.reduce((sum, order) => {
-        const grossAmount = Math.max(
-          0,
-          order.payAmount === null || order.payAmount === undefined
-            ? Number(order.totalAmount || 0)
-            : Number(order.payAmount || 0) + Number(order.subsidyAmount || 0),
-        );
-        const selfDelivery =
-          order.businessType === "dorm_shop" ||
-          order.deliveryMode === "self_delivery";
-        const originalFreight = Number(order.originalFreightAmount || 0);
-        const platformDeliveryAmount = selfDelivery
-          ? 0
-          : originalFreight > 0
-            ? originalFreight
-            : Number(order.freightAmount || 0);
-        const merchantBaseAmount = Math.max(
-          0,
-          grossAmount - platformDeliveryAmount,
-        );
-        const refundedGoodsAmount =
-          order.refundStatus === "partial"
-            ? Math.min(
-                merchantBaseAmount,
-                Math.max(0, Number(order.refundAmount || 0)),
-              )
-            : 0;
-        return sum + merchantBaseAmount - refundedGoodsAmount;
-      }, 0);
+      const amount = completedOrders.reduce((sum, order) => sum + merchantSettlementBase(order), 0);
       const commissionRate = Number(merchant.region?.commissionRate || 0);
       const platformFee = Math.round(amount * commissionRate * 100) / 100;
       const settlementNo = `MST${Date.now()}`;
@@ -8653,7 +8570,7 @@ export class AdminService {
         module: l.module,
         targetId: l.targetId,
         targetType: l.targetType,
-        detail: l.detail,
+        detail: redactAuditDetail(l.detail),
         ip: l.ip,
         regionId: this.getOperationRegionId(l),
         riskLevel: alert?.level || fallbackRisk.riskLevel,
@@ -8689,15 +8606,11 @@ export class AdminService {
     if (module) where.module = module;
     if (action) {
       const actionText = String(action);
-      where.action = {
-        in: Array.from(
-          new Set([
-            actionText,
-            actionText.toLowerCase(),
-            actionText.toUpperCase(),
-          ]),
-        ),
-      };
+      where.AND = [{ OR: [
+        { action: { in: [actionText, actionText.toLowerCase(), actionText.toUpperCase()] } },
+        { action: { startsWith: `${actionText.toLowerCase()}_` } },
+        { action: { startsWith: `${actionText.toUpperCase()}_` } },
+      ] }];
     }
     if (keyword) {
       where.OR = [
@@ -8796,6 +8709,7 @@ export class AdminService {
     if (keyword) {
       where.OR = [
         { account: { username: { contains: keyword } } },
+        { username: { contains: keyword } },
         { ip: { contains: keyword } },
       ];
     }
@@ -8826,7 +8740,7 @@ export class AdminService {
       list: list.map((l) => ({
         id: l.id,
         accountId: l.accountId,
-        adminName: l.account?.realName || l.account?.username,
+        adminName: l.username || l.account?.username || '未填写账号',
         success: l.success,
         failReason: l.failReason,
         ip: l.ip,
@@ -8874,6 +8788,7 @@ export class AdminService {
   }
 
   async setConfig(key: string, value: any, operatorId?: string, ip?: string) {
+    const existing = await this.prisma.config.findUnique({ where: { key } });
     await this.prisma.config.upsert({
       where: { key },
       update: { value },
@@ -8890,7 +8805,7 @@ export class AdminService {
       "config",
       key,
       "config",
-      { key },
+      { key, before: existing?.value ?? null, after: value },
       ip,
     );
     return { success: true };
@@ -10411,17 +10326,8 @@ export class AdminService {
     if (!user) throw new NotFoundException("用户不存在");
     if (!coupon || coupon.status !== "active" || coupon.endAt <= now)
       throw new BadRequestException("优惠券不存在、未启用或已过期");
-    const remain =
-      Number(coupon.totalCount || 0) - Number(coupon.receivedCount || 0);
-    if (remain < quantity) throw new BadRequestException("优惠券库存不足");
-    if (!ignoreLimit) {
-      const owned = await this.prisma.couponReceive.count({
-        where: { userId, couponId },
-      });
-      if (owned + quantity > Number(coupon.limitPerUser || 1))
-        throw new BadRequestException("超过该券的用户限领数量");
-    }
     await this.prisma.$transaction(async (tx) => {
+      await reserveCouponIssue(tx, couponId, userId, quantity, { ignoreUserLimit: ignoreLimit });
       await tx.couponReceive.createMany({
         data: Array.from({ length: quantity }).map(() => ({
           userId,
@@ -10429,11 +10335,7 @@ export class AdminService {
           status: "unused",
         })),
       });
-      await tx.coupon.update({
-        where: { id: couponId },
-        data: { receivedCount: { increment: quantity } },
-      });
-    });
+    }, { isolationLevel: 'ReadCommitted' });
     if (operatorId) {
       await this.logOperation(
         operatorId,
@@ -11194,6 +11096,7 @@ export class AdminService {
     const { regionId, config } = dto;
     await this.adminDataScope.assertRegionAccess(operatorId, regionId);
     const normalizedConfig = this.normalizeRegionTabBarConfig(config);
+    const existing = await this.prisma.regionTabBar.findUnique({ where: { regionId } });
     const item = await this.prisma.regionTabBar.upsert({
       where: { regionId },
       update: { config: normalizedConfig },
@@ -11206,7 +11109,7 @@ export class AdminService {
         "region_tabbar",
         regionId,
         "region",
-        normalizedConfig,
+        { ...normalizedConfig, before: existing?.config ?? null, after: normalizedConfig },
         ip,
       );
     this.wsNative?.broadcast({

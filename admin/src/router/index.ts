@@ -128,6 +128,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'marketing/overview', component: () => import('@/views/marketing/MarketingOverview.vue'), meta: { title: '营销概览' } },
       { path: 'marketing/coupons', component: () => import('@/views/marketing/CouponList.vue'), meta: { title: '优惠券' } },
       { path: 'marketing/coupon-redeem-codes', component: () => import('@/views/marketing/CouponRedeemCodes.vue'), meta: { title: '兑换码' } },
+      { path: 'marketing/welfare', component: () => import('@/views/marketing/WelfareDraws.vue'), meta: { title: '福利抽奖' } },
       { path: 'marketing/activities', component: () => import('@/views/marketing/ActivityList.vue'), meta: { title: '活动管理' } },
       { path: 'marketing/group-buys', component: () => import('@/views/marketing/GroupBuyList.vue'), meta: { title: '团购管理' } },
       { path: 'marketing/sign', component: () => import('@/views/marketing/SignConfig.vue'), meta: { title: '签到任务' } },
@@ -141,12 +142,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'growth/ai-ops-config', redirect: '/ai/ops-config' },
 
       // ========== 扩展玩法中心 ==========
-      { path: 'features/dating', component: () => import('@/views/features/DatingManage.vue'), meta: { title: '对象匹配' } },
-      { path: 'features/netdisk', component: () => import('@/views/features/NetDisk.vue'), meta: { title: '网盘资源' } },
-      { path: 'features/checkin-map', component: () => import('@/views/features/CheckinMap.vue'), meta: { title: '打卡地图' } },
       { path: 'features/rating', component: () => import('@/views/features/RatingSystem.vue'), meta: { title: '评分系统' } },
       { path: 'features/second-hand', component: () => import('@/views/features/SecondHand.vue'), meta: { title: '二手交易' } },
-      { path: 'features/photo-vote', component: () => import('@/views/features/PhotoVote.vue'), meta: { title: '爆照评选' } },
       { path: 'features/clubs', component: () => import('@/views/features/ClubsManage.vue'), meta: { title: '社团俱乐部' } },
 
       // ========== 系统运维中心 ==========
@@ -192,14 +189,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'ai/config', component: () => import('@/views/ai/AiConfig.vue'), meta: { title: 'AI配置' } },
       { path: 'ai/ops-config', component: () => import('@/views/growth/AiOpsConfigCenter.vue'), meta: { title: 'AI运营配置' } },
 
-      // ========== 埋点追踪 ==========
-      { path: 'tracking/events', component: () => import('@/views/tracking/TrackingEvents.vue'), meta: { title: '埋点事件' } },
-      { path: 'tracking/funnel', component: () => import('@/views/tracking/FunnelAnalysis.vue'), meta: { title: '漏斗分析' } },
-      { path: 'tracking/keywords', component: () => import('@/views/tracking/SearchKeywords.vue'), meta: { title: '搜索关键词' } },
-
       // ========== tab 化入口（旧路由全部保留作深链） ==========
       { path: 'insights/business', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '业务分析', tabsKey: 'business' } },
-      { path: 'insights/tracking', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '埋点分析', tabsKey: 'tracking' } },
       { path: 'insights/recommend', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: '推荐与实验', tabsKey: 'recommend' } },
       { path: 'insights/ai', component: () => import('@/views/common/TabbedModulePage.vue'), meta: { title: 'AI 运营', tabsKey: 'ai' } },
       // 宿舍小店：组件靠路径含 '/dorm-' 识别小店模式，此路径必须保留该片段

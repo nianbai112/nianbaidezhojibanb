@@ -2,6 +2,12 @@ import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObjec
 import { ApiProperty } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 
+export class RepairErrandCouponDto {
+  @IsString()
+  @MaxLength(500)
+  note: string
+}
+
 // ==================== Rider ====================
 
 export class RiderQueryDto {

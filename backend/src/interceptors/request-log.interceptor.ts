@@ -7,8 +7,9 @@ import {
   OnModuleDestroy,
 } from "@nestjs/common";
 import { Observable } from "rxjs";
-import { tap } from "rxjs/operators";
+import { tap, mergeMap } from "rxjs/operators";
 import { PrismaService } from "../common/services/prisma.service";
+import { clientIp, redactAuditDetail, requestContext } from '../common/request-context';
 
 // =============================================================================
 // 敏感数据脱敏规则
@@ -206,7 +207,7 @@ export class RequestLogInterceptor implements NestInterceptor, OnModuleDestroy {
         requestId: (safeHeaders["x-request-id"] as string) || undefined,
         userId,
         adminId,
-        ip: ip || (safeHeaders["x-forwarded-for"] as string) || undefined,
+        ip: clientIp(request),
         userAgent: (safeHeaders["user-agent"] as string) || undefined,
         path: url,
         method,
@@ -216,6 +217,24 @@ export class RequestLogInterceptor implements NestInterceptor, OnModuleDestroy {
     };
 
     return next.handle().pipe(
+      mergeMap(async (result) => {
+        const store = requestContext.getStore();
+        const isAdminMutation = adminId && /^(POST|PUT|PATCH|DELETE)$/.test(method)
+          && /^(\/api)?\/admin\//.test(url);
+        if (isAdminMutation && !store?.operationLogged && result?.success !== false
+          && (result?.code === undefined || [0, 200].includes(Number(result.code)))
+          && (request.res?.statusCode || 200) < 400) {
+          const parts = String(request.route?.path || url).replace(/^\/api/, '').split('/').filter(Boolean);
+          const action = method === 'DELETE' ? 'delete' : ['PUT', 'PATCH'].includes(method) ? 'update' : 'submit';
+          await this.prisma.adminOperationLog.create({ data: {
+            accountId: adminId, action, module: parts[1] || 'system',
+            targetId: request.params?.id || request.params?.regionId || null,
+            ip: clientIp(request), ua: request.headers?.['user-agent'],
+            detail: redactAuditDetail({ requestPath: url.split('?')[0], submitted: body || {}, outcome: '成功' }),
+          } }).catch((error: any) => this.logger.warn(`后台操作日志写入失败：${error.message}`));
+        }
+        return result;
+      }),
       tap({
         next: () => enqueue(request.res?.statusCode || 200),
         error: (error: any) =>

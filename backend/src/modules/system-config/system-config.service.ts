@@ -557,6 +557,7 @@ export class SystemConfigService {
   getDefaultAppReviewMode() {
     return {
       enabled: true,
+      allowGuestBrowsing: true,
       hideDelivery: true,
       hideMall: true,
       hideErrand: true,
@@ -576,7 +577,7 @@ export class SystemConfigService {
       : {};
     const normalized = { ...defaults };
     for (const key of Object.keys(defaults) as Array<keyof typeof defaults>) {
-      if (key === 'placeholderText') continue;
+      if (key === 'placeholderText' || key === 'hideDating') continue; // 已下线，兼容旧客户端时始终关闭对象匹配。
       if (typeof source[key] === 'boolean') normalized[key] = source[key] as never;
     }
     normalized.placeholderText = typeof source.placeholderText === 'string'
@@ -593,7 +594,8 @@ export class SystemConfigService {
   async saveAppReviewMode(dto: any, operatorId?: string, ip?: string) {
     const existing = await this.prisma.config.findUnique({ where: { key: 'app_review_mode' } });
     const before = this.normalizeAppReviewMode(existing?.value);
-    const value = this.normalizeAppReviewMode(dto);
+    // 旧版后台未提交新字段时保留已保存的选择，避免重新打开游客入口。
+    const value = this.normalizeAppReviewMode({ allowGuestBrowsing: before.allowGuestBrowsing, ...dto });
     await this.prisma.config.upsert({
       where: { key: 'app_review_mode' },
       update: { value, group: 'app_capability', desc: '小程序全用户业务能力配置', updatedBy: operatorId },
@@ -610,8 +612,8 @@ export class SystemConfigService {
   /** 内置默认费率，首次加载或 reset 时使用 */
   getDefaultBizFeeConfigs(): Array<{ bizType: string; label: string; rate: number; fixedFee: number; enabled: boolean; remark: string }> {
     return [
-      { bizType: 'order',              label: '外卖订单',     rate: 0,    fixedFee: 0, enabled: true,  remark: '外卖订单抽成，实际由区域 commissionRate 控制，此处为统一展示' },
-      { bizType: 'errand_order',       label: '跑腿订单',     rate: 0.05, fixedFee: 0, enabled: true,  remark: '跑腿订单完成时抽取 5%' },
+      { bizType: 'order',              label: '外卖 / 宿舍小店', rate: 0, fixedFee: 0, enabled: true, remark: '按校区商家结算金额与校区费率计算' },
+      { bizType: 'errand_order',       label: '跑腿订单',     rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按实付金额计算，扣除抽成后计入骑手收入' },
       { bizType: 'mall_order',         label: '商城订单',     rate: 0.03, fixedFee: 0, enabled: true,  remark: '商城订单支付时抽取 3%' },
       { bizType: 'group_buy_order',    label: '拼团订单',     rate: 0.03, fixedFee: 0, enabled: false, remark: '拼团业务暂未开启抽成' },
       { bizType: 'recharge',           label: '余额充值',     rate: 0,    fixedFee: 0, enabled: false, remark: '充值为平台直收，无抽成' },
@@ -636,8 +638,17 @@ export class SystemConfigService {
   }
 
   async saveBizFeeConfig(bizType: string, dto: { label?: string; rate?: number; fixedFee?: number; enabled?: boolean; remark?: string }, operatorId?: string) {
-    if (dto.rate !== undefined && (dto.rate < 0 || dto.rate > 1)) {
-      throw new Error('费率 rate 必须在 0~1 之间（如 0.05 表示 5%）');
+    if (bizType === 'order') {
+      throw new BadRequestException('外卖和宿舍小店抽成请在校区商家费率中设置');
+    }
+    if (dto.rate !== undefined && (typeof dto.rate !== 'number' || !Number.isFinite(dto.rate) || dto.rate < 0 || dto.rate > 1)) {
+      throw new BadRequestException('费率 rate 必须在 0~1 之间（如 0.05 表示 5%）');
+    }
+    if (dto.fixedFee !== undefined && (typeof dto.fixedFee !== 'number' || !Number.isFinite(dto.fixedFee) || dto.fixedFee < 0 || dto.fixedFee > 99999999.99)) {
+      throw new BadRequestException('每单固定费用必须为有效的非负金额');
+    }
+    if (dto.enabled !== undefined && typeof dto.enabled !== 'boolean') {
+      throw new BadRequestException('抽成开关必须为布尔值');
     }
     const data: any = { updatedBy: operatorId };
     if (dto.label !== undefined) data.label = dto.label;

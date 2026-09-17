@@ -736,7 +736,6 @@ const DEFAULT_TABS = [
   { id: '2', name: '二手', enabled: true },
   { id: '3', name: '活动', enabled: true },
   { id: '4', name: '评分', enabled: true },
-  { id: '5', name: '打卡地点', enabled: true }
 ]
 const DEFAULT_LEADERBOARD = {
   enabled: true,

@@ -127,6 +127,17 @@ function makeMocks(initialBalance: number) {
 }
 
 describe('AUD-P1-184 跑腿余额支付原子扣款回归', () => {
+  it('扣款提交后提醒入库失败仍返回支付成功，通知交由补偿任务恢复', async () => {
+    const { service, calls, store } = makeMocks(100);
+    (service as any).notifyAvailableRiders.mockRejectedValueOnce(new Error('notification unavailable'));
+    const result: any = await service.payOrder('user1', { orderId: 'order1', payChannel: 'balance' });
+    expect(result.success).toBe(true);
+    expect(result.data.status).toBe('pending_accept');
+    expect(store.balance).toBe(20);
+    expect(calls.walletUpdateMany).toBe(1);
+    expect(calls.paymentOrderCreate).toBe(1);
+  });
+
   it('余额充足：扣减余额并创建流水/支付单/平台流水/置 pending_accept，流水余额为扣后真实余额', async () => {
     const { service, calls, store } = makeMocks(100);
     const res: any = await service.payOrder('user1', { orderId: 'order1', payChannel: 'balance' });

@@ -49,10 +49,14 @@ export class AddressService {
     return { success: true };
   }
 
-  async getDetail(addressId: string) {
-    const address =
-      (await this.prisma.address.findUnique({ where: { id: addressId } }).catch(() => null)) ||
-      (await this.prisma.address.findFirst({ where: { specifiedAddressId: addressId } }));
+  async getDetail(addressId: string, userId: string) {
+    if (!userId) throw new NotFoundException('地址不存在');
+    const address = await this.prisma.address.findFirst({
+      where: { id: addressId, userId },
+    }) || await this.prisma.address.findFirst({
+      where: { userId, specifiedAddressId: addressId },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
     if (address) return { data: this.formatSpecifiedAddress(address.specifiedAddressId || address.id, address.fullAddress || address.detail) };
 
     const region = await this.prisma.region.findUnique({

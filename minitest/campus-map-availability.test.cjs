@@ -46,7 +46,9 @@ async function run() {
   assert.match(painter, /availabilityStatus/)
   assert.match(painter, /unavailableMessage/)
   assert.match(inspector, /serviceStatus/)
-  assert.match(inspector, /未开放说明/)
+  // Keep the committed label and its real data binding under regression.
+  assert.match(inspector, /用户端状态说明/)
+  assert.match(inspector, /v-model="selectedEditableItem\.item\.unavailableMessage"/)
   assert.match(regionList, /campusMapStatusFilter/)
   assert.match(regionList, /fetchCampusMapStatuses/)
 }

@@ -24,11 +24,6 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
     { key: 'riders', title: '骑手分析', icon: 'Van', component: asyncPage(() => import('@/views/analytics/RiderAnalytics.vue')) },
     { key: 'second-hand', title: '二手分析', icon: 'Goods', component: asyncPage(() => import('@/views/analytics/SecondHandAnalytics.vue')) }
   ],
-  tracking: [
-    { key: 'events', title: '埋点事件', icon: 'Aim', component: asyncPage(() => import('@/views/tracking/TrackingEvents.vue')) },
-    { key: 'funnel', title: '漏斗分析', icon: 'Filter', component: asyncPage(() => import('@/views/tracking/FunnelAnalysis.vue')) },
-    { key: 'keywords', title: '搜索关键词', icon: 'Search', component: asyncPage(() => import('@/views/tracking/SearchKeywords.vue')) }
-  ],
   recommend: [
     { key: 'dashboard', title: '推荐中心', icon: 'DataLine', component: asyncPage(() => import('@/views/recommend/RecommendDashboard.vue')) },
     { key: 'strategy', title: '推荐策略', icon: 'Setting', component: asyncPage(() => import('@/views/recommend/RecommendStrategy.vue')) },
@@ -59,7 +54,7 @@ export const moduleTabSets: Record<string, ModuleTab[]> = {
   'merchant-config': [
     { key: 'price', title: '平台价格规则', icon: 'PriceTag', component: asyncPage(() => import('@/views/merchant/MerchantPriceAdjustments.vue')) },
     { key: 'collection', title: '商品批量复制', icon: 'CopyDocument', component: asyncPage(() => import('@/views/merchant/ProductCollection.vue')) },
-    { key: 'region', title: '外卖区域规则', icon: 'Setting', component: asyncPage(() => import('@/views/merchant/RegionMerchantSettings.vue')) },
+    { key: 'region', title: '外卖 / 小店区域规则', icon: 'Setting', component: asyncPage(() => import('@/views/merchant/RegionMerchantSettings.vue')) },
     { key: 'printers', title: '打印机配置', icon: 'Printer', component: asyncPage(() => import('@/views/merchant/MerchantPrinters.vue')) }
   ],
 

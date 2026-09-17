@@ -131,6 +131,7 @@ describe('Errand closure acceptance flow', () => {
       'rider-2': { userId: 'rider-2', regionId: 'region-1', riderType: 'official', verifyStatus: 'approved', status: 'online' },
     };
     const tx: any = {
+      errandAssigneeMutex: { upsert: jest.fn().mockResolvedValue({ version: 1 }) },
       errandOrder: {
         findUnique: jest.fn(async () => ({ ...state })),
         updateMany: jest.fn(async ({ data }: any) => {
@@ -156,13 +157,13 @@ describe('Errand closure acceptance flow', () => {
       deliveryOrderNode: { create: jest.fn(async ({ data }: any) => nodes.push(data)) },
     };
     const prisma: any = {
-      errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: state.id }) },
+      errandOrder: { findUnique: jest.fn(async () => ({ ...state })) },
       $transaction: jest.fn((callback: any) => callback(tx)),
     };
     const notifyService = { createAndDispatch: jest.fn().mockResolvedValue({ id: 'notification-1' }) };
     const service = new ErrandService(prisma, {} as any, notifyService as any, {} as any, {} as any, {} as any, {} as any);
     jest.spyOn(service as any, 'getOrderTakingPolicy').mockResolvedValue({});
-    jest.spyOn(service as any, 'getRiderDispatchContext').mockResolvedValue({ activeOrdersCount: 0 });
+    jest.spyOn(service as any, 'getRiderDispatchContext').mockResolvedValue({ active_orders_count: 0 });
     jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([{}]);
     jest.spyOn(service as any, 'recordErrandLearningSnapshot').mockResolvedValue(undefined);
 
@@ -200,6 +201,7 @@ describe('Errand closure acceptance flow', () => {
     const nodes: any[] = [];
     const tx: any = {
       errandOrder: {
+        update: jest.fn(async ({ data }: any) => Object.assign(state, data)),
         updateMany: jest.fn(async ({ where, data }: any) => {
           if (state.status !== where.status) return { count: 0 };
           Object.assign(state, data);
@@ -208,6 +210,11 @@ describe('Errand closure acceptance flow', () => {
         findUniqueOrThrow: jest.fn(async () => ({ ...state })),
       },
       deliveryOrderNode: { create: jest.fn(async ({ data }: any) => nodes.push(data)) },
+      errandSettlementHold: { findUnique: jest.fn().mockResolvedValue(null) },
+      orderAppeal: { findFirst: jest.fn().mockResolvedValue(null) },
+      deliveryRiskEvent: { findFirst: jest.fn().mockResolvedValue(null) },
+      subsidyLedger: { findFirst: jest.fn().mockResolvedValue(null) },
+      bizFeeConfig: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     const prisma: any = {
       errandOrder: {
@@ -325,6 +332,8 @@ describe('Errand closure acceptance flow', () => {
       riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       orderAppeal: { findMany: jest.fn().mockResolvedValue([{ orderId: 'appealed-1' }]) },
       deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
+      errandSettlementHold: { findMany: jest.fn().mockResolvedValue([]) },
+      subsidyLedger: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((callback: any) => callback(tx)),
     };
     const scope: any = { getAdminContext: jest.fn().mockResolvedValue({ isSuperAdmin: true, regionIds: [] }) };

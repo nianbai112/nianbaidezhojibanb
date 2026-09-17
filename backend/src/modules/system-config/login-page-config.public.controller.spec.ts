@@ -11,7 +11,7 @@ describe('LoginPageConfigPublicController', () => {
   });
 
   it('exposes the same all-user capability config through the public controller', async () => {
-    const config = { enabled: true, hideDelivery: true, placeholderText: '' };
+    const config = { enabled: true, allowGuestBrowsing: false, hideDelivery: true, placeholderText: '' };
     const service = { getAppReviewMode: jest.fn().mockResolvedValue({ success: true, data: config }) };
     const controller = new LoginPageConfigPublicController(service as any);
 

@@ -1,94 +1,25 @@
 import { ErrandService } from './errand.service';
 
 describe('ErrandService new-order notification channels', () => {
-  it('dispatches in-app, websocket, and offline push to online riders', async () => {
-    const prisma: any = {
-      regionRider: {
-        findMany: jest.fn().mockResolvedValue([{ userId: 'rider-1' }]),
-      },
-      errandOrder: {
-        findUnique: jest.fn().mockResolvedValue(null),
-        groupBy: jest.fn().mockResolvedValue([]),
-      },
-      order: {
-        groupBy: jest.fn().mockResolvedValue([]),
-      },
-      errandConfig: { findUnique: jest.fn().mockResolvedValue(null) },
-      config: { findUnique: jest.fn().mockResolvedValue(null) },
-    };
-    const notifyService = {
-      createAndDispatch: jest.fn().mockResolvedValue({ id: 'notification-1' }),
-    };
-    const service = new ErrandService(
-      prisma,
-      {} as any,
-      notifyService as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
-
-    await (service as any).notifyAvailableRiders({
-      id: 'order-1',
-      orderNo: 'ERR001',
-      regionId: 'region-1',
-      type: 'pickup',
-      payAmount: 8,
-      status: 'pending_accept',
-    });
-
-    expect(notifyService.createAndDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'rider-1',
-        scene: 'new_errand_order',
-        channelMask: { inApp: true, websocket: true, push: true },
-      }),
-    );
+  it('routes errand payment notifications through the shared rider notification pipeline', async () => {
+    const notify: any = { notifyAvailableErrandRiders: jest.fn().mockResolvedValue({ queued: 2 }) };
+    const service: any = new ErrandService({} as any, {} as any, notify, {} as any, {} as any, {} as any, {} as any);
+    await expect(service.notifyAvailableRiders({ id: 'order-1' })).resolves.toEqual({ queued: 2 });
+    expect(notify.notifyAvailableErrandRiders).toHaveBeenCalledWith('order-1');
   });
 
-  it('does not notify approved riders before an ordinary-user fallback order is released', async () => {
+  it.each([false, true])('persists a transfer before notifying its recipient, including notification failure=%s', async (failNotification) => {
+    const order = { id: 'order-1', userId: 'owner', riderId: 'sender', status: 'accepted', regionId: 'r1', payAmount: 8, payTime: new Date() };
     const prisma: any = {
-      regionRider: { findMany: jest.fn().mockResolvedValue([{ userId: 'rider-1' }]) },
-      errandOrder: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'order-ordinary',
-          receiverType: 'ordinary_user',
-          payTime: new Date(Date.now() + 60_000),
-          tasks: [],
-        }),
-        groupBy: jest.fn().mockResolvedValue([]),
-      },
-      order: { groupBy: jest.fn().mockResolvedValue([]) },
-      errandConfig: { findUnique: jest.fn().mockResolvedValue(null) },
-      config: {
-        findUnique: jest.fn().mockResolvedValue({
-          value: {
-            orderTakingPolicy: {
-              ordinaryUserEnabled: true,
-              receiverChoiceEnabled: true,
-              ordinaryUserFallbackEnabled: true,
-              ordinaryUserFallbackMinutes: 10,
-            },
-          },
-        }),
-      },
+      errandOrder: { findUnique: jest.fn().mockResolvedValue(order) },
+      regionRider: { findFirst: jest.fn().mockResolvedValue({ userId: 'receiver', verifyStatus: 'approved', regionId: 'r1' }) },
+      transferRequest: { create: jest.fn().mockResolvedValue({ id: 'transfer-1' }) },
     };
-    const notifyService = { createAndDispatch: jest.fn() };
-    const service = new ErrandService(
-      prisma, {} as any, notifyService as any, {} as any, {} as any, {} as any, {} as any,
-    );
-
-    await (service as any).notifyAvailableRiders({
-      id: 'order-ordinary',
-      regionId: 'region-1',
-      receiverType: 'ordinary_user',
-      payTime: new Date(Date.now() + 60_000),
-      type: 'pickup',
-      payAmount: 8,
-    });
-
-    expect(prisma.regionRider.findMany).not.toHaveBeenCalled();
-    expect(notifyService.createAndDispatch).not.toHaveBeenCalled();
+    const notify: any = { createAndDispatch: failNotification ? jest.fn().mockRejectedValue(new Error('push unavailable')) : jest.fn().mockResolvedValue({}) };
+    const service = new ErrandService(prisma, {} as any, notify, {} as any, {} as any, {} as any, {} as any);
+    await expect(service.requestTransfer('order-1', 'sender', { target_rider_id: 'receiver' })).resolves.toMatchObject({ id: 'transfer-1' });
+    expect(notify.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({ userId: 'receiver', scene: 'rider_transfer_request', linkValue: '/pages/orders/orders' }));
+    expect(prisma.transferRequest.create.mock.invocationCallOrder[0]).toBeLessThan(notify.createAndDispatch.mock.invocationCallOrder[0]);
   });
+
 });

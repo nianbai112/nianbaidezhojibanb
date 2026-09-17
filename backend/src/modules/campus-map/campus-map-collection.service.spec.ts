@@ -372,6 +372,18 @@ describe("CampusMapCollectionService", () => {
       note: "照片合格",
       promoteAttachmentIds: ["attachment-1"],
     })).toThrow("必须显式选择 media");
+    expect(parseObjectReview({
+      decision: "approved",
+      note: "路线通过并随本版上线",
+      applyFields: ["geometry"],
+      publishRoute: true,
+    })).toMatchObject({ publishRoute: true });
+    expect(() => parseObjectReview({
+      decision: "approved",
+      note: "公开状态类型错误",
+      applyFields: ["geometry"],
+      publishRoute: "true" as any,
+    })).toThrow("路线公开状态无效");
   });
 
   it("rejects incomplete or mismatched place verification evidence before storage", () => {
@@ -1338,6 +1350,7 @@ describe("CampusMapCollectionService", () => {
         note: "路线有效",
         applyFields: ["geometry", "media"],
         promoteAttachmentIds: ["route-photo-1"],
+        publishRoute: true,
       },
       "admin-1",
     );
@@ -1350,7 +1363,7 @@ describe("CampusMapCollectionService", () => {
         id: "collection-route-road-object-1",
         sourceObjectId: "road-object-1",
         collectionSource: "rider_app_approved",
-        public: false,
+        public: true,
         quality: {
           acceptedPointCount: 5,
           medianAccuracy: 6,

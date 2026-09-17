@@ -79,9 +79,9 @@
     </div>
 
     <!-- Detail Dialog -->
-    <el-dialog v-model="showDetailDialog" title="订单详情" width="700px">
+    <el-dialog v-model="showDetailDialog" title="订单详情" width="min(700px, 94vw)">
       <div v-if="selectedOrder" class="order-detail">
-        <el-descriptions :column="2" border>
+        <el-descriptions :column="detailColumns" border>
           <el-descriptions-item label="订单号">{{ selectedOrder.orderNo }}</el-descriptions-item>
           <el-descriptions-item label="订单类型">{{ selectedOrder.orderType }}</el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -92,6 +92,11 @@
           <el-descriptions-item label="商户">{{ selectedOrder.merchant?.name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ formatDate(selectedOrder.createdAt) }}</el-descriptions-item>
         </el-descriptions>
+        <el-descriptions v-if="selectedOrder.orderType === '跑腿订单'" :column="1" border class="receipt-record">
+          <el-descriptions-item label="收货确认">{{ receiptMethodLabel(selectedOrder.receiptConfirmedBy) }}</el-descriptions-item>
+          <el-descriptions-item label="确认时间">{{ selectedOrder.receiptConfirmedAt ? formatDate(selectedOrder.receiptConfirmedAt) : '尚未确认' }}</el-descriptions-item>
+        </el-descriptions>
+        <p v-if="selectedOrder.orderType === '跑腿订单' && !deliveryNodes.length">暂无配送记录</p>
         <section v-if="deliveryNodes.length" class="delivery-evidence">
           <h4>配送证据</h4>
           <div v-for="node in deliveryNodes" :key="node.id || `${node.nodeType}-${node.createdAt}`" class="node-row">
@@ -99,6 +104,7 @@
             <span>{{ formatDate(node.createdAt) }}</span>
             <small v-if="node.remark">{{ node.remark }}</small>
             <small v-if="hasLocation(node)">送达坐标：{{ Number(node.lat).toFixed(6) }}, {{ Number(node.lng).toFixed(6) }}</small>
+            <small v-if="node.nodeType === 'arrived' && !nodeProofImages(node).length">暂无送达照片</small>
             <div v-if="nodeProofImages(node).length" class="node-proofs">
               <el-image v-for="image in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
             </div>
@@ -111,12 +117,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { request } from '@/api/request'
 import PageHeader from '@/components/common/PageHeader.vue'
+
+const detailColumns = ref(window.innerWidth < 600 ? 1 : 2)
+const updateDetailColumns = () => { detailColumns.value = window.innerWidth < 600 ? 1 : 2 }
+onMounted(() => window.addEventListener('resize', updateDetailColumns))
+onUnmounted(() => window.removeEventListener('resize', updateDetailColumns))
 
 const loading = ref(false)
 const route = useRoute()
@@ -125,6 +136,7 @@ const orders = ref<any[]>([])
 const selectedOrder = ref<any>(null)
 const orderAmount = computed(() => Number(selectedOrder.value?.amount || selectedOrder.value?.orderAmount || 0))
 const dateRange = ref<any>(null)
+const receiptMethodLabel = (value?: string) => ({ user: '用户主动确认', rider: '骑手凭收货码确认', system: '系统自动确认' }[value || ''] || (value ? '其他确认方式' : '尚未确认'))
 const deliveryNodes = computed(() => selectedOrder.value?.deliveryNodes || [])
 const focusOrderId = ref('')
 const focusOrderType = ref('order')
@@ -147,7 +159,7 @@ const formatDate = (date: string) => {
   return new Date(date).toLocaleString('zh-CN')
 }
 const hasLocation = (node: any) => node?.lat != null && node?.lng != null && Number.isFinite(Number(node.lat)) && Number.isFinite(Number(node.lng))
-const nodeProofImages = (node: any) => (node?.proofImages || node?.proof_images || []).filter((image: any) => typeof image === 'string' && image)
+const nodeProofImages = (node: any) => (Array.isArray(node?.proofImages || node?.proof_images) ? (node.proofImages || node.proof_images) : []).filter((image: any) => typeof image === 'string' && image)
 const deliveryNodeLabel = (value?: string) => ({
   merchant_accepted: '商家已接单', merchant_completed: '商家已送达', accepted: '骑手已接单',
   in_progress: '骑手已取货', arrived: '骑手已送达', completed: '订单已完成', cancelled: '订单已取消',
@@ -332,4 +344,10 @@ onMounted(() => {
 .node-row small, .node-proofs { grid-column: 1 / -1; }
 .node-proofs { display: flex; gap: 8px; flex-wrap: wrap; }
 .node-proofs :deep(.el-image) { width: 88px; height: 88px; border-radius: 6px; }
+</style>
+
+<style scoped>
+.order-detail :deep(.el-descriptions__label) { white-space: nowrap; min-width: 76px; }
+.node-row { overflow-wrap: anywhere; min-width: 0; }
+.receipt-record { margin-top: 16px; }
 </style>

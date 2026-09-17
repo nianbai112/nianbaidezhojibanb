@@ -9,6 +9,7 @@ import { WalletService } from "../../common/services/wallet.service";
 import { MembershipService } from "../membership/membership.service";
 import { UserAccessPolicyService } from "../../common/services/user-access-policy.service";
 import { PaymentService } from "../payment/payment.service";
+import { errandCampaignDayKey, reserveErrandCampaignBudget, resolveActiveCouponCampaign } from "../errand/errand-transaction-guards";
 
 @Injectable()
 export class MallService {
@@ -41,23 +42,11 @@ export class MallService {
   }
 
   private dayStart() {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date;
+    return new Date(`${errandCampaignDayKey(new Date())}T00:00:00+08:00`);
   }
 
   private async resolveCouponCampaign(tx: any, couponId: string) {
-    const config = await tx.config.findUnique({ where: { key: 'marketing_campaigns_config' } }).catch(() => null);
-    const value = config?.value as any;
-    const list = Array.isArray(value?.list) ? value.list : Array.isArray(value) ? value : [];
-    const now = new Date();
-    return list.find((item: any) => {
-      if (!item || item.status !== 'active') return false;
-      if (String(item.couponId || '') !== String(couponId)) return false;
-      if (item.startAt && now < new Date(item.startAt)) return false;
-      if (item.endAt && now > new Date(item.endAt)) return false;
-      return true;
-    }) || null;
+    return resolveActiveCouponCampaign(tx, couponId);
   }
 
   private couponDiscountAmount(coupon: any, amount: number) {
@@ -140,12 +129,15 @@ export class MallService {
     }
     const discountAmount = this.couponDiscountAmount(coupon, amount);
     const campaign = await this.resolveCouponCampaign(tx, coupon.id);
+    const campaignTime = new Date();
+    await reserveErrandCampaignBudget(tx, campaign, userId, discountAmount, campaignTime);
     await this.assertCampaignRules(tx, campaign, userId, coupon.id, discountAmount);
     return {
       discountAmount,
       receive,
       coupon,
       campaign,
+      campaignTime,
     };
   }
 
@@ -463,6 +455,7 @@ export class MallService {
             receiverId: String(merchant_id),
             amount: couponBenefit.discountAmount,
             status: 'pending',
+            createdAt: couponBenefit.campaignTime,
             description: `${couponBenefit.campaign?.title ? `活动${couponBenefit.campaign.title}，` : ''}优惠券核销：${couponBenefit.coupon.name}`,
             metadata: {
               couponReceiveId: couponBenefit.receive.id,
@@ -474,7 +467,7 @@ export class MallService {
               payAmount,
             },
           },
-        }).catch(() => undefined);
+        });
       }
 
       if (memberPrice.discountAmount > 0 && memberPrice.grant) {
@@ -524,7 +517,7 @@ export class MallService {
       }
 
       return order;
-    });
+    }, { isolationLevel: 'ReadCommitted' });
   }
 
   async getMyOrders(userId: string, query: any) {

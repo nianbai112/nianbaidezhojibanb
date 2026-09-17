@@ -27,6 +27,7 @@ export class SubscribeConsentDto {
 }
 
 export class WechatMessageLogQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(100) keyword?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() userId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() platformType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() templateType?: string;

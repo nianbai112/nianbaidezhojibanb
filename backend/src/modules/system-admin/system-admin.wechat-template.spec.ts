@@ -2,6 +2,14 @@ import { BadRequestException } from '@nestjs/common';
 import { SystemAdminService } from './system-admin.service';
 
 describe('SystemAdminService WeChat template technical ownership', () => {
+  it('masks the official account encryption key and preserves it when the unchanged form is saved', () => {
+    const { service } = createService();
+    const config = { appId: 'wx-test', encodingAESKey: 'private-aes-value', appSecret: 'private-secret' };
+    const masked = (service as any).maskConfigValue(config);
+    expect(masked).toEqual({ appId: 'wx-test', encodingAESKey: '******', appSecret: '******' });
+    expect((service as any).mergeMaskedConfigValue(config, masked)).toEqual(config);
+  });
+
   function createService(rows: any[] = []) {
     const prisma: any = {
       config: {
@@ -39,8 +47,8 @@ describe('SystemAdminService WeChat template technical ownership', () => {
       contractManaged: true,
       fieldMapping: {
         character_string1: 'orderNo',
-        character_string2: 'riderName',
-        time3: 'estimatedTime',
+        thing4: 'riderName',
+        time6: 'estimatedTime',
       },
     }));
     expect(result.list[1]).toEqual(expect.objectContaining({

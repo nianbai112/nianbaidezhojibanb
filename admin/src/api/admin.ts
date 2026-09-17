@@ -174,7 +174,7 @@ function mapRow(moduleKey: string, row: any) {
         balance: money(row.balance, row.wallet?.balance, 0),
         freezeAmount: money(row.freezeAmount, row.wallet?.freeze, 0),
         amount: money(row.consumeAmount, row.totalAmount, row.balance),
-        status: moduleKey === 'users' ? userStatusValue(row.status) : statusText(row.status),
+        status: moduleKey === 'users' ? userStatusValue(row.status) : ({ pending: '待审核', approved: '已通过', rejected: '已驳回', none: '未提交' }[String(row.studentCertStatus || row.certStatus || 'none').toLowerCase()] || '未提交'),
         membershipLabel: row.membershipLabel || '',
         membershipExpiredAt: row.membershipExpiredAt || null,
         tags: Array.isArray(row.tags) ? row.tags : [],
@@ -187,7 +187,9 @@ function mapRow(moduleKey: string, row: any) {
         lastLoginDistrict: row.lastLoginDistrict || '',
         lastLoginDevice: row.lastLoginDevice || '',
         lastLoginUserAgent: row.lastLoginUserAgent || '',
-        createdAt
+        createdAt: moduleKey === 'verification' ? text(row.studentCertCreatedAt, row.submitTime, createdAt) : createdAt,
+        studentCertVerifiedAt: row.studentCertVerifiedAt || null,
+        studentCertRemark: row.studentCertRemark || ''
       })
     case 'merchants':
       return withMeta(moduleKey, row, {
@@ -586,7 +588,10 @@ export async function fetchModulePage(moduleKey: string, params: Record<string, 
   const endpoint = moduleEndpoint[moduleKey]
   if (!endpoint) return { rows: [], total: 0 }
   const query: Record<string, any> = { page: 1, pageSize: 10, ...params }
-  if (moduleKey === 'verification') query.studentCertStatus = query.status || 'pending'
+  if (moduleKey === 'verification') {
+    query.studentCertStatus = query.status || 'pending'
+    delete query.status
+  }
   if (moduleKey === 'delivery') {
     if (query.keyword && !query.orderNo) {
       query.orderNo = query.keyword
@@ -832,35 +837,6 @@ export async function disableRegionCampusMap(regionId: string | number) {
   return request.delete(`/admin/campus-map/${regionId}`)
 }
 
-export async function uploadRegionCampusMapImport(regionId: string | number, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  return request.post(`/admin/campus-map/${regionId}/imports`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120000,
-  })
-}
-
-export async function fetchRegionCampusMapImports(regionId: string | number) {
-  return request.get(`/admin/campus-map/${regionId}/imports`)
-}
-
-export async function fetchRegionCampusMapImport(regionId: string | number, jobId: string) {
-  return request.get(`/admin/campus-map/${regionId}/imports/${jobId}`)
-}
-
-export async function retryRegionCampusMapImport(regionId: string | number, jobId: string) {
-  return request.post(`/admin/campus-map/${regionId}/imports/${jobId}/retry`)
-}
-
-export async function deleteRegionCampusMapImport(regionId: string | number, jobId: string) {
-  return request.delete(`/admin/campus-map/${regionId}/imports/${jobId}`)
-}
-
-export async function fetchCampusMapConverterStatus() {
-  return request.get('/admin/campus-map/converter/status')
-}
-
 function campusMapCatalogParams(regionId?: string | number, mapId?: string) {
   if (regionId) return { regionId }
   if (mapId) return { mapId }
@@ -964,10 +940,6 @@ export async function deleteCampusMapPlaceMedia(
   return request.delete(
     `/admin/campus-map/${regionId}/places/${encodeURIComponent(placeId)}/media/${encodeURIComponent(mediaId)}`,
   )
-}
-
-export async function saveCampusMapConverterConfig(data: { converterPath?: string | null }) {
-  return request.put('/admin/campus-map/converter', data)
 }
 
 export async function fetchConfigGroup(group: string) {

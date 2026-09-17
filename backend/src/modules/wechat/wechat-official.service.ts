@@ -6,7 +6,9 @@ import { WechatTokenService } from './wechat-token.service';
 import axios from 'axios';
 import * as crypto from 'crypto';
 import { XMLParser } from 'fast-xml-parser';
-import { getManagedWechatTemplateContract } from './wechat-template-contracts';
+import { getManagedWechatTemplateContract, validateErrandNewOrderTemplate } from './wechat-template-contracts';
+import { currentRequestMetadata } from '../../common/request-context';
+import { hasWechatTemplatePayload, wechatFailure } from './wechat-log-presentation';
 
 @Injectable()
 export class WechatOfficialService {
@@ -163,6 +165,14 @@ export class WechatOfficialService {
     let openid = '';
     let templateData: Record<string, any> = data;
     try {
+      if (templateType === 'new_errand_order') {
+        if (!data.orderId || !page) return { success: false, error: '新单通知缺少订单关联' };
+        const accepted = await this.prisma.wechatMessageLog.findFirst({
+          where: { userId, platformType: 'official', templateType, page, status: { in: ['pending', 'success'] } },
+          select: { id: true },
+        });
+        if (accepted) return { success: true };
+      }
       const binding = await this.prisma.wechatOfficialBinding.findUnique({
         where: { userId },
       });
@@ -186,18 +196,19 @@ export class WechatOfficialService {
         where: { userId },
         select: { regionId: true },
       }).catch(() => null);
+      const templateRegionId = templateType === 'new_errand_order' ? data.regionId : profile?.regionId;
       const templates = await this.prisma.wechatTemplateConfig.findMany({
         where: {
           platformType: 'official',
           templateType,
           enabled: true,
-          OR: profile?.regionId
-            ? [{ regionId: profile.regionId }, { regionId: null }]
+          OR: templateRegionId
+            ? [{ regionId: templateRegionId }, { regionId: null }]
             : [{ regionId: null }],
         },
         take: 2,
       });
-      const template = templates.find((item) => item.regionId === profile?.regionId)
+      const template = templates.find((item) => item.regionId === templateRegionId)
         || templates.find((item) => !item.regionId);
       if (!template?.templateId) {
         await this.writeMessageLog({
@@ -217,6 +228,10 @@ export class WechatOfficialService {
 
       const managedContract = getManagedWechatTemplateContract('official', templateType);
       const fieldMapping = (managedContract?.fieldMapping || template.fieldMapping || {}) as Record<string, string>;
+      if (templateType === 'new_errand_order') {
+        const validationError = validateErrandNewOrderTemplate(templateId, fieldMapping);
+        if (validationError) throw new BadRequestException(validationError);
+      }
       templateData = {};
       for (const [templateKey, dataKey] of Object.entries(fieldMapping)) {
         const value = data[dataKey];
@@ -226,14 +241,15 @@ export class WechatOfficialService {
           };
         }
       }
-      const missingRequiredFields = (managedContract?.requiredTemplateKeys || [])
+      const requiredTemplateKeys = templateType === 'new_errand_order' ? Object.keys(fieldMapping) : managedContract?.requiredTemplateKeys || [];
+      const missingRequiredFields = requiredTemplateKeys
         .filter((templateKey) => !templateData[templateKey]);
       const mappingInvalid = !Object.keys(fieldMapping).length
-        || (managedContract ? missingRequiredFields.length > 0 : !Object.keys(templateData).length);
+        || (requiredTemplateKeys.length ? missingRequiredFields.length > 0 : !Object.keys(templateData).length);
       if (mappingInvalid) {
         const errorMessage = !Object.keys(fieldMapping).length
           ? '服务号模板字段映射未配置'
-          : managedContract
+          : requiredTemplateKeys.length
             ? `服务号模板字段缺少业务数据: ${missingRequiredFields.join(', ')}`
             : '服务号模板字段映射为空或业务数据缺失';
         await this.writeMessageLog({
@@ -255,10 +271,13 @@ export class WechatOfficialService {
         template_id: templateId,
         data: templateData,
       };
+      if (templateType === 'new_errand_order') {
+        requestBody.client_msg_id = crypto.createHash('sha256').update(`${templateType}:${userId}:${data.orderId}`).digest('hex').slice(0, 32);
+      }
       await this.attachTemplateTarget(requestBody, page);
 
       const response = await this.postOfficialTemplateMessage(requestBody);
-      if (Number(response?.errcode || 0) !== 0) {
+      if (response?.errcode === undefined || Number(response.errcode) !== 0) {
         await this.writeMessageLog({
           userId,
           openid,
@@ -270,7 +289,7 @@ export class WechatOfficialService {
           errorCode: String(response?.errcode ?? 'wechat_error'),
           errorMessage: String(response?.errmsg || '微信服务号发送失败'),
         });
-        return { success: false, error: String(response?.errmsg || '微信服务号发送失败') };
+        return { success: false, error: wechatFailure(String(response?.errcode ?? 'unknown'), response?.errmsg).errorMessageZh };
       }
 
       const wechatMsgId = String(response?.msgid || '').trim();
@@ -321,9 +340,10 @@ export class WechatOfficialService {
     const log = await this.prisma.wechatMessageLog.findUnique({ where: { id: logId } });
     if (!log) throw new BadRequestException('日志不存在');
     if (log.platformType !== 'official') throw new BadRequestException('不是服务号消息日志');
+    if (log.templateType === 'new_errand_order') throw new BadRequestException('新单通知必须通过通知中心重新检查订单和骑手资格后重试');
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
     if (log.status === 'pending') return { success: true, message: '微信已受理，正在等待送达回执' };
-    if (!log.openid || !log.templateId || !log.payload || typeof log.payload !== 'object') {
+    if (!log.openid || !log.templateId || !hasWechatTemplatePayload(log.payload)) {
       throw new BadRequestException('原发送数据不完整，无法重试');
     }
 
@@ -335,7 +355,7 @@ export class WechatOfficialService {
       };
       await this.attachTemplateTarget(requestBody, log.page || undefined);
       const response = await this.postOfficialTemplateMessage(requestBody);
-      const accepted = Number(response?.errcode || 0) === 0;
+      const accepted = response?.errcode !== undefined && Number(response.errcode) === 0;
       const wechatMsgId = accepted ? String(response?.msgid || '').trim() : '';
       const success = accepted && !!wechatMsgId;
       await this.prisma.wechatMessageLog.update({
@@ -396,14 +416,15 @@ export class WechatOfficialService {
       requestBody.url = target;
       return;
     }
-    if (!target.startsWith('/')) return;
+    if (!/^(\/?pages[^/]*\/)/.test(target) || /[\s#]|\.\./.test(target)) {
+      throw new BadRequestException('小程序跳转页面格式无效，请配置完整页面路径');
+    }
 
     const saved = await this.prisma.config.findUnique({ where: { key: 'miniapp' } }).catch(() => null);
     const value = (saved?.value || {}) as Record<string, any>;
     const appid = String(value.appId || value.appid || this.config.get('WX_MINI_APPID') || '').trim();
     if (!appid || appid.startsWith('your-')) {
-      this.logger.warn('服务号模板消息未配置小程序 AppID，已省略小程序跳转');
-      return;
+      throw new BadRequestException('未配置小程序应用编号，无法生成通知跳转页面');
     }
     requestBody.miniprogram = {
       appid,
@@ -443,6 +464,7 @@ export class WechatOfficialService {
   private resolveTemplateType(scene?: string | null): string {
     const value = String(scene || '').trim().toLowerCase();
     if (!value) return '';
+    if (value === 'new_errand_order') return 'new_errand_order';
     if (value.includes('mention') || value.includes('_at')) return 'community_at';
     if (value.includes('reply') || value.includes('comment')) return 'community_reply';
     if (value.includes('like')) return 'community_like';
@@ -470,6 +492,7 @@ export class WechatOfficialService {
       pickupAddress: source.pickupAddress || source.pickup_address || source.content || '',
       deliveryAddress: source.deliveryAddress || source.delivery_address || source.content || '订单服务地点',
       estimatedTime: source.estimatedTime || source.estimated_time || source.time || nowText,
+      pickedAt: source.pickedAt || source.picked_at || source.time || nowText,
       finishedAt: source.finishedAt || source.finished_at || source.time || nowText,
       abnormalReason: source.abnormalReason || source.reason || source.content || '',
       suggestion: source.suggestion || source.remark || source.content || '',
@@ -489,6 +512,7 @@ export class WechatOfficialService {
       community_reply: '收到新回复',
       community_like: '收到点赞',
       community_circle_new: '圈子有新内容',
+      new_errand_order: '跑腿新订单通知',
       errand_accepted: '骑手已接单',
       errand_picked: '骑手已取货',
       errand_delivered: '订单已完成',
@@ -539,10 +563,13 @@ export class WechatOfficialService {
     errorCode?: string;
     errorMessage?: string;
   }) {
+    const metadata = currentRequestMetadata();
     await this.prisma.wechatMessageLog.create({
       data: {
         userId: params.userId || null,
         openid: params.openid || null,
+        requestIp: metadata.ip || null,
+        requestIpSource: metadata.ipSource,
         platformType: 'official',
         templateType: params.templateType,
         templateId: params.templateId,

@@ -1,0 +1,13 @@
+// Temporary isolated visual QA harness. No requests reach a business API.
+import {createApp} from 'vue'
+import {createPinia,setActivePinia} from 'pinia'
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
+import WelfareDraws from './views/marketing/WelfareDraws.vue'
+import {request} from './api/request'
+import {useAuthStore} from './stores/auth'
+const pinia=createPinia();setActivePinia(pinia);const auth=useAuthStore();auth.permissions=['activity:view','activity:edit'];
+const now=Date.now();const date=(days:number)=>new Date(now+days*86400000).toISOString()
+let rows:any[]=[{id:'qa-scheduled',title:'新学期 · 把好礼带回校园',description:'免费报名，期待一份校园小惊喜。',cover:'',mode:'scheduled',status:'draft',regionId:'',startAt:date(0),endAt:date(3),drawAt:date(3),claimUntil:date(10),dailyLimit:1,totalLimit:1,maxEntries:1000,entryCount:0,prizes:[{id:'qp',name:'校园惊喜礼包',image:'',kind:'physical',quantity:10,probabilityBps:0}],gifts:[],_count:{gifts:0},pickupLocation:'大学生活动中心 101',contact:'校园服务台'},{id:'qa-instant',title:'每天一点小幸运',mode:'instant',status:'published',endAt:date(2),entryCount:128,maxEntries:10000,prizes:[{quantity:100}],_count:{gifts:0}}]
+request.defaults.adapter=async(config:any)=>{let data:any={};const url=config.url;const body=typeof config.data==='string'?JSON.parse(config.data):config.data;if(url.endsWith('/capabilities'))data={canGift:true};else if(url.endsWith('/options'))data={canGlobal:true,regions:[{id:'r1',name:'大学城校区'}],coupons:[]};else if(url.endsWith('/campaigns')&&config.method==='get')data={list:rows,total:rows.length};else if(url.endsWith('/campaigns')&&config.method==='post'){data={...body,id:'qa-'+Date.now(),prizes:body.prizes.map((p:any,i:number)=>({...p,id:'qp-'+i})),gifts:[],entryCount:0,_count:{gifts:0}};rows.unshift(data)}else if(url.match(/\/campaigns\/[^/]+$/)){const id=url.split('/').pop();if(config.method==='put'){rows=rows.map(r=>r.id===id?{...r,...body}:r)}data=rows.find(r=>r.id===id)}else if(url.endsWith('/entries')||url.endsWith('/logs'))data={list:[],total:0};return{data:{code:0,data},status:200,statusText:'OK',headers:{},config};}
+createApp(WelfareDraws).use(pinia).use(ElementPlus).mount('#app')

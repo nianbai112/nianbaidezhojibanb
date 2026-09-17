@@ -1,6 +1,27 @@
 import { ErrandService } from './errand.service';
 
 describe('ErrandService shop delivery bridge', () => {
+  it.each(['received', 'awaiting_delivery'])('does not lose mixed errand and shop orders between %s pages', async (status) => {
+    const errands = [6, 4, 2].map(n => ({ id: `errand-${n}`, type: 'errand', created_at: new Date(n * 1000) }));
+    const shops = [5, 3, 1].map(n => ({ id: `shop-${n}`, type: 'delivery', created_at: new Date(n * 1000) }));
+    const source = (rows: any[]) => ({ findMany: jest.fn(async ({ skip = 0, take }: any) => rows.slice(skip, skip + take)), count: jest.fn().mockResolvedValue(rows.length) });
+    const service: any = Object.create(ErrandService.prototype);
+    service.prisma = { errandOrder: source(errands), order: source(shops) };
+    service.getOrderTakingIdentity = async () => ({ role: 'approved_rider', regionId: 'region-1', canTakeOrders: true });
+    service.filterErrandRowsForOrderTaking = (rows: any[]) => rows;
+    service.formatMiniOrders = async (rows: any[]) => rows;
+    service.formatShopOrdersForRider = async (rows: any[]) => rows;
+    service.getRiderDispatchContext = async () => ({});
+    const ids: string[] = [];
+    for (const page of [1, 2, 3]) {
+      const result = await service.getDeliveryOrdersList('rider', { status, type: 'all', page, pageSize: 2 });
+      expect(result.pagination.total).toBe(6);
+      expect(result.orders).toHaveLength(2);
+      ids.push(...result.orders.map((row: any) => row.id));
+    }
+    expect(new Set(ids)).toEqual(new Set([...errands, ...shops].map(row => row.id)));
+  });
+
   it('rejects an owner taking their own pending errand before opening a transaction', async () => {
     const prisma: any = {
       errandOrder: { findUnique: jest.fn().mockResolvedValue({
@@ -25,7 +46,7 @@ describe('ErrandService shop delivery bridge', () => {
     };
     const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     jest.spyOn(service as any, 'getOrderTakingIdentity').mockResolvedValue({
-      role: 'ordinary_user', regionId: 'region-1', canTakeOrders: false, policy: {}, user: { id: 'user-1' },
+      role: 'ordinary_user', regionId: 'region-1', canTakeOrders: true, policy: {}, user: { id: 'user-1' },
     });
     jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([]);
 
@@ -178,6 +199,7 @@ describe('ErrandService shop delivery bridge', () => {
 
   it('shows a processing refund before an unassigned errand can be cancelled again', async () => {
     const prisma: any = {
+      bizFeeConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       errandOrderTask: { findMany: jest.fn().mockResolvedValue([]) },
       errandItemSize: { findMany: jest.fn().mockResolvedValue([]) },
       errandPickupPoint: { findMany: jest.fn().mockResolvedValue([]) },
@@ -215,6 +237,94 @@ describe('ErrandService shop delivery bridge', () => {
     expect(paymentService.refund).toHaveBeenCalledWith(expect.objectContaining({
       bizType: 'errand_order', bizId: 'errand-1', amount: 8.8, reason: '临时有事', operatorId: 'user-1',
     }));
+    expect((service as any).restoreErrandOrderCoupon).not.toHaveBeenCalled();
+    expect(membershipService.restoreBenefitUsagesForTarget).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending_pay', 8.8],
+    ['pending_accept', 0],
+  ])('returns coupon reservations on cancelling a %s order with payAmount %s', async (status, payAmount) => {
+    const order = { id: 'errand-1', userId: 'user-1', status, payAmount, refundStatus: 'none' };
+    const tx: any = {
+      errandOrder: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, status: 'cancelled' }),
+      },
+      subsidyLedger: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    const prisma: any = { errandOrder: { findUnique: jest.fn().mockResolvedValue(order) }, $transaction: jest.fn(fn => fn(tx)) };
+    const membership: any = { restoreBenefitUsagesForTarget: jest.fn().mockResolvedValue({}) };
+    const payment: any = { refund: jest.fn() };
+    const service = new ErrandService(prisma, {} as any, {} as any, membership, {} as any, payment, {} as any);
+    const restore = jest.spyOn(service as any, 'restoreErrandOrderCoupon').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([{}]);
+    jest.spyOn(service as any, 'recordErrandLearningSnapshot').mockResolvedValue(undefined);
+    await expect((service as any).cancelOrderUnlocked(order.id, order.userId, {})).resolves.toMatchObject({ message: '订单已取消' });
+    expect(restore).toHaveBeenCalledWith(tx, order);
+    expect(membership.restoreBenefitUsagesForTarget).toHaveBeenCalledWith('errand_order', order.id, tx);
+    expect(payment.refund).not.toHaveBeenCalled();
+    expect(tx.errandOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ refundStatus: 'none' }) }));
+  });
+
+  it('retains coupons when a paid cancellation cannot start its refund', async () => {
+    const order = { id: 'errand-1', userId: 'user-1', status: 'pending_accept', payAmount: 8.8, refundStatus: 'none' };
+    const tx: any = { errandOrder: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: jest.fn().mockResolvedValue({ ...order, status: 'cancelled', refundStatus: 'refunding' }),
+    } };
+    const prisma: any = { errandOrder: { findUnique: jest.fn().mockResolvedValue(order) }, $transaction: jest.fn(fn => fn(tx)) };
+    const payment: any = { refund: jest.fn().mockRejectedValue(new Error('退款通道失败')) };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, payment, {} as any);
+    const restore = jest.spyOn(service as any, 'restoreErrandOrderCoupon').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'formatMiniOrders').mockResolvedValue([{}]);
+    jest.spyOn(service as any, 'recordErrandLearningSnapshot').mockResolvedValue(undefined);
+    await expect((service as any).cancelOrderUnlocked(order.id, order.userId, {})).resolves.toMatchObject({ message: expect.stringContaining('退款发起失败') });
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel a newly paid order using an earlier pending-pay snapshot', async () => {
+    const snapshot = { id: 'errand-1', userId: 'user-1', status: 'pending_pay', payAmount: 8.8, refundStatus: 'none' };
+    const current = { ...snapshot, status: 'pending_accept' };
+    const tx: any = { errandOrder: {
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const matches = typeof where.status === 'string' ? current.status === where.status : where.status.in.includes(current.status);
+        if (!matches) return { count: 0 };
+        Object.assign(current, data);
+        return { count: 1 };
+      }),
+    } };
+    const prisma: any = { errandOrder: { findUnique: jest.fn().mockResolvedValue(snapshot) }, $transaction: jest.fn(fn => fn(tx)) };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const restore = jest.spyOn(service as any, 'restoreErrandOrderCoupon').mockResolvedValue(undefined);
+    await expect((service as any).cancelOrderUnlocked(snapshot.id, snapshot.userId, {})).rejects.toThrow();
+    expect(current.status).toBe('pending_accept');
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it('reopens self-service refund eligibility after submission fails without returning the coupon', async () => {
+    const order = { id: 'errand-1', userId: 'user-1', status: 'pending_accept', payAmount: 8.8, refundStatus: 'none' };
+    const prisma: any = { errandOrder: { findUnique: jest.fn().mockResolvedValue(order), updateMany: jest.fn().mockResolvedValue({ count: 1 }) } };
+    const payment: any = { refund: jest.fn().mockRejectedValue(new Error('退款失败')) };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, payment, {} as any);
+    const restore = jest.spyOn(service as any, 'restoreErrandOrderCoupon').mockResolvedValue(undefined);
+    await expect(service.refundOrder(order.id, order.userId, {})).rejects.toThrow('退款失败');
+    expect(prisma.errandOrder.updateMany).toHaveBeenLastCalledWith({
+      where: { id: order.id, refundStatus: 'refunding' }, data: { refundStatus: 'none', refundAmount: null },
+    });
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it('cancels a coupon-covered zero-pay order without submitting a zero-value refund', async () => {
+    const order = { id: 'errand-1', userId: 'user-1', status: 'pending_accept', payAmount: 0, refundStatus: 'none' };
+    const prisma: any = { errandOrder: { findUnique: jest.fn().mockResolvedValue(order), updateMany: jest.fn() } };
+    const payment: any = { refund: jest.fn() };
+    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, payment, {} as any);
+    const cancel = jest.spyOn(service, 'cancelOrder').mockResolvedValue({ success: true } as any);
+    await service.refundOrder(order.id, order.userId, {});
+    expect(cancel).toHaveBeenCalledWith(order.id, order.userId, {});
+    expect(prisma.errandOrder.updateMany).not.toHaveBeenCalled();
+    expect(payment.refund).not.toHaveBeenCalled();
   });
 
   it('claims the receiving rider atomically and releases the source rider after a transfer', async () => {
@@ -242,10 +352,14 @@ describe('ErrandService shop delivery bridge', () => {
       errandOrder: { findUnique: jest.fn().mockResolvedValue({ id: 'errand-1', userId: 'owner-1', riderId: 'rider-a', status: 'accepted' }) },
       $transaction: jest.fn((callback: any) => callback(tx)),
     };
-    const service = new ErrandService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const notify = { createAndDispatch: jest.fn().mockResolvedValue({}) };
+    const service = new ErrandService(prisma, {} as any, notify as any, {} as any, {} as any, {} as any, {} as any);
 
     await (service as any).respondToTransferUnlocked('transfer-1', 'rider-b', { action: 'accept' });
 
+    expect(notify.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({ userId: 'rider-a', scene: 'rider_transfer_resolved' }));
+    expect(notify.createAndDispatch).toHaveBeenCalledWith(expect.objectContaining({ userId: 'rider-b', scene: 'rider_transfer_resolved' }));
+    expect(tx.errandOrder.updateMany.mock.invocationCallOrder[0]).toBeLessThan(notify.createAndDispatch.mock.invocationCallOrder[0]);
     expect(tx.regionRider.updateMany).toHaveBeenNthCalledWith(1, {
       where: { userId: 'rider-b', verifyStatus: 'approved', status: 'online' }, data: { status: 'busy' },
     });
@@ -474,4 +588,13 @@ describe('ErrandService shop delivery bridge', () => {
 
     expect(row).toMatchObject({ status: 'refunding', refund_status: 'refunding', refund_amount: '20.00' });
   });
+  it('shows the rider delivery fee before membership deductions and derives payment from payTime', async () => {
+    const service: any = Object.create(ErrandService.prototype);
+    service.prisma = { regionRider: { findMany: jest.fn().mockResolvedValue([]) } };
+    const [row] = await service.formatShopOrdersForRider([{ id: 'shop-free-freight', status: 'PAID', originalFreightAmount: 3, freightAmount: 0, payTime: new Date(), merchant: {}, items: [] }]);
+    expect(row).toMatchObject({ platform_delivery_fee: '3.00', base_delivery_fee: '3.00', payment_status: 'paid' });
+    const [cancelled] = await service.formatShopOrdersForRider([{ id: 'shop-cancelled', status: 'CANCELLED', payTime: null, merchant: {}, items: [] }]);
+    expect(cancelled.payment_status).toBe('unpaid');
+  });
+
 });

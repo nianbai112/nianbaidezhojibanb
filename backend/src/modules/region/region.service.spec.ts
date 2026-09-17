@@ -21,6 +21,22 @@ const createPrismaMock = () => ({
 });
 
 describe('RegionService.updateManagerSettings', () => {
+  it('removes retired home tabs from stored region config while retaining notes, ratings and activities', () => {
+    const service = new RegionService(createPrismaMock() as any);
+    const source = [
+      { id: '0', name: '笔记' },
+      { id: '5', name: '旧地点入口' },
+      { type: 'photo_vote', name: '旧评选入口' },
+      { type: 'dating', name: '旧匹配入口' },
+      { type: 'netdisk', name: '旧资料入口' },
+      { id: '4', name: '评分' },
+      { id: '3', name: '活动' },
+    ];
+    const visible = (service as any).normalizeRegionTabs(source);
+    expect(visible.map((tab: any) => tab.id)).toEqual(['0', '4', '3']);
+    expect(source).toHaveLength(7);
+  });
+
   it('allows the bound region manager user to update mini-program region settings', async () => {
     const prisma = createPrismaMock();
     prisma.region.findUnique.mockResolvedValue({

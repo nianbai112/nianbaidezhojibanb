@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../../common/services/prisma.service";
+import { errandRiderIncome } from '../../common/commission';
 import { AuthService } from "../auth/auth.service";
 import { ErrandService } from "../errand/errand.service";
 import { SystemConfigService } from "../system-config/system-config.service";
@@ -85,6 +86,7 @@ export class RiderAppService {
 
   async acceptOrder(userId: string, orderId: string) {
     await this.requireOfficialRider(userId);
+    await this.requireOrderPoolOpen();
     return this.withoutReceiptCodes(
       await this.errandService.acceptOrder(orderId, userId),
     );
@@ -215,7 +217,7 @@ export class RiderAppService {
         },
       }),
     ]);
-    if (assignedErrands.length + assignedShopOrders.length === 0) {
+    if (assignedErrands.length + assignedShopOrders.length === 0 && dto?.partial_ack !== true) {
       throw new BadRequestException("没有可补传的配送订单");
     }
     type AssignedOrderContext = {
@@ -279,8 +281,10 @@ export class RiderAppService {
       recordedAt: Date;
     };
     type ValidatedTrack = TrackInput & { refreshLiveLocation: boolean };
-    const validatedTracks: ValidatedTrack[] = source.map(
-      (item: any): ValidatedTrack => {
+    const rejectedPoints: Array<{ client_id: string; reason: string }> = [];
+    const validatedTracks: ValidatedTrack[] = (source as any[]).map(
+      (item: any): ValidatedTrack | null => {
+        try {
         const clientId = String(
           item?.client_id ?? item?.clientId ?? "",
         ).trim();
@@ -348,8 +352,13 @@ export class RiderAppService {
           recordedAt,
           refreshLiveLocation: orderContext?.active === true,
         };
+        } catch (error) {
+          if (dto?.partial_ack !== true || !(error instanceof BadRequestException)) throw error;
+          rejectedPoints.push({ client_id: String(item?.client_id ?? item?.clientId ?? ""), reason: error.message });
+          return null;
+        }
       },
-    );
+    ).filter((point): point is ValidatedTrack => point !== null);
 
     const tracks: TrackInput[] = validatedTracks.map((point) => ({
       clientId: point.clientId,
@@ -364,10 +373,10 @@ export class RiderAppService {
       recordedAt: point.recordedAt,
     }));
 
-    const result = await this.prisma.riderLocationTrack.createMany({
+    const result = tracks.length ? await this.prisma.riderLocationTrack.createMany({
       data: tracks,
       skipDuplicates: true,
-    });
+    }) : { count: 0 };
     const liveTracks = validatedTracks.filter(
       (point) => point.refreshLiveLocation,
     );
@@ -409,6 +418,7 @@ export class RiderAppService {
       success: true,
       inserted: result.count,
       accepted_client_ids: tracks.map((point) => point.clientId),
+      ...(dto?.partial_ack === true ? { rejected_points: rejectedPoints } : {}),
       live_location_updated: liveLocationUpdated,
     };
   }
@@ -581,6 +591,7 @@ export class RiderAppService {
           title: true,
           price: true,
           tip: true,
+          platformFee: true,
           completeTime: true,
         },
       }),
@@ -612,15 +623,13 @@ export class RiderAppService {
           completeTime: true,
         },
       }),
-      excludeCovered
-        ? this.prisma.riderSettlementItem.findMany({
+      this.prisma.riderSettlementItem.findMany({
             where: {
               riderId: userId,
               settlement: { status: { not: "REJECTED" } },
             },
-            select: { orderType: true, orderId: true },
-          })
-        : Promise.resolve([]),
+            select: { orderType: true, orderId: true, payableAmount: true },
+          }),
     ]);
 
     const covered = new Set(
@@ -660,8 +669,9 @@ export class RiderAppService {
     }> = [];
 
     for (const order of errandOrders) {
-      if (covered.has(`errand:${order.id}`)) continue;
-      const amount = this.toNumber(order.price) + this.toNumber(order.tip);
+      if (excludeCovered && covered.has(`errand:${order.id}`)) continue;
+      const paidItem = coveredItems.find(item => item.orderType === 'errand' && item.orderId === order.id);
+      const amount = paidItem ? this.toNumber(paidItem.payableAmount) : errandRiderIncome(order);
       if (amount <= 0) continue;
       earnings.push({
         orderId: order.id,
@@ -674,7 +684,7 @@ export class RiderAppService {
     }
 
     for (const order of deliveryOrders) {
-      if (covered.has(`delivery_order:${order.id}`)) continue;
+      if (excludeCovered && covered.has(`delivery_order:${order.id}`)) continue;
       const paidFreight = this.toNumber(order.freightAmount);
       const subsidy = subsidyMap.get(order.id) || 0;
       const originalFreight = this.toNumber(
@@ -752,7 +762,7 @@ export class RiderAppService {
         where: { riderId: userId, status: "holding" },
         select: {
           releaseAt: true,
-          order: { select: { price: true, tip: true, status: true } },
+          order: { select: { price: true, tip: true, platformFee: true, status: true } },
         },
         orderBy: { releaseAt: "asc" },
       }),
@@ -773,7 +783,7 @@ export class RiderAppService {
         settlementHolds
           .filter(item => item.order.status === "completed")
           .reduce(
-            (total, item) => total + this.toNumber(item.order.price) + this.toNumber(item.order.tip),
+            (total, item) => total + errandRiderIncome(item.order),
             0,
           ),
       ),
@@ -884,6 +894,7 @@ export class RiderAppService {
         source: item.orderType === "delivery_order" ? "配送订单" : "跑腿订单",
         orderType: item.orderType,
         amount: this.toNumber(item.payableAmount),
+        platformFee: item.orderType === 'errand' ? Math.max(0, this.round2(this.toNumber(item.deliveryFeeAmount) + this.toNumber(item.tipAmount) + this.toNumber(item.rewardAmount) - this.toNumber(item.penaltyAmount) - originalAmount)) : 0,
         originalAmount,
         netAmount,
         reversalAmount,
@@ -1063,6 +1074,14 @@ export class RiderAppService {
     return { success: true, clientId };
   }
 
+  private async requireOrderPoolOpen() {
+    const response = await this.systemConfigService.getRiderAppControlConfig();
+    const config = response?.data || response;
+    if (config?.enabled === false || config?.maintenance?.enabled === true || config?.features?.orderPool === false) {
+      throw new BadRequestException("当前暂停新增接单，已接订单可继续处理");
+    }
+  }
+
   private async requireOfficialRider(userId: string) {
     const session = await this.buildSession(userId);
     if (!session.allowed) {
@@ -1077,7 +1096,7 @@ export class RiderAppService {
     const [user, rider] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, nickname: true, avatar: true, phone: true },
+        select: { id: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true, regionId: true } } },
       }),
       this.prisma.regionRider.findUnique({ where: { userId } }),
     ]);
@@ -1129,6 +1148,7 @@ export class RiderAppService {
             real_name: rider.realName,
             phone: rider.phone,
             rider_bio: rider.riderBio || "",
+            gender: user.profile?.gender || "UNKNOWN",
             status: rider.status,
             verify_status: rider.verifyStatus,
             rider_type: rider.riderType,
@@ -1152,6 +1172,7 @@ export class RiderAppService {
           id: true,
           name: true,
           businessType: true,
+          regionId: true,
           status: true,
           deliveryMode: true,
           logo: true,
@@ -1171,6 +1192,7 @@ export class RiderAppService {
               logo: true,
               status: true,
               businessType: true,
+              regionId: true,
               dormBuilding: true,
               dormRoom: true,
             },
@@ -1182,6 +1204,7 @@ export class RiderAppService {
       id: merchant.id,
       name: merchant.name,
       business_type: merchant.businessType,
+      region_id: merchant.regionId,
       status: merchant.status,
       delivery_mode: merchant.deliveryMode,
       logo: merchant.logo,
@@ -1226,6 +1249,7 @@ export class RiderAppService {
     const staffShops = memberships.map((membership) => ({
       staff_id: membership.id,
       merchant_id: membership.merchantId,
+      region_id: membership.merchant.regionId,
       name: membership.merchant.name,
       logo: membership.merchant.logo || "",
       status:

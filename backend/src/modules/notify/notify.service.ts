@@ -1,3 +1,4 @@
+import { ERRAND_NEW_ORDER_SCENE, ERRAND_NEW_ORDER_PAGE, errandNewOrderData, loadErrandNotificationAudience } from '../errand/errand-new-order-notification';
 import {
   BadRequestException,
   ForbiddenException,
@@ -20,6 +21,7 @@ import { WsNativeGateway } from "../websocket/ws-native.gateway";
 import { NotificationChannelService } from "./notification-channel.service";
 import { WechatSubscribeService } from "../wechat/wechat-subscribe.service";
 import { WechatOfficialService } from "../wechat/wechat-official.service";
+import { WECHAT_TEMPLATE_NAMES, describeWechatPage, hasWechatTemplatePayload, wechatFailure } from "../wechat/wechat-log-presentation";
 import { PushService } from "../push/push.service";
 import {
   OFFICIAL_ASSISTANT_OPENID,
@@ -915,6 +917,13 @@ export class NotifyService {
     options: { allowImplicitWechatSubscribe?: boolean } = {},
   ) {
     const report: Record<string, any> = { inApp: { status: "success" } };
+    if (notification.scene === ERRAND_NEW_ORDER_SCENE) {
+      const orderId = String(notification.data?.orderId || '');
+      const audience = orderId ? await loadErrandNotificationAudience(this.prisma, orderId, notification.userId) : null;
+      if (!audience?.targets.length) {
+        return { report: { ...report, eligibility: { status: 'skipped', reason: audience?.reason || 'order_missing' } }, deliveryStatus: 'retired' };
+      }
+    }
     const unreadSummary = await this.getUnreadSummary(
       notification.userId,
       notification.regionId,
@@ -1015,6 +1024,7 @@ export class NotifyService {
         let pushed = 0;
         for (const device of devices) {
           const ok = await this.pushService.sendToClient(device.clientId, {
+            platform: device.platform || undefined,
             title: notification.title || "新通知",
             content: notification.content || "",
             data: {
@@ -1028,7 +1038,7 @@ export class NotifyService {
           });
           if (ok) pushed += 1;
         }
-        report.push = { status: pushed > 0 ? "success" : "skipped" };
+        report.push = { status: pushed > 0 ? "success" : (devices.length && this.pushService.isConfigured() ? "failed" : "skipped") };
       } catch (error: any) {
         report.push = {
           status: "failed",
@@ -1092,16 +1102,57 @@ export class NotifyService {
       }
     }
 
+    if (notification.scene === ERRAND_NEW_ORDER_SCENE) {
+      const current = await loadErrandNotificationAudience(this.prisma, String(notification.data?.orderId || ''), notification.userId);
+      if (!current.targets.length) return { report: { ...report, eligibility: { status: 'skipped', reason: current.reason } }, deliveryStatus: 'retired' };
+    }
+    const wechatPage = this.wechatNotificationPage(notification);
+    let allowNewOrderSubscriptionFallback = !channelMask.officialAccount || !this.wechatOfficial;
+    if (channelMask.officialAccount && this.wechatOfficial) {
+      const sent = await this.wechatOfficial.sendNotificationTemplate({
+        userId: notification.userId,
+        scene: notification.scene,
+        page: wechatPage || undefined,
+        data: {
+          ...(notification.data || {}),
+          title: notification.title,
+          content: notification.content,
+        },
+      });
+      if (notification.scene === ERRAND_NEW_ORDER_SCENE) {
+        // Only a definite unavailable channel permits subscription fallback. Ambiguous errors retry this channel.
+        allowNewOrderSubscriptionFallback = !sent.success && (sent.skipped === true || /未绑定|未关注|未配置|停用|字段|模板编号无效/.test(sent.error || ''));
+      }
+      if (sent.error !== "unsupported_scene" || notification.scene === ERRAND_NEW_ORDER_SCENE) {
+        report.officialAccount = notification.scene === ERRAND_NEW_ORDER_SCENE && allowNewOrderSubscriptionFallback
+          ? { status: 'skipped', reason: sent.error, templateType: sent.templateType }
+          : sent.success
+          ? { status: "success", templateType: sent.templateType }
+          : {
+              status: sent.skipped ? "skipped" : "failed",
+              ...(sent.skipped
+                ? { reason: sent.error }
+                : { error: sent.error }),
+              templateType: sent.templateType,
+            };
+      }
+    } else if (channelMask.officialAccount) {
+      report.officialAccount = {
+        status: "skipped",
+        reason: "wechat_official_service_unavailable",
+      };
+    }
+
     const miniProgramTemplate = this.miniProgramTemplateType(
       notification.scene,
     );
-    const wechatPage = this.wechatNotificationPage(notification);
     const allowImplicitWechatSubscribe =
       options.allowImplicitWechatSubscribe !== false;
     if (
       (channelMask.wechatSubscribe ||
         (allowImplicitWechatSubscribe && miniProgramTemplate)) &&
-      this.wechatSubscribe
+      this.wechatSubscribe &&
+      (notification.scene !== ERRAND_NEW_ORDER_SCENE || allowNewOrderSubscriptionFallback)
     ) {
       const sent = await this.wechatSubscribe.sendSubscribeMessage({
         userId: notification.userId,
@@ -1119,39 +1170,12 @@ export class NotifyService {
       report.wechatSubscribe = sent.success
         ? { status: "success" }
         : { status: "skipped", reason: sent.error };
+    } else if (notification.scene === ERRAND_NEW_ORDER_SCENE && !allowNewOrderSubscriptionFallback) {
+      report.wechatSubscribe = { status: 'skipped', reason: 'official_account_preferred' };
     } else if (channelMask.wechatSubscribe) {
       report.wechatSubscribe = {
         status: "skipped",
         reason: "wechat_subscribe_service_unavailable",
-      };
-    }
-
-    if (channelMask.officialAccount && this.wechatOfficial) {
-      const sent = await this.wechatOfficial.sendNotificationTemplate({
-        userId: notification.userId,
-        scene: notification.scene,
-        page: wechatPage || undefined,
-        data: {
-          ...(notification.data || {}),
-          title: notification.title,
-          content: notification.content,
-        },
-      });
-      if (sent.error !== "unsupported_scene") {
-        report.officialAccount = sent.success
-          ? { status: "success", templateType: sent.templateType }
-          : {
-              status: sent.skipped ? "skipped" : "failed",
-              ...(sent.skipped
-                ? { reason: sent.error }
-                : { error: sent.error }),
-              templateType: sent.templateType,
-            };
-      }
-    } else if (channelMask.officialAccount) {
-      report.officialAccount = {
-        status: "skipped",
-        reason: "wechat_official_service_unavailable",
       };
     }
 
@@ -1215,7 +1239,7 @@ export class NotifyService {
     return "";
   }
 
-  async createAndDispatch(dto: CreateNotificationDto) {
+  async createAndDispatch(dto: CreateNotificationDto, eventKey?: string) {
     const preference = this.interactionNotificationPreference(dto.type);
     let preferenceMode = "";
     let interactionBadgeEnabled = true;
@@ -1288,6 +1312,7 @@ export class NotifyService {
     // 1. 站内通知入库（必须成功）
     const notification = await this.prisma.notification.create({
       data: {
+        ...(eventKey ? { eventKey } : {}),
         userId: dto.userId,
         regionId: dto.regionId || null,
         type: this.toDbNotificationType(dto.type) as any,
@@ -1299,6 +1324,12 @@ export class NotifyService {
         linkValue: dto.linkValue || null,
         channelMask: channelMask as any,
       },
+    }).catch(async (error) => {
+      if (eventKey && error?.code === 'P2002') {
+        const existing = await this.prisma.notification.findUnique({ where: { userId_eventKey: { userId: dto.userId, eventKey } } });
+        if (existing) return existing;
+      }
+      throw error;
     });
 
     // 2. 站内消息立即可见；外部渠道由独立 Worker 持久消费。
@@ -1309,6 +1340,49 @@ export class NotifyService {
       deliveryAttempts: notification.deliveryAttempts || 0,
       queued: true,
     };
+  }
+
+  async notifyAvailableErrandRiders(orderId: string) {
+    const { order, targets, reason } = await loadErrandNotificationAudience(this.prisma, orderId);
+    if (!targets.length) return { queued: 0, reason };
+    const region = await this.prisma.region.findUnique({ where: { id: order.regionId }, select: { name: true } });
+    const data = errandNewOrderData(order, region?.name || '所属校区');
+    let queued = 0;
+    const failures: unknown[] = [];
+    for (const rider of targets) {
+      try { await this.createAndDispatch({
+        userId: rider.userId, regionId: order.regionId, type: 'delivery', scene: ERRAND_NEW_ORDER_SCENE,
+        title: '新订单通知', content: `${data.serviceName}，订单金额${data.orderAmount}，请查看接单大厅`,
+        data, linkType: 'page', linkValue: `${ERRAND_NEW_ORDER_PAGE}&region_id=${encodeURIComponent(order.regionId)}&order_id=${encodeURIComponent(order.id)}`,
+        channelMask: { inApp: true, websocket: true, push: true, officialAccount: true },
+      }, `${ERRAND_NEW_ORDER_SCENE}:${order.id}`);
+        queued++;
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new Error(`跑腿新单通知入库失败 ${failures.length}/${targets.length}，等待补偿`);
+    return { queued };
+  }
+
+  private errandReconcileCursor = '';
+  private errandReconcileRunning = false;
+
+  @Interval(30_000)
+  async reconcileErrandNewOrderNotifications() {
+    if (this.errandReconcileRunning) return;
+    this.errandReconcileRunning = true;
+    try {
+      const orders = await this.prisma.errandOrder.findMany({
+        where: { status: 'pending_accept', payTime: { not: null }, riderId: null,
+          refundStatus: { notIn: ['refunding', 'refunded'] },
+          ...(this.errandReconcileCursor ? { id: { gt: this.errandReconcileCursor } } : {}) },
+        select: { id: true }, orderBy: { id: 'asc' }, take: 50,
+      });
+      for (const order of orders) {
+        try { await this.notifyAvailableErrandRiders(order.id); }
+        catch (error: any) { this.logger.warn(`跑腿新单通知待补偿 ${order.id}: ${error?.message}`); }
+      }
+      this.errandReconcileCursor = orders.length === 50 ? orders[orders.length - 1].id : '';
+    } finally { this.errandReconcileRunning = false; }
   }
 
   @Interval(2_000)
@@ -1817,10 +1891,11 @@ export class NotifyService {
       "wechatSubscribe",
       "officialAccount",
     ].filter((channel) => previousReport[channel]?.status === "failed");
-    if (Object.keys(previousReport).length && !failedChannels.length) {
+    const interrupted = previousReport.worker?.status === 'failed';
+    if (Object.keys(previousReport).length && !failedChannels.length && !interrupted) {
       return { success: true, notification, message: "没有需要重试的失败渠道" };
     }
-    const retryMask = Object.keys(previousReport).length
+    const retryMask = Object.keys(previousReport).length && !interrupted
       ? {
           inApp: true,
           websocket: failedChannels.includes("websocket"),
@@ -1837,10 +1912,12 @@ export class NotifyService {
       notification,
       retryMask,
       {
-        allowImplicitWechatSubscribe: !Object.keys(previousReport).length,
+        allowImplicitWechatSubscribe: !Object.keys(previousReport).length || interrupted,
       },
     );
     const mergedReport = { ...previousReport };
+    if (interrupted) delete mergedReport.worker;
+    if (delivery.deliveryStatus === 'retired') Object.assign(mergedReport, delivery.report);
     (failedChannels.length
       ? failedChannels
       : Object.keys(delivery.report)
@@ -1848,7 +1925,7 @@ export class NotifyService {
       if (delivery.report[channel])
         mergedReport[channel] = delivery.report[channel];
     });
-    const deliveryStatus = Object.values(mergedReport).some(
+    const deliveryStatus = delivery.deliveryStatus === 'retired' ? 'retired' : Object.values(mergedReport).some(
       (item: any) => item?.status === "failed",
     )
       ? "partial"
@@ -2172,6 +2249,7 @@ export class NotifyService {
   async getWechatMessageLogs(
     query: {
       userId?: string;
+      keyword?: string;
       platformType?: string;
       templateType?: string;
       status?: string;
@@ -2186,6 +2264,11 @@ export class NotifyService {
     const pageSize = this.toPositiveInt(query.pageSize, 20);
     const where: any = {};
     if (query.userId) where.userId = query.userId;
+    if (query.keyword?.trim()) {
+      const keyword = query.keyword.trim();
+      const users = await this.prisma.user.findMany({ where: { nickname: { contains: keyword } }, select: { id: true }, take: 200 });
+      where.OR = [{ userId: { contains: keyword } }, { openid: { contains: keyword } }, { userId: { in: users.map((user) => user.id) } }];
+    }
     if (query.platformType) where.platformType = query.platformType;
     if (query.templateType) where.templateType = query.templateType;
     if (query.status) where.status = query.status;
@@ -2222,23 +2305,62 @@ export class NotifyService {
       this.prisma.wechatMessageLog.count({ where }),
     ]);
 
-    // 脱敏处理
-    const maskedList = list.map((item) => ({
-      ...item,
-      openid: this.maskOpenid(item.openid),
-      payload: item.payload ? "[已隐藏]" : null,
-    }));
+    const userIds = [...new Set(list.map((item) => item.userId).filter(Boolean))] as string[];
+    const users = userIds.length ? await this.prisma.user.findMany({
+      where: { id: { in: userIds } }, select: { id: true, nickname: true },
+    }) : [];
+    const userMap = new Map(users.map((user) => [user.id, user.nickname]));
+    const maskedList = list.map((item) => {
+      const failure = wechatFailure(item.errorCode, item.errorMessage);
+      const skipped = ['template_missing', 'consent_unavailable', 'openid_missing'].includes(failure.errorCode)
+        && ['failed', 'skipped'].includes(item.status);
+      return {
+        ...item,
+        ...(['failed', 'skipped'].includes(item.status) ? failure : { errorMessageZh: '', errorAdvice: '' }),
+        userName: (item.userId && userMap.get(item.userId)) || (item.userId ? '未设置昵称或用户已注销' : '未关联用户'),
+        templateName: WECHAT_TEMPLATE_NAMES[item.templateType] || '其他业务通知',
+        pageDescription: describeWechatPage(item.page),
+        displayStatus: skipped ? 'skipped' : item.status,
+        errorCodeLabel: item.errorCode && /^-?\d+$/.test(item.errorCode) ? item.errorCode
+          : skipped ? '未请求微信' : item.status === 'failed' ? '本地发送异常' : '无',
+        requestIpSourceLabel: item.requestIpSource === 'request' ? '发送时的请求 IP'
+          : item.requestIpSource === 'system' ? '后台系统任务（无用户请求 IP）' : '历史未记录来源',
+        retryable: item.status === 'failed' && !skipped && !!item.openid && !!item.templateId
+          && hasWechatTemplatePayload(item.payload),
+        // Access is already permission checked and region scoped. Keep the exact
+        // identifier for reconciliation; message content stays private.
+        payload: item.payload ? "[已隐藏]" : null,
+      };
+    });
 
     return { list: maskedList, total, page, pageSize };
   }
 
-  async retryWechatMessage(logId: string) {
+  async retryWechatMessage(logId: string, operatorId?: string) {
     const log = await this.prisma.wechatMessageLog.findUnique({
       where: { id: logId },
     });
     if (!log) throw new NotFoundException("日志不存在");
+    if (operatorId) {
+      const accessible = await this.getAccessibleUserIds(operatorId);
+      if (accessible !== null && (!log.userId || !accessible.includes(log.userId))) {
+        throw new ForbiddenException('无权重试该用户的消息');
+      }
+    }
     if (log.status === "success")
       return { success: true, message: "该消息已发送成功" };
+    if (log.platformType === 'official' && log.templateType === ERRAND_NEW_ORDER_SCENE) {
+      if (log.status === 'pending') return { success: true, message: '微信已受理，正在等待送达回执' };
+      const orderId = new URLSearchParams(String(log.page || '').split('?')[1] || '').get('order_id');
+      if (!orderId || !log.userId) throw new BadRequestException('新单通知缺少业务关联，不能直接重发');
+      const notice = await this.prisma.notification.findUnique({ where: { userId_eventKey: { userId: log.userId, eventKey: `${ERRAND_NEW_ORDER_SCENE}:${orderId}` } } });
+      if (!notice) throw new BadRequestException('没有对应的新单通知记录');
+      if (notice.deliveryStatus === 'retired') return { success: true, message: '订单或骑手状态已变化，不再重发' };
+      await this.prisma.notification.update({ where: { id: notice.id }, data: {
+        deliveryReport: { ...((notice.deliveryReport || {}) as any), officialAccount: { status: 'failed', error: log.errorMessage || 'delivery_failed' } },
+      } });
+      return this.retryNotificationDelivery(notice.id, operatorId);
+    }
     if (log.platformType === "official" && this.wechatOfficial) {
       return this.wechatOfficial.retryTemplateMessage(logId);
     }

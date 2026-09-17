@@ -40,7 +40,7 @@
           :feature-count="drawableFeatureCount"
           :can-publish="publishReadiness.canPublish"
           @update:model-value="setToolMode"
-          @import-cad="openImportDrawer"
+          @show-artwork="handleEditorModeChange('image')"
           @switch-amap="openCoordinatePicker"
           @open-quality="openQualityDrawer"
         />
@@ -66,8 +66,23 @@
             @add-calibration="addCalibrationAtRatio(0.5, 0.5)"
           />
 
+          <div v-if="editorMode === 'amap'" class="amap-workbench-shell">
+            <div class="amap-route-filter">
+              <strong>路线显示</strong>
+              <el-radio-group v-model="amapRouteFilter" size="small">
+                <el-radio-button label="verified">只看已审核实采（{{ verifiedRiderRouteCount }}）</el-radio-button>
+                <el-radio-button label="all">全部路线（{{ routes.length }}）</el-radio-button>
+              </el-radio-group>
+              <span>蓝色粗线为已审核实采；规划线也可随本版发布并参与导航</span>
+            </div>
+            <div ref="amapMapRef" class="amap-workbench-map"></div>
+            <div class="map-status-strip">
+              <span>{{ amapStatus }}；点击路线可在右侧查看详情</span>
+            </div>
+          </div>
+
           <CampusMapCadWorkbench
-            v-if="hasVisualBaseMap"
+            v-else-if="hasVisualBaseMap"
             :artwork-url="ARTWORK_URL"
             :pois="artworkPois"
             :areas="artworkAreas"
@@ -89,7 +104,7 @@
             </div>
           </div>
 
-          <div class="map-status-strip">
+          <div v-if="editorMode === 'image'" class="map-status-strip">
             <span>画师 SVG 是唯一主地图；蓝色地点、建筑状态和骑手采集结果是可控覆盖层</span>
             <el-button text @click="openCoordinatePicker">设置真实坐标</el-button>
           </div>
@@ -157,20 +172,6 @@
       @focus-key-place="focusKeyPlace"
     />
 
-    <CampusMapImportDrawer
-      v-model="importDrawerVisible"
-      :active-import-job="activeImportJob"
-      :import-jobs="importJobs"
-      :importing="importing"
-      :converter-status="converterStatus"
-      :import-status-label="importStatusLabel"
-      @file-change="handleImportFileChange"
-      @apply-draft="applyImportDraft"
-      @refresh-job="refreshImportJob"
-      @retry-job="retryImportJob"
-      @delete-job="deleteImportJob"
-      @select-job="activeImportJob = $event"
-    />
 
     <CampusMapPreviewDrawer
       v-model="previewDrawerVisible"
@@ -271,7 +272,7 @@ import CampusMapAssistantDrawer from './campus-map/CampusMapAssistantDrawer.vue'
 import CampusMapCollectionDrawer from './campus-map/CampusMapCollectionDrawer.vue'
 import CampusMapAvailabilityPanel from './campus-map/CampusMapAvailabilityPanel.vue'
 import CampusMapCadWorkbench from './campus-map/CampusMapCadWorkbench.vue'
-import CampusMapImportDrawer from './campus-map/CampusMapImportDrawer.vue'
+
 import CampusMapInspector from './campus-map/CampusMapInspector.vue'
 import CampusMapPreviewDrawer from './campus-map/CampusMapPreviewDrawer.vue'
 import CampusMapQualityDrawer from './campus-map/CampusMapQualityDrawer.vue'
@@ -281,24 +282,24 @@ import CampusMapWorkbenchHeader from './campus-map/CampusMapWorkbenchHeader.vue'
 import CampusMapProjectCatalogDrawer from './campus-map/CampusMapProjectCatalogDrawer.vue'
 import {
   amapPlaceSearch,
-  deleteRegionCampusMapImport,
+
   disableRegionCampusMap,
   fetchCampusMapStatuses,
-  fetchCampusMapConverterStatus,
+
   fetchCampusMapProjectCatalog,
   fetchActiveCampusMap,
   removeCampusMapProjectPhoto,
   fetchAmapRuntimeConfig,
-  fetchRegionCampusMapImport,
-  fetchRegionCampusMapImports,
+
+
   fetchRegionCampusMap,
   publishRegionCampusMapDraft,
   prepareCampusMapVerifiedReleaseBatch,
-  retryRegionCampusMapImport,
+
   saveRegionCampusMapDraft,
   synchronizeApprovedCampusMapCalibrations,
   upsertCampusMapProject,
-  uploadRegionCampusMapImport,
+
 } from '@/api/admin'
 import {
   campusMapPublicationSnapshot,
@@ -309,6 +310,9 @@ import {
   calibrationEvidenceMetadata,
   isApprovedPlaceVerificationCoordinate,
   isRiderCollectedCalibrationPoint,
+  isValidGcj02Coordinate,
+  isVerifiedRiderRoute,
+  shouldShowLocalRequestError,
 } from './campus-map/campusMapCollectionModel.mjs'
 import {
   applyCampusProject,
@@ -316,8 +320,8 @@ import {
   createCampusProjectCatalogLoader,
   campusProjectCounts,
   findCampusProjectArtworkFeature,
-  normalizeImportedAreaProject,
-  normalizeImportedPoiProject,
+
+
   persistedCampusMapItems,
   pickCampusProjectMetadata,
   resolveCampusProjectFeatureState,
@@ -438,52 +442,8 @@ type SemanticCategory = {
   icon: string
   color: string
 }
-type CampusMapImportJob = {
-  id: string
-  status: 'queued' | 'processing' | 'draft_ready' | 'needs_converter' | 'failed'
-  progress: number
-  message: string
-  source?: {
-    fileName: string
-    fileExt: string
-    fileSize: number
-    url: string
-  }
-  report?: {
-    summary?: string[]
-    warnings?: string[]
-    layers?: Array<{ name: string; role: string; featureCount: number; importedCount: number }>
-  }
-  draft?: {
-    baseSource?: string
-    title?: string
-    mapWidth?: number
-    mapHeight?: number
-    coordinateSystem?: Record<string, any>
-    imageMap?: Record<string, any> | null
-    pois?: PoiItem[]
-    areas?: AreaItem[]
-    routes?: RouteItem[]
-    semanticCategories?: SemanticCategory[]
-  } | null
-}
-type CampusMapConverterStatus = {
-  ready: boolean
-  path: string
-  source: string
-  message: string
-  checkedAt: string
-  platform: string
-  instructions?: string[]
-  candidates?: Array<{
-    path: string
-    source: string
-    exists: boolean
-    executable: boolean
-    reason?: string
-  }>
-}
-type AssistantAction = 'import' | 'poi' | 'area' | 'route' | 'calibration' | 'preview' | 'quality' | 'publish' | ''
+
+type AssistantAction = 'poi' | 'area' | 'route' | 'calibration' | 'preview' | 'quality' | 'publish' | ''
 type AssistantStep = {
   key: string
   order: number
@@ -496,7 +456,7 @@ type AssistantStep = {
 
 // 与画师 AI 原文件的 1-38 号文字中心坐标一致；真实经纬度单独由骑手现场采集。
 const illustratedArtworkBounds = [0, 0, 2761.14, 2990.41] as const
-const ARTWORK_URL = '/admin/assets/cqcx-campus-map.svg'
+const ARTWORK_URL = '/admin/assets/cqcx-campus-map-20260908.svg'
 const illustratedSeedAnchors = new Map<number, [number, number]>([
   [1, [302.44, 1715.91]], [2, [233.14, 1933.59]], [3, [535.15, 1648.29]],
   [4, [672.78, 1858.49]], [5, [720.94, 1655.22]], [6, [890.06, 1733.56]],
@@ -554,9 +514,9 @@ const loading = ref(false)
 const saving = ref(false)
 const draftSaving = ref(false)
 const disabling = ref(false)
-const importing = ref(false)
+
 const amapLoading = ref(false)
-// 运营界面永远编辑画师 SVG；sourceCoordinateMode 只决定保存时是否保留高德真实坐标清单。
+// 画师 SVG 和高德真实路线是两个独立画布，切换只改变工作台视图。
 const editorMode = ref<EditorMode>('image')
 const sourceCoordinateMode = ref<EditorMode>('amap')
 const toolMode = ref<ToolMode>('poi')
@@ -566,7 +526,7 @@ const releaseStage = ref<ReleaseStageKey>('binding')
 const previewDrawerVisible = ref(false)
 const qualityDrawerVisible = ref(false)
 const advancedDrawerVisible = ref(false)
-const importDrawerVisible = ref(false)
+
 const assistantDrawerVisible = ref(false)
 const versionDrawerVisible = ref(false)
 const collectionDrawerVisible = ref(false)
@@ -579,14 +539,15 @@ const amapSearchKeyword = ref('')
 const amapSearchResults = ref<AmapSearchResult[]>([])
 const amapStatus = ref('正在准备高德绘制工作台')
 const amapReady = ref(false)
+const amapRouteFilter = ref<'verified' | 'all'>('all')
 const undoStack = ref<string[]>([])
 const redoStack = ref<string[]>([])
 const historyLocked = ref(false)
 const hasVectorBaseMap = ref(false)
 const vectorCoordinateSystem = ref<Record<string, any> | null>(null)
-const importJobs = ref<CampusMapImportJob[]>([])
-const activeImportJob = ref<CampusMapImportJob | null>(null)
-const converterStatus = ref<CampusMapConverterStatus | null>(null)
+
+
+
 const projectCatalog = ref<any[]>([])
 const projectStateSaving = ref(false)
 const collectionDrawerRef = ref<InstanceType<typeof CampusMapCollectionDrawer> | null>(null)
@@ -598,8 +559,34 @@ const pois = ref<PoiItem[]>([])
 const areas = ref<AreaItem[]>([])
 const routes = ref<RouteItem[]>([])
 const calibrationPoints = ref<CalibrationPoint[]>([])
-const draftAreaPoints = ref<RatioPoint[]>([])
-const draftRoutePoints = ref<RatioPoint[]>([])
+const imageDraftAreaPoints = ref<RatioPoint[]>([])
+const imageDraftRoutePoints = ref<RatioPoint[]>([])
+const amapDraftAreaPoints = ref<RatioPoint[]>([])
+const amapDraftRoutePoints = ref<RatioPoint[]>([])
+const draftAreaPoints = computed({
+  get: () => editorMode.value === 'amap' ? amapDraftAreaPoints.value : imageDraftAreaPoints.value,
+  set: (value: RatioPoint[]) => {
+    if (editorMode.value === 'amap') amapDraftAreaPoints.value = value
+    else imageDraftAreaPoints.value = value
+  },
+})
+const draftRoutePoints = computed({
+  get: () => editorMode.value === 'amap' ? amapDraftRoutePoints.value : imageDraftRoutePoints.value,
+  set: (value: RatioPoint[]) => {
+    if (editorMode.value === 'amap') amapDraftRoutePoints.value = value
+    else imageDraftRoutePoints.value = value
+  },
+})
+const hasAnyDraftPoints = computed(() => Boolean(
+  imageDraftAreaPoints.value.length
+  || imageDraftRoutePoints.value.length
+  || amapDraftAreaPoints.value.length
+  || amapDraftRoutePoints.value.length,
+))
+const verifiedRiderRouteCount = computed(() => routes.value.filter(isVerifiedRiderRoute).length)
+const visibleAmapRoutes = computed(() => amapRouteFilter.value === 'verified'
+  ? routes.value.filter(isVerifiedRiderRoute)
+  : routes.value)
 const amapDefaults = reactive({
   city: '全国',
   center: [113.264385, 23.129112] as [number, number],
@@ -611,11 +598,19 @@ let amapMap: any = null
 let amapClickBound = false
 let amapInitSeq = 0
 let amapSearchTimer: ReturnType<typeof setTimeout> | null = null
-let importPollingTimer: ReturnType<typeof setTimeout> | null = null
+
 let amapSearchSeq = 0
 let amapOverlays: any[] = []
+const amapOverlayEntries = new Map<string, { signature: string; overlay: any }>()
+let refreshingAmapOverlays = false
+let amapOverlayRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let activeAmapEditorKey = ''
+
 let activeAmapEditor: any = null
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+const editRevision = ref(0)
+let draftSavePromise: Promise<any> | null = null
+let mapLoadSequence = 0
 
 const form = reactive({
   enabled: true,
@@ -750,8 +745,8 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
     {
       key: 'drafts',
       label: '草稿状态',
-      status: draftAreaPoints.value.length || draftRoutePoints.value.length ? 'warning' : 'pass',
-      message: draftAreaPoints.value.length || draftRoutePoints.value.length ? '还有未完成的区域或路线草稿' : '没有未完成草稿',
+      status: hasAnyDraftPoints.value ? 'warning' : 'pass',
+      message: hasAnyDraftPoints.value ? '还有未完成的区域或路线草稿' : '没有未完成草稿',
     },
   ]
 
@@ -769,8 +764,27 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
   const unmatchedActive = projectItems.filter((item) => item.visibilityScope === 'phase1_active' && item.geometryStatus === 'unmatched')
   const unavailableWithoutMessage = releaseProjectItems.filter((item) => item.serviceStatus === 'unopened'
     && !String(item.unavailableMessage || '').trim())
-  const approvedRiderRouteCount = routes.value.filter((route) =>
-    String(route.sourceProperties?.collectionSource || '') === 'rider_app_approved').length
+  const publicRoutes = routes.value.filter((route) => route.public === true
+    && route.sourceProperties?.pedestrian !== false && route.sourceProperties?.closed !== true
+    && route.sourceProperties?.construction !== true)
+  const publicRouteCount = publicRoutes.length
+  const plannedRoutes = publicRoutes.filter((route) => !isVerifiedRiderRoute(route))
+  const plannedRouteCount = plannedRoutes.length
+  const invalidPlannedRouteCount = plannedRoutes.filter((route) => {
+    const geometry = route.sourceProperties?.plannedGeometryGcj02
+    const points = sourceCoordinateMode.value === 'amap' ? route.points
+      : geometry?.type === 'LineString' && Array.isArray(geometry.coordinates)
+        ? geometry.coordinates.map((point: any) => ({ longitude: point?.[0], latitude: point?.[1] })) : []
+    return points.length < 2 || points.some((point: any) => !isValidGcj02Coordinate(point))
+  }).length
+  if (invalidPlannedRouteCount) checks.push({
+    key: 'planned-route-coordinates', label: '规划路线真实坐标', status: 'error',
+    message: `${invalidPlannedRouteCount} 条公开规划路线缺少有效 GCJ-02 坐标，请在真实地图上补全路线后发布`,
+  })
+  if (plannedRouteCount) checks.push({
+    key: 'planned-navigation', label: '规划路线发布确认', status: 'warning',
+    message: `${plannedRouteCount} 条规划路线将展示并参与导航，发布即确认；小程序会标明规划路线，实地采集可后续补充`,
+  })
   const publishedArtworkPlaceCount = projectCatalog.value.filter((place) =>
     place?.publishStatus === 'published'
       && place?.visibilityScope === 'phase1_active'
@@ -804,26 +818,26 @@ const mapQualityChecks = computed<QualityCheck[]>(() => {
       ? `${publishedArtworkPlaceCount} 个已发布地点会进入小程序`
       : '至少将 1 个已绑定矢量图的地点设为“已发布 + 一期可见”',
   })
-  if (approvedRiderRouteCount > 0) {
+  if (publicRouteCount > 0) {
     const nativeGcj02Route = sourceCoordinateMode.value === 'amap'
     checks.push({
       key: 'illustrated-navigation-calibration',
       label: nativeGcj02Route ? '路线真实坐标' : '矢量图导航校准',
       status: nativeGcj02Route || illustratedNavigationReady ? 'pass' : 'error',
       message: nativeGcj02Route
-        ? `${approvedRiderRouteCount} 条骑手审核路线使用 GCJ-02 真实轨迹，无需三点校准`
+        ? `${publicRouteCount} 条公开路线使用 GCJ-02 坐标，无需三点校准`
         : illustratedNavigationReady
-          ? `${illustratedCalibrationPlaces.length} 个已发布地点可把骑手路线投射到用户矢量图`
-          : '发布骑手导航路线前，至少要有 3 个分散地点同时具备已核验坐标和矢量图锚点',
+          ? `${illustratedCalibrationPlaces.length} 个已发布地点可把公开路线投射到用户矢量图`
+          : '发布导航路线前，至少要有 3 个分散地点同时具备已核验坐标和矢量图锚点',
     })
   }
 
   if (editorMode.value === 'image') {
     checks.unshift({
       key: 'image',
-      label: hasVectorBaseMap.value ? 'CAD 矢量底图' : '图片底图',
+      label: hasVectorBaseMap.value ? '矢量底图' : '图片底图',
       status: hasVisualBaseMap.value ? 'pass' : 'error',
-      message: hasVectorBaseMap.value ? 'CAD 图纸已转为矢量底图' : form.imageUrl ? '已上传底图' : '图片模式必须上传校园底图或导入 CAD',
+      message: hasVectorBaseMap.value ? '矢量底图已加载' : form.imageUrl ? '已配置底图' : '校园底图尚未加载，请检查底图资源',
     })
     checks.push(sourceCoordinateMode.value === 'amap'
       ? {
@@ -1037,10 +1051,10 @@ const mapAssistantSteps = computed<AssistantStep[]>(() => {
       key: 'base',
       order: 1,
       label: '准备底图',
-      message: baseReady ? (hasVectorBaseMap.value ? 'CAD 矢量底图可用' : editorMode.value === 'amap' ? '高德绘制底图可用' : '图片底图可用') : '先导入 CAD 或上传校园底图',
+      message: baseReady ? (hasVectorBaseMap.value ? '矢量底图可用' : editorMode.value === 'amap' ? '高德绘制底图可用' : '图片底图可用') : '校园底图尚未加载，请检查底图资源',
       status: baseReady ? 'pass' : 'error',
-      action: baseReady ? '' : 'import',
-      actionLabel: '导入',
+      action: '',
+      actionLabel: '',
     },
     {
       key: 'content',
@@ -1129,9 +1143,9 @@ const assistantWarnings = computed(() => {
   }
   if (sourceCoordinateMode.value !== 'amap' && !calibrationReadyForProjection.value) warnings.push('请在校园不同方位完成至少 3 个地点核验，并在审核中采用“真实位置”；系统会自动生成校准点。手工校准仅用于补充或修正。')
   if (pois.value.length > 80) warnings.push('点位较多，建议隐藏低频点或按分类展示，避免小程序地图拥挤。')
-  if (draftAreaPoints.value.length || draftRoutePoints.value.length) warnings.push('还有未完成的区域或路线草稿，发布前请完成或清空。')
-  if (activeImportJob.value?.status === 'needs_converter') warnings.push('DWG 自动转换缺少 ODA 转换器，建议上传 DXF 或安装转换器。')
-  if (activeImportJob.value?.status === 'failed') warnings.push('最近一次图纸导入失败，请查看导入任务提示后重新上传。')
+  if (hasAnyDraftPoints.value) warnings.push('还有未完成的区域或路线草稿，发布前请完成或清空。')
+
+
   return warnings
 })
 
@@ -1265,26 +1279,39 @@ watch(() => form.imageUrl, (value) => {
 })
 
 watch(editorMode, (mode) => {
-  resetDrafts()
   if (mode === 'amap') {
     nextTick(() => initAmapWorkbench())
   }
 })
 
-watch([pois, areas, routes, calibrationPoints], () => {
-  if (editorMode.value === 'amap') refreshAmapOverlays()
-  if (!historyLocked.value) hasUnsavedChanges.value = true
-}, { deep: true })
+watch(amapRouteFilter, () => {
+  if (editorMode.value !== 'amap') return
+  refreshAmapOverlays()
+  nextTick(() => fitAmapOverlays())
+})
 
-watch([form, editorMode, hasVectorBaseMap, vectorCoordinateSystem], () => {
-  if (!historyLocked.value) hasUnsavedChanges.value = true
-}, { deep: true })
+watch([pois, areas, routes, calibrationPoints], () => {
+  if (editorMode.value === 'amap') scheduleAmapOverlayRefresh()
+  if (!historyLocked.value) {
+    editRevision.value += 1
+    hasUnsavedChanges.value = true
+  }
+}, { deep: true, flush: 'sync' })
+
+watch([form, hasVectorBaseMap, vectorCoordinateSystem], () => {
+  if (!historyLocked.value) {
+    editRevision.value += 1
+    hasUnsavedChanges.value = true
+  }
+}, { deep: true, flush: 'sync' })
 
 onBeforeUnmount(() => {
+  mapLoadSequence += 1
   amapInitSeq += 1
   if (amapSearchTimer) clearTimeout(amapSearchTimer)
-  if (importPollingTimer) clearTimeout(importPollingTimer)
+
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  if (amapOverlayRefreshTimer) clearTimeout(amapOverlayRefreshTimer)
   window.removeEventListener('keydown', handleMapKeydown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   clearAmapOverlays()
@@ -1300,16 +1327,18 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
-/* ---------- 自动保存草稿（30s 防抖） ---------- */
-watch(hasUnsavedChanges, (dirty) => {
-  if (!dirty) return
+/* ---------- 编辑停止 30 秒后保存，保存期间的新编辑保留为待保存 ---------- */
+function scheduleDraftSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = null
+  if (!hasUnsavedChanges.value) return
   autoSaveTimer = setTimeout(() => {
-    if (hasUnsavedChanges.value && currentRegionId()) {
-      saveDraft({ silent: true })
-    }
+    autoSaveTimer = null
+    if (hasUnsavedChanges.value && currentRegionId()) void saveDraft({ silent: true })
   }, 30000)
-})
+}
+watch(editRevision, scheduleDraftSave)
+watch(hasUnsavedChanges, scheduleDraftSave)
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
   if (!hasUnsavedChanges.value) return
@@ -1507,10 +1536,7 @@ function handleReleaseIssue(issue: any) {
 }
 
 async function handleOperationsCommand(command: string) {
-  if (command === 'import') {
-    await openImportDrawer()
-    return
-  }
+
   if (command === 'catalog') {
     catalogDrawerVisible.value = true
     return
@@ -1534,10 +1560,6 @@ async function handleOperationsCommand(command: string) {
   if (command === 'disable') await disableMap()
 }
 
-async function openImportDrawer() {
-  importDrawerVisible.value = true
-  await Promise.all([loadImportJobs(), loadConverterStatus()])
-}
 
 function focusKeyPlace(type: string) {
   const existing = [...pois.value, ...areas.value].find((item: any) => item.semanticType === type || item.category === type)
@@ -1554,10 +1576,7 @@ function focusKeyPlace(type: string) {
 }
 
 async function runAssistantAction(action: AssistantAction) {
-  if (action === 'import') {
-    openImportDrawer()
-    return
-  }
+
   if (action === 'calibration') {
     assistantDrawerVisible.value = false
     await synchronizeApprovedRiderCalibrations()
@@ -1925,196 +1944,6 @@ async function synchronizeApprovedRiderCalibrations() {
   }
 }
 
-function importStatusLabel(status: CampusMapImportJob['status']) {
-  const labels: Record<string, string> = {
-    queued: '排队中',
-    processing: '转换中',
-    draft_ready: '可应用',
-    needs_converter: '缺少转换器',
-    failed: '失败',
-  }
-  return labels[status] || '未知'
-}
-
-async function loadConverterStatus() {
-  try {
-    const res: any = await fetchCampusMapConverterStatus()
-    converterStatus.value = (res?.data || res) as CampusMapConverterStatus
-  } catch (error) {
-    console.error('校园地图 DWG 转换器状态加载失败:', error)
-  }
-}
-
-async function loadImportJobs() {
-  if (!currentRegionId()) return
-  try {
-    const res: any = await fetchRegionCampusMapImports(currentRegionId())
-    const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
-    importJobs.value = list
-    if (!activeImportJob.value && list.length) activeImportJob.value = list[0]
-  } catch (error) {
-    console.error('校园地图导入任务加载失败:', error)
-  }
-}
-
-async function retryImportJob(jobId: string) {
-  if (!currentRegionId() || !jobId) return
-  importing.value = true
-  try {
-    const res: any = await retryRegionCampusMapImport(currentRegionId(), jobId)
-    const job = (res?.data || res) as CampusMapImportJob
-    activeImportJob.value = job
-    importJobs.value = [job, ...importJobs.value.filter((item) => item.id !== job.id)]
-    scheduleImportPolling(job.id)
-    ElMessage.success('已重新提交转换任务')
-  } catch (error: any) {
-    ElMessage.error(error?.message || '重新转换失败')
-  } finally {
-    importing.value = false
-  }
-}
-
-async function deleteImportJob(jobId: string) {
-  if (!currentRegionId() || !jobId) return
-  try {
-    await ElMessageBox.confirm('删除后会清理原始图纸和转换草稿；转换中的任务也会被中止。确定删除吗？', '删除导入任务', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-    importing.value = true
-    await deleteRegionCampusMapImport(currentRegionId(), jobId)
-    importJobs.value = importJobs.value.filter((item) => item.id !== jobId)
-    activeImportJob.value = activeImportJob.value?.id === jobId ? importJobs.value[0] || null : activeImportJob.value
-    ElMessage.success('导入任务已删除')
-  } catch (error: any) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '删除导入任务失败')
-  } finally {
-    importing.value = false
-  }
-}
-
-async function handleImportFileChange(uploadFile: any) {
-  const file = uploadFile?.raw || uploadFile
-  if (!currentRegionId()) {
-    ElMessage.warning('请先选择区域')
-    return false
-  }
-  if (!file) return false
-  importing.value = true
-  try {
-    const res: any = await uploadRegionCampusMapImport(currentRegionId(), file)
-    const job = (res?.data || res) as CampusMapImportJob
-    activeImportJob.value = job
-    importJobs.value = [job, ...importJobs.value.filter((item) => item.id !== job.id)]
-    scheduleImportPolling(job.id)
-    ElMessage.success('图纸已上传，正在转换')
-  } catch (error: any) {
-    ElMessage.error(error?.message || 'CAD 图纸上传失败')
-  } finally {
-    importing.value = false
-  }
-  return false
-}
-
-function scheduleImportPolling(jobId: string) {
-  if (importPollingTimer) clearTimeout(importPollingTimer)
-  importPollingTimer = setTimeout(() => {
-    refreshImportJob(jobId)
-  }, 1200)
-}
-
-async function refreshImportJob(jobId: string) {
-  if (!currentRegionId() || !jobId) return
-  importing.value = true
-  try {
-    const res: any = await fetchRegionCampusMapImport(currentRegionId(), jobId)
-    const job = (res?.data || res) as CampusMapImportJob
-    activeImportJob.value = job
-    importJobs.value = [job, ...importJobs.value.filter((item) => item.id !== job.id)]
-    if (job.status === 'queued' || job.status === 'processing') {
-      scheduleImportPolling(job.id)
-    } else if (job.status === 'draft_ready') {
-      ElMessage.success('CAD 已转换成可编辑地图草稿')
-    }
-  } catch (error: any) {
-    ElMessage.error(error?.message || '导入任务刷新失败')
-  } finally {
-    importing.value = false
-  }
-}
-
-function normalizeImportedPoi(item: any, index: number): PoiItem {
-  return applySemanticFields({
-    id: item.id || createId('poi'),
-    title: item.title || `点位 ${index + 1}`,
-    category: item.category || item.semanticType || 'building',
-    semanticType: item.semanticType || item.category || 'building',
-    icon: item.icon,
-    color: item.color,
-    sourceLayer: item.sourceLayer,
-    xRatio: clampRatio(item.xRatio),
-    yRatio: clampRatio(item.yRatio),
-    ...normalizeImportedPoiProject(item),
-  }, item.semanticType || item.category) as PoiItem
-}
-
-function normalizeImportedArea(item: any, index: number): AreaItem {
-  return applySemanticFields({
-    id: item.id || createId('area'),
-    title: item.title || `区域 ${index + 1}`,
-    category: item.category || item.semanticType || 'teaching',
-    semanticType: item.semanticType || item.category || 'teaching',
-    icon: item.icon,
-    color: item.color,
-    sourceLayer: item.sourceLayer,
-    points: Array.isArray(item.points) ? item.points.map((point: any) => ({
-      xRatio: clampRatio(point.xRatio),
-      yRatio: clampRatio(point.yRatio),
-    })) : [],
-    ...normalizeImportedAreaProject(item),
-  }, item.semanticType || item.category) as AreaItem
-}
-
-function normalizeImportedRoute(item: any, index: number): RouteItem {
-  return {
-    id: item.id || createId('route'),
-    title: item.title || `路线 ${index + 1}`,
-    category: item.category || 'walk',
-    semanticType: item.semanticType || 'service',
-    icon: item.icon || 'route',
-    color: item.color || '#f97316',
-    sourceLayer: item.sourceLayer,
-    points: Array.isArray(item.points) ? item.points.map((point: any) => ({
-      xRatio: clampRatio(point.xRatio),
-      yRatio: clampRatio(point.yRatio),
-    })) : [],
-  }
-}
-
-function applyImportDraft(job: CampusMapImportJob) {
-  const draft = job?.draft
-  if (!draft) {
-    ElMessage.warning('导入任务还没有生成草稿')
-    return
-  }
-  recordMapHistory()
-  editorMode.value = 'image'
-  toolMode.value = 'select'
-  hasVectorBaseMap.value = draft.baseSource === 'cad-vector'
-  vectorCoordinateSystem.value = draft.coordinateSystem || null
-  if (draft.title) form.title = draft.title
-  form.imageUrl = draft.imageMap?.imageUrl || ''
-  form.mapWidth = Math.max(Number(draft.mapWidth || 1200), 100)
-  form.mapHeight = Math.max(Number(draft.mapHeight || 800), 100)
-  form.opacity = Number(draft.imageMap?.opacity || form.opacity || 1)
-  pois.value = (draft.pois || []).map(normalizeImportedPoi)
-  areas.value = (draft.areas || []).map(normalizeImportedArea).filter((item) => item.points.length >= 3)
-  routes.value = (draft.routes || []).map(normalizeImportedRoute).filter((item) => item.points.length >= 2)
-  selectedId.value = ''
-  importDrawerVisible.value = false
-  ElMessage.success('已应用为可编辑地图草稿，请检查建筑名称和坐标校准')
-}
 
 function clampRatio(value: number) {
   return Math.max(0, Math.min(1, Number(value) || 0))
@@ -2140,8 +1969,10 @@ function serializeMapState() {
     areas: cloneValue(areas.value),
     routes: cloneValue(routes.value),
     calibrationPoints: cloneValue(calibrationPoints.value),
-    draftAreaPoints: cloneValue(draftAreaPoints.value),
-    draftRoutePoints: cloneValue(draftRoutePoints.value),
+    imageDraftAreaPoints: cloneValue(imageDraftAreaPoints.value),
+    imageDraftRoutePoints: cloneValue(imageDraftRoutePoints.value),
+    amapDraftAreaPoints: cloneValue(amapDraftAreaPoints.value),
+    amapDraftRoutePoints: cloneValue(amapDraftRoutePoints.value),
     amapDefaults: cloneValue(amapDefaults),
     hasVectorBaseMap: hasVectorBaseMap.value,
     vectorCoordinateSystem: cloneValue(vectorCoordinateSystem.value),
@@ -2161,8 +1992,18 @@ function applyMapSnapshot(snapshot: string) {
   areas.value = Array.isArray(state.areas) ? state.areas : []
   routes.value = Array.isArray(state.routes) ? state.routes : []
   calibrationPoints.value = Array.isArray(state.calibrationPoints) ? state.calibrationPoints : []
-  draftAreaPoints.value = Array.isArray(state.draftAreaPoints) ? state.draftAreaPoints : []
-  draftRoutePoints.value = Array.isArray(state.draftRoutePoints) ? state.draftRoutePoints : []
+  imageDraftAreaPoints.value = Array.isArray(state.imageDraftAreaPoints)
+    ? state.imageDraftAreaPoints
+    : state.editorMode === 'image' && Array.isArray(state.draftAreaPoints) ? state.draftAreaPoints : []
+  imageDraftRoutePoints.value = Array.isArray(state.imageDraftRoutePoints)
+    ? state.imageDraftRoutePoints
+    : state.editorMode === 'image' && Array.isArray(state.draftRoutePoints) ? state.draftRoutePoints : []
+  amapDraftAreaPoints.value = Array.isArray(state.amapDraftAreaPoints)
+    ? state.amapDraftAreaPoints
+    : state.editorMode === 'amap' && Array.isArray(state.draftAreaPoints) ? state.draftAreaPoints : []
+  amapDraftRoutePoints.value = Array.isArray(state.amapDraftRoutePoints)
+    ? state.amapDraftRoutePoints
+    : state.editorMode === 'amap' && Array.isArray(state.draftRoutePoints) ? state.draftRoutePoints : []
   hasVectorBaseMap.value = Boolean(state.hasVectorBaseMap)
   vectorCoordinateSystem.value = state.vectorCoordinateSystem || null
   if (state.amapDefaults?.center) {
@@ -2230,7 +2071,7 @@ function escapeHtml(value: any) {
 }
 
 function hasLngLat(point: RatioPoint) {
-  return Number.isFinite(Number(point.longitude)) && Number.isFinite(Number(point.latitude))
+  return isValidGcj02Coordinate(point)
 }
 
 function toAmapPath(points: RatioPoint[]) {
@@ -2354,10 +2195,23 @@ async function initAmapWorkbench() {
   }
 }
 
-function handleEditorModeChange(value: EditorMode) {
-  // 兼容旧组件事件，但不允许运营界面再切回高德主画面。
-  editorMode.value = 'image'
-  if (value === 'amap') openCoordinatePicker()
+async function handleEditorModeChange(value: EditorMode) {
+  editorMode.value = value
+  selectedId.value = ''
+  toolMode.value = 'select'
+  if (value === 'amap') {
+    await nextTick()
+    await initAmapWorkbench()
+    fitAmapOverlays()
+    return
+  }
+  amapInitSeq += 1
+  clearAmapOverlays()
+  amapMap?.destroy?.()
+  amapMap = null
+  amapClickBound = false
+  amapReady.value = false
+  amapStatus.value = '正在准备高德绘制工作台'
 }
 
 function handleAmapClick(event: any) {
@@ -2437,18 +2291,21 @@ function addCalibrationAtLngLat(longitude: number, latitude: number) {
 }
 
 function clearAmapOverlays() {
+  if (amapOverlayRefreshTimer) clearTimeout(amapOverlayRefreshTimer)
+  amapOverlayRefreshTimer = null
   closeAmapEditor()
   if (amapMap && amapOverlays.length) {
     amapMap.remove(amapOverlays)
   }
   amapOverlays = []
+  amapOverlayEntries.clear()
 }
 
 function closeAmapEditor() {
-  if (activeAmapEditor) {
-    activeAmapEditor.close?.()
-    activeAmapEditor = null
-  }
+  const editor = activeAmapEditor
+  activeAmapEditor = null
+  activeAmapEditorKey = ''
+  editor?.close?.()
 }
 
 function updateAmapPoiPosition(id: string, longitude: number, latitude: number) {
@@ -2483,11 +2340,13 @@ function enableAmapShapeEditing(overlay: any, kind: 'area' | 'route', id: string
     activeAmapEditor = kind === 'area'
       ? new amapSdk.PolygonEditor(amapMap, overlay)
       : new amapSdk.PolylineEditor(amapMap, overlay)
+    activeAmapEditorKey = `${kind}:${id}`
     activeAmapEditor.open?.()
     amapStatus.value = kind === 'area' ? '正在编辑区域节点，双击其他对象可切换' : '正在编辑路线节点，双击其他对象可切换'
     activeAmapEditor.on?.('end', () => {
       syncAmapOverlayPath(kind, id, overlay.getPath?.() || [])
       activeAmapEditor = null
+      activeAmapEditorKey = ''
       amapStatus.value = '节点编辑已保存'
     })
   })
@@ -2566,10 +2425,11 @@ function drawAmapRoute(route: RouteItem, draft = false) {
   if (!amapSdk || !amapMap) return null
   const path = toAmapPath(route.points)
   if (path.length < 2) return null
+  const verified = !draft && isVerifiedRiderRoute(route)
   const polyline = new amapSdk.Polyline({
     path,
-    strokeColor: draft ? '#0f766e' : '#f97316',
-    strokeWeight: draft ? 4 : 5,
+    strokeColor: draft ? '#0f766e' : verified ? '#2563eb' : '#f97316',
+    strokeWeight: draft ? 4 : verified ? 8 : 4,
     strokeOpacity: 0.9,
     strokeStyle: draft ? 'dashed' : 'solid',
     lineJoin: 'round',
@@ -2585,32 +2445,54 @@ function drawAmapRoute(route: RouteItem, draft = false) {
   return polyline
 }
 
+function scheduleAmapOverlayRefresh() {
+  if (amapOverlayRefreshTimer) clearTimeout(amapOverlayRefreshTimer)
+  amapOverlayRefreshTimer = setTimeout(() => {
+    amapOverlayRefreshTimer = null
+    refreshAmapOverlays()
+  }, 100)
+}
+
 function refreshAmapOverlays() {
-  if (!amapMap || !amapSdk) return
-  clearAmapOverlays()
-  pois.value.forEach((poi) => {
-    const overlay = drawAmapPoi(poi)
-    if (overlay) amapOverlays.push(overlay)
-  })
-  areas.value.forEach((area) => {
-    const overlay = drawAmapArea(area)
-    if (overlay) amapOverlays.push(overlay)
-  })
-  routes.value.forEach((route) => {
-    const overlay = drawAmapRoute(route)
-    if (overlay) amapOverlays.push(overlay)
-  })
-  calibrationPoints.value.forEach((point) => {
-    const overlay = drawAmapCalibration(point)
-    if (overlay) amapOverlays.push(overlay)
-  })
-  if (draftAreaPoints.value.length >= 2) {
-    const overlay = drawAmapArea({ id: 'draft_area', title: '区域草稿', category: 'draft', points: draftAreaPoints.value }, true)
-    if (overlay) amapOverlays.push(overlay)
-  }
-  if (draftRoutePoints.value.length >= 2) {
-    const overlay = drawAmapRoute({ id: 'draft_route', title: '路线草稿', category: 'draft', points: draftRoutePoints.value }, true)
-    if (overlay) amapOverlays.push(overlay)
+  if (!amapMap || !amapSdk || refreshingAmapOverlays) return
+  refreshingAmapOverlays = true
+  try {
+    const wanted: Array<{ key: string; item: any; draw: () => any }> = []
+    pois.value.forEach((item) => wanted.push({ key: `poi:${item.id}`, item, draw: () => drawAmapPoi(item) }))
+    areas.value.forEach((item) => wanted.push({ key: `area:${item.id}`, item, draw: () => drawAmapArea(item) }))
+    visibleAmapRoutes.value.forEach((item) => wanted.push({ key: `route:${item.id}`, item, draw: () => drawAmapRoute(item) }))
+    calibrationPoints.value.forEach((item) => wanted.push({ key: `calibration:${item.id}`, item, draw: () => drawAmapCalibration(item) }))
+    if (draftAreaPoints.value.length >= 2) {
+      const item = { id: 'draft_area', title: '区域草稿', category: 'draft', points: draftAreaPoints.value }
+      wanted.push({ key: 'draft:area', item, draw: () => drawAmapArea(item, true) })
+    }
+    if (draftRoutePoints.value.length >= 2) {
+      const item = { id: 'draft_route', title: '路线草稿', category: 'draft', points: draftRoutePoints.value }
+      wanted.push({ key: 'draft:route', item, draw: () => drawAmapRoute(item, true) })
+    }
+    const keys = new Set(wanted.map((entry) => entry.key))
+    for (const [key, entry] of amapOverlayEntries) {
+      if (!keys.has(key)) {
+        if (activeAmapEditorKey === key) closeAmapEditor()
+        amapMap.remove(entry.overlay)
+        amapOverlayEntries.delete(key)
+      }
+    }
+    wanted.forEach(({ key, item, draw }) => {
+      const signature = JSON.stringify(item)
+      const existing = amapOverlayEntries.get(key)
+      if (existing?.signature === signature) return
+      if (existing) {
+        if (activeAmapEditorKey === key) closeAmapEditor()
+        amapMap.remove(existing.overlay)
+        amapOverlayEntries.delete(key)
+      }
+      const overlay = draw()
+      if (overlay) amapOverlayEntries.set(key, { signature, overlay })
+    })
+    amapOverlays = Array.from(amapOverlayEntries.values(), (entry) => entry.overlay)
+  } finally {
+    refreshingAmapOverlays = false
   }
 }
 
@@ -2685,7 +2567,7 @@ function selectAmapPlace(item: AmapSearchResult) {
 
 function handleCanvasPointClick(point: RatioPoint) {
   if (!hasVisualBaseMap.value) {
-    ElMessage.warning('请先上传校园底图或导入 CAD 图纸')
+    ElMessage.warning('校园底图尚未加载，请检查底图资源')
     return
   }
   if (toolMode.value === 'poi') {
@@ -2834,8 +2716,10 @@ function removeCalibration(id: string) {
 }
 
 function resetDrafts() {
-  draftAreaPoints.value = []
-  draftRoutePoints.value = []
+  imageDraftAreaPoints.value = []
+  imageDraftRoutePoints.value = []
+  amapDraftAreaPoints.value = []
+  amapDraftRoutePoints.value = []
   selectedId.value = ''
   if (editorMode.value === 'amap') refreshAmapOverlays()
 }
@@ -2968,6 +2852,7 @@ function buildPayload() {
     }),
     title: form.title || '校园地图',
     mapId: form.mapId || `campus-map-${currentRegionId() || 'region'}`,
+    artworkId: 'cqcx-campus-illustrated',
     version: form.version || new Date().toISOString().slice(0, 10),
     coordinateSystem: hasVectorBaseMap.value
       ? {
@@ -3074,10 +2959,13 @@ function standardizeAmapFeature(kind: 'poi' | 'area' | 'route', item: PoiItem | 
     }
   }
 
-  if (points.length < 2) return null
+  if (points.length < 2 || points.length !== (item as RouteItem).points.length) return null
   return {
     type: 'Feature',
-    properties,
+    properties: { ...properties, ...(!isVerifiedRiderRoute(item) ? {
+      collectionSource: 'admin_planned', verificationStatus: 'planned',
+      plannedGeometryGcj02: { type: 'LineString', coordinates: points },
+    } : {}) },
     geometry: {
       type: 'LineString',
       coordinates: points,
@@ -3142,6 +3030,7 @@ function buildAmapPayload() {
     }),
     title: form.title || '校园地图',
     mapId: form.mapId || `campus-map-${currentRegionId() || 'region'}`,
+    artworkId: 'cqcx-campus-illustrated',
     version: form.version || new Date().toISOString().slice(0, 10),
     coordinateSystem: {
       type: 'amap',
@@ -3282,14 +3171,18 @@ async function validateBeforePublish() {
 }
 
 async function loadMap() {
-  if (!currentRegionId()) return
+  const regionId = currentRegionId()
+  if (!regionId) return
+  const sequence = ++mapLoadSequence
+  const isCurrent = () => sequence === mapLoadSequence && regionId === currentRegionId()
   loading.value = true
   try {
     const [config, statusesResponse, activeConfig]: any[] = await Promise.all([
-      fetchRegionCampusMap(currentRegionId()),
+      fetchRegionCampusMap(regionId),
       fetchCampusMapStatuses().catch(() => []),
-      fetchActiveCampusMap(currentRegionId()).catch(() => null),
+      fetchActiveCampusMap(regionId).catch(() => null),
     ])
+    if (!isCurrent()) return
     const statuses = Array.isArray(statusesResponse?.data)
       ? statusesResponse.data
       : Array.isArray(statusesResponse) ? statusesResponse : []
@@ -3302,6 +3195,7 @@ async function loadMap() {
     if (activeConfig) applyLivePublication(activeConfig)
     else livePublication.verified = false
     await loadProjectCatalog(true)
+    if (!isCurrent()) return
     synchronizeCatalogArtworkPois()
     await nextTick()
     const restoredCalibrationCount = synchronizeCollectedCalibrationPoints()
@@ -3310,48 +3204,63 @@ async function loadMap() {
       ElMessage.info(`已从历史地点核验中恢复 ${restoredCalibrationCount} 个校准点，请保存地图草稿`)
     }
   } catch (error: any) {
-    ElMessage.error(error?.message || '校园地图加载失败')
+    if (isCurrent()) ElMessage.error(error?.message || '校园地图加载失败')
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
-async function saveDraft(options: { silent?: boolean } = {}) {
-  if (!currentRegionId()) {
+async function saveDraft(options: { silent?: boolean } = {}): Promise<any> {
+  if (draftSavePromise) {
+    const result = await draftSavePromise
+    return result && hasUnsavedChanges.value ? saveDraft(options) : result
+  }
+  const regionId = currentRegionId()
+  if (!regionId) {
     ElMessage.warning('请先选择区域')
     return null
   }
+  const savedEditRevision = editRevision.value
+  const mapId = form.mapId
+  const payload = buildPayload()
+  const draftRevision = workflow.draftRevision
   draftSaving.value = true
-  try {
-    const result: any = await saveRegionCampusMapDraft(
-      currentRegionId(),
-      buildPayload(),
-      workflow.draftRevision,
-    )
-    const config = result?.data || result || {}
-    applyWorkflow(config.workflow)
-    hasUnsavedChanges.value = false
-    if (!options.silent) ElMessage.success('校园地图草稿已保存，尚未发布到小程序')
-    return config
-  } catch (error: any) {
-    // 请求层已经展示过服务端错误时，这里不要再弹一次相同提示。
-    if (!error?.userMessage) ElMessage.error(error?.message || '校园地图草稿保存失败')
-    return null
-  } finally {
-    draftSaving.value = false
+  const pending = (async () => {
+    try {
+      const result: any = await saveRegionCampusMapDraft(regionId, payload, draftRevision)
+      if (regionId !== currentRegionId() || mapId !== form.mapId) return null
+      const config = result?.data || result || {}
+      applyWorkflow(config.workflow)
+      hasUnsavedChanges.value = editRevision.value !== savedEditRevision
+      if (hasUnsavedChanges.value) scheduleDraftSave()
+      if (!options.silent) ElMessage.success(hasUnsavedChanges.value
+        ? '本次草稿已保存，后续修改仍待保存'
+        : '校园地图草稿已保存，尚未发布到小程序')
+      return config
+    } catch (error: any) {
+      if (shouldShowLocalRequestError(error)) ElMessage.error(error?.message || '校园地图草稿保存失败')
+      return null
+    } finally {
+      draftSaving.value = false
+    }
+  })()
+  draftSavePromise = pending
+  try { return await pending } finally {
+    if (draftSavePromise === pending) draftSavePromise = null
   }
 }
 
 async function publishMap() {
-  if (!currentRegionId()) {
+  const regionId = currentRegionId()
+  if (!regionId) {
     ElMessage.warning('请先选择区域')
     return
   }
   if (form.enabled && editorMode.value === 'image' && !hasVisualBaseMap.value) {
-    ElMessage.warning('请先上传校园底图或导入 CAD 图纸')
+    ElMessage.warning('校园底图尚未加载，请检查底图资源')
     return
   }
-  if (!(await validateBeforePublish())) return
+  if (!(await validateBeforePublish()) || regionId !== currentRegionId()) return
   saving.value = true
   try {
     const beforePublication = {
@@ -3363,13 +3272,21 @@ async function publishMap() {
     }
     const draft = await saveDraft({ silent: true })
     if (!draft) return
+    if (hasUnsavedChanges.value) {
+      ElMessage.warning('保存期间产生了新修改，请等待草稿保存完成后再发布')
+      return
+    }
     const revision = Number(draft.workflow?.draftRevision || workflow.draftRevision)
-    const result: any = await publishRegionCampusMapDraft(currentRegionId(), revision)
+    const publishedEditRevision = editRevision.value
+    const result: any = await publishRegionCampusMapDraft(regionId, revision)
+    if (regionId !== currentRegionId()) return
     const config = result?.data || result || {}
     applyWorkflow(config.workflow)
     publishedAvailabilityStatus.value = normalizeSchoolAvailability(config?.availability).status
-    hasUnsavedChanges.value = false
-    const activeConfig: any = await fetchActiveCampusMap(currentRegionId())
+    hasUnsavedChanges.value = editRevision.value !== publishedEditRevision
+    if (hasUnsavedChanges.value) scheduleDraftSave()
+    const activeConfig: any = await fetchActiveCampusMap(regionId)
+    if (regionId !== currentRegionId()) return
     const verification = verifyCampusMapPublication(beforePublication, config, activeConfig)
     applyLivePublication(activeConfig)
     if (!verification.ok) {
@@ -3378,7 +3295,7 @@ async function publishMap() {
     }
     ElMessage.success(`校园地图已正式发布：线上 v${verification.live.activeVersion}，公开地点 ${verification.live.publicPlaceCount} 个`)
   } catch (error: any) {
-    ElMessage.error(error?.message || '校园地图发布失败')
+    if (shouldShowLocalRequestError(error)) ElMessage.error(error?.message || '校园地图发布失败')
   } finally {
     saving.value = false
   }
@@ -3497,7 +3414,7 @@ function parseAmapCoordinate(coordinate: any): RatioPoint | null {
   if (!Array.isArray(coordinate) || coordinate.length < 2) return null
   const lng = Number(coordinate[0])
   const lat = Number(coordinate[1])
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+  if (!isValidGcj02Coordinate({ longitude: lng, latitude: lat })) return null
   return toAmapPoint(lng, lat)
 }
 
@@ -3702,10 +3619,34 @@ function syncImageSize(url: string) {
   width: 128px;
 }
 
-.amap-workbench {
+.amap-workbench,
+.amap-workbench-shell {
   display: grid;
   gap: 10px;
   min-height: 0;
+}
+
+.amap-workbench-shell {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.amap-route-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 12px;
+}
+
+.amap-workbench-map {
+  min-height: 560px;
+  border: 1px solid #d8e2f0;
+  border-radius: 6px;
 }
 
 .amap-search-bar {
@@ -4501,175 +4442,6 @@ function syncImageSize(url: string) {
   border-radius: 50%;
 }
 
-.import-panel {
-  display: grid;
-  gap: 16px;
-}
-
-.import-panel :deep(.el-upload-dragger) {
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  min-height: 180px;
-  border-radius: 6px;
-  background: #f8fbff;
-}
-
-.upload-icon {
-  color: #2563eb;
-  font-size: 30px;
-}
-
-.upload-title {
-  color: #0f172a;
-  font-size: 15px;
-  font-weight: 900;
-}
-
-.upload-tip {
-  max-width: 360px;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.import-job-card {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid #dbe4f0;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.import-job-card.draft_ready {
-  border-color: #bbf7d0;
-  background: #f8fffb;
-}
-
-.import-job-card.failed,
-.import-job-card.needs_converter {
-  border-color: #fed7aa;
-  background: #fffaf4;
-}
-
-.import-job-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.import-job-head > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.import-job-head strong {
-  overflow: hidden;
-  color: #0f172a;
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.import-job-head span,
-.import-summary,
-.import-warnings {
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.import-warnings {
-  display: grid;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: #fff7ed;
-  color: #c2410c;
-}
-
-.import-layer-list {
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-}
-
-.import-layer-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) 72px 66px;
-  gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid #edf2f7;
-  color: #475569;
-  font-size: 12px;
-}
-
-.import-layer-row:first-child {
-  border-top: 0;
-}
-
-.import-layer-row.head {
-  background: #f8fafc;
-  color: #0f172a;
-  font-weight: 900;
-}
-
-.import-layer-row span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.import-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.import-history {
-  display: grid;
-  gap: 8px;
-}
-
-.history-title {
-  color: #0f172a;
-  font-size: 13px;
-  font-weight: 900;
-}
-
-.history-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 9px 10px;
-  background: #fff;
-  color: #0f172a;
-  text-align: left;
-  cursor: pointer;
-}
-
-.history-row span {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.history-row small {
-  flex: 0 0 auto;
-  color: #64748b;
-  font-size: 12px;
-}
 
 .layer-summary {
   display: grid;

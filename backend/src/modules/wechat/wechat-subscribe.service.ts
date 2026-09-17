@@ -3,6 +3,8 @@ import { PrismaService } from '../../common/services/prisma.service';
 import { WechatTokenService } from './wechat-token.service';
 import axios from 'axios';
 import { getManagedWechatTemplateContract } from './wechat-template-contracts';
+import { currentRequestMetadata } from '../../common/request-context';
+import { hasWechatTemplatePayload, wechatFailure } from './wechat-log-presentation';
 
 @Injectable()
 export class WechatSubscribeService {
@@ -64,7 +66,7 @@ export class WechatSubscribeService {
       const template = this.selectTemplateForRegion(templates, regionId);
 
       if (!template) {
-        await this.writeLog({ userId, platformType: 'miniprogram', templateType, templateId: '', page, data, status: 'failed', errorMessage: '模板未配置或已停用' });
+        await this.writeLog({ userId, platformType: 'miniprogram', templateType, templateId: '', page, data, status: 'skipped', errorCode: 'template_missing', errorMessage: '模板未配置或已停用' });
         return { success: false, error: '模板未配置或已停用' };
       }
 
@@ -75,7 +77,7 @@ export class WechatSubscribeService {
       });
 
       if (!user?.openid) {
-        await this.writeLog({ userId, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'failed', errorMessage: '用户无 openid' });
+        await this.writeLog({ userId, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'skipped', errorCode: 'openid_missing', errorMessage: '用户无 openid' });
         return { success: false, error: '用户无 openid' };
       }
 
@@ -85,7 +87,7 @@ export class WechatSubscribeService {
       });
 
       if (!consent || consent.status !== 'accept' || consent.templateId !== template.templateId) {
-        await this.writeLog({ userId, openid: user.openid, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'failed', errorMessage: '用户未授权当前模板或授权已使用' });
+        await this.writeLog({ userId, openid: user.openid, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'skipped', errorCode: 'consent_unavailable', errorMessage: '用户未授权当前模板或授权已使用' });
         return { success: false, error: '用户未授权当前模板或授权已使用' };
       }
 
@@ -128,6 +130,7 @@ export class WechatSubscribeService {
           page: targetPage,
           data: templateData,
         },
+        { timeout: 10000 },
       );
 
       if (result.data.errcode === 0) {
@@ -163,8 +166,14 @@ export class WechatSubscribeService {
       throw new BadRequestException('不是小程序订阅消息日志');
     }
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
-    if (!log.openid || !log.templateId || !log.payload || typeof log.payload !== 'object') {
+    if (!log.openid || !log.templateId || !hasWechatTemplatePayload(log.payload)) {
       throw new BadRequestException('原发送数据不完整，无法重试');
+    }
+    const consent = log.userId ? await this.prisma.wechatSubscribeConsent.findUnique({
+      where: { userId_templateType: { userId: log.userId, templateType: log.templateType } },
+    }) : null;
+    if (!consent || consent.status !== 'accept' || consent.templateId !== log.templateId) {
+      throw new BadRequestException('用户没有当前模板的可用订阅授权，需要用户重新同意订阅');
     }
 
     try {
@@ -179,7 +188,7 @@ export class WechatSubscribeService {
         },
         { timeout: 10000 },
       );
-      const success = Number(response?.errcode || 0) === 0;
+      const success = response?.errcode !== undefined && Number(response.errcode) === 0;
       await this.prisma.wechatMessageLog.update({
         where: { id: logId },
         data: {
@@ -197,7 +206,7 @@ export class WechatSubscribeService {
       }
       return success
         ? { success: true, message: '订阅消息已重新发送' }
-        : { success: false, message: '订阅消息重试失败', error: String(response?.errmsg || '微信订阅消息发送失败') };
+        : { success: false, message: '订阅消息重试失败', error: wechatFailure(String(response?.errcode ?? 'unknown'), response?.errmsg).errorMessageZh };
     } catch (err: any) {
       await this.prisma.wechatMessageLog.update({
         where: { id: logId },
@@ -314,17 +323,20 @@ export class WechatSubscribeService {
     errorMessage?: string;
   }) {
     try {
+      const metadata = currentRequestMetadata();
       await this.prisma.wechatMessageLog.create({
         data: {
           userId: params.userId || null,
           openid: params.openid || null,
+          requestIp: metadata.ip || null,
+          requestIpSource: metadata.ipSource,
           platformType: params.platformType,
           templateType: params.templateType,
           templateId: params.templateId,
           page: params.page || null,
           payload: params.data,
           status: params.status,
-          errorCode: params.errorCode || null,
+          errorCode: params.status === 'success' ? null : wechatFailure(params.errorCode, params.errorMessage).errorCode,
           errorMessage: params.errorMessage || null,
           sentAt: params.status === 'success' ? new Date() : null,
         },

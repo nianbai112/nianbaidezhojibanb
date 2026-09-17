@@ -49,3 +49,21 @@ test('publication verification rejects a stale public response', () => {
   assert.equal(verification.ok, false)
   assert.match(verification.issues.join('；'), /版本/)
 })
+
+test('publication rejects a matching version whose entrance policy disabled navigation', () => {
+  const live = { enabled: true, publicPlaces: [{ id: 'p1', navigable: false }], navigation: null,
+    navigationUnavailableReason: 'entrance_republish_required',
+    workflow: { activeVersion: 17, activeVersionId: 'v17' } }
+  assert.equal(verifyCampusMapPublication({ workflow: { activeVersion: 16 } }, live, live).ok, false)
+})
+
+test('publication checks expected navigable entrances against the live graph', () => {
+  const published = { enabled: true, publicPlaces: [{ id: 'p1', title: '南校门', navigable: true, entranceNodeIds: ['entry'] }],
+    workflow: { activeVersion: 18, activeVersionId: 'v18' },
+    navigation: { graph: { nodes: { entry: {}, road: {} }, edges: [{ a: 'entry', b: 'road', public: true }] } } }
+  const before = { workflow: { activeVersion: 17 } }
+  assert.equal(verifyCampusMapPublication(before, published, published).ok, true)
+  assert.equal(verifyCampusMapPublication(before, published, { ...published, navigation: null }).ok, false)
+  assert.equal(verifyCampusMapPublication(before, published, { ...published,
+    publicPlaces: [{ ...published.publicPlaces[0], navigable: false }] }).ok, false)
+})

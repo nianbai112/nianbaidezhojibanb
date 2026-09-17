@@ -27,7 +27,6 @@ import { RiderAppModule } from "./modules/rider-app/rider-app.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { FinanceAdminModule } from "./modules/finance-admin/finance-admin.module";
 import { CouponAdminModule } from "./modules/coupon-admin/coupon-admin.module";
-import { DatingAdminModule } from "./modules/dating-admin/dating-admin.module";
 import { ErrandAdminModule } from "./modules/errand-admin/errand-admin.module";
 import { MessageModule } from "./modules/message/message.module";
 import { NotifyModule } from "./modules/notify/notify.module";
@@ -39,6 +38,7 @@ import { PaymentModule } from "./modules/payment/payment.module";
 import { WebsocketModule } from "./modules/websocket/websocket.module";
 import { AddressModule } from "./modules/address/address.module";
 import { ActivityModule } from "./modules/activity/activity.module";
+import { WelfareModule } from "./modules/welfare/welfare.module";
 import { TopupModule } from "./modules/topup/topup.module";
 import { MallModule } from "./modules/mall/mall.module";
 import { AuditModule } from "./modules/audit/audit.module";
@@ -50,13 +50,10 @@ import { HealthModule } from "./modules/health/health.module";
 import { GroupBuyModule } from "./modules/group-buy/group-buy.module";
 import { MiniappModule } from "./modules/miniapp/miniapp.module";
 import { ContentExtModule } from "./modules/content-ext/content-ext.module";
-import { PhotoContestModule } from "./modules/photo-contest/photo-contest.module";
-import { PunchInModule } from "./modules/punch-in/punch-in.module";
 import { ShareModule } from "./modules/share/share.module";
 import { MerchantModule } from "./modules/merchant/merchant.module";
 import { RatingModule } from "./modules/rating/rating.module";
 import { SecondHandModule } from "./modules/second-hand/second-hand.module";
-import { NetDiskModule } from "./modules/netdisk/netdisk.module";
 import { UserAdminModule } from "./modules/user-admin/user-admin.module";
 import { SystemAdminModule } from "./modules/system-admin/system-admin.module";
 import { OrderCenterModule } from "./modules/order-center/order-center.module";
@@ -67,7 +64,6 @@ import { AnalyticsModule } from "./modules/analytics/analytics.module";
 import { MarketingAdminModule } from "./modules/marketing-admin/marketing-admin.module";
 import { AiAdminModule } from "./modules/ai-admin/ai-admin.module";
 import { AiRuntimeModule } from "./modules/ai-runtime/ai-runtime.module";
-import { TrackingModule } from "./modules/tracking/tracking.module";
 import { RecommendModule } from "./modules/recommend/recommend.module";
 import { ABTestModule } from "./modules/ab-test/ab-test.module";
 import { SchedulerModule } from "./modules/scheduler/scheduler.module";
@@ -121,7 +117,6 @@ const envFilePath = getEnvFilePaths();
     FinanceModule,
     FinanceAdminModule,
     CouponAdminModule,
-    DatingAdminModule,
     ErrandAdminModule,
     PaymentModule,
     MessageModule,
@@ -132,6 +127,7 @@ const envFilePath = getEnvFilePaths();
     AdminModule,
     AddressModule,
     ActivityModule,
+    WelfareModule,
     TopupModule,
     MallModule,
     WebsocketModule,
@@ -144,13 +140,10 @@ const envFilePath = getEnvFilePaths();
     GroupBuyModule,
     MiniappModule,
     ContentExtModule,
-    PhotoContestModule,
-    PunchInModule,
     ShareModule,
     MerchantModule,
     RatingModule,
     SecondHandModule,
-    NetDiskModule,
     UserAdminModule,
     SystemAdminModule,
     OrderCenterModule,
@@ -161,7 +154,6 @@ const envFilePath = getEnvFilePaths();
     MarketingAdminModule,
     AiRuntimeModule,
     AiAdminModule,
-    TrackingModule,
     RecommendModule,
     ABTestModule,
     SchedulerModule,

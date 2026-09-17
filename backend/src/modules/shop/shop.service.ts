@@ -1,3 +1,6 @@
+import { couponDiscountAmount as calculateCouponDiscount } from '../../common/coupon-policy';
+import { merchantSettlementBase } from '../../common/commission';
+import { assertCouponCampaignRules } from '../errand/errand-transaction-guards';
 import {
   Injectable,
   NotFoundException,
@@ -19,6 +22,7 @@ import { PrintService } from "../print/print.service";
 import { PaymentService } from "../payment/payment.service";
 import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
 import { randomInt } from "node:crypto";
+import { errandCampaignDayKey, lockErrandAssignee, reserveErrandCampaignBudget, resolveActiveCouponCampaign } from "../errand/errand-transaction-guards";
 
 @Injectable()
 export class ShopService {
@@ -56,9 +60,7 @@ export class ShopService {
   }
 
   private dayStart() {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date;
+    return new Date(`${errandCampaignDayKey(new Date())}T00:00:00+08:00`);
   }
 
   private isFulfillmentDue(order: any, now = new Date()) {
@@ -1048,114 +1050,15 @@ export class ShopService {
   }
 
   private couponDiscountAmount(coupon: any, amount: number) {
-    const value = this.toNumber(coupon?.value);
-    if (amount <= 0 || value <= 0) return 0;
-    const type = String(coupon?.type || "").toUpperCase();
-    if (type === "DISCOUNT") {
-      if (value <= 0 || value >= 10) return 0;
-      return Math.max(
-        0,
-        Math.round((amount - amount * (value / 10)) * 100) / 100,
-      );
-    }
-    return Math.min(value, amount);
+    return calculateCouponDiscount(coupon, amount);
   }
 
   private async resolveCouponCampaign(db: any, couponId: string) {
-    const config = await db.config
-      .findUnique({ where: { key: "marketing_campaigns_config" } })
-      .catch(() => null);
-    const value = config?.value as any;
-    const list = Array.isArray(value?.list)
-      ? value.list
-      : Array.isArray(value)
-        ? value
-        : [];
-    const now = new Date();
-    return (
-      list.find((item: any) => {
-        if (!item || item.status !== "active") return false;
-        if (String(item.couponId || "") !== String(couponId)) return false;
-        if (item.startAt && now < new Date(item.startAt)) return false;
-        if (item.endAt && now > new Date(item.endAt)) return false;
-        return true;
-      }) || null
-    );
+    return resolveActiveCouponCampaign(db, couponId);
   }
 
-  private async assertCampaignRules(
-    db: any,
-    campaign: any,
-    userId: string,
-    couponId: string,
-    discountAmount: number,
-  ) {
-    if (!campaign || discountAmount <= 0) return;
-    if (campaign.firstOrderOnly) {
-      const orderCount = await db.order.count({
-        where: { userId, status: { not: "CANCELLED" } },
-      });
-      if (orderCount > 0) throw new BadRequestException("该活动仅限首单使用");
-    }
-    if (campaign.newUserOnly) {
-      const user = await db.user.findUnique({
-        where: { id: userId },
-        select: { createdAt: true },
-      });
-      const days = Number(campaign.newUserDays || 7);
-      if (
-        !user ||
-        Date.now() - user.createdAt.getTime() > days * 24 * 60 * 60 * 1000
-      ) {
-        throw new BadRequestException("该活动仅限新用户使用");
-      }
-    }
-    const baseWhere: any = {
-      status: { not: "cancelled" },
-      OR: [
-        { campaignId: campaign.id },
-        { sourceType: "coupon", sourceId: couponId },
-      ],
-    };
-    const [totalAgg, todayAgg, userAgg] = await Promise.all([
-      db.subsidyLedger.aggregate({ where: baseWhere, _sum: { amount: true } }),
-      db.subsidyLedger.aggregate({
-        where: { ...baseWhere, createdAt: { gte: this.dayStart() } },
-        _sum: { amount: true },
-      }),
-      db.subsidyLedger.aggregate({
-        where: { ...baseWhere, userId },
-        _sum: { amount: true },
-        _count: true,
-      }),
-    ]);
-    const totalSpent = Number(totalAgg?._sum?.amount || 0);
-    const todaySpent = Number(todayAgg?._sum?.amount || 0);
-    const userSpent = Number(userAgg?._sum?.amount || 0);
-    if (
-      Number(campaign.totalBudget || 0) > 0 &&
-      totalSpent + discountAmount > Number(campaign.totalBudget)
-    ) {
-      throw new BadRequestException("活动总预算已不足");
-    }
-    if (
-      Number(campaign.dailyBudget || 0) > 0 &&
-      todaySpent + discountAmount > Number(campaign.dailyBudget)
-    ) {
-      throw new BadRequestException("活动今日预算已不足");
-    }
-    if (
-      Number(campaign.perUserBudget || 0) > 0 &&
-      userSpent + discountAmount > Number(campaign.perUserBudget)
-    ) {
-      throw new BadRequestException("已达到个人活动补贴上限");
-    }
-    if (
-      Number(campaign.userLimit || 0) > 0 &&
-      Number(userAgg?._count || 0) >= Number(campaign.userLimit)
-    ) {
-      throw new BadRequestException("已达到个人活动参与次数上限");
-    }
+  private async assertCampaignRules(db: any, campaign: any, userId: string, couponId: string, discountAmount: number) {
+    return assertCouponCampaignRules(db, campaign, userId, couponId, discountAmount, 'shop');
   }
 
   private async resolveShopUserCoupon(
@@ -1230,8 +1133,7 @@ export class ShopService {
       .updateMany({
         where: { sourceType: "coupon", orderType: "order", orderId: order.id },
         data: { status: "cancelled" },
-      })
-      .catch(() => undefined);
+      });
   }
 
   private async reserveOrderInventory(db: any, items: any[]) {
@@ -1280,6 +1182,9 @@ export class ShopService {
           option.group?.status !== "on_sale"
         ) {
           throw new BadRequestException(`${item.productName} 属性或小料已下架`);
+        }
+        if (this.roundMoney(this.toNumber(option.price)) !== this.roundMoney(this.toNumber(modifier.additionalPrice))) {
+          throw new BadRequestException(`${item.productName} 属性或小料价格已变化，请移除后重新选择`);
         }
         modifier.stockManaged = option.stock !== null;
         if (option.stock === null) continue;
@@ -3398,32 +3303,7 @@ export class ShopService {
     const commissionRate = this.toNumber(
       (merchant as any).region?.commissionRate,
     );
-    const merchantAmount = (order: any) => {
-      const grossAmount = Math.max(
-        0,
-        order.payAmount === null || order.payAmount === undefined
-          ? this.toNumber(order.totalAmount)
-          : this.toNumber(order.payAmount) + this.toNumber(order.subsidyAmount),
-      );
-      const selfDelivery =
-        order.businessType === "dorm_shop" ||
-        order.deliveryMode === "self_delivery";
-      const originalFreight = this.toNumber(order.originalFreightAmount);
-      const platformDeliveryAmount = selfDelivery
-        ? 0
-        : originalFreight > 0
-          ? originalFreight
-          : this.toNumber(order.freightAmount);
-      const merchantBaseAmount = Math.max(
-        0,
-        grossAmount - platformDeliveryAmount,
-      );
-      const refundAmount =
-        order.refundStatus === "partial"
-          ? Math.min(merchantBaseAmount, this.toNumber(order.refundAmount))
-          : 0;
-      return merchantBaseAmount - refundAmount;
-    };
+    const merchantAmount = merchantSettlementBase;
     const summary = (from: Date, to = now) => {
       const rows = orders.filter(
         (order) => order.createdAt >= from && order.createdAt <= to,
@@ -3922,16 +3802,15 @@ export class ShopService {
 
   async removeFromCart(userId: string, dto: any) {
     const productId = dto?.product_id || dto?.productId;
-    const skuId = dto?.sku_id || dto?.skuId || null;
+    const skuId = dto?.sku_id || dto?.skuId || dto?.option_id || null;
     if (!productId) {
       throw new BadRequestException("请选择商品");
     }
-    const modifierSelections = await this.resolveModifierSelections(
-      productId,
-      dto,
-    );
+    // Removal must still work after the selected catalog options have been taken off sale.
+    const optionIds = [...(dto.attribute_ids || dto.attributeIds || []), dto.extra_id || dto.extraId].filter(Boolean).map(String);
+    const selectionKey = [...new Set(optionIds)].sort((a, b) => a.localeCompare(b)).join('|');
     await this.prisma.cart.deleteMany({
-      where: { userId, productId, skuId, selectionKey: modifierSelections.key },
+      where: { userId, productId, skuId, selectionKey },
     });
     return { success: true };
   }
@@ -4090,6 +3969,31 @@ export class ShopService {
             },
           ]
         : [];
+    const now = new Date();
+    const candidateCoupons = productAmount > 0 ? await this.prisma.couponReceive.findMany({
+      where: { userId, status: 'unused', coupon: {
+        status: 'active', startAt: { lte: now }, endAt: { gte: now },
+        businessScope: { in: ['all', 'shop'] }, minAmount: { lte: productAmount },
+        AND: [{ OR: [{ regionId: null }, { regionId: merchant.regionId }] },
+          { OR: [{ merchantId: null }, { merchantId: merchant.id }] }],
+      } }, include: { coupon: true },
+    }) : [];
+    let availableCouponsCount = 0;
+    const checks = new Map<string, boolean>();
+    for (const receive of candidateCoupons) {
+      if (!checks.has(receive.couponId)) {
+        try {
+          const discount = this.couponDiscountAmount(receive.coupon, productAmount);
+          const campaign = await this.resolveCouponCampaign(this.prisma, receive.couponId);
+          await this.assertCampaignRules(this.prisma, campaign, userId, receive.couponId, discount);
+          checks.set(receive.couponId, discount > 0);
+        } catch (error) {
+          if (!(error instanceof BadRequestException)) throw error;
+          checks.set(receive.couponId, false);
+        }
+      }
+      if (checks.get(receive.couponId)) availableCouponsCount++;
+    }
     return {
       merchant_id: merchant.id,
       merchant_name: merchant.name,
@@ -4126,7 +4030,7 @@ export class ShopService {
       member_benefits: memberBenefits,
       package_fee: this.toMoney(merchant.packagingFee),
       merchant_packaging_fee: "0.00",
-      available_coupons_count: 0,
+      available_coupons_count: availableCouponsCount,
       userInfo: {
         id: user?.id,
         nickname: user?.nickname || "",
@@ -4380,10 +4284,21 @@ export class ShopService {
     );
     const isFreeOrder = payAmount <= 0;
     const order = await this.prisma.$transaction(async (tx) => {
+      let campaignTime: Date | undefined;
+      if (couponBenefit.campaign && couponBenefit.discountAmount > 0) {
+        await lockErrandAssignee(tx, `order-create:${userId}`);
+        const activeCampaign = await this.resolveCouponCampaign(tx, couponBenefit.coupon.id);
+        if (JSON.stringify(activeCampaign) !== JSON.stringify(couponBenefit.campaign)) {
+          throw new BadRequestException("营销活动状态已变化，请重新确认订单");
+        }
+        campaignTime = new Date();
+        await reserveErrandCampaignBudget(tx, activeCampaign, userId, couponBenefit.discountAmount, campaignTime);
+        await this.assertCampaignRules(tx, activeCampaign, userId, couponBenefit.coupon.id, couponBenefit.discountAmount);
+      }
       const claimedCart = await tx.cart.deleteMany({
         where: {
           userId,
-          id: { in: cartItems.map((item: any) => item.id) },
+          OR: cartItems.map((item: any) => ({ id: item.id, quantity: item.quantity, updatedAt: item.updatedAt })),
           selected: true,
         },
       });
@@ -4501,6 +4416,7 @@ export class ShopService {
               receiverId: merchantId,
               amount: couponBenefit.discountAmount,
               status: "pending",
+              ...(campaignTime ? { createdAt: campaignTime } : {}),
               description: `${couponBenefit.campaign?.title ? `活动${couponBenefit.campaign.title}，` : ""}优惠券核销：${couponBenefit.coupon.name}`,
               metadata: {
                 couponReceiveId: couponBenefit.receive.id,
@@ -4513,8 +4429,7 @@ export class ShopService {
                 payAmount,
               },
             },
-          })
-          .catch(() => undefined);
+          });
       }
       if (memberDiscount.benefitKey) {
         await this.membershipService.consumeBenefitWithDb(
@@ -4552,7 +4467,7 @@ export class ShopService {
         });
       }
       return created;
-    });
+    }, { isolationLevel: 'ReadCommitted' });
     if (isFreeOrder && this.isFulfillmentDue(order)) {
       await this.notifyMerchantForOrder({ ...order, merchant }).catch(
         () => undefined,
@@ -4865,8 +4780,7 @@ export class ShopService {
               orderId: order.id,
             },
             data: { status: "cancelled" },
-          })
-          .catch(() => undefined);
+          });
         await tx.orderLog.create({
           data: {
             orderId,
@@ -4993,8 +4907,7 @@ export class ShopService {
             orderId: order.id,
           },
           data: { status: "cancelled" },
-        })
-        .catch(() => undefined);
+        });
       await tx.orderLog.create({
         data: {
           orderId,
@@ -6619,6 +6532,8 @@ export class ShopService {
       (sum: number, item: any) => sum + Number(item.total_price || 0),
       0,
     );
+    const settlementBase = merchantSettlementBase(order);
+    const estimatedFee = Math.round(settlementBase * this.toNumber(order.merchant?.region?.commissionRate) * 100) / 100;
     return {
       id: order.id,
       order_id: order.id,
@@ -6642,6 +6557,9 @@ export class ShopService {
       can_fulfill_now: this.isFulfillmentDue(order),
       remarks: order.remark || "",
       remark: order.remark || "",
+      settlement_base: settlementBase,
+      estimated_platform_fee: estimatedFee,
+      estimated_merchant_income: this.toNumber(this.toMoney(settlementBase - estimatedFee)),
       commission_rate: Number(
         (this.toNumber(order.merchant?.region?.commissionRate) * 100).toFixed(
           4,

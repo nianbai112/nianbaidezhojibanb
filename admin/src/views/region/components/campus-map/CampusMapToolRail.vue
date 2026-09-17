@@ -39,7 +39,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
-  importCad: []
+  showArtwork: []
   switchAmap: []
   openQuality: []
 }>()
@@ -62,7 +62,7 @@ const stageText = computed(() => {
 })
 
 function handleStepClick(key: string) {
-  if (key === 'cad') emit('importCad')
+  if (key === 'cad') emit('showArtwork')
   if (key === 'draw') emit('update:modelValue', 'select')
   if (key === 'amap') emit('switchAmap')
   if (key === 'preview') emit('openQuality')

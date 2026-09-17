@@ -7,12 +7,12 @@ describe('ErrandAdminService closed-loop detail', () => {
     const prisma: any = {
       errandOrder: { findUnique: jest.fn().mockResolvedValue({
         id: 'order-1', status: 'completed', refundStatus: 'partial', riderId: 'rider-1',
-        pricingSnapshot: { payAmount: 8 }, receiptConfirmedAt: new Date(), receiptConfirmedBy: 'user',
+        pricingSnapshot: { payAmount: 8 }, receiptCode: '123456', receiptConfirmedAt: new Date(), receiptConfirmedBy: 'user',
         User: {}, RegionRider: {}, tasks: [], remark: null,
       }) },
       errandItemSize: { findMany: jest.fn() },
       errandPickupPoint: { findMany: jest.fn() },
-      deliveryOrderNode: { findMany: jest.fn().mockResolvedValue([]) },
+      deliveryOrderNode: { findMany: jest.fn().mockResolvedValue([{ nodeType: 'arrived', proofImages: ['proof.jpg'] }]) },
       deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
       orderAppeal: { findFirst: jest.fn().mockResolvedValue(null) },
       paymentRefund: { findMany: jest.fn().mockResolvedValue([{ id: 'refund-1', status: 'success' }]) },
@@ -23,6 +23,10 @@ describe('ErrandAdminService closed-loop detail', () => {
     };
     const detail = await new ErrandAdminService(prisma).getOrderDetail('order-1');
 
+    expect(detail).not.toHaveProperty('receiptCode');
+    expect(detail.deliveryNodes[0].proofImages).toEqual(['proof.jpg']);
+    prisma.deliveryOrderNode.findMany.mockRejectedValueOnce(new Error('evidence unavailable'));
+    await expect(new ErrandAdminService(prisma).getOrderDetail('order-1')).rejects.toThrow('evidence unavailable');
     expect(detail).toEqual(expect.objectContaining({
       allowedActions: { assign: false, cancel: false, retryRefund: false, handleRisk: false },
       pricingSnapshot: { payAmount: 8 },
@@ -64,7 +68,7 @@ describe('ErrandAdminService closed-loop detail', () => {
 
     expect(prisma.regionRider.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { regionId: 'region-a', riderType: 'official', verifyStatus: 'approved' },
-      include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true } } },
+      include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
     }));
   });
 

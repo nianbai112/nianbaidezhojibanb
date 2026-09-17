@@ -227,28 +227,35 @@ export class MerchantService {
         skip: (Number(page) - 1) * Number(pageSize),
         take: Number(pageSize),
         orderBy: { createdAt: 'desc' },
-        include: { region: { select: { name: true } } },
+        include: { region: { select: { name: true, commissionRate: true } } },
       }),
       this.prisma.regionMerchantSettings.count({ where }),
     ]);
-    return { list, total, page: Number(page), pageSize: Number(pageSize) };
+    return { list: list.map(row => ({ ...row, commissionRate: Number(row.region.commissionRate || 0) * 100 })), total, page: Number(page), pageSize: Number(pageSize) };
   }
 
   async getRegionSettings(regionId: string) {
     const settings = await this.prisma.regionMerchantSettings.findUnique({
       where: { regionId },
-      include: { region: { select: { name: true } } },
+      include: { region: { select: { name: true, commissionRate: true } } },
     });
-    return settings || { regionId, isOpen: true, autoAuditEnabled: false, allowNegativeStock: false, requireProductAudit: true, settlementCycle: 'weekly', settlementDay: 1 };
+    const region = settings?.region || await this.prisma.region.findUnique({ where: { id: regionId }, select: { name: true, commissionRate: true } });
+    if (!region) throw new NotFoundException('区域不存在');
+    return { ...(settings || { regionId, isOpen: true, autoAuditEnabled: false, allowNegativeStock: false, requireProductAudit: true, settlementCycle: 'weekly', settlementDay: 1 }), commissionRate: Number(region.commissionRate || 0) * 100 };
   }
 
   async upsertRegionSettings(regionId: string, dto: any) {
     const r = await this.prisma.region.findUnique({ where: { id: regionId } });
     if (!r) throw new NotFoundException('区域不存在');
+    // Commission changes require finance:config at the dedicated finance endpoint.
+    const { commissionRate, ...settings } = dto;
+    if (commissionRate !== undefined && (typeof commissionRate !== 'number' || !Number.isFinite(commissionRate) || Math.abs(commissionRate - Number(r.commissionRate || 0) * 100) > 0.000001)) {
+      throw new BadRequestException('请到财务中心的平台抽成中修改校区商家费率');
+    }
     return this.prisma.regionMerchantSettings.upsert({
       where: { regionId },
-      create: { regionId, ...dto } as any,
-      update: dto as any,
+      create: { regionId, ...settings } as any,
+      update: settings as any,
     });
   }
 }

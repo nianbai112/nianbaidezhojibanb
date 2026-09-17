@@ -62,6 +62,7 @@ describe('ErrandLifecycleService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    tx.bizFeeConfig.findUnique.mockResolvedValue(null);
     prisma.errandOrder.count.mockResolvedValue(0);
     prisma.order.count.mockResolvedValue(0);
     prisma.orderAppeal.findFirst.mockResolvedValue(null);
@@ -88,6 +89,43 @@ describe('ErrandLifecycleService', () => {
       service.riderTransition('order-1', 'rider-1', { status: 'completed' }),
     ).rejects.toThrow('骑手只能标记送达');
     expect(prisma.errandOrder.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { config: { enabled: true, rate: 0.05, fixedFee: 0 }, fee: 0.6, net: 11.4 },
+    { config: { enabled: true, rate: 0.05, fixedFee: 1 }, fee: 1.6, net: 10.4 },
+    { config: { enabled: false, rate: 0.05, fixedFee: 1 }, fee: 0, net: 12 },
+    { config: null, fee: 0, net: 12 },
+    { config: { enabled: true, rate: 1, fixedFee: 100 }, fee: 12, net: 0 },
+  ])('deducts the receipt fee $fee before crediting $net', async ({ config, fee, net }) => {
+    prisma.errandOrder.findUnique.mockResolvedValue({
+      id: 'commission-order', userId: 'owner', riderId: 'rider', regionId: 'region',
+      status: 'arrived', refundStatus: 'none', price: 10, tip: 2, payAmount: 12,
+    });
+    tx.bizFeeConfig.findUnique.mockResolvedValue(config);
+    tx.errandOrder.findUniqueOrThrow.mockResolvedValue({ id: 'commission-order', status: 'completed' });
+    await service.confirmReceipt('commission-order', 'owner', 'user');
+    expect(tx.errandOrder.update).toHaveBeenCalledWith({ where: { id: 'commission-order' }, data: { platformFee: fee } });
+    expect(tx.riderSettlementItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ deliveryFeeAmount: 10, tipAmount: 2, payableAmount: net }) });
+    if (net) expect(tx.wallet.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: expect.objectContaining({ balance: { increment: net } }) }));
+    else expect(tx.wallet.upsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps the held fee snapshot and recovers liabilities after commission', async () => {
+    tx.bizFeeConfig.findUnique.mockResolvedValue({ enabled: true, rate: 0.99 });
+    tx.riderLiability.findMany.mockResolvedValue([{ id: 'debt', amount: 2, recoveredAmount: 0 }]);
+    const result = await (service as any).creditConfirmedRiderIncome(tx, {
+      id: 'held', userId: 'owner', riderId: 'rider', price: 10, tip: 2, platformFee: 0.6,
+    }, new Date());
+    expect(result).toMatchObject({ payableAmount: 11.4, paidAmount: 9.4, liabilityRecovered: 2 });
+    expect(tx.bizFeeConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('fails receipt settlement when the fee configuration cannot be read', async () => {
+    prisma.errandOrder.findUnique.mockResolvedValue({ id: 'fee-error', userId: 'owner', riderId: 'rider', status: 'arrived', refundStatus: 'none', price: 12, payAmount: 12 });
+    tx.bizFeeConfig.findUnique.mockRejectedValue(new Error('database unavailable'));
+    await expect(service.confirmReceipt('fee-error', 'owner', 'user')).rejects.toThrow('database unavailable');
+    expect(tx.wallet.upsert).not.toHaveBeenCalled();
   });
 
   it('marks an in-progress order arrived and starts the receipt clock', async () => {
@@ -278,9 +316,10 @@ describe('ErrandLifecycleService', () => {
     });
     expect(tx.errandSettlementHold.upsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({
-        orderId: 'order-related',
-        riderId: 'rider-1',
+        orderId: 'order-self',
+        riderId: 'user-1',
         status: 'holding',
+        reasonCode: 'self_assignment',
         releaseAt: null,
       }),
     }));

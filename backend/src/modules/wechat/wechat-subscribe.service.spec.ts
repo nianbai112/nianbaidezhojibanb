@@ -114,6 +114,7 @@ describe('WechatSubscribeService', () => {
           thing2: { value: '有新配送任务' },
         },
       }),
+      { timeout: 10000 },
     );
   });
 
@@ -127,7 +128,10 @@ describe('WechatSubscribeService', () => {
         }),
         update: jest.fn().mockResolvedValue({}),
       },
-      wechatSubscribeConsent: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      wechatSubscribeConsent: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'accept', templateId: 'template-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     const tokenService: any = { getMiniappAccessToken: jest.fn().mockResolvedValue('token-1') };
     (axios.post as jest.Mock).mockResolvedValue({ data: { errcode: 0 } });
@@ -148,4 +152,14 @@ describe('WechatSubscribeService', () => {
       data: { status: 'used' },
     });
   });
+  it.each([null, { status: 'used', templateId: 'template-1' }, { status: 'accept', templateId: 'other-template' }])('does not resend without current unconsumed consent: %p', async (consent) => {
+    const prisma: any = {
+      wechatMessageLog: { findUnique: jest.fn().mockResolvedValue({ id: 'log-1', userId: 'user-1', openid: 'openid-1', platformType: 'miniprogram', templateType: 'errand_delivered', templateId: 'template-1', payload: { thing1: { value: '已送达' } }, status: 'failed' }) },
+      wechatSubscribeConsent: { findUnique: jest.fn().mockResolvedValue(consent) },
+    };
+    const token: any = { getMiniappAccessToken: jest.fn() };
+    await expect(new WechatSubscribeService(prisma, token).retryMessage('log-1')).rejects.toThrow('需要用户重新同意订阅');
+    expect(token.getMiniappAccessToken).not.toHaveBeenCalled();
+  });
+
 });

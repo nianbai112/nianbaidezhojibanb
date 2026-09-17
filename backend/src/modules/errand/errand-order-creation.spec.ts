@@ -286,4 +286,28 @@ describe('ErrandService authoritative order creation', () => {
       ]),
     });
   });
+  it.each([{ value: 10, member: 0 }, { value: 7, member: 3 }])('persists only actual benefits and preserves tips for %j', async scenario => {
+    quoteService.quote.mockResolvedValue({ ...quote(10), tip: 2 });
+    const coupon = { id: 'coupon-1', name: '测试券', value: scenario.value, minAmount: 0,
+      type: 'FULL_REDUCTION', status: 'active', businessScope: 'errand', regionId: 'region-1' };
+    prisma.couponReceive.findFirst.mockResolvedValue({ id: 'receive-1', couponId: coupon.id, status: 'unused', coupon });
+    tx.couponReceive.updateMany.mockResolvedValue({ count: 1 });
+    membershipService.getUserBenefits.mockResolvedValue({ list: [{ benefitKey: 'errand_service_discount', discountRate: 5 }] });
+    const consume = jest.fn();
+    (membershipService as any).consumeBenefitWithDb = consume;
+    jest.spyOn(service as any, 'resolveCouponCampaign').mockResolvedValue(null);
+    const result = await service.createOrder('user-1', { ...dto, coupon_id: 'receive-1' });
+    expect(result.data.payAmount).toBe(2);
+    expect(tx.errandOrder.create).toHaveBeenCalledWith({ data: expect.objectContaining({ couponDiscount: 10, tip: 2, payAmount: 2 }) });
+    const ledgers = tx.subsidyLedger.create.mock.calls.map(([arg]: any) => arg.data);
+    expect(ledgers.reduce((sum: number, row: any) => sum + row.amount, 0)).toBe(10);
+    expect(ledgers.find((row: any) => row.sourceType === 'coupon').amount).toBe(scenario.value);
+    if (scenario.member > 0) {
+      expect(consume).toHaveBeenCalledWith('user-1', 'errand_service_discount', expect.objectContaining({ amount: scenario.member }), tx);
+    } else {
+      expect(consume).not.toHaveBeenCalled();
+      expect(ledgers.find((row: any) => row.sourceType === 'membership')).toBeUndefined();
+    }
+  });
+
 });

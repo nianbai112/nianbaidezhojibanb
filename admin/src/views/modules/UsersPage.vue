@@ -43,7 +43,7 @@
         @selection-change="handleSelectionChange"
         stripe
       >
-        <el-table-column type="selection" width="48" />
+        <el-table-column type="selection" width="48" :selectable="canChangeStatus" />
         <el-table-column label="用户" min-width="190" fixed="left">
           <template #default="{ row }">
             <div class="user-cell">
@@ -115,10 +115,10 @@
         <el-table-column label="操作" fixed="right" width="160">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
-            <el-button link :type="row.status === 'active' ? 'warning' : 'success'" size="small" @click="toggleStatus(row)">
+            <el-button v-if="canChangeStatus(row)" link :type="row.status === 'active' ? 'warning' : 'success'" size="small" @click="toggleStatus(row)">
               {{ row.status === 'active' ? '禁用' : '启用' }}
             </el-button>
-            <el-button link :type="row.status === 'banned' ? 'success' : 'danger'" size="small" @click="toggleBan(row)">
+            <el-button v-if="canChangeStatus(row)" link :type="row.status === 'banned' ? 'success' : 'danger'" size="small" @click="toggleBan(row)">
               {{ row.status === 'banned' ? '解封' : '封禁' }}
             </el-button>
           </template>
@@ -166,14 +166,15 @@
           <el-button size="small" @click="openRegionDialog">变更区域</el-button>
           <el-button size="small" type="primary" @click="openTagDialog">编辑标签</el-button>
           <el-button size="small" @click="goPrivateMessages">私信记录</el-button>
-          <el-button size="small" :type="detailUser.status === 'active' ? 'warning' : 'success'" @click="toggleStatus(detailUser)">
+          <el-button v-if="canChangeStatus(detailUser)" size="small" :type="detailUser.status === 'active' ? 'warning' : 'success'" @click="toggleStatus(detailUser)">
             {{ detailUser.status === 'active' ? '禁用' : '启用' }}
           </el-button>
-          <el-button size="small" :type="detailUser.status === 'banned' ? 'success' : 'danger'" @click="toggleBan(detailUser)">
+          <el-button v-if="canChangeStatus(detailUser)" size="small" :type="detailUser.status === 'banned' ? 'success' : 'danger'" @click="toggleBan(detailUser)">
             {{ detailUser.status === 'banned' ? '解封' : '封禁' }}
           </el-button>
         </div>
 
+        <el-alert v-if="detailUser.status === 'deleted'" title="该账号已注销" type="info" :closable="false" description="注销时间和已有记录可在“账号状态记录”中查看。" style="margin-bottom: 16px" />
         <el-tabs v-model="detailTab">
           <el-tab-pane label="概览" name="overview">
             <div class="mini-stat-grid">
@@ -193,10 +194,18 @@
                 <div class="detail-item"><span class="label">用户类型</span><span>{{ detailUser.typeLabel || '-' }}</span></div>
                 <div class="detail-item"><span class="label">学校</span><span>{{ detailUser.school || '-' }}</span></div>
                 <div class="detail-item"><span class="label">学生认证</span><el-tag :type="certTagType(detailUser.studentCertStatus)" size="small">{{ certLabel(detailUser.studentCertStatus) }}</el-tag></div>
+                <div v-if="detailUser.studentCertStatus && detailUser.studentCertStatus !== 'none'" class="detail-item full">
+                  <span class="label">学生证照片</span>
+                  <el-image v-if="detailUser.studentCardImage" :src="detailUser.studentCardImage" :preview-src-list="[detailUser.studentCardImage]" preview-teleported fit="contain" style="width: 160px; height: 110px; cursor: zoom-in">
+                    <template #error><span>照片加载失败，请稍后重试</span></template>
+                  </el-image>
+                  <span v-else>未保存学生证照片</span>
+                </div>
                 <div class="detail-item"><span class="label">正式归属区域</span><span>{{ detailUser.ownedRegionName || detailUser.regionName || '未归属' }}</span></div>
                 <div class="detail-item"><span class="label">当前访问/推断区域</span><span>{{ detailUser.currentRegionName || '-' }}</span></div>
                 <div class="detail-item"><span class="label">当前区域来源</span><span>{{ regionSourceLabel(detailUser.currentRegionSource || detailUser.regionSource) }}</span></div>
                 <div class="detail-item"><span class="label">最后登录</span><span>{{ detailUser.lastLoginAt ? formatDate(detailUser.lastLoginAt) : '-' }}</span></div>
+                <div v-if="detailUser.status === 'deleted'" class="detail-item"><span class="label">注销时间</span><span>{{ fullTime(detailUser.deletedAt) }}</span></div>
                 <div class="detail-item"><span class="label">注册时间</span><span>{{ formatDate(detailUser.createdAt) }}</span></div>
                 <div class="detail-item"><span class="label">最后登录IP</span><span>{{ detailUser.lastLoginIp || '-' }}</span></div>
                 <div v-if="ipGeoDisplay.enabled" class="detail-item detail-item-wide"><span class="label">{{ ipLocationColumnLabel }}</span><span>{{ formatIpLocation(detailUser) }}</span></div>
@@ -204,6 +213,26 @@
                 <div class="detail-item detail-item-wide"><span class="label">登录User-Agent</span><span class="id-text">{{ detailUser.lastLoginUserAgent || '-' }}</span></div>
               </div>
             </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="账号状态记录" name="status">
+            <p class="text-muted">最近 50 条相关审计中的状态变更；旧记录缺失的信息显示为“未记录”。</p>
+            <el-table :data="detailUser.statusHistory || []" size="small" border empty-text="暂无账号状态变更记录">
+              <el-table-column type="expand">
+                <template #default="{ row }">
+                  <div style="padding: 12px 20px; overflow-wrap: anywhere">
+                    <p>原因 / 说明：{{ row.reason || '未记录' }}</p>
+                    <p>请求 IP：{{ row.ip || '未记录' }}</p>
+                    <p>客户端信息：{{ row.ua || '未记录' }}</p>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="时间" width="160"><template #default="{ row }">{{ fullTime(row.createdAt) }}</template></el-table-column>
+              <el-table-column label="状态变化" min-width="130"><template #default="{ row }">{{ row.beforeStatus === 'unknown' ? '原状态未记录' : statusLabel(row.beforeStatus) }} → {{ statusLabel(row.afterStatus) }}</template></el-table-column>
+              <el-table-column prop="sourceLabel" label="来源" min-width="110" />
+              <el-table-column prop="operator" label="操作人" min-width="90" show-overflow-tooltip />
+              <el-table-column prop="reason" label="原因 / 说明" min-width="150" />
+            </el-table>
           </el-tab-pane>
 
           <el-tab-pane label="内容" name="content">
@@ -310,8 +339,9 @@
             <h4 class="block-title">后台操作记录</h4>
             <el-table :data="detailUser.operationLogs || []" size="small" border empty-text="暂无后台操作">
               <el-table-column prop="operator" label="操作人" width="110" />
-              <el-table-column prop="action" label="动作" width="110" />
-              <el-table-column prop="module" label="模块" width="100" />
+              <el-table-column label="动作" width="110"><template #default="{ row }">{{ actionName(row.action) }}</template></el-table-column>
+              <el-table-column label="模块" width="100"><template #default="{ row }">{{ moduleName(row.module) }}</template></el-table-column>
+              <el-table-column label="原因 / 说明" min-width="180"><template #default="{ row }">{{ row.detail?.reason || '未记录' }}</template></el-table-column>
               <el-table-column label="时间" width="150"><template #default="{ row }">{{ formatDate(row.createdAt) }}</template></el-table-column>
             </el-table>
           </el-tab-pane>
@@ -574,6 +604,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus, Download, ArrowDown } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { fullTime, actionName, moduleName } from '../system/logPresentation.mjs'
 import EmptyState from '@/components/common/EmptyState.vue'
 import GlassPageHeader from '@/components/glass/GlassPageHeader.vue'
 import StatGrid from '@/components/glass/StatGrid.vue'
@@ -670,6 +701,7 @@ const searchFields: SearchField[] = [
     { label: '正常', value: 'active' },
     { label: '禁用', value: 'disabled' },
     { label: '封禁', value: 'banned' },
+    { label: '已注销', value: 'deleted' },
   ]},
   { key: 'userId', label: '用户ID', type: 'input', placeholder: '精确搜索UID' },
   { key: 'regionId', label: '区域筛选', type: 'select', options: [] },
@@ -834,13 +866,17 @@ function certLabel(status: string) {
   return map[status] || '未认证'
 }
 
+function canChangeStatus(user: any) {
+  return user?.status !== 'deleted' && !user?.deletedAt
+}
+
 function statusTagType(status: string) {
   const map: Record<string, string> = { active: 'success', banned: 'danger', disabled: 'warning' }
   return map[status] || 'info'
 }
 
 function statusLabel(status: string) {
-  const map: Record<string, string> = { active: '正常', banned: '封禁', disabled: '禁用' }
+  const map: Record<string, string> = { active: '正常', banned: '封禁', disabled: '禁用', deleted: '已注销' }
   return map[status] || '未知'
 }
 
@@ -1180,6 +1216,7 @@ async function submitRegionChange() {
 }
 
 async function toggleStatus(row: any) {
+  if (!canChangeStatus(row)) return ElMessage.warning('已注销账号不能启用或禁用')
   const newStatus = row.status === 'active' ? 'disabled' : 'active'
   const label = newStatus === 'active' ? '启用' : '禁用'
   try {
@@ -1193,6 +1230,7 @@ async function toggleStatus(row: any) {
 }
 
 async function toggleBan(row: any) {
+  if (!canChangeStatus(row)) return ElMessage.warning('已注销账号不能封禁或解封')
   const isBanned = row.status === 'banned'
   const label = isBanned ? '解封' : '封禁'
   try {
@@ -1214,6 +1252,10 @@ async function toggleBan(row: any) {
 async function batchAction(action: string) {
   if (!selectedRows.value.length) {
     ElMessage.warning('请先选择要操作的用户')
+    return
+  }
+  if (selectedRows.value.some((row: any) => !canChangeStatus(row))) {
+    ElMessage.warning('批量操作不能包含已注销账号，请重新选择')
     return
   }
   const labels: Record<string, string> = { enable: '启用', disable: '禁用', ban: '封禁' }
