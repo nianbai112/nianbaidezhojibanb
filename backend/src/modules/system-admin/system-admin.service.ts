@@ -13,9 +13,9 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  getManagedWechatTemplateContract,
   isWechatTemplateTechnicalConfigManaged,
   normalizeWechatTemplatePlatform,
+  validateErrandNewOrderTemplate,
 } from '../wechat/wechat-template-contracts';
 
 const SECRET_MASK = '******';
@@ -121,37 +121,38 @@ export class SystemAdminService {
       this.prisma.wechatTemplateConfig.count({ where }),
     ]);
     return {
-      list: list.map((item: any) => {
-        const contract = getManagedWechatTemplateContract(item.platformType, item.templateType);
-        const contractManaged = isWechatTemplateTechnicalConfigManaged(item.platformType, item.templateType);
-        return contract
-          ? { ...item, fieldMapping: contract.fieldMapping, defaultPage: contract.defaultPage || item.defaultPage, contractManaged }
-          : { ...item, contractManaged };
-      }),
-      total,
-      page,
-      pageSize,
+      list: list.map((item: any) => ({ ...item, contractManaged: false })),
+      total, page, pageSize,
     };
   }
 
   async createTemplate(dto: CreateWechatTemplateDto) {
-    return this.prisma.wechatTemplateConfig.create({ data: this.normalizeWechatTemplateDto(dto) as any });
+    const data: any = this.normalizeWechatTemplateDto(dto);
+    const duplicate = await this.prisma.wechatTemplateConfig.findFirst({
+      where: { platformType: data.platformType, templateType: data.templateType, regionId: data.regionId || null },
+    });
+    if (duplicate) throw new BadRequestException('该场景和范围已有模板，请编辑已有配置');
+    // NULL is not unique in MySQL composite indexes. A deterministic ID also
+    // prevents two concurrent first saves from creating duplicate global rows.
+    if (!data.regionId) {
+      data.id = 'wx_' + require('node:crypto').createHash('sha256')
+        .update(`${data.platformType}:${data.templateType}:global`).digest('hex').slice(0, 32);
+    }
+    try {
+      return await this.prisma.wechatTemplateConfig.create({ data });
+    } catch (error: any) {
+      if (error?.code === 'P2002') throw new BadRequestException('该场景和范围已有模板，请刷新后编辑');
+      throw error;
+    }
   }
 
   async updateTemplate(id: string, dto: UpdateWechatTemplateDto) {
     const tpl = await this.prisma.wechatTemplateConfig.findUnique({ where: { id } });
     if (!tpl) throw new NotFoundException('模板不存在');
-    if (isWechatTemplateTechnicalConfigManaged(tpl.platformType, tpl.templateType)) {
-      const immutableChanged =
-        (dto.platformType && normalizeWechatTemplatePlatform(dto.platformType) !== normalizeWechatTemplatePlatform(tpl.platformType))
-        || (dto.templateType && dto.templateType !== tpl.templateType)
-        || (dto.templateId !== undefined && dto.templateId !== tpl.templateId)
-        || dto.fieldMapping !== undefined
-        || dto.defaultPage !== undefined
-        || dto.pageTemplate !== undefined;
-      if (immutableChanged) {
-        throw new BadRequestException('该通知模板的 ID、字段映射和页面路径由发布配置托管');
-      }
+    if ((dto.platformType !== undefined && normalizeWechatTemplatePlatform(dto.platformType) !== tpl.platformType)
+      || (dto.templateType !== undefined && dto.templateType !== tpl.templateType)
+      || (dto.regionId !== undefined && (dto.regionId || null) !== tpl.regionId)) {
+      throw new BadRequestException('不能更改已有模板的通知场景、发送渠道或校区范围');
     }
     return this.prisma.wechatTemplateConfig.update({ where: { id }, data: this.normalizeWechatTemplateDto(dto, tpl) as any });
   }
@@ -160,41 +161,49 @@ export class SystemAdminService {
     const tpl = await this.prisma.wechatTemplateConfig.findUnique({ where: { id } });
     if (!tpl) throw new NotFoundException('模板不存在');
     if (isWechatTemplateTechnicalConfigManaged(tpl.platformType, tpl.templateType)) {
-      throw new BadRequestException('该通知模板由后端托管，不能从运营后台删除');
+      throw new BadRequestException('内置通知场景请停用模板，避免误删业务配置');
     }
     return this.prisma.wechatTemplateConfig.delete({ where: { id } });
   }
 
   async batchToggleTemplate(dto: BatchToggleTemplateDto) {
-    await this.prisma.wechatTemplateConfig.updateMany({
-      where: { id: { in: dto.ids } },
-      data: { enabled: dto.enabled },
-    });
+    if (dto.enabled) {
+      const templates = await this.prisma.wechatTemplateConfig.findMany({ where: { id: { in: dto.ids } } });
+      for (const template of templates) this.normalizeWechatTemplateDto({ enabled: true }, template);
+    }
+    await this.prisma.wechatTemplateConfig.updateMany({ where: { id: { in: dto.ids } }, data: { enabled: dto.enabled } });
     return { success: true };
   }
 
   private normalizeWechatTemplateDto<T extends CreateWechatTemplateDto | UpdateWechatTemplateDto>(dto: T, current?: any): T {
     const data: Record<string, any> = { ...dto };
-    if (data.platformType === 'miniapp') data.platformType = 'miniprogram';
-    if (data.pageTemplate && !data.defaultPage) data.defaultPage = data.pageTemplate;
-    const platformType = data.platformType || current?.platformType;
-    const templateType = data.templateType || current?.templateType;
-    const contract = getManagedWechatTemplateContract(platformType, templateType);
-    if (contract) {
-      if (current) {
-        // A non-technical update (for example enabled=false) must not rewrite
-        // the persisted production mapping as a side effect.
-        if (data.platformType !== undefined) data.platformType = contract.platformType;
-        if (data.templateType !== undefined) data.templateType = contract.templateType;
-        delete data.fieldMapping;
-        delete data.defaultPage;
-        delete data.pageTemplate;
-      } else {
-        data.platformType = contract.platformType;
-        data.templateType = contract.templateType;
-        data.fieldMapping = contract.fieldMapping;
-        if (contract.defaultPage) data.defaultPage = contract.defaultPage;
-        delete data.pageTemplate;
+    if (data.platformType !== undefined) data.platformType = normalizeWechatTemplatePlatform(data.platformType);
+    if (data.templateId !== undefined) data.templateId = String(data.templateId).trim();
+    if (data.regionId === '') data.regionId = null;
+    if (data.pageTemplate !== undefined && data.defaultPage === undefined) data.defaultPage = data.pageTemplate;
+    const merged = { ...current, ...data };
+    // Disabling and renaming must remain possible even for an old invalid config.
+    const technicalEdit = !current || dto.templateId !== undefined || dto.fieldMapping !== undefined
+      || dto.defaultPage !== undefined || dto.pageTemplate !== undefined || dto.enabled === true;
+    if (technicalEdit) {
+      if (!['official', 'miniprogram'].includes(merged.platformType)) throw new BadRequestException('发送渠道无效');
+      if (!/^[a-z][a-z0-9_]{1,79}$/.test(merged.templateType || '')) throw new BadRequestException('通知场景无效');
+      if (!/^[A-Za-z0-9_-]{20,128}$/.test(merged.templateId || '')) throw new BadRequestException('请填写微信添加后生成的完整模板 ID，不能填写模板库编号');
+      const mapping = merged.fieldMapping;
+      if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping) || !Object.keys(mapping).length || Object.keys(mapping).length > 20
+        || Object.entries(mapping).some(([key, value]) => !/^(?:[a-z][a-z_]*[0-9]+|first|remark|content)$/.test(key)
+          || typeof value !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(value)
+          || ['constructor', 'prototype', '__proto__'].includes(value))) {
+        throw new BadRequestException('请完整填写微信字段编号和对应的业务内容');
+      }
+      if (merged.platformType === 'official' && merged.templateType === 'new_errand_order') {
+        const error = validateErrandNewOrderTemplate(merged.templateId, mapping);
+        if (error) throw new BadRequestException(error);
+      }
+      for (const field of ['defaultPage', 'pageTemplate']) {
+        if (merged[field] && (!/^\/?[A-Za-z0-9_/-]+(?:\?[^\s]*)?$/.test(merged[field]) || merged[field].includes('..') || merged[field].startsWith('//'))) {
+          throw new BadRequestException('跳转页面须填写小程序内的页面路径');
+        }
       }
     }
     return data as T;

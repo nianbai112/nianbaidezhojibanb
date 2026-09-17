@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { SystemAdminService } from './system-admin.service';
 
-describe('SystemAdminService WeChat template technical ownership', () => {
+describe('SystemAdminService operator-managed WeChat templates', () => {
   it('masks the official account encryption key and preserves it when the unchanged form is saved', () => {
     const { service } = createService();
     const config = { appId: 'wx-test', encodingAESKey: 'private-aes-value', appSecret: 'private-secret' };
@@ -20,6 +20,8 @@ describe('SystemAdminService WeChat template technical ownership', () => {
         findMany: jest.fn().mockResolvedValue(rows),
         count: jest.fn().mockResolvedValue(rows.length),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve(data)),
         update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve(data)),
         delete: jest.fn(),
       },
@@ -28,46 +30,51 @@ describe('SystemAdminService WeChat template technical ownership', () => {
     return { service, prisma };
   }
 
-  it('reports locked scenes without replacing an unverified persisted mapping', async () => {
-    const persistedTakeawayMapping = { keyword7: 'content' };
-    const { service } = createService([
-      {
-        id: 'official-accepted', platformType: 'official', templateType: 'errand_accepted',
-        fieldMapping: { thing1: 'wrongMutableValue' }, defaultPage: null,
-      },
-      {
-        id: 'takeaway', platformType: 'miniprogram', templateType: 'takeaway_order_status',
-        fieldMapping: persistedTakeawayMapping, defaultPage: '/persisted/page',
-      },
-    ]);
+  const templateId = 'real_account_template_identifier_1234567890';
+  const mapping = { character_string1: 'orderNo', amount2: 'orderAmount', thing3: 'serviceName', time4: 'orderTime', thing5: 'serviceAddress' };
 
-    const result = await service.getTemplateList({ page: 1, pageSize: 20 });
-
-    expect(result.list[0]).toEqual(expect.objectContaining({
-      contractManaged: true,
-      fieldMapping: {
-        character_string1: 'orderNo',
-        thing4: 'riderName',
-        time6: 'estimatedTime',
-      },
-    }));
-    expect(result.list[1]).toEqual(expect.objectContaining({
-      contractManaged: true,
-      fieldMapping: persistedTakeawayMapping,
-      defaultPage: '/persisted/page',
-    }));
+  it('reads exactly the persisted mapping, without replacing operator settings with defaults', async () => {
+    const { service } = createService([{ id: 'accepted', platformType: 'official', templateType: 'errand_accepted', fieldMapping: { thing9: 'riderName' } }]);
+    const result = await service.getTemplateList({});
+    expect(result.list[0]).toEqual(expect.objectContaining({ contractManaged: false, fieldMapping: { thing9: 'riderName' } }));
   });
 
-  it('rejects technical edits for an operator-visible managed scene', async () => {
+  it('saves edited IDs and mappings for an existing built-in scene', async () => {
     const { service, prisma } = createService();
-    prisma.wechatTemplateConfig.findUnique.mockResolvedValue({
-      id: 'takeaway', platformType: 'miniprogram', templateType: 'takeaway_order_status',
-      templateId: 'current-template', fieldMapping: { keyword7: 'content' },
-    });
+    prisma.wechatTemplateConfig.findUnique.mockResolvedValue({ id: 'accepted', platformType: 'official', templateType: 'errand_accepted', regionId: null });
+    await service.updateTemplate('accepted', { templateId: `  ${templateId}  `, fieldMapping: { thing9: 'riderName' } });
+    expect(prisma.wechatTemplateConfig.update).toHaveBeenCalledWith({ where: { id: 'accepted' }, data: { templateId, fieldMapping: { thing9: 'riderName' } } });
+  });
 
-    await expect(service.updateTemplate('takeaway', {
-      fieldMapping: { thing1: 'orderNo' },
-    })).rejects.toBeInstanceOf(BadRequestException);
+  it('creates a global rider template without changing notification switches', async () => {
+    const { service, prisma } = createService();
+    const result = await service.createTemplate({ platformType: 'official', templateType: 'new_errand_order', templateId, fieldMapping: mapping, enabled: true });
+    expect(result.fieldMapping).toEqual(mapping);
+    expect(result.id).toMatch(/^wx_[a-f0-9]{32}$/);
+    expect(prisma.config.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects library numbers, incomplete fields and candidate-rider private data', async () => {
+    const { service, prisma } = createService();
+    for (const patch of [{ templateId: '42995' }, { fieldMapping: { thing1: 'content' } }, { fieldMapping: { ...mapping, thing5: 'riderPhone' } }]) {
+      await expect(service.createTemplate({ platformType: 'official', templateType: 'new_errand_order', templateId, fieldMapping: mapping, ...patch })).rejects.toBeInstanceOf(BadRequestException);
+    }
+    expect(prisma.wechatTemplateConfig.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate scope and maps concurrent saves to a helpful conflict message', async () => {
+    const { service, prisma } = createService();
+    prisma.wechatTemplateConfig.findFirst.mockResolvedValueOnce({ id: 'existing' });
+    const input = { platformType: 'official', templateType: 'new_errand_order', templateId, fieldMapping: mapping };
+    await expect(service.createTemplate(input)).rejects.toThrow('已有模板');
+    prisma.wechatTemplateConfig.create.mockRejectedValueOnce({ code: 'P2002' });
+    await expect(service.createTemplate(input)).rejects.toThrow('刷新后编辑');
+  });
+
+  it('prevents an edit from moving another campus template into the global scope', async () => {
+    const { service, prisma } = createService();
+    prisma.wechatTemplateConfig.findUnique.mockResolvedValue({ platformType: 'official', templateType: 'new_errand_order', regionId: 'campus-a' });
+    await expect(service.updateTemplate('a', { regionId: '' })).rejects.toThrow('校区范围');
     expect(prisma.wechatTemplateConfig.update).not.toHaveBeenCalled();
   });
 

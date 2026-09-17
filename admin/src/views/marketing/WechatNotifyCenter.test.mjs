@@ -29,16 +29,10 @@ test('all implemented order and community subscriptions expose connection status
   assert.doesNotMatch(abnormalRow, /supportsMiniProgram/)
 })
 
-test('operator template panel exposes no editable template ids or field mappings', () => {
-  const templateStart = source.indexOf('<!-- ===== TAB 3：消息模板 ===== -->')
-  const templateEnd = source.indexOf('<!-- ===== TAB 4', templateStart)
-  const template = source.slice(templateStart, templateEnd > templateStart ? templateEnd : source.indexOf('</el-tab-pane>', templateStart))
-
-  assert.match(template, /模板 ID、变量名和业务字段由后端统一维护/)
-  assert.match(template, /系统托管/)
-  assert.doesNotMatch(template, /v-model="fd\.varName"/)
-  assert.doesNotMatch(template, /v-model="fd\.mappedField"/)
-  assert.doesNotMatch(template, /v-model="row\.templateId"/)
-  assert.doesNotMatch(template, /v-model="row\.miniTemplateId"/)
-  assert.doesNotMatch(source, /fieldDefs|miniFieldDefs|mappedField|varName/)
+test('operators can open persisted official and mini-program template editors', () => {
+  assert.match(source, /openTemplateEditor\(row, 'official'\)/)
+  assert.match(source, /openTemplateEditor\(row, 'miniprogram'\)/)
+  assert.match(source, /canConfigureTemplates/)
+  assert.match(source, /@saved="reloadTemplatesAfterSave"/)
+  assert.doesNotMatch(source, /系统托管|由后端统一维护/)
 })

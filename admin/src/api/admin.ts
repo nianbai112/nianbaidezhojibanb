@@ -1040,6 +1040,10 @@ export async function testEmailConfig(data: { toEmail: string; subject?: string;
 
 // ==================== 微信模板消息 ====================
 
+export async function fetchOfficialAccountTemplates() {
+  return request.get('/admin/wechat/official/templates')
+}
+
 export async function fetchWechatTemplates(params: Record<string, any> = {}) {
   return request.get('/admin/wechat-templates', { params })
 }

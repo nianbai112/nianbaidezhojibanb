@@ -24,9 +24,8 @@ export function validateErrandNewOrderTemplate(templateId: string, mapping: unkn
   return null;
 }
 
-// These are the operator-visible scenes. Their technical fields are release
-// configuration: the admin UI/API may toggle them, but must not rewrite IDs,
-// variable names, mappings or page paths.
+// Built-in scenes may be configured by administrators with system:config.
+// Retain this registry to protect built-in scenes from accidental deletion.
 const TECHNICALLY_MANAGED_TEMPLATE_KEYS = new Set([
   "miniprogram:takeaway_order_status",
   "miniprogram:takeaway_merchant_order",

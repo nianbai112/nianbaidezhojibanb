@@ -180,7 +180,7 @@ function normalizePath(path = '') {
   return path.startsWith('/') ? path : `/${path}`
 }
 
-function isSuperRole(role = '') {
+export function isSuperRole(role = '') {
   return ['super_admin', 'SUPER_ADMIN', '超级管理员'].includes(role)
 }
 

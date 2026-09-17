@@ -93,7 +93,7 @@ export class WechatSubscribeService {
 
       // 4. 构建发送数据
       const managedContract = getManagedWechatTemplateContract('miniprogram', templateType);
-      const fieldMapping = (managedContract?.fieldMapping || template.fieldMapping || {}) as Record<string, string>;
+      const fieldMapping = (template.fieldMapping || managedContract?.fieldMapping || {}) as Record<string, string>;
       const normalizedData = this.normalizeNotificationData(data);
       const templateData: Record<string, any> = {};
       for (const [templateKey, dataKey] of Object.entries(fieldMapping)) {

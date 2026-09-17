@@ -188,7 +188,7 @@
       <el-tab-pane label="消息模板" name="templates">
         <div class="tpl-hint">
           <el-icon><InfoFilled /></el-icon>
-          模板 ID、变量名和业务字段由后端统一维护。运营人员只需查看接入状态和管理场景开关，无需填写技术字段。
+          有系统配置权限的运营人员和超级管理员可在这里配置模板。复制微信模板 ID 后，点击「配置模板」填写并保存。
           <el-link type="primary" :underline="false" @click="openUrl('https://mp.weixin.qq.com/advanced/tmplmsg?action=list')" style="margin-left:6px">打开模板消息管理 →</el-link>
         </div>
 
@@ -213,7 +213,7 @@
               <section v-if="row.supportsOfficial !== false" class="tpl-platform-section">
                 <div class="tpl-platform-title">
                   <span>服务号模板消息</span>
-                  <el-tag size="small" type="info">系统托管</el-tag>
+                  <el-button size="small" type="primary" :disabled="!canConfigureTemplates || !templateRecords.official" @click="openTemplateEditor(row, 'official')">配置模板</el-button>
                 </div>
                 <div class="managed-template-summary">
                   <span class="managed-template-state">{{ row.officialConnection?.label || '检查中' }}</span>
@@ -224,7 +224,7 @@
               <section v-if="row.supportsMiniProgram" class="tpl-platform-section tpl-mini-section">
                 <div class="tpl-platform-title">
                   <span>小程序订阅消息</span>
-                  <el-tag size="small" type="info">系统托管</el-tag>
+                  <el-button size="small" type="primary" :disabled="!canConfigureTemplates || !templateRecords.miniprogram" @click="openTemplateEditor(row, 'miniprogram')">配置模板</el-button>
                 </div>
                 <div class="managed-template-summary">
                   <span class="managed-template-state">{{ row.miniConnection?.label || '检查中' }}</span>
@@ -352,6 +352,7 @@
       </el-tab-pane>
 
     </el-tabs>
+    <WechatTemplateEditor ref="templateEditor" @saved="reloadTemplatesAfterSave" />
   </div>
 </template>
 
@@ -360,6 +361,9 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { RefreshRight, InfoFilled, Bicycle, ChatDotRound } from '@element-plus/icons-vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import WechatTemplateEditor from './WechatTemplateEditor.vue'
+import { useAuthStore } from '@/stores/auth'
+import { isSuperRole } from '@/router/access'
 import {
   fetchConfigGroup,
   fetchWechatMessageLogs,
@@ -373,6 +377,16 @@ import {
 import { describeWechatTemplateState } from './wechatTemplateState.mjs'
 
 const activeTab = ref('setup')
+const auth = useAuthStore()
+const canConfigureTemplates = computed(() => isSuperRole(auth.user.role) || auth.permissions.includes('system:config'))
+const templateEditor = ref<InstanceType<typeof WechatTemplateEditor>>()
+const templateRecords = ref<Record<string, any[] | null>>({ official: null, miniprogram: null })
+function openTemplateEditor(row: any, channel: string) {
+  if (canConfigureTemplates.value && templateRecords.value[channel]) templateEditor.value?.open(row, channel, templateRecords.value[channel]!)
+}
+async function reloadTemplatesAfterSave() {
+  try { await loadTemplates() } catch { ElMessage.error('模板已保存，但状态刷新失败，请刷新页面查看') }
+}
 
 // ===== 接入状态 =====
 const configured = ref(false)
@@ -486,7 +500,7 @@ async function saveScene(s: any) {
 }
 
 // ===== 消息模板 =====
-// 运营端只展示场景和接入状态。模板 ID、变量名、字段映射和跳转路径不下发为可编辑表单。
+// 编辑器通过已有权限接口保存配置；场景开关独立管理。
 const templateRows = ref<any[]>([
   {
     key: 'new_errand_order', scene: '跑腿骑手新订单',
@@ -751,6 +765,10 @@ async function loadTemplates() {
     loadTemplatePages('official'),
     loadTemplatePages('miniprogram'),
   ])
+  templateRecords.value = {
+    official: results[0].status === 'fulfilled' ? results[0].value : null,
+    miniprogram: results[1].status === 'fulfilled' ? results[1].value : null,
+  }
   for (const row of templateRows.value as any[]) {
     for (const [index, field] of [[0, 'officialConnection'], [1, 'miniConnection']] as const) {
       const result = results[index]

@@ -18,6 +18,11 @@ export class WechatAdminController {
     private readonly officialService: WechatOfficialService,
   ) {}
 
+  @Get('official/templates')
+  @RequirePermission('system:config')
+  @ApiOperation({ summary: '读取当前服务号已添加的微信模板，不发送消息' })
+  getOfficialTemplates() { return this.officialService.listAccountTemplates(); }
+
   @Get('official/config')
   @RequirePermission('system:config')
   @ApiOperation({ summary: '获取公众号配置' })

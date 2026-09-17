@@ -250,7 +250,7 @@ describe('WechatOfficialService template notification delivery', () => {
         findMany: jest.fn().mockResolvedValue([{
           id: 'template-1', platformType: 'official', templateType: 'errand_delivered',
           templateId: 'wechat-template-1', regionId: null, enabled: true,
-          fieldMapping: { thing1: 'orderNo', time2: 'finishedAt', thing3: 'remark' },
+          fieldMapping: { character_string13: 'orderNo', time5: 'finishedAt', thing7: 'deliveryAddress' },
         }]),
       },
       wechatMessageLog: {
@@ -432,7 +432,7 @@ describe('WechatOfficialService template notification delivery', () => {
       templateId: 'wechat-template-accepted',
       regionId: null,
       enabled: true,
-      fieldMapping: { time3: 'estimatedTime' },
+      fieldMapping: { character_string1: 'orderNo', thing4: 'riderName', time6: 'estimatedTime' },
     }]);
     const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 790 } } as any);
 
@@ -458,7 +458,7 @@ describe('WechatOfficialService template notification delivery', () => {
     post.mockRestore();
   });
 
-  it('ignores a mutable database mapping for a backend-managed template', async () => {
+  it('sends exactly the administrator saved field numbers for an existing built-in scene', async () => {
     const { service, prisma } = createDeliveryService({
       globalEnabled: true,
       scenes: { errand_accepted: true },
@@ -473,7 +473,7 @@ describe('WechatOfficialService template notification delivery', () => {
       enabled: true,
       fieldMapping: {
         character_string1: 'orderNo',
-        phone_number2: 'riderPhone',
+        thing17: 'riderName',
       },
     }]);
     const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { errcode: 0, msgid: 791 } } as any);
@@ -492,7 +492,7 @@ describe('WechatOfficialService template notification delivery', () => {
       expect.any(String),
       expect.objectContaining({ data: expect.objectContaining({
         character_string1: { value: 'ERR-1' },
-        thing4: { value: '测试骑手' },
+        thing17: { value: '测试骑手' },
       }) }),
       { timeout: 10000 },
     );
@@ -504,7 +504,7 @@ describe('WechatOfficialService template notification delivery', () => {
     prisma.wechatTemplateConfig.findMany.mockResolvedValue([{
       id: 'template-accepted', platformType: 'official', templateType: 'errand_accepted',
       templateId: 'wechat-template-accepted', regionId: null, enabled: true,
-      fieldMapping: { thing1: 'content' },
+      fieldMapping: { character_string1: 'orderNo', thing4: 'riderName', time6: 'estimatedTime' },
     }]);
     const post = jest.spyOn(axios, 'post');
 

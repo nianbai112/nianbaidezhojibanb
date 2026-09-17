@@ -27,6 +27,22 @@ export class WechatOfficialService {
     private readonly tokenService: WechatTokenService,
   ) {}
 
+  async listAccountTemplates() {
+    try {
+      const token = await this.tokenService.getOfficialAccessToken();
+      const { data } = await axios.get('https://api.weixin.qq.com/cgi-bin/template/get_all_private_template', {
+        params: { access_token: token }, timeout: 10000,
+      });
+      if (data.errcode) throw new BadRequestException(`微信模板读取失败（${Number(data.errcode)}），请检查服务号接入配置`);
+      return (data.template_list || []).map((item: any) => ({
+        templateId: String(item.template_id || ''), title: String(item.title || ''), content: String(item.content || ''),
+      }));
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new BadRequestException('暂时无法读取微信模板，请检查服务号接入配置后重试；也可以手动填写模板字段');
+    }
+  }
+
   async getBindingStatus(userId: string) {
     const binding = await this.prisma.wechatOfficialBinding.findUnique({
       where: { userId },
@@ -227,7 +243,7 @@ export class WechatOfficialService {
       templateId = template.templateId;
 
       const managedContract = getManagedWechatTemplateContract('official', templateType);
-      const fieldMapping = (managedContract?.fieldMapping || template.fieldMapping || {}) as Record<string, string>;
+      const fieldMapping = (template.fieldMapping || managedContract?.fieldMapping || {}) as Record<string, string>;
       if (templateType === 'new_errand_order') {
         const validationError = validateErrandNewOrderTemplate(templateId, fieldMapping);
         if (validationError) throw new BadRequestException(validationError);
@@ -241,7 +257,7 @@ export class WechatOfficialService {
           };
         }
       }
-      const requiredTemplateKeys = templateType === 'new_errand_order' ? Object.keys(fieldMapping) : managedContract?.requiredTemplateKeys || [];
+      const requiredTemplateKeys = templateType === 'new_errand_order' || managedContract ? Object.keys(fieldMapping) : [];
       const missingRequiredFields = requiredTemplateKeys
         .filter((templateKey) => !templateData[templateKey]);
       const mappingInvalid = !Object.keys(fieldMapping).length
