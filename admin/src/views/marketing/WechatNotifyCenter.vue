@@ -465,7 +465,7 @@ async function testConnection() {
 const globalEnabled = ref(false)
 
 const errandScenes = ref([
-  { key: 'new_errand_order', name: '骑手新订单', desc: '通知同校区符合接单条件的兼职骑手和官方骑手', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
+  { key: 'new_errand_order', name: '骑手新订单', desc: '通知同校区审核通过且符合条件的兼职骑手和官方骑手，离线也提醒；需开启新单提醒并绑定服务号', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
   { key: 'errand_accepted', name: '骑手已接单', desc: '订单被骑手接受时推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
   { key: 'errand_picked', name: '骑手已取货', desc: '骑手到达取件地点并取货后推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
   { key: 'errand_delivered', name: '订单送达/完成', desc: '送达待收货、用户确认收货或系统自动完成时推送', enabled: false, strategy: 'immediate', strategyLabel: '立即发送' },
@@ -504,7 +504,7 @@ async function saveScene(s: any) {
 const templateRows = ref<any[]>([
   {
     key: 'new_errand_order', scene: '跑腿骑手新订单',
-    desc: '新订单通知（生活服务／跑腿），接收者为合格的兼职骑手和官方骑手',
+    desc: '新订单通知（生活服务／跑腿），接收者为符合条件的兼职骑手和官方骑手，在线、忙碌和离线均可接收',
     templateId: '', supportsOfficial: true, supportsMiniProgram: false,
   },
   {

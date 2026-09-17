@@ -3,14 +3,18 @@ import { loadErrandNotificationAudience } from '../errand/errand-new-order-notif
 
 function fixture() {
   const order: any = { id: 'o1', orderNo: 'E001', userId: 'buyer', regionId: 'campus', status: 'pending_accept', payTime: new Date(), createdAt: new Date(), type: 'pickup', payAmount: 8, tasks: [] };
-  const riders = ['part_time', 'official'].map(riderType => ({ userId: riderType, riderType, User: { profile: { gender: 'FEMALE' } } }));
+  const riders = ['part_time', 'official'].map(riderType => ({ userId: riderType, riderType, status: 'online', notificationStatus: true, User: { profile: { gender: 'FEMALE' } } }));
   const rows = new Map<string, any>();
   const prisma: any = {
     errandOrder: { findUnique: jest.fn(async () => order), findMany: jest.fn(async () => [{ id: order.id }]), groupBy: jest.fn(async () => []) },
     order: { groupBy: jest.fn(async () => []) },
     config: { findUnique: jest.fn(async () => null) },
     region: { findUnique: jest.fn(async () => ({ name: '东校区' })) },
-    regionRider: { findMany: jest.fn(async (query) => riders.filter(rider => !query.where.userId.equals || rider.userId === query.where.userId.equals)) },
+    regionRider: { findMany: jest.fn(async ({ where }) => riders.filter(rider =>
+      (!where.userId.equals || rider.userId === where.userId.equals)
+      && (!where.status || where.status.in.includes(rider.status))
+      && (!where.notificationStatus || rider.notificationStatus)
+    )) },
     notification: {
       create: jest.fn(async ({ data }) => {
         const key = `${data.userId}:${data.eventKey}`;
@@ -39,7 +43,7 @@ describe('rider new-order delivery', () => {
     expect(f.rows.size).toBe(2);
     expect([...f.rows.values()].map(row => row.userId)).toEqual(['part_time', 'official']);
     expect(f.prisma.regionRider.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
-      regionId: 'campus', verifyStatus: 'approved', status: { in: ['online', 'busy'] }, notificationStatus: true,
+      regionId: 'campus', verifyStatus: 'approved', notificationStatus: true,
       userId: { not: 'buyer' }, riderType: { not: 'ordinary_user' }, User: { status: 'ACTIVE' },
     }) }));
     const row: any = [...f.rows.values()][0];
@@ -48,6 +52,25 @@ describe('rider new-order delivery', () => {
     expect(row.data).toMatchObject({ serviceAddress: '东校区', orderAmount: '8.00元' });
     expect(row.data).not.toHaveProperty('phone');
     expect(row.data).not.toHaveProperty('pickupCode');
+  });
+
+  it.each(['part_time', 'official'])('queues and delivers to an already offline %s rider', async riderType => {
+    const f = fixture();
+    f.riders.find(rider => rider.riderType === riderType)!.status = 'offline';
+    await f.service.notifyAvailableErrandRiders('o1');
+    const notice: any = [...f.rows.values()].find(row => row.userId === riderType);
+    expect(notice).toBeDefined();
+    const result = await f.service.deliverNotificationChannels(notice, { officialAccount: true });
+    expect(result.deliveryStatus).toBe('delivered');
+    expect(f.official.sendNotificationTemplate).toHaveBeenCalledWith(expect.objectContaining({ userId: riderType, scene: 'new_errand_order' }));
+  });
+
+  it('still respects an offline rider disabling new-order reminders', async () => {
+    const f = fixture();
+    f.riders[0].status = 'offline';
+    f.riders[0].notificationStatus = false;
+    await f.service.notifyAvailableErrandRiders('o1');
+    expect([...f.rows.values()].map(row => row.userId)).toEqual(['official']);
   });
 
   it.each(['unpaid', 'cancelled', 'accepted', 'refunding', 'refunded'])('does not queue %s orders', async state => {
@@ -87,8 +110,9 @@ describe('rider new-order delivery', () => {
     expect(f.rows.size).toBe(0);
   });
 
-  it('recovers a paid order after the immediate enqueue step was missed', async () => {
+  it('recovers a paid order for offline riders without duplicates after the immediate enqueue step was missed', async () => {
     const f = fixture();
+    f.riders.forEach(rider => { rider.status = 'offline'; });
     await f.service.reconcileErrandNewOrderNotifications();
     await f.service.reconcileErrandNewOrderNotifications();
     expect(f.rows.size).toBe(2);
@@ -103,12 +127,13 @@ describe('rider new-order delivery', () => {
     expect(f.rows.size).toBe(2);
   });
 
-  it('retries an interrupted worker even when no channel result was saved', async () => {
+  it('retries an interrupted delivery even if the rider has since gone offline', async () => {
     const f = fixture();
     await f.service.notifyAvailableErrandRiders('o1');
     const notice: any = [...f.rows.values()][0];
     notice.channelMask = { inApp: true, officialAccount: true };
     notice.deliveryReport = { worker: { status: 'failed', error: 'interrupted' } };
+    f.riders[0].status = 'offline';
     await f.service.retryNotificationDelivery(notice.id);
     expect(f.official.sendNotificationTemplate).toHaveBeenCalledTimes(1);
     expect(notice.deliveryReport).not.toHaveProperty('worker');
@@ -137,11 +162,20 @@ describe('rider new-order delivery', () => {
     expect(f.subscribe.sendSubscribeMessage).not.toHaveBeenCalled();
   });
 
-  it('retires a notification when its recipient goes off duty before delivery', async () => {
+  it('delivers a queued notification when its recipient goes offline before delivery', async () => {
     const f = fixture();
     await f.service.notifyAvailableErrandRiders('o1');
     const notice: any = [...f.rows.values()][0];
-    f.prisma.regionRider.findMany.mockResolvedValue([]);
+    f.riders[0].status = 'offline';
+    expect((await f.service.deliverNotificationChannels(notice, { officialAccount: true })).deliveryStatus).toBe('delivered');
+    expect(f.official.sendNotificationTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('retires a queued notification when its recipient disables reminders before delivery', async () => {
+    const f = fixture();
+    await f.service.notifyAvailableErrandRiders('o1');
+    const notice: any = [...f.rows.values()][0];
+    f.riders[0].notificationStatus = false;
     expect((await f.service.deliverNotificationChannels(notice, notice.channelMask)).deliveryStatus).toBe('retired');
     expect(f.official.sendNotificationTemplate).not.toHaveBeenCalled();
   });

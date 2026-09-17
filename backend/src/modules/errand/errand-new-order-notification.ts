@@ -52,7 +52,9 @@ export async function loadErrandNotificationAudience(db: any, orderId: string, u
   }
   const riders = await db.regionRider.findMany({
     where: {
-      regionId: order.regionId, verifyStatus: 'approved', status: { in: ['online', 'busy'] },
+      regionId: order.regionId, verifyStatus: 'approved',
+      // Duty status controls acceptance; reminders also reach riders who are offline.
+      status: { in: ['online', 'busy', 'offline'] },
       notificationStatus: true,
       // Both official and part-time approved riders. Ordinary students are a different role.
       riderType: { not: 'ordinary_user' },
