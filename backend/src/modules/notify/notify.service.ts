@@ -1025,15 +1025,18 @@ export class NotifyService {
         for (const device of devices) {
           const ok = await this.pushService.sendToClient(device.clientId, {
             platform: device.platform || undefined,
-            title: notification.title || "新通知",
-            content: notification.content || "",
+            title: "校园新通知",
+            content: "你有一条新通知，请打开应用查看",
             data: {
-              ...(notification.data || {}),
+              ...Object.fromEntries(["orderId", "merchantId", "postId", "groupId"].flatMap(key => {
+                const value = notification.data?.[key];
+                return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? [[key, value]] : [];
+              })),
+              recipientUserId: notification.userId,
               id: notification.id,
               scene: notification.scene,
               type: this.toClientNotificationType(notification.type),
-              linkType: notification.linkType,
-              linkValue: notification.linkValue,
+
             },
           });
           if (ok) pushed += 1;
@@ -3117,7 +3120,7 @@ export class NotifyService {
       type: "unreadSummary",
       data: unreadSummary,
     };
-    const deliveredCount = this.wsNative.pushToUser(receiver.userId, {
+    const deliveredCount = await this.wsNative.pushToUser(receiver.userId, {
       event: "message",
       type: "message",
       conversationId,

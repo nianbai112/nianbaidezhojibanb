@@ -2,7 +2,7 @@
   <div class="page-shell errand-settings">
     <PageHeader
       title="跑腿配置"
-      subtitle="配置小程序帮我取件、帮我寄件、帮我取餐、万能任务的开关、价格、页面素材和运营规则"
+      subtitle="配置小程序帮我取件、帮我寄件、万能任务的开关、价格、页面素材和运营规则"
       icon="Tools"
     >
       <template #actions>
@@ -61,15 +61,15 @@
             </div>
             <div class="switch-row">
               <div>
-                <strong>外卖代拿</strong>
-                <span>控制「帮我取餐」入口，配合外卖取餐点使用。</span>
+                <strong>代买服务</strong>
+                <span>店铺、商品、合单和费用在代买管理中维护。</span>
               </div>
-              <el-switch v-model="feeConfig.serviceSwitches.food" active-text="开启" inactive-text="关闭" />
+              <el-button @click="$router.push('/errand/purchase')">管理代买服务</el-button>
             </div>
             <div class="switch-row">
               <div>
                 <strong>万能任务</strong>
-                <span>控制打印、买东西、送资料等自定义任务。</span>
+                <span>控制打印、送资料等无需垫款的自定义任务。</span>
               </div>
               <el-switch v-model="feeConfig.serviceSwitches.custom" active-text="开启" inactive-text="关闭" />
             </div>
@@ -327,8 +327,9 @@
             <el-form-item label="闭环版本">
               <el-input-number v-model="feeConfig.closureVersion" :min="1" :max="99" :precision="0" />
             </el-form-item>
-            <el-form-item label="24小时自动确认">
+            <el-form-item label="自动确认收货">
               <el-switch v-model="feeConfig.autoReceiptEnabled" active-text="开启" inactive-text="暂停" />
+              <span>普通跑腿送达 24 小时后自动确认；代买时长在“代买服务”设置。</span>
             </el-form-item>
             <el-form-item label="V2结算与追偿">
               <el-switch v-model="feeConfig.settlementV2Enabled" active-text="开启" inactive-text="暂停" />
@@ -359,8 +360,7 @@ import {
 const serviceCards = [
   { key: 'express_pickup', switchKey: 'express', title: '帮我取件', scene: '快递到站、驿站取件、宿舍送达', icon: 'Box', tone: 'blue' },
   { key: 'express_send', switchKey: 'express', title: '帮我寄件', scene: '代寄快递、上门取件、送到寄件点', icon: 'Promotion', tone: 'cyan' },
-  { key: 'food_delivery', switchKey: 'food', title: '帮我取餐', scene: '外卖、奶茶、校园餐代拿', icon: 'Bowl', tone: 'orange' },
-  { key: 'custom_task', switchKey: 'custom', title: '万能任务', scene: '打印、代买、送资料等自定义任务', icon: 'MagicStick', tone: 'purple' },
+  { key: 'custom_task', switchKey: 'custom', title: '万能任务', scene: '打印、送资料等无需垫款的任务', icon: 'MagicStick', tone: 'purple' },
 ]
 
 const defaultDescriptions: Record<string, string> = {

@@ -13,7 +13,8 @@ export class MerchantService {
 
   async getPrinterList(query: any) {
     const { page = 1, pageSize = 20, merchantId, brand, status } = query;
-    const where: any = {};
+    // 代买店铺的出单打印机在代买服务里管理。
+    const where: any = { purchaseShopId: null };
     if (merchantId) where.merchantId = merchantId;
     if (brand) where.brand = brand;
     if (status) where.status = status;
@@ -31,7 +32,7 @@ export class MerchantService {
 
   async getPrinter(id: string) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
-    if (!p) throw new NotFoundException('打印机不存在');
+    if (!p || p.purchaseShopId) throw new NotFoundException('打印机不存在');
     return this.maskPrinter(p);
   }
 
@@ -41,13 +42,13 @@ export class MerchantService {
 
   async updatePrinter(id: string, dto: any) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
-    if (!p) throw new NotFoundException('打印机不存在');
+    if (!p || p.purchaseShopId) throw new NotFoundException('打印机不存在');
     return this.maskPrinter(await this.prisma.printerConfig.update({ where: { id }, data: this.normalizePrinter(dto, p) }));
   }
 
   async deletePrinter(id: string) {
     const p = await this.prisma.printerConfig.findUnique({ where: { id } });
-    if (!p) throw new NotFoundException('打印机不存在');
+    if (!p || p.purchaseShopId) throw new NotFoundException('打印机不存在');
     return this.prisma.printerConfig.update({ where: { id }, data: { status: 'deleted' } });
   }
 
@@ -61,6 +62,7 @@ export class MerchantService {
     const brand = ['yly', 'xpyun', 'gprinter'].includes(dto?.brand) ? dto.brand : 'feie';
     const data: any = { ...dto, brand };
     delete data.key;
+    delete data.purchaseShopId;
     delete data.user;
     delete data.ukey;
     delete data.appId;

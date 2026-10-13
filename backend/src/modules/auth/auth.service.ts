@@ -1,4 +1,5 @@
-import { Injectable, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
+import { effectiveStudentIdentity, identityInclude } from '../student-identity/student-identity.policy';
+import { Injectable, UnauthorizedException, BadRequestException, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -9,6 +10,12 @@ import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
 import { IpGeoService } from '../ip-geo/ip-geo.service';
 import { checkPasswordStrength } from '../../common/utils/password-policy';
+import { AgreementProof, recordAgreementConsents, validateAgreementProof } from '../../common/agreement-consent';
+import { AppOauthService } from './app-oauth.service';
+import { AppleLifecycleService } from './apple-lifecycle.service';
+import { resolveLoginIdentity } from './app-identity';
+import { isMiniappOpenid, isAppLoginOpenid } from '../../common/wechat-identity';
+import { assertMatchingAuthVersion, storedAuthVersion, tokenAuthVersion } from '../../common/user-token-policy';
 
 type MiniLoginDeviceInput = {
   brand?: string;
@@ -67,6 +74,8 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly redis: RedisService,
     private readonly ipGeo: IpGeoService,
+    @Optional() private readonly appOauth?: AppOauthService,
+    @Optional() private readonly appleLifecycle?: AppleLifecycleService,
   ) {}
 
   private formatPublicUser(user: any) {
@@ -207,10 +216,12 @@ export class AuthService {
       phone: user.phone,
       mobile: user.phone,
       phone_bound: !!user.phone,
-      wx_bound: !this.isPhoneLoginOpenid(user.openid),
-      login_identifier_type: this.isPhoneLoginOpenid(user.openid) ? 'phone' : 'wechat',
-      student_verified: studentVerify?.status === 'APPROVED',
-      student_verification_status: studentVerify?.status?.toLowerCase() || 'none',
+      wx_bound: isMiniappOpenid(user.openid),
+      login_identifier_type: isAppLoginOpenid(user.openid) ? 'app' : this.isPhoneLoginOpenid(user.openid) ? 'phone' : 'wechat',
+      student_verified: effectiveStudentIdentity(studentVerify, user.id),
+      school_id: studentVerify?.schoolId || '',
+      student_school_region_id: studentVerify?.school?.regionId || '',
+      student_verification_status: studentVerify?.status === 'APPROVED' && !effectiveStudentIdentity(studentVerify, user.id) ? 'revoked' : studentVerify?.status?.toLowerCase() || 'none',
       status: user.status,
     };
   }
@@ -269,37 +280,65 @@ export class AuthService {
     });
   }
 
-  /**
-   * AUD-P1-069: 登录时记录协议确认。
-   * 用户在登录页勾选"已阅读并同意"后即视为确认用户协议和隐私政策的当前版本。
-   */
-  private async recordLoginAgreementConsent(userId: string, regionId?: string) {
-    const effectiveRegionId = String(regionId || 'global').trim() || 'global';
-    const now = new Date();
-    const codes = ['TERMS_OF_SERVICE', 'PRIVACY_POLICY'];
+  /** 仅主动提交的完整协议证明才记同意；旧客户端和静默登录不伪造记录。 */
+  private async recordLoginAgreementConsent(userId: string, regionId?: string, proofs?: unknown, source = 'miniapp-login') {
+    if (proofs === undefined) return;
+    this.assertLoginAgreementProofs(proofs);
+    await recordAgreementConsents(this.prisma, userId, proofs, {
+      regionId, scene: 'login', source, requireContentHash: true,
+    });
+  }
 
-    for (const code of codes) {
-      await this.prisma.userAgreementConsent.upsert({
-        where: {
-          userId_code_version_regionId: {
-            userId,
-            code,
-            version: '1.0.0',
-            regionId: effectiveRegionId,
-          },
-        },
-        update: { acceptedAt: now, scene: 'login', source: 'miniapp-login' },
-        create: {
-          userId,
-          code,
-          version: '1.0.0',
-          regionId: effectiveRegionId,
-          scene: 'login',
-          source: 'miniapp-login',
-          acceptedAt: now,
-        },
-      }).catch(() => undefined); // 静默失败，不阻塞登录
+  private assertLoginAgreementProofs(proofs: unknown): asserts proofs is AgreementProof[] {
+    const required = ['TERMS_OF_SERVICE', 'PRIVACY_POLICY'];
+    if (!Array.isArray(proofs) || proofs.length !== 2 ||
+      !required.every((type) => proofs.filter((proof) => proof && proof.type === type).length === 1)) {
+      throw new BadRequestException({ code: 'AGREEMENT_PROOF_REQUIRED', message: '请阅读并同意当前用户协议和隐私政策后重试' });
     }
+  }
+
+  /** App credentials are always exchanged server-side; no client identity fields are trusted. */
+  async appLogin(dto: any, ip?: string, ua?: string) {
+    const authorizationStartedAt = Date.now();
+    if (!dto || !['app-weixin', 'app-apple'].includes(dto.channel) ||
+      typeof dto.code !== 'string' || !dto.code.trim() || dto.code.length > 4096 ||
+      typeof dto.region_id !== 'string' || !dto.region_id.trim() || dto.region_id.length > 191) {
+      throw new BadRequestException({ code: 'APP_LOGIN_INVALID', message: '请重新选择校园并发起 App 登录' });
+    }
+    this.assertLoginAgreementProofs(dto.agreement_consents);
+    const region = await this.prisma.region.findUnique({ where: { id: dto.region_id } });
+    if (!region?.isOpen) throw new BadRequestException('当前校园未开放，请重新选择');
+    for (const proof of dto.agreement_consents as AgreementProof[]) {
+      const hash = proof.content_hash ?? proof.contentHash;
+      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/i.test(hash.trim())) {
+        throw new BadRequestException({ code: 'AGREEMENT_PROOF_REQUIRED', message: '请重新读取协议并确认' });
+      }
+      await validateAgreementProof(this.prisma, proof, dto.region_id);
+    }
+    if (!this.appOauth) throw new ServiceUnavailableException('App 登录服务尚未配置');
+    if (dto.channel === 'app-apple') {
+      if (!this.appleLifecycle) throw new ServiceUnavailableException('Apple 授权生命周期服务尚未配置');
+      this.appleLifecycle.assertLoginConfigured();
+    }
+    const identity = dto.channel === 'app-weixin'
+      ? await this.appOauth.verifyWechatCode(dto.code)
+      : await this.appOauth.verifyAppleCode(dto.code);
+    let user = await resolveLoginIdentity(this.prisma, {
+      provider: dto.channel, appId: identity.appId, subject: identity.subject,
+      unionId: identity.unionId,
+      unionScope: dto.channel === 'app-weixin' ? String(this.config.get('WX_OPEN_PLATFORM_ACCOUNT_ID') || '').trim() || undefined : undefined,
+    }, dto.channel === 'app-apple' ? (tx, account) => this.appleLifecycle!.bindAuthorization(tx, account, identity, authorizationStartedAt) : undefined);
+    const authorizedVersion = Number(user.authVersion || 0);
+    const loginMeta = await this.buildLoginMeta({ ip, ua, device: dto.loginDevice,
+      method: dto.channel === 'app-weixin' ? 'App 微信登录' : 'App Apple 登录' });
+    user = await this.prisma.user.update({ where: { id: user.id }, data: loginMeta });
+    user = await this.ensurePublicUid(user);
+    await this.bindInitialRegion(user.id, dto.region_id);
+    await this.recordLoginAgreementConsent(user.id, dto.region_id, dto.agreement_consents, dto.channel + '-login');
+    const tokens = await this.generateTokens(user.id, user.openid, { expectedAuthVersion: authorizedVersion });
+    await this.clearUserProfileCache(user.id);
+    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id }, include: identityInclude });
+    return { ...this.formatLoginResponse(user, tokens, studentVerify), login_channel: dto.channel };
   }
 
   // =============================================================================
@@ -450,7 +489,7 @@ export class AuthService {
   // ============ 小程序微信登录 ============
 
   async wxMiniLogin(
-    dto: { code: string; nickname?: string; avatarUrl?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
+    dto: { code: string; nickname?: string; avatarUrl?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput; agreement_consents?: unknown },
     ip?: string,
     ua?: string,
   ) {
@@ -467,7 +506,10 @@ export class AuthService {
 
     const { openid, session_key, unionid } = data;
 
-    let user: any = await this.prisma.user.findUnique({ where: { openid } });
+    const unionScope = String(this.config.get('WX_OPEN_PLATFORM_ACCOUNT_ID') || '').trim();
+    let user: any = unionid && unionScope
+      ? await resolveLoginIdentity(this.prisma, { provider: 'mp-weixin', appId: appid, subject: openid, unionId: unionid, unionScope })
+      : await this.prisma.user.findUnique({ where: { openid } });
 
     if (!user) {
       user = await (this.prisma.user as any).create({
@@ -485,6 +527,7 @@ export class AuthService {
         where: { id: user.id },
         data: {
           ...loginMeta,
+          ...(unionid && !user.unionid ? { unionid } : {}),
           ...(nickname && !user.nickname ? { nickname } : {}),
           ...(avatarUrl && !user.avatar ? { avatar: avatarUrl } : {}),
         },
@@ -494,14 +537,12 @@ export class AuthService {
 
     await this.bindInitialRegion(user.id, dto.region_id || dto.regionId);
 
+    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId, dto.agreement_consents);
     const tokens = await this.generateTokens(user.id, openid);
     await this.redis.set(`session_key:${user.id}`, session_key, 7200);
 
-    // AUD-P1-069: 登录时记录协议确认（用户勾选同意后登录即视为确认当前版本）
-    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId).catch(() => {});
-
     await this.clearUserProfileCache(user.id);
-    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id } });
+    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id }, include: identityInclude });
     return this.formatLoginResponse(user, tokens, studentVerify);
   }
 
@@ -512,8 +553,23 @@ export class AuthService {
     return { phone, phoneNumber: phone, mobile: phone };
   }
 
+  /** Verify the WeChat account currently opening the authorization page. */
+  async verifyMiniappIdentity(userId: string, loginCode: string) {
+    if (!loginCode || loginCode.length > 128) throw new BadRequestException('缺少有效的微信登录凭证');
+    const { appid, secret } = await this.getMiniappCredentials();
+    const { data } = await axios.get('https://api.weixin.qq.com/sns/jscode2session', {
+      params: { appid, secret, js_code: loginCode, grant_type: 'authorization_code' }, timeout: 10000,
+    });
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.status !== 'ACTIVE' || !user.phone || !isMiniappOpenid(user.openid) ||
+      data.errcode || !data.openid || data.openid !== user.openid) {
+      throw new BadRequestException('请使用该骑手绑定的微信登录小程序，并先完成手机号绑定');
+    }
+    return { id: user.id, openid: user.openid, nickname: user.nickname, appid };
+  }
+
   async phoneOneTapLogin(
-    dto: { loginCode?: string; code?: string; phoneCode?: string; nickname?: string; avatarUrl?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
+    dto: { loginCode?: string; code?: string; phoneCode?: string; nickname?: string; avatarUrl?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput; agreement_consents?: unknown },
     ip?: string,
     ua?: string,
   ) {
@@ -533,7 +589,10 @@ export class AuthService {
     const phone = await this.resolveWxPhoneNumber(phoneCode);
     const loginMeta = await this.buildLoginMeta({ ip, ua, device: dto.loginDevice, method: '手机号一键登录' });
 
-    let user: any = await this.prisma.user.findUnique({ where: { openid } });
+    const unionScope = String(this.config.get('WX_OPEN_PLATFORM_ACCOUNT_ID') || '').trim();
+    let user: any = unionid && unionScope
+      ? await resolveLoginIdentity(this.prisma, { provider: 'mp-weixin', appId: appid, subject: openid, unionId: unionid, unionScope, verifiedPhone: phone })
+      : await this.prisma.user.findUnique({ where: { openid } });
     if (!user) {
       const phoneUser = await this.prisma.user.findFirst({ where: { phone, status: { not: 'DELETED' as any } } });
       if (phoneUser && !this.isPhoneLoginOpenid(phoneUser.openid)) {
@@ -580,11 +639,10 @@ export class AuthService {
     await this.bindInitialRegion(user.id, dto.region_id || dto.regionId);
     await this.redis.set(`session_key:${user.id}`, session_key, 7200);
 
+    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId, dto.agreement_consents, 'phone-one-tap-login');
     const tokens = await this.generateTokens(user.id, user.openid);
-    // AUD-P1-069: 记录协议确认
-    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId).catch(() => {});
     await this.clearUserProfileCache(user.id);
-    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id } });
+    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id }, include: identityInclude });
     return this.formatLoginResponse(user, tokens, studentVerify);
   }
 
@@ -687,7 +745,7 @@ export class AuthService {
   }
 
   async phoneLogin(
-    dto: { phone?: string; mobile?: string; code?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput },
+    dto: { phone?: string; mobile?: string; code?: string; region_id?: string; regionId?: string; loginDevice?: MiniLoginDeviceInput; agreement_consents?: unknown },
     ip?: string,
     ua?: string,
     options: {
@@ -729,13 +787,12 @@ export class AuthService {
 
     user = await this.ensurePublicUid(user);
     await this.bindInitialRegion(user.id, dto.region_id || dto.regionId);
+    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId, dto.agreement_consents, 'phone-login');
     const tokens = await this.generateTokens(user.id, user.openid, {
       scope: options.sessionScope,
     });
-    // AUD-P1-069: 记录协议确认
-    await this.recordLoginAgreementConsent(user.id, dto.region_id || dto.regionId).catch(() => {});
     await this.clearUserProfileCache(user.id);
-    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id } });
+    const studentVerify = await this.prisma.studentVerify.findUnique({ where: { userId: user.id }, include: identityInclude });
     return this.formatLoginResponse(user, tokens, studentVerify);
   }
 
@@ -805,6 +862,7 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('刷新令牌无效');
     }
+    const expectedAuthVersion = tokenAuthVersion(payload, 'refresh', true);
 
     // Redis/数据库暂时异常必须保持为 5xx，不能伪装成 401。
     // 否则客户端会当作凭证失效清空本地会话，用户就会遇到“休息一会自动退出”。
@@ -816,6 +874,7 @@ export class AuthService {
     const tokens = await this.generateTokens(payload.sub, payload.openid, {
       sessionId: payload.sid,
       scope: payload.scope,
+      expectedAuthVersion,
       // 已经具有 sid 的会话在 30 天有效期内保持 refresh token 不变，
       // 只换新短期 access token。这样服务端已响应但网络丢包时，
       // 客户端仍能用原 refresh token 重试，不会被误判成登录失效。
@@ -831,7 +890,7 @@ export class AuthService {
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { profile: true, settings: true, studentVerify: true, wallet: true },
+      include: { profile: true, settings: true, studentVerify: { include: identityInclude }, wallet: true },
     });
     if (!user) throw new UnauthorizedException('用户不存在');
     const publicUser = this.formatPublicUser(await this.ensurePublicUid(user));
@@ -847,8 +906,10 @@ export class AuthService {
       phone: user.phone,
       status: user.status,
       createdAt: user.createdAt,
-      student_verified: user.studentVerify?.status === 'APPROVED',
-      student_verification_status: user.studentVerify?.status?.toLowerCase() || 'none',
+      student_verified: effectiveStudentIdentity(user.studentVerify, user.id),
+      school_id: user.studentVerify?.schoolId || '',
+      student_school_region_id: user.studentVerify?.school?.regionId || '',
+      student_verification_status: user.studentVerify?.status === 'APPROVED' && !effectiveStudentIdentity(user.studentVerify, user.id) ? 'revoked' : user.studentVerify?.status?.toLowerCase() || 'none',
       gender: user.profile?.gender,
       school: user.profile?.school,
       bio: user.profile?.bio,
@@ -1593,14 +1654,15 @@ export class AuthService {
       sessionId?: string;
       scope?: string;
       refreshToken?: string;
+      expectedAuthVersion?: number;
     } = {},
   ) {
     // 封禁用户仍需受限会话访问状态查询、原生客服和自助解封；JwtGuard 会按实时用户状态封锁其他接口。
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, deletedAt: true, authVersion: true },
     });
-    if (!user || !['ACTIVE', 'BANNED'].includes(user.status)) {
+    if (!user || user.deletedAt || !['ACTIVE', 'BANNED'].includes(user.status)) {
       // 清理可能残留的 refresh token，防止旧 token 被刷新
       await this.clearUserRefreshSessions(userId);
       if (!user) {
@@ -1614,6 +1676,8 @@ export class AuthService {
       }
       throw new UnauthorizedException('账号状态异常，暂无法登录');
     }
+    const authVersion = storedAuthVersion(user);
+    if (session.expectedAuthVersion !== undefined) assertMatchingAuthVersion(session.expectedAuthVersion, user);
 
     const sessionId = session.sessionId || crypto.randomUUID();
     const sessionScope = String(session.scope || 'default').trim() || 'default';
@@ -1628,11 +1692,12 @@ export class AuthService {
       restricted: user.status === 'BANNED',
       sid: sessionId,
       scope: sessionScope,
+      sv: authVersion,
     };
-    const accessToken = this.jwtService.sign(payload, {
+    const accessToken = this.jwtService.sign({ ...payload, token_use: 'access' }, {
       expiresIn: accessExpiresIn,
     });
-    const refreshToken = session.refreshToken || this.jwtService.sign(payload, {
+    const refreshToken = session.refreshToken || this.jwtService.sign({ ...payload, token_use: 'refresh' }, {
       expiresIn: refreshExpiresIn,
     });
     if (!session.refreshToken) {

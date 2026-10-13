@@ -1,4 +1,6 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import { RiderPayoutService } from '../rider-payout/rider-payout.service';
+import { isAutomaticWithdrawal, payoutStatusText } from '../rider-payout/rider-payout.policy';
 import { ConfigService } from '@nestjs/config';
 import { errandRiderIncome } from '../../common/commission';
 import type { ErrandSettlementHold } from '@prisma/client';
@@ -15,6 +17,7 @@ export class FinanceAdminService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly adminDataScope: AdminDataScopeService,
+    @Optional() private readonly riderPayout?: RiderPayoutService,
   ) {}
 
   private userRegionScopeWhere(regionIds: string[]) {
@@ -86,11 +89,15 @@ export class FinanceAdminService {
     if (!scope.regionIds.length) return { scope, where: { id: { in: [] } } };
     const [orders, errandOrders] = await Promise.all([
       this.prisma.order.findMany({ where: { merchant: { regionId: { in: scope.regionIds } } }, select: { id: true } }),
-      this.prisma.errandOrder.findMany({ where: { regionId: { in: scope.regionIds } }, select: { id: true } }),
+      this.prisma.errandOrder.findMany({ where: { regionId: { in: scope.regionIds } }, select: { id: true, type: true } }),
     ]);
+    const purchaseOrderIds = errandOrders.filter(item => item.type === 'purchase').map(item => item.id);
+    const purchaseChanges = purchaseOrderIds.length ? await this.prisma.purchaseChange.findMany({ where: { purchaseId: { in: purchaseOrderIds } }, select: { id: true } }) : [];
     const branches = [
       ...(orders.length ? [{ bizType: 'order', bizId: { in: orders.map((item) => item.id) } }] : []),
       ...(errandOrders.length ? [{ bizType: 'errand_order', bizId: { in: errandOrders.map((item) => item.id) } }] : []),
+      ...(errandOrders.length ? [{ bizType: 'errand_purchase', bizId: { in: errandOrders.map(item => item.id) } }] : []),
+      ...(purchaseChanges.length ? [{ bizType: 'errand_purchase_change', bizId: { in: purchaseChanges.map(item => item.id) } }] : []),
     ];
     return { scope, where: branches.length ? { OR: branches } : { id: { in: [] } } };
   }
@@ -128,32 +135,6 @@ export class FinanceAdminService {
     if (!orderIds.length) return;
     const blocker = await findErrandSettlementBlocker(db, orderIds);
     if (blocker) throw new BadRequestException('结算单包含冻结、申诉或未处理风险订单，暂不能确认或打款');
-    const [marketingLedgers, discountedOrders, releasedHolds] = await Promise.all([
-      db.subsidyLedger.findMany({
-        where: {
-          orderType: 'errand_order',
-          orderId: { in: orderIds },
-          status: { not: 'cancelled' },
-        },
-        select: { orderId: true },
-      }),
-      db.errandOrder.findMany({
-        where: { id: { in: orderIds }, couponDiscount: { gt: 0 } },
-        select: { id: true },
-      }),
-      db.errandSettlementHold.findMany({
-        where: { orderId: { in: orderIds }, status: 'released' },
-        select: { orderId: true },
-      }),
-    ]);
-    const marketingIds = new Set([
-      ...marketingLedgers.map((item: any) => item.orderId),
-      ...discountedOrders.map((item: any) => item.id),
-    ]);
-    const releasedIds = new Set(releasedHolds.map((item: any) => item.orderId));
-    if ([...marketingIds].some(orderId => !releasedIds.has(orderId))) {
-      throw new BadRequestException('结算单包含尚未完成48小时风控复核的营销订单');
-    }
   }
 
   private async assertRiderWithdrawalFinanciallyClear(db: any, riderId: string) {
@@ -1225,6 +1206,7 @@ export class FinanceAdminService {
         ...w,
         amount: Number(w.amount),
         userName: w.user?.nickname,
+        automatic: isAutomaticWithdrawal(w.id),
       })),
       total,
       page: +page,
@@ -1311,6 +1293,7 @@ export class FinanceAdminService {
   }
 
   async completeWithdrawal(id: string, dto: { transferNo?: string }, operatorId?: string, ip?: string) {
+    if (isAutomaticWithdrawal(id)) throw new BadRequestException('自动转账只能根据微信查单结果完成，请使用核对到账');
     const transferNo = String(dto.transferNo || '').trim();
     if (!transferNo) throw new BadRequestException('请填写打款流水号');
     const withdraw = await this.prisma.withdraw.findUnique({ where: { id } });
@@ -1350,6 +1333,17 @@ export class FinanceAdminService {
       }).catch(() => undefined);
     }
     return { success: true, data: updated };
+  }
+
+  async reconcileAutomaticWithdrawal(id: string, operatorId?: string) {
+    if (!isAutomaticWithdrawal(id)) throw new BadRequestException('该记录不是微信自动转账');
+    const row = await this.prisma.riderWechatPayout.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('自动转账记录不存在');
+    await this.assertUserRegionAccess(operatorId, row.userId);
+    if (!this.riderPayout) throw new BadRequestException('自动转账服务未配置');
+    await this.riderPayout.reconcile(id);
+    const current = await this.prisma.riderWechatPayout.findUniqueOrThrow({ where: { id } });
+    return { status: current.status, statusText: payoutStatusText(current.status), reason: current.reason };
   }
 
   // ================= 商家结算 =================
@@ -1667,7 +1661,7 @@ export class FinanceAdminService {
     const itemKeys = completedOrders.map(item => ({ orderType: item.source, orderId: item.orderId }));
     // Keep the empty branch typed so Promise.all does not produce a never[] union.
     const emptyHolds: Pick<ErrandSettlementHold, 'orderId' | 'status'>[] = [];
-    const [openAppeals, openRisks, existingItems, holds, marketingLedgers] = await Promise.all([
+    const [openAppeals, openRisks, existingItems, holds] = await Promise.all([
       errandIds.length ? this.prisma.orderAppeal.findMany({
         where: {
           orderType: { in: ['errand', 'errand_order'] },
@@ -1691,23 +1685,11 @@ export class FinanceAdminService {
         where: { orderId: { in: errandIds } },
         select: { orderId: true, status: true },
       }) : emptyHolds,
-      errandIds.length ? this.prisma.subsidyLedger.findMany({
-        where: { orderType: 'errand_order', orderId: { in: errandIds }, status: { not: 'cancelled' } },
-        select: { orderId: true },
-      }) : [],
-    ]);
-    const releasedHoldIds = new Set(holds.filter(item => item.status === 'released').map(item => item.orderId));
-    const marketingOrderIds = new Set([
-      ...marketingLedgers.map(item => item.orderId),
-      ...completedOrders
-        .filter(item => item.source === 'errand' && (item as any).marketingBenefit)
-        .map(item => item.orderId),
     ]);
     const blockedErrandIds = new Set([
       ...openAppeals.map(item => item.orderId),
       ...openRisks.map(item => item.orderId),
       ...holds.filter(item => item.status !== 'released').map(item => item.orderId),
-      ...[...marketingOrderIds].filter(orderId => !releasedHoldIds.has(orderId)),
     ]);
     const settledKeys = new Set(existingItems.map(item => `${item.orderType}:${item.orderId}`));
     const eligibleOrders = completedOrders.filter(item =>
@@ -1991,7 +1973,7 @@ export class FinanceAdminService {
       });
       let remainingRecovery = this.toNumber(settlement.payableAmount);
       let liabilityRecovered = 0;
-      const liabilityUpdates: Array<{ id: string; recoveredAmount: number; status: string }> = [];
+      const liabilityUpdates: Array<{ id: string; amount: number; recoveredBefore: number; recoveredAmount: number; status: string }> = [];
       for (const liability of liabilities) {
         const outstanding = Math.max(0, this.toNumber(liability.amount) - this.toNumber(liability.recoveredAmount));
         const recovered = Math.min(outstanding, remainingRecovery);
@@ -1999,6 +1981,8 @@ export class FinanceAdminService {
         const recoveredAmount = Number((this.toNumber(liability.recoveredAmount) + recovered).toFixed(2));
         liabilityUpdates.push({
           id: liability.id,
+          amount: this.toNumber(liability.amount),
+          recoveredBefore: this.toNumber(liability.recoveredAmount),
           recoveredAmount,
           status: recoveredAmount >= this.toNumber(liability.amount) ? 'recovered' : 'open',
         });
@@ -2019,10 +2003,11 @@ export class FinanceAdminService {
       if (!result.count) throw new BadRequestException('结算单状态已变更，请刷新后重试');
 
       for (const liability of liabilityUpdates) {
-        await tx.riderLiability.update({
-          where: { id: liability.id },
+        const changed = await tx.riderLiability.updateMany({
+          where: { id: liability.id, status: 'open', amount: liability.amount, recoveredAmount: liability.recoveredBefore },
           data: { recoveredAmount: liability.recoveredAmount, status: liability.status },
         });
+        if (changed.count !== 1) throw new BadRequestException('骑手负债已由其他订单结算更新，请重试');
       }
 
       if (netPaidAmount > 0) {
@@ -2479,7 +2464,7 @@ export class FinanceAdminService {
     // ── 8. 各业务费率配置（含默认值） ──
     const defaultConfigs: Record<string, any> = {
       order: { label: '外卖 / 宿舍小店', rate: 0, fixedFee: 0, enabled: true, remark: '按校区商家结算金额与校区费率计算' },
-      errand_order: { label: '跑腿订单', rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按实付金额计算，扣除抽成后计入骑手收入' },
+      errand_order: { label: '跑腿订单', rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按优惠前总金额（配送费＋小费）计算，优惠券不减少抽成基数' },
       mall_order: { label: '商城订单', rate: 0.03, fixedFee: 0, enabled: true, remark: '' },
       group_buy_order: { label: '拼团订单', rate: 0.03, fixedFee: 0, enabled: false, remark: '' },
       recharge: { label: '余额充值', rate: 0, fixedFee: 0, enabled: false, remark: '充值全额归平台，无需抽成配置' },

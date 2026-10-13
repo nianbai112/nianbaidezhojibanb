@@ -9,6 +9,7 @@ import { MallService } from './mall.service';
 
 function buildTx(order: any, usedCoupon: any | null) {
   const tx: any = {
+    mallPromotionUsage:{updateMany:jest.fn().mockResolvedValue({count:0})},
     mallOrder: {
       findUnique: jest.fn(async () => order),
       updateMany: jest.fn(async () => ({ count: 1 })),
@@ -25,6 +26,7 @@ function buildTx(order: any, usedCoupon: any | null) {
       update: jest.fn(async (q: any) => ({ id: q.where.id, ...q.data })),
     },
     subsidyLedger: {
+      findMany:jest.fn().mockResolvedValue(usedCoupon?[{id:'coupon-ledger',campaignId:null,amount:1,createdAt:new Date()}]:[]),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
   };
@@ -192,6 +194,7 @@ describe('AUD-P1-185 商城待支付订单取消：资源回滚统一方法', ()
     let readCount = 0;
     let status = 'pending_pay';
     const tx: any = {
+      mallPromotionUsage:{updateMany:jest.fn().mockResolvedValue({count:0})},
       mallOrder: {
         findUnique: jest.fn(async () => {
           readCount += 1;
@@ -214,7 +217,7 @@ describe('AUD-P1-185 商城待支付订单取消：资源回滚统一方法', ()
       mallProduct: { update: jest.fn(async () => ({ id: 'p1' })) },
       couponReceive: { findFirst: jest.fn(async () => null), update: jest.fn() },
       coupon: { update: jest.fn() },
-      subsidyLedger: { updateMany: jest.fn(async () => ({ count: 0 })) },
+      subsidyLedger: { findMany:jest.fn().mockResolvedValue([]),updateMany: jest.fn(async () => ({ count: 0 })) },
     };
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
     const membershipService: any = { restoreBenefitUsagesForTarget: jest.fn(async () => undefined) };
@@ -235,4 +238,15 @@ describe('AUD-P1-185 商城待支付订单取消：资源回滚统一方法', ()
     expect(membershipService.restoreBenefitUsagesForTarget).toHaveBeenCalledTimes(1);
     expect(tx.mallOrder.updateMany).toHaveBeenCalledTimes(2);
   });
+});
+
+describe('真实零元未发货订单撤销',()=>{
+ it('uses free payment proof and restores resources without a monetary refund',async()=>{const {service,tx}=makeService(pendingOrder({status:'paid',payChannel:'free',payAmount:0,refundStatus:'none'}),{id:'coupon-use',couponId:'coupon'});tx.paymentOrder={findFirst:jest.fn().mockResolvedValue({id:'free-pay',amount:0}),updateMany:jest.fn().mockResolvedValue({count:1})};await service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'});expect(tx.mallOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:{id:'o1',status:'paid',payChannel:'free',payAmount:0,refundStatus:'none'}}));expect(tx.paymentOrder.updateMany).toHaveBeenCalledWith(expect.objectContaining({data:{status:'closed'}}));expect(tx.couponReceive.update).toHaveBeenCalled();expect(tx.mallProduct.update).toHaveBeenCalledTimes(1)});
+ it.each([{status:'shipped',payChannel:'free',payAmount:0,refundStatus:'none'},{status:'paid',payChannel:'balance',payAmount:0,refundStatus:'none'},{status:'paid',payChannel:'free',payAmount:1,refundStatus:'none'}])('cannot cancel shipped or forged free status %s',async extra=>{const{service,tx}=makeService(pendingOrder(extra),null);await expect(service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'})).rejects.toThrow('仅待支付');expect(tx.mallProduct.update).not.toHaveBeenCalled()});
+ it('missing free payment proof cannot restore stock',async()=>{const{service,tx}=makeService(pendingOrder({status:'paid',payChannel:'free',payAmount:0,refundStatus:'none'}),null);tx.paymentOrder={findFirst:jest.fn().mockResolvedValue(null)};await expect(service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'})).rejects.toThrow('记录不完整');expect(tx.mallProduct.update).not.toHaveBeenCalled()});
+});
+
+describe('商城取消活动券预算',()=>{
+ it('only the ledger cancellation claim releases total/day/user counters once',async()=>{const{service,tx}=makeService(pendingOrder(),null);tx.subsidyLedger.findMany.mockResolvedValue([{id:'ledger',campaignId:'campaign',amount:2,createdAt:new Date('2026-09-29T01:00:00Z')}]);tx.marketingCampaignBudgetCounter={updateMany:jest.fn().mockResolvedValue({count:1})};await service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'});expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledTimes(3);expect(tx.marketingCampaignBudgetCounter.updateMany.mock.calls[0][0].data).toEqual({spent:{decrement:2},uses:{decrement:1}});tx.subsidyLedger.updateMany.mockResolvedValue({count:0});await service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'});expect(tx.marketingCampaignBudgetCounter.updateMany).toHaveBeenCalledTimes(3)});
+ it('counter restore failure must abort the same cancellation transaction',async()=>{const{service,tx}=makeService(pendingOrder(),null);tx.subsidyLedger.findMany.mockResolvedValue([{id:'ledger',campaignId:'campaign',amount:2,createdAt:new Date()}]);tx.marketingCampaignBudgetCounter={updateMany:jest.fn().mockRejectedValue(new Error('counter write failed'))};await expect(service.cancelPendingPayOrder('o1',{type:'user',userId:'u1'})).rejects.toThrow('counter write failed');expect(tx.mallOrder.update).not.toHaveBeenCalled()});
 });

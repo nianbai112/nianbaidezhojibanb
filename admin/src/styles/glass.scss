@@ -10,7 +10,7 @@
   --mx-red: #ef4444;
   --mx-text: #0f172a;
   --mx-sub: #526174;
-  --mx-muted: #7d8ba3;
+  --mx-muted: #607086;
   --mx-border: #e3e9f2;
   --mx-border-strong: #d4deeb;
   --mx-bg: #f5f7fb;
@@ -87,7 +87,7 @@
   --el-text-color-primary: var(--mx-text);
   --el-text-color-regular: #334155;
   --el-text-color-secondary: var(--mx-sub);
-  --el-text-color-placeholder: #9aa8ba;
+  --el-text-color-placeholder: #607086;
   --el-text-color-disabled: #a8b4c5;
 
   --el-border-color: var(--mx-border-strong);
@@ -496,7 +496,23 @@ select {
 
 .el-table .cell {
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
+
+/* 列表只滚动自身，长内容不能撑开整个工作区。 */
+.content { min-width: 0; }
+.content > * { min-width: 0; max-width: 100%; }
+.el-table .cell .el-button + .el-button { margin-left: 8px; }
+.el-table .el-image { vertical-align: middle; }
+.el-image__preview { cursor: zoom-in; }
+.el-image-viewer__wrapper { font-family: var(--mx-font-sans); }
+.el-image-viewer__canvas img { object-fit: contain; }
+
+/* 语义标签保持浅色背景，用深色文字支持连续阅读。 */
+.el-tag.el-tag--success:not(.el-tag--dark) { --el-tag-text-color: #08785c; }
+.el-tag.el-tag--warning:not(.el-tag--dark) { --el-tag-text-color: #9a4b05; }
+.el-tag.el-tag--danger:not(.el-tag--dark) { --el-tag-text-color: #b91c1c; }
+.el-tag.el-tag--info:not(.el-tag--dark) { --el-tag-text-color: #526174; }
 
 /* Side lists */
 .side-list {
@@ -700,6 +716,24 @@ select {
 .el-dialog {
   border-radius: var(--mx-radius-lg);
   overflow: hidden;
+  max-width: calc(100vw - 24px);
+}
+
+.el-drawer { max-width: 100vw; }
+.el-drawer__body { overflow-wrap: anywhere; }
+.el-drawer__footer { border-top: 1px solid var(--mx-border); }
+.el-dialog__footer, .el-drawer__footer { flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .el-dialog__body, .el-drawer__body { padding: 16px; }
+  .el-dialog__header, .el-drawer__header { padding: 16px; }
+  .el-pagination { flex-wrap: wrap; gap: 8px; }
+  .el-pagination .el-pagination__sizes { margin-right: 0; }
+  /* 窄屏保留整张表横向滚动，固定列不覆盖正文。 */
+  .content .el-table .el-table__cell.el-table-fixed-column--left,
+  .content .el-table .el-table__cell.el-table-fixed-column--right { position: static !important; }
+  .el-table .el-table-fixed-column--left::before,
+  .el-table .el-table-fixed-column--right::before { display: none; }
 }
 
 .el-dialog__header {

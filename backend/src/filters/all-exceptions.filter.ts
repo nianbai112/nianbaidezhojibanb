@@ -17,6 +17,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
+    const privateWechatRequest = /(?:^|\/)(?:wechat-chat|wechat-channel|wechat-moments)(?:\/|$|\?)/.test(request.url);
+    const appLoginRequest = /(?:^|\/)wx-auth\/(?:app-login|apple\/notifications)(?:\?|$)/.test(request.url);
+    const privateRequest = privateWechatRequest || appLoginRequest;
+    const loggedPath = privateRequest ? request.url.split('?')[0] : request.url;
+    const loggedStack = !privateRequest && exception instanceof Error ? exception.stack : undefined;
 
     const status =
       exception instanceof HttpException
@@ -44,9 +49,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message = '服务器内部错误，请稍后重试';
     }
 
+    const loggedMessage = appLoginRequest ? 'App 登录请求异常；授权凭证不记入通用日志' : privateWechatRequest ? '微信请求异常；聊天正文不记入通用日志' : message;
     this.logger.error(
-      `${request.method} ${request.url} ${status} - ${JSON.stringify(message)}`,
-      exception instanceof Error ? exception.stack : undefined,
+      `${request.method} ${loggedPath} ${status} - ${JSON.stringify(loggedMessage)}`,
+      loggedStack,
       'ExceptionFilter',
     );
 
@@ -57,17 +63,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
         data: {
           level: 'error',
           module: 'system',
-          message: typeof message === 'string' ? message : JSON.stringify(message).slice(0, 500),
+          message: typeof loggedMessage === 'string' ? loggedMessage : JSON.stringify(loggedMessage).slice(0, 500),
           detail: {
-            stack: exception instanceof Error ? (exception.stack || '').slice(0, 2000) : undefined,
-            name: exception instanceof Error ? exception.name : undefined,
+            stack: loggedStack?.slice(0, 2000),
+            name: appLoginRequest ? 'AppLoginRequestError' : privateWechatRequest ? 'WechatRequestError' : exception instanceof Error ? exception.name : undefined,
           },
           requestId: request.headers['x-request-id'] as string || undefined,
           userId: user?.isAdmin ? undefined : user?.sub,
           adminId: user?.isAdmin ? user?.sub : undefined,
           ip: clientIp(request),
           userAgent: request.headers['user-agent'] as string || undefined,
-          path: request.url,
+          path: loggedPath,
           method: request.method,
           statusCode: status,
         },
@@ -78,10 +84,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     response.status(status).json({
       code: status,
+      // 保留 HTTP code 的既有格式，另传稳定业务码，供客户端区分重新阅读协议等可恢复状态。
+      error_code: exception instanceof HttpException &&
+        typeof (exception.getResponse() as any)?.code === 'string' &&
+        /^[A-Z][A-Z0-9_]{0,63}$/.test((exception.getResponse() as any).code)
+        ? (exception.getResponse() as any).code : undefined,
       message,
       data: null,
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: loggedPath,
     });
   }
 

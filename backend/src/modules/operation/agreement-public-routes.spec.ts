@@ -4,6 +4,7 @@ import request from 'supertest';
 import { OperationController } from './operation.controller';
 import { OperationService } from './operation.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { TransformInterceptor } from '../../interceptors/transform.interceptor';
 import { getMiniProgramGlobalPrefixExcludes, miniProgramApiCompatMiddleware } from '../../common/middleware/mini-program-api-compat';
 
@@ -16,7 +17,8 @@ describe('public agreement routes behind the API proxy', () => {
     const module = await Test.createTestingModule({
       controllers: [OperationController],
       providers: [{ provide: OperationService, useValue: service }],
-    }).overrideGuard(JwtGuard).useValue({ canActivate: () => { throw new UnauthorizedException(); } }).compile();
+    }).overrideGuard(JwtGuard).useValue({ canActivate: () => { throw new UnauthorizedException(); } })
+      .overrideGuard(OptionalAuthGuard).useValue({ canActivate: () => true }).compile();
     app = module.createNestApplication();
     app.use(miniProgramApiCompatMiddleware);
     app.useGlobalInterceptors(new TransformInterceptor());
@@ -24,7 +26,7 @@ describe('public agreement routes behind the API proxy', () => {
     await app.init();
   });
 
-  afterAll(async () => { await app.close(); });
+  afterAll(async () => { await app?.close(); });
 
   it.each(['/agreements/PRIVACY_POLICY', '/api/agreements/PRIVACY_POLICY'])(
     'serves the published document anonymously at %s with the campus preserved', async path => {

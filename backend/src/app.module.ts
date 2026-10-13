@@ -1,4 +1,7 @@
+import { AcademicModule } from './modules/academic/academic.module';
 import "./config/bootstrap-env";
+import { WechatChatModule } from './modules/wechat-chat/wechat-chat.module';
+import { WechatBroadcastModule } from './modules/wechat-broadcast/wechat-broadcast.module';
 import { Module } from "@nestjs/common";
 import { APP_INTERCEPTOR, APP_FILTER, APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
@@ -16,12 +19,14 @@ import { UserModule } from "./modules/user/user.module";
 import { RegionModule } from "./modules/region/region.module";
 import { PostModule } from "./modules/post/post.module";
 import { PostShareModule } from "./modules/post-share/post-share.module";
+import { WechatMomentsModule } from "./modules/wechat-moments/wechat-moments.module";
 import { CommentModule } from "./modules/comment/comment.module";
 import { CircleModule } from "./modules/circle/circle.module";
 import { ShopModule } from "./modules/shop/shop.module";
 // SEC-P0-B5: DeliveryModule 为历史遗留空壳（订单池恒空、骑手表无写入、orderPool 越权泄露地址电话），已下线。
 // 其唯一有用副作用（写 Redis rider:location）已迁移至 ErrandService.updateLocation。
 // import { DeliveryModule } from './modules/delivery/delivery.module';
+import { PurchaseModule } from "./modules/errand-purchase/purchase.module";
 import { ErrandModule } from "./modules/errand/errand.module";
 import { RiderAppModule } from "./modules/rider-app/rider-app.module";
 import { FinanceModule } from "./modules/finance/finance.module";
@@ -108,11 +113,15 @@ const envFilePath = getEnvFilePaths();
     RegionModule,
     PostModule,
     PostShareModule,
+    WechatMomentsModule,
+    WechatChatModule,
+    WechatBroadcastModule,
     CommentModule,
     CircleModule,
     ShopModule,
     // DeliveryModule 已下线（见上方 import 处说明）
     ErrandModule,
+    PurchaseModule,
     RiderAppModule,
     FinanceModule,
     FinanceAdminModule,
@@ -128,6 +137,7 @@ const envFilePath = getEnvFilePaths();
     AddressModule,
     ActivityModule,
     WelfareModule,
+    AcademicModule,
     TopupModule,
     MallModule,
     WebsocketModule,

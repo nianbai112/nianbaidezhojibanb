@@ -265,7 +265,7 @@
         <el-form-item label="用户端公开图片">
           <div class="catalog-photo-grid">
             <div v-for="media in formMedia" :key="media.id || media.url" class="catalog-photo-item">
-              <el-image :src="media.url" :preview-src-list="formPhotoUrls" fit="cover" />
+              <el-image preview-teleported :src="media.url" :preview-src-list="formPhotoUrls" fit="cover" />
               <el-button circle size="small" type="danger" @click="removePhoto(media)">×</el-button>
             </div>
             <label v-if="editingNumber" class="catalog-photo-upload">

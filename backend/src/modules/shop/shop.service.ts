@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Logger,
 } from "@nestjs/common";
@@ -21,7 +22,7 @@ import { SystemConfigService } from "../system-config/system-config.service";
 import { PrintService } from "../print/print.service";
 import { PaymentService } from "../payment/payment.service";
 import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
-import { randomInt } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { errandCampaignDayKey, lockErrandAssignee, reserveErrandCampaignBudget, resolveActiveCouponCampaign } from "../errand/errand-transaction-guards";
 
 @Injectable()
@@ -3195,7 +3196,8 @@ export class ShopService {
       throw new BadRequestException("没有可同步的商家设置");
 
     const result = await this.prisma.merchant.updateMany({
-      where: { regionId },
+      // 营业同步不能代替资质审核；待审和被拒店铺不能借由区域开店变成 approved。
+      where: { regionId, status: { in: ["approved", "closed"] } },
       data,
     });
     return { success: true, updated: result.count };
@@ -3226,7 +3228,8 @@ export class ShopService {
     const printer = await this.prisma.printerConfig.findUnique({
       where: { id: printerId },
     });
-    if (!printer) throw new NotFoundException("打印机不存在");
+    // 代买店铺的出单打印机没有 merchantId，不归商家端管理。
+    if (!printer?.merchantId) throw new NotFoundException("打印机不存在");
     await this.assertMerchantOwner(printer.merchantId, userId);
     const updated = await this.prisma.printerConfig.update({
       where: { id: printerId },
@@ -3239,7 +3242,8 @@ export class ShopService {
     const printer = await this.prisma.printerConfig.findUnique({
       where: { id: printerId },
     });
-    if (!printer) throw new NotFoundException("打印机不存在");
+    // 代买店铺的出单打印机没有 merchantId，不归商家端管理。
+    if (!printer?.merchantId) throw new NotFoundException("打印机不存在");
     await this.assertMerchantOwner(printer.merchantId, userId);
     await this.prisma.printerConfig.delete({ where: { id: printerId } });
     return { success: true };
@@ -4091,8 +4095,35 @@ export class ShopService {
     };
   }
 
+  private requestOrderNo(userId: string, requestId: unknown) {
+    if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(requestId)) throw new BadRequestException('缺少有效下单请求号，请更新客户端');
+    return 'ORD' + createHash('sha256').update(userId + '\0' + requestId).digest('hex').slice(0,32);
+  }
+
+  private createdOrderResponse(order: any) {
+    return { success:true,message:'订单创建成功',order_id:order.id,order_no:order.orderNo,business_type:order.businessType,delivery_mode:order.deliveryMode,delivery_mode_label:this.getDeliveryModeLabel(order.deliveryMode),pay_amount:this.toNumber(order.payAmount),payment_required:order.status==='PENDING_PAY',data:order };
+  }
+
+  async findOrderByRequest(userId: string, requestId: string) {
+    const order = await this.prisma.order.findUnique({where:{orderNo:this.requestOrderNo(userId,requestId)},include:{items:true}});
+    return order && order.userId === userId ? this.createdOrderResponse(order) : null;
+  }
+
   async createOrder(merchantId: string, userId: string, dto: any) {
-    const orderNo = `ORD${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const orderNo = this.requestOrderNo(userId,dto.request_id);
+    const recover = async () => {
+      const order=await this.prisma.order.findUnique({where:{orderNo},include:{items:true}});
+      if (!order) return null;
+      if (order.userId !== userId || order.merchantId !== merchantId) throw new ConflictException('本请求号已用于其它订单，请查回原订单');
+      // A repeated key always returns its original immutable order, never reinterprets a changed cart/address.
+      return this.createdOrderResponse(order);
+    };
+    const existing=await recover();if(existing)return existing;
+    try { return await this.createOrderForRequest(merchantId,userId,dto,orderNo); }
+    catch(error) { const committed=await recover();if(committed)return committed;throw error; }
+  }
+
+  private async createOrderForRequest(merchantId: string, userId: string, dto: any, orderNo: string) {
     const [merchant, cartItems] = await Promise.all([
       this.prisma.merchant.findUnique({
         where: { id: merchantId },
@@ -4217,6 +4248,12 @@ export class ShopService {
     });
     if (!items.length)
       throw new BadRequestException("购物车为空，请先选择商品");
+    if (dto.cart_snapshot !== undefined) {
+      const canonical = (rows: any[]) => JSON.stringify(rows.map(row=>({cart_id:String(row.cart_id),product_id:String(row.product_id),sku_id:String(row.sku_id||''),quantity:Number(row.quantity),unit_fen:Math.round(Number(row.unit_price)*100),attribute_ids:[...new Set((row.attribute_ids||[]).map(String))].sort()})).sort((a,b)=>a.cart_id.localeCompare(b.cart_id)));
+      if (!Array.isArray(dto.cart_snapshot) || dto.cart_snapshot.length !== cartItems.length || dto.cart_snapshot.some((row:any)=>!row || !Array.isArray(row.attribute_ids))) throw new ConflictException('购物车内容已变化，请重新确认');
+      const current=cartItems.map((row:any,index:number)=>({cart_id:row.id,product_id:row.productId,sku_id:row.skuId,quantity:row.quantity,unit_price:items[index].price,attribute_ids:this.parseModifierSelections(row.modifierSelections).map((option:any)=>option.optionId)}));
+      if (canonical(dto.cart_snapshot) !== canonical(current)) throw new ConflictException('购物车内容或价格已变化，请重新确认');
+    }
     const productAmount = this.roundMoney(
       items.reduce((sum, item) => sum + item.totalPrice, 0),
     );
@@ -4476,18 +4513,7 @@ export class ShopService {
         .enqueueAutomaticOrder(order.id)
         .catch(() => undefined);
     }
-    return {
-      success: true,
-      message: "订单创建成功",
-      order_id: order.id,
-      order_no: order.orderNo,
-      business_type: order.businessType,
-      delivery_mode: deliveryMode,
-      delivery_mode_label: this.getDeliveryModeLabel(deliveryMode),
-      pay_amount: this.toNumber(order.payAmount),
-      payment_required: !isFreeOrder,
-      data: order,
-    };
+    return this.createdOrderResponse(order);
   }
 
   private async resolveDeliveryMemberDiscount(
@@ -4629,11 +4655,13 @@ export class ShopService {
     const status = String(query.status || "").trim();
     const keyword = String(query.keyword || "").trim();
     const takeForMerge = page * pageSize;
-    const [deliveryRows, errandRows, statistics] = await Promise.all([
+    const deliveryWhere = this.buildDeliveryOrderWhere(userId, status, keyword);
+    const errandWhere = this.buildErrandOrderWhere(userId, status, keyword);
+    const [deliveryRows, errandRows, statistics, deliveryTotal, errandTotal] = await Promise.all([
       this.prisma.order.findMany({
-        where: this.buildDeliveryOrderWhere(userId, status, keyword),
+        where: deliveryWhere,
         take: takeForMerge,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: {
           merchant: {
             select: {
@@ -4650,9 +4678,9 @@ export class ShopService {
         },
       }),
       this.prisma.errandOrder.findMany({
-        where: this.buildErrandOrderWhere(userId, status, keyword),
+        where: errandWhere,
         take: takeForMerge,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: {
           User: {
             select: { id: true, nickname: true, avatar: true, phone: true },
@@ -4666,6 +4694,8 @@ export class ShopService {
         },
       }),
       this.getOrderStatistics(userId),
+      this.prisma.order.count({ where: deliveryWhere }),
+      this.prisma.errandOrder.count({ where: errandWhere }),
     ]);
     const riderIds = [
       ...new Set(
@@ -4695,9 +4725,9 @@ export class ShopService {
       ...errandRows.map((row) => this.formatErrandOrder(row)),
     ].sort(
       (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime() || String(b.id).localeCompare(String(a.id)),
     );
-    const total = orders.length;
+    const total = deliveryTotal + errandTotal;
     const start = (page - 1) * pageSize;
     return {
       orders: orders.slice(start, start + pageSize),

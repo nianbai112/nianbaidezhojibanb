@@ -79,7 +79,7 @@ const profileIdCards = (profile?: IdentityProfile | null) => {
 const studentIdentityKeys = (profile?: IdentityProfile | null) => {
   const student = approvedStudent(profile)
   if (!student) return []
-  const studentId = normalizedIdentity(student.studentId)
+  const studentId = String(student.studentId || '').trim()
   if (!studentId) return []
   return [student.schoolId, student.schoolName]
     .map(normalizedText)
@@ -317,12 +317,16 @@ export async function recordErrandAssignmentRisk(
   }
 }
 
+import { assertPurchaseAdvance } from '../errand-purchase/purchase.transactions';
+
 export async function enforceErrandAssignmentGuard(
   db: any,
   order: any,
   assigneeUserId: string,
   source: string,
 ) {
+  if (order?.type === 'purchase' && order.riderId && order.riderId !== assigneeUserId) throw new BadRequestException('代买订单已开始采购，不支持转派');
+  await assertPurchaseAdvance(db, order, assigneeUserId);
   await assertErrandRiderGender(db, order, assigneeUserId)
   const risk = await inspectErrandAssignmentRisk(db, order, assigneeUserId)
   await recordErrandAssignmentRisk(db, order, assigneeUserId, source, risk)

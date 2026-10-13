@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { PUBLIC_ACTIVITY_STATUSES, lockActivity, lockActivityOrder, settleActivityPayment, settleActivityRefund } from './activity-settlement';
+import { canStartWechatPayment } from '../../common/payment-client';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { isMiniappOpenid } from '../../common/wechat-identity';
 import { PrismaService } from '../../common/services/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MembershipService } from '../membership/membership.service';
@@ -58,7 +62,11 @@ export class ActivityService {
     const availableTickets = Number(pkg.availableTickets ?? pkg.stock ?? 0);
     const now = Date.now();
     const saleEnd = pkg.saleEndAt ? new Date(pkg.saleEndAt).getTime() : 0;
-    const canPurchase = pkg.isActive !== false && availableTickets > 0 && (!saleEnd || now <= saleEnd);
+    const saleStart=pkg.saleStartAt?new Date(pkg.saleStartAt).getTime():0;
+    const activityEnd=pkg.activity?.endAt?new Date(pkg.activity.endAt).getTime():0;
+    const signupStart=pkg.activity?.signStartAt?new Date(pkg.activity.signStartAt).getTime():0;
+    const signupEnd=pkg.activity?.signEndAt?new Date(pkg.activity.signEndAt).getTime():0;
+    const canPurchase=pkg.isActive!==false&&availableTickets>0&&(!saleStart||now>=saleStart)&&(!saleEnd||now<=saleEnd)&&(!activityEnd||now<activityEnd)&&(!signupStart||now>=signupStart)&&(!signupEnd||now<=signupEnd)&&(!pkg.activity||['upcoming','signup','ongoing'].includes(pkg.activity.status));
 
     return {
       ...pkg,
@@ -82,7 +90,7 @@ export class ActivityService {
   }
 
   private formatActivity(activity: any, options: { orders?: any[]; includePackages?: boolean } = {}) {
-    const cover = activity.cover || '/static/logo.jpg';
+    const cover = activity.cover || '';
     const packages = options.includePackages
       ? (activity.packages || []).map((pkg: any) => this.formatPackage({ ...pkg, activity }, options.orders || []))
       : [];
@@ -125,7 +133,7 @@ export class ActivityService {
     };
   }
 
-  async getActivities(query: any) {
+  async getActivities(query: any, userId?: string) {
     const page = this.toInt(query.page, 1);
     const size = this.toInt(query.size || query.limit || query.pageSize, 10, 1, 50);
     const { region_id, regionId, club_id, clubId, status } = query;
@@ -133,8 +141,13 @@ export class ActivityService {
     const queryRegionId = region_id || regionId;
     if (queryRegionId) where.OR = [{ regionId: queryRegionId }, { regionId: null }];
     if (club_id || clubId) where.clubId = club_id || clubId;
-    if (status) where.status = status;
-    if (!status) where.status = { not: 'cancelled' };
+    where.status = { in: PUBLIC_ACTIVITY_STATUSES };
+    if (status && PUBLIC_ACTIVITY_STATUSES.includes(status)) where.status = status;
+    if (query.keyword) where.title = { contains: String(query.keyword).trim().slice(0,100) };
+    if (query.my_participation === 'true' || query.my_participation === true) {
+      if (!userId) throw new ForbiddenException('请先登录查看本人活动');
+      where.joins = { some: { userId, status: 'joined' } };
+    }
 
     const [list, total] = await Promise.all([
       this.prisma.activity.findMany({
@@ -181,19 +194,21 @@ export class ActivityService {
         ? this.prisma.activityOrder.findMany({ where: { userId, activityId } })
         : Promise.resolve([] as any[]),
     ]);
-    if (!activity) throw new NotFoundException('活动不存在');
+    if (!activity || !PUBLIC_ACTIVITY_STATUSES.includes(activity.status)) throw new NotFoundException('活动不存在');
     const userOrders = orders as any[];
     const formatted = this.formatActivity(activity, { orders: userOrders, includePackages: true });
     return {
       ...formatted,
       is_join: userOrders.some((order: any) => order.payStatus === 'paid' || order.orderStatus === 'joined'),
-      user_favorited: false,
+      can_checkin: activity.clubId && userId ? (await this.readableClub(activity.clubId,userId)).canManage : false,
     };
   }
 
   async getParticipants(activityId: string, query: any) {
     const page = this.toInt(query.page, 1);
     const size = this.toInt(query.size || query.limit || query.pageSize, 20, 1, 50);
+    const activity = await this.prisma.activity.findUnique({where:{id:activityId}});
+    if (!activity || !PUBLIC_ACTIVITY_STATUSES.includes(activity.status)) throw new NotFoundException('活动不存在');
     const where = { activityId, status: 'joined' };
     const [list, total] = await Promise.all([
       this.prisma.activityJoin.findMany({
@@ -224,133 +239,128 @@ export class ActivityService {
   }
 
   async createOrderWithPayment(userId: string, dto: any) {
-    const activityId = dto.activity_id || dto.activityId;
-    const packageId = dto.package_id || dto.packageId;
-    const quantity = this.toInt(dto.purchase_quantity || dto.quantity, 1, 1, 99);
-    if (!activityId) throw new BadRequestException('缺少活动ID');
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, openid: true } });
-    if (!user) throw new BadRequestException('用户不存在');
-
-    const activity = await this.prisma.activity.findUnique({
-      where: { id: activityId },
-      include: { packages: { where: packageId ? { id: packageId } : { isActive: true }, orderBy: { sortOrder: 'asc' } } },
-    });
+    const activityId = String(dto.activity_id || dto.activityId || '').trim();
+    const packageId = String(dto.package_id || dto.packageId || '').trim();
+    const quantity = Number(dto.purchase_quantity ?? dto.quantity ?? 1);
+    const requestKey = String(dto.request_key || '').trim();
+    if (!activityId || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey)) throw new BadRequestException('缺少有效活动编号或提交标识');
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new BadRequestException('购票数量必须为 1–99 的整数');
+    const orderNo = `ACT${createHash('sha256').update(`${userId}:${requestKey}`).digest('hex').slice(0, 36)}`;
+    const activity = await this.prisma.activity.findUnique({ where: { id: activityId } });
     if (!activity) throw new NotFoundException('活动不存在');
     await this.userAccess.assertStudentProtectedAction(userId, activity.regionId, '报名活动');
-    if (activity.status === 'cancelled' || activity.status === 'ended') throw new BadRequestException('活动已结束');
-    if (activity.visibility === 'member_only' && !(await this.membershipService.hasBenefit(userId, 'member_only_activity').catch(() => false))) {
-      throw new BadRequestException('该活动为会员专属活动，请先开通会员');
-    }
-
-    const pkg = activity.packages[0] || null;
-    const originalAmount = pkg ? this.toMoney(pkg.price) * quantity : this.toMoney(activity.fee) * quantity;
-    let amount = originalAmount;
-    let memberBenefit: any = null;
-    if (amount > 0) {
-      memberBenefit = await this.resolveActivityMemberBenefit(userId, amount, quantity);
-      amount = memberBenefit?.amount ?? amount;
-    }
-    if (pkg) {
-      if (pkg.isActive === false) throw new BadRequestException('该票种已下架');
-      if (Number(pkg.availableTickets ?? pkg.stock ?? 0) < quantity) throw new BadRequestException('余票不足');
-      if (pkg.limitPerUser && quantity > pkg.limitPerUser) throw new BadRequestException(`单次最多购买${pkg.limitPerUser}张`);
-    }
-
-    const orderNo = `ACT${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
-    const subsidyAmount = Math.max(originalAmount - amount, 0);
-    const order = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.activityOrder.create({
-        data: {
-          orderNo,
-          userId,
-          activityId,
-          packageId: pkg?.id,
-          quantity,
-          amount,
-          payStatus: amount > 0 ? 'unpaid' : 'paid',
-          orderStatus: 'pending',
-          payChannel: amount > 0 ? 'wx_pay' : 'free',
-          payTime: amount > 0 ? undefined : new Date(),
-        },
-      });
-      if (memberBenefit?.benefitKey) {
-        await this.membershipService.consumeBenefitWithDb(userId, memberBenefit.benefitKey, {
-          targetType: 'activity_order',
-          targetId: created.id,
-          quantity: memberBenefit.quantity || 1,
-          amount: subsidyAmount,
-          metadata: { activityId, packageId: pkg?.id || null, originalAmount, paidAmount: amount },
-        }, tx);
-        if (subsidyAmount > 0) {
-          await tx.subsidyLedger.create({
-            data: {
-              subsidyNo: this.subsidyNo(),
-              sourceType: 'membership',
-              benefitKey: memberBenefit.benefitKey,
-              orderType: 'activity_order',
-              orderId: created.id,
-              orderNo: created.orderNo,
-              userId,
-              payerType: 'platform',
-              receiverType: 'platform',
-              amount: subsidyAmount,
-              status: 'pending',
-              description: '会员活动报名/票价平台补贴',
-              metadata: { activityId, packageId: pkg?.id || null, originalAmount, paidAmount: amount },
-            },
-          });
-        }
+    const member = activity.visibility !== 'member_only' || await this.membershipService.hasBenefit(userId, 'member_only_activity');
+    const order = await this.prisma.$transaction(async tx => {
+      await lockActivity(tx, activityId);
+      const existing = await tx.activityOrder.findUnique({ where: { orderNo } });
+      if (existing) {
+        if (existing.activityId !== activityId || String(existing.packageId || '') !== packageId || existing.quantity !== quantity) throw new BadRequestException('同一提交标识不能用于另一份购票内容');
+        return existing;
       }
+      const current = await tx.activity.findUnique({ where: { id: activityId }, include: { packages: { orderBy: { sortOrder: 'asc' } } } });
+      const now = new Date();
+      if (!current || !['upcoming','signup','ongoing'].includes(current.status) || current.endAt <= now || (current.signStartAt && current.signStartAt > now) || (current.signEndAt && current.signEndAt < now)) throw new BadRequestException('活动不在可报名时段');
+      if (!member) throw new BadRequestException('该活动仅限具有对应权益的会员报名');
+      const pkg = packageId ? current.packages.find(p => p.id === packageId) : null;
+      if (packageId && !pkg) throw new BadRequestException('票种不属于本活动');
+      if (!packageId && current.packages.length) throw new BadRequestException('请明确选择活动票种');
+      if (pkg && (!pkg.isActive || (pkg.saleStartAt && pkg.saleStartAt > now) || (pkg.saleEndAt && pkg.saleEndAt < now))) throw new BadRequestException('票种不在售卖时段');
+      const user = await tx.user.findUnique({ where: { id: userId }, include: { profile: true } });
+      if (!user || user.status !== 'ACTIVE') throw new BadRequestException('账号不可报名');
+      if (pkg && ['1','2','MALE','FEMALE','male','female'].includes(String(pkg.genderLimit)) && this.formatGender(user.profile?.gender) !== this.formatGender(pkg.genderLimit)) throw new BadRequestException('本人资料不符合该票种性别条件');
+      const pending = await tx.activityOrder.aggregate({ where: { activityId, orderStatus: 'pending' }, _sum: { quantity: true } });
+      if (current.maxPeople && current.joinCount + Number(pending._sum.quantity || 0) + quantity > current.maxPeople) throw new BadRequestException('活动剩余名额不足');
+      if (pkg) {
+        const reserved = await tx.activityOrder.aggregate({ where: { activityId, packageId, orderStatus: 'pending' }, _sum: { quantity: true } });
+        if (pkg.availableTickets - Number(reserved._sum.quantity || 0) < quantity) throw new BadRequestException('票种剩余数量不足');
+        const owned = await tx.activityOrder.aggregate({ where: { userId, activityId, packageId, orderStatus: { in: ['pending','paid','joined','completed'] } }, _sum: { quantity: true } });
+        if (pkg.limitPerUser && Number(owned._sum.quantity || 0) + quantity > pkg.limitPerUser) throw new BadRequestException('已达到本票种累计限购数量');
+      }
+      const price = Number(pkg ? pkg.price : current.fee || 0);
+      if (!Number.isFinite(price) || price < 0) throw new BadRequestException('活动价格配置不合法');
+      const originalAmount = Math.round(price * 100) * quantity / 100;
+      const benefit = originalAmount > 0 ? await this.resolveActivityMemberBenefit(userId, originalAmount, quantity) : null;
+      const amount = benefit?.amount ?? originalAmount, subsidyAmount = Math.max(0, originalAmount - amount);
+      if (amount > 0 && !canStartWechatPayment(user.openid)) throw new BadRequestException('当前账号或客户端无法发起微信支付');
+      const created = await tx.activityOrder.create({ data: { orderNo, userId, activityId, packageId: pkg?.id || null, quantity, amount, payStatus: 'unpaid', orderStatus: 'pending', payChannel: amount > 0 ? 'wx_pay' : 'free' } });
+      if (benefit?.benefitKey) {
+        await this.membershipService.consumeBenefitWithDb(userId, benefit.benefitKey, { targetType:'activity_order',targetId:created.id,quantity:benefit.quantity||1,amount:subsidyAmount,metadata:{activityId,packageId:pkg?.id||null,originalAmount,paidAmount:amount} },tx);
+        if (subsidyAmount > 0) await tx.subsidyLedger.create({data:{subsidyNo:this.subsidyNo(),sourceType:'membership',benefitKey:benefit.benefitKey,orderType:'activity_order',orderId:created.id,orderNo:created.orderNo,userId,payerType:'platform',receiverType:'platform',amount:subsidyAmount,status:'pending',description:'会员活动票价补贴'}});
+      }
+      if (amount <= 0) await settleActivityPayment(tx, created.id, 0);
       return created;
     });
-
-    if (amount <= 0) {
-      await this.finishPaidActivityOrder(order.id);
-      return {
-        success: true,
-        requires_payment: false,
-        order_id: order.id,
-        order_no: order.orderNo,
-        message: '报名成功',
-      };
+    try { return await this.continueOrderPayment(userId, order.id); }
+    catch (error: any) {
+      // No usable payment session was returned; release reservations. A late channel success is refunded by settlement.
+      await this.cancelMyOrder(userId,order.id).catch(()=>undefined);
+      return {success:true,requires_payment:false,order_id:order.id,order_no:order.orderNo,order:await this.getMyOrder(userId,order.id),payment_error:String(error?.message||'暂时无法发起支付，请在本人订单中继续')};
     }
+  }
 
-    if (!user.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
-    let paymentParams: any;
-    try {
-      paymentParams = await this.paymentService.wxUnifiedOrder({
-        bizType: 'activity_order',
-        bizId: order.id,
-        orderNo: order.orderNo,
-        amount,
-        description: activity.title || '活动报名',
-        openid: user.openid,
-        userId,
-      });
-    } catch (error) {
-      await this.prisma.$transaction(async (tx) => {
-        await this.membershipService.restoreBenefitUsagesForTarget('activity_order', order.id, tx);
-        await tx.subsidyLedger.updateMany({
-          where: { sourceType: 'membership', orderType: 'activity_order', orderId: order.id },
-          data: { status: 'cancelled' },
-        }).catch(() => undefined);
-        await tx.activityOrder.update({
-          where: { id: order.id },
-          data: { orderStatus: 'cancelled', refundReason: '支付发起失败，系统取消' },
-        }).catch(() => undefined);
-      });
-      throw error;
-    }
-    return {
-      success: true,
-      requires_payment: true,
-      order_id: order.id,
-      order_no: order.orderNo,
-      member_benefit: memberBenefit,
-      payment_params: paymentParams,
-      paymentInfo: paymentParams,
-    };
+  async getMyOrder(userId: string, orderId: string) {
+    const order = await this.prisma.activityOrder.findUnique({ where: { id: orderId }, include: { activity: true, package: true, tickets: true } });
+    if (!order || order.userId !== userId) throw new NotFoundException('本人活动订单不存在');
+    return this.formatOrder(order);
+  }
+
+  async continueOrderPayment(userId: string, orderId: string) {
+    const order = await this.getMyOrder(userId, orderId);
+    if (order.orderStatus !== 'pending' || order.payStatus === 'paid') return {success:true,requires_payment:false,order_id:order.id,order_no:order.orderNo,order};
+    if (Number(order.amount) <= 0) throw new BadRequestException('免费订单确认中，请刷新');
+    if (!['upcoming','signup','ongoing'].includes(order.activity?.status) || new Date(order.activity.endAt)<=new Date()) throw new BadRequestException('活动已结束或取消，不可继续付款');
+    const user = await this.prisma.user.findUnique({where:{id:userId},select:{openid:true}});
+    if (!user || !canStartWechatPayment(user.openid)) throw new BadRequestException('当前账号或客户端无法发起微信支付');
+    const payment = await this.paymentService.wxUnifiedOrder({bizType:'activity_order',bizId:order.id,orderNo:order.orderNo,amount:Number(order.amount),description:order.activity?.title||'活动购票',openid:user.openid,userId});
+    return {success:true,requires_payment:true,order_id:order.id,order_no:order.orderNo,order,payment_params:payment,paymentInfo:payment};
+  }
+
+  async cancelMyOrder(userId: string, orderId: string) {
+    await this.getMyOrder(userId, orderId);
+    await this.prisma.$transaction(async tx=>{
+      const order=await lockActivityOrder(tx,orderId);
+      if(order.userId!==userId)throw new NotFoundException('本人订单不存在');
+      if(order.orderStatus==='cancelled')return;
+      if(order.orderStatus!=='pending'||order.payStatus==='paid')throw new BadRequestException('仅未付款订单可以取消');
+      await tx.activityOrder.update({where:{id:order.id},data:{orderStatus:'cancelled',refundReason:'用户取消未付款订单'}});
+      await this.membershipService.restoreBenefitUsagesForTarget('activity_order',order.id,tx);
+      await tx.subsidyLedger.updateMany({where:{orderType:'activity_order',orderId:order.id},data:{status:'cancelled'}});
+    });
+    return this.getMyOrder(userId,orderId);
+  }
+
+  async refundMyOrder(userId: string, orderId: string, dto: any) {
+    const reason=String(dto?.reason||'').trim();
+    if(!reason||reason.length>200)throw new BadRequestException('退款原因须为 1–200 字');
+    await this.getMyOrder(userId,orderId);
+    await this.prisma.$transaction(async tx=>{
+      const row=await lockActivityOrder(tx,orderId);
+      if(row.userId!==userId)throw new NotFoundException('本人订单不存在');
+      if(row.refundStatus==='pending'||row.orderStatus==='pending_refund'||row.orderStatus==='refunded')return;
+      if(row.orderStatus!=='paid'||row.payStatus!=='paid')throw new BadRequestException('当前订单不能申请退款');
+      if(await tx.activityTicket.count({where:{orderId,ticketStatus:{not:'valid'}}}))throw new BadRequestException('票券已使用或失效，不能申请整单退款');
+      await tx.activityOrder.update({where:{id:orderId},data:{refundStatus:'pending',refundReason:reason}});
+      await tx.activityTicket.updateMany({where:{orderId,ticketStatus:'valid'},data:{ticketStatus:'refund_pending'}});
+    });
+    return this.getMyOrder(userId,orderId);
+  }
+
+  async checkInTicket(userId: string, activityId: string, code: string) {
+    if(!code||code.length>100)throw new BadRequestException('请输入有效票券码');
+    return this.prisma.$transaction(async tx=>{
+      await lockActivity(tx,activityId);
+      const activity=await tx.activity.findUnique({where:{id:activityId},include:{club:true}});
+      if(!activity?.clubId||!activity.club)throw new BadRequestException('该活动未配置社团核销权限');
+      const member=await tx.activityClubMember.findUnique({where:{clubId_userId:{clubId:activity.clubId,userId}}});
+      if(activity.club.leaderId!==userId&&activity.club.adminUserId!==userId&&!['leader','admin'].includes(member?.role||''))throw new ForbiddenException('仅本社团负责人可以核销');
+      if(!['signup','ongoing'].includes(activity.status)||activity.endAt<new Date())throw new BadRequestException('活动当前不可核销');
+      const ticket=await tx.activityTicket.findFirst({where:{activityId,ticketNumber:code},include:{order:true}});
+      if(!ticket||ticket.order.orderStatus!=='paid'||ticket.order.payStatus!=='paid')throw new BadRequestException('票券不存在或订单不可用');
+      if(ticket.ticketStatus!=='valid')throw new BadRequestException('票券已核销或失效');
+      const updated=await tx.activityTicket.updateMany({where:{id:ticket.id,ticketStatus:'valid'},data:{ticketStatus:'used',checkInTime:new Date(),checkedInBy:userId}});
+      if(updated.count!==1)throw new BadRequestException('票券已由其他操作核销');
+      return {success:true,ticket_id:ticket.id,ticket_status:'used'};
+    });
   }
 
   private async resolveActivityMemberBenefit(userId: string, amount: number, quantity: number) {
@@ -369,93 +379,24 @@ export class ActivityService {
   }
 
   async finishPaidActivityOrder(orderId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const order = await tx.activityOrder.findUnique({
-        where: { id: orderId },
-        include: { package: true, activity: true },
-      });
-      if (!order) throw new NotFoundException('订单不存在');
-      if (order.orderStatus === 'paid' || order.orderStatus === 'joined') {
-        return order;
-      }
-
-      await tx.activityOrder.update({
-        where: { id: orderId },
-        data: { payStatus: 'paid', orderStatus: 'paid', payTime: new Date(), payChannel: order.payChannel || 'wx_pay' },
-      });
-      await tx.activityJoin.upsert({
-        where: { activityId_userId: { activityId: order.activityId, userId: order.userId } },
-        create: { activityId: order.activityId, userId: order.userId, status: 'joined' },
-        update: { status: 'joined' },
-      });
-      await tx.activity.update({
-        where: { id: order.activityId },
-        data: { joinCount: { increment: order.quantity } },
-      });
-      if (order.packageId) {
-        await tx.activityPackage.update({
-          where: { id: order.packageId },
-          data: { availableTickets: { decrement: order.quantity } },
-        });
-      }
-      const ticketCount = await tx.activityTicket.count({ where: { orderId: order.id } });
-      if (ticketCount === 0) {
-        await tx.activityTicket.createMany({
-          data: Array.from({ length: order.quantity }).map((_, index) => ({
-            orderId: order.id,
-            packageId: order.packageId,
-            activityId: order.activityId,
-            userId: order.userId,
-            ticketNumber: `${order.orderNo}-${String(index + 1).padStart(2, '0')}`,
-            ticketStatus: 'valid',
-          })),
-        });
-      }
-      return order;
-    });
+    return this.prisma.$transaction(async tx => (await settleActivityPayment(tx, orderId)).order);
   }
-
   async expirePendingPayment(orderId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const order = await tx.activityOrder.findUnique({ where: { id: orderId } });
-      if (!order || order.orderStatus !== 'pending' || order.payStatus === 'paid') return false;
-      const claimed = await tx.activityOrder.updateMany({
-        where: { id: orderId, orderStatus: 'pending', payStatus: { not: 'paid' } },
-        data: { orderStatus: 'cancelled', refundReason: '支付超时自动取消' },
-      });
-      if (claimed.count !== 1) return false;
-      await this.membershipService.restoreBenefitUsagesForTarget('activity_order', order.id, tx);
-      await tx.subsidyLedger.updateMany({
-        where: { sourceType: 'membership', orderType: 'activity_order', orderId: order.id },
-        data: { status: 'cancelled' },
-      }).catch(() => undefined);
+    const existing=await this.prisma.activityOrder.findUnique({where:{id:orderId}});
+    if(!existing)return false;
+    return this.prisma.$transaction(async tx=>{
+      const order=await lockActivityOrder(tx,orderId);
+      if(order.orderStatus!=='pending'||order.payStatus==='paid')return false;
+      await tx.activityOrder.update({where:{id:orderId},data:{orderStatus:'cancelled',refundReason:'支付超时已确认关闭'}});
+      await this.membershipService.restoreBenefitUsagesForTarget('activity_order',orderId,tx);
+      await tx.subsidyLedger.updateMany({where:{orderType:'activity_order',orderId},data:{status:'cancelled'}});
       return true;
     });
   }
-
   async joinFreeActivity(userId: string, activityId: string) {
-    const activity = await this.prisma.activity.findUnique({ where: { id: activityId } });
-    if (!activity) throw new NotFoundException('活动不存在');
-    await this.userAccess.assertStudentProtectedAction(userId, activity.regionId, '报名活动');
-    if (activity.status === 'cancelled' || activity.status === 'ended') throw new BadRequestException('活动已结束');
-    if (activity.visibility === 'member_only' && !(await this.membershipService.hasBenefit(userId, 'member_only_activity').catch(() => false))) {
-      throw new BadRequestException('该活动为会员专属活动，请先开通会员');
-    }
-    const fee = this.toMoney(activity.fee);
-    if (fee > 0) throw new BadRequestException('该活动需要购票参加');
-    const existing = await this.prisma.activityJoin.findUnique({
-      where: { activityId_userId: { activityId, userId } },
-    });
-    if (existing?.status === 'joined') return { success: true, message: '已报名', joined: true };
-    await this.prisma.$transaction([
-      this.prisma.activityJoin.upsert({
-        where: { activityId_userId: { activityId, userId } },
-        create: { activityId, userId, status: 'joined' },
-        update: { status: 'joined' },
-      }),
-      this.prisma.activity.update({ where: { id: activityId }, data: { joinCount: { increment: existing ? 0 : 1 } } }),
-    ]);
-    return { success: true, message: '报名成功', joined: true };
+    const activity=await this.prisma.activity.findUnique({where:{id:activityId},include:{packages:true}});
+    if(!activity||activity.packages.length||Number(activity.fee||0)>0)throw new BadRequestException('该活动须选择票种并通过购票流程报名');
+    return this.createOrderWithPayment(userId,{activity_id:activityId,quantity:1,request_key:'free_'+createHash('sha256').update(activityId).digest('hex')});
   }
 
   async getMyOrders(userId: string, query: any) {
@@ -512,24 +453,52 @@ export class ActivityService {
       product_status: order.payStatus === 'paid' ? 2 : 0,
       img: order.activity?.cover || '/static/logo.jpg',
       name: order.activity?.title || '活动',
-      status_str: order.payStatus === 'paid' ? '已报名' : '待支付',
+      status_str: ({pending:'待支付',paid:'已报名',cancelled:'已取消',pending_refund:'退款处理中',refunded:'已退款'} as any)[order.orderStatus] || order.orderStatus,
+      can_refund: order.orderStatus==='paid' && !['pending','processing','partial_refunded'].includes(order.refundStatus) && (order.tickets||[]).every((t:any)=>t.ticketStatus==='valid'),
     };
   }
 
-  async getClubDetail(clubId: string) {
-    const club = await this.prisma.activityClub.findUnique({ where: { id: clubId }, include: { members: { include: { user: { select: { id: true, nickname: true, avatar: true } } } } } });
+  private async readableClub(clubId: string, userId?: string) {
+    const club = await this.prisma.activityClub.findUnique({ where: { id: clubId } });
     if (!club) throw new NotFoundException('社团不存在');
-    return club;
+    const member = userId ? await this.prisma.activityClubMember.findUnique({ where: { clubId_userId: { clubId, userId } } }) : null;
+    const canManage = !!userId && (club.leaderId === userId || club.adminUserId === userId || ['leader', 'admin'].includes(member?.role || ''));
+    if (club.status !== 'active' && !canManage) throw new NotFoundException('社团暂未开放');
+    return { club, canManage, member };
   }
 
-  async getClubMembers(clubId: string, query: any) {
-    const { page = 1, size = 10 } = query;
-    return this.prisma.activityClubMember.findMany({ where: { clubId }, include: { user: { select: { id: true, nickname: true, avatar: true } } }, skip: (page - 1) * size, take: Number(size) });
+  async getClubDetail(clubId: string, userId?: string) {
+    const { club, canManage, member } = await this.readableClub(clubId, userId);
+    const [memberCount, activityCount] = await Promise.all([
+      this.prisma.activityClubMember.count({ where: { clubId } }),
+      this.prisma.activity.count({ where: { clubId, visibility: 'public', status: { in: ['upcoming', 'signup', 'ongoing', 'ended'] } } }),
+    ]);
+    return { ...club, canManage, is_admin: canManage, is_member: !!member, memberCount, activityCount };
   }
 
-  async getClubOrders(clubId: string, query: any) {
-    const { page = 1, size = 10, status, user_id } = query;
-    return this.prisma.activityOrder.findMany({ where: { activityId: clubId, ...(status && { status }), ...(user_id && { userId: user_id }) }, skip: (page - 1) * size, take: Number(size), orderBy: { createdAt: 'desc' } });
+  async getClubMembers(clubId: string, query: any, userId?: string) {
+    await this.readableClub(clubId, userId);
+    const page = this.toInt(query.page, 1), size = this.toInt(query.size || query.limit, 20, 1, 50);
+    const where = { clubId };
+    const [list, total] = await Promise.all([
+      this.prisma.activityClubMember.findMany({ where, include: { user: { select: { id: true, nickname: true, avatar: true } } }, skip: (page - 1) * size, take: size, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
+      this.prisma.activityClubMember.count({ where }),
+    ]);
+    return { list, total, page, size };
+  }
+
+  async getClubOrders(clubId: string, query: any, userId: string) {
+    const { canManage } = await this.readableClub(clubId, userId);
+    if (!canManage) throw new ForbiddenException('仅社团负责人可查看报名订单');
+    const page = this.toInt(query.page, 1), size = this.toInt(query.size || query.limit, 20, 1, 50);
+    const where: any = { activity: { clubId } };
+    if (query.pay_status && ['unpaid', 'paid', 'refunded'].includes(String(query.pay_status))) where.payStatus = String(query.pay_status);
+    if (query.order_status && ['pending', 'confirmed', 'cancelled', 'completed', 'refunded'].includes(String(query.order_status))) where.orderStatus = String(query.order_status);
+    const [rows, total] = await Promise.all([
+      this.prisma.activityOrder.findMany({ where, include: { activity: true, package: true, user: { select: { id: true, nickname: true, avatar: true } } }, skip: (page - 1) * size, take: size, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }),
+      this.prisma.activityOrder.count({ where }),
+    ]);
+    return { list: rows.map((row) => this.formatOrder(row)), total, page, size };
   }
 
 }

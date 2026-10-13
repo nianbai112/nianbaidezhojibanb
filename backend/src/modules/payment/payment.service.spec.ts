@@ -2,6 +2,7 @@ import { PaymentService } from './payment.service';
 
 const createService = () => {
   const tx = {
+    mallPromotionUsage:{updateMany:jest.fn().mockResolvedValue({count:0})},
     paymentRefund: {
       updateMany: jest.fn(),
       findUnique: jest.fn().mockResolvedValue(null),
@@ -48,7 +49,7 @@ const createService = () => {
     },
     orderAppeal: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     orderAppealEvent: { create: jest.fn() },
-    mallOrder: { update: jest.fn() },
+    mallOrder: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue({id:'mall-order-1',status:'shipped',items:[],refundStatus:'refunding'}), updateMany: jest.fn().mockResolvedValue({count:1}) },
     mallRefund: { updateMany: jest.fn() },
     membershipOrder: { update: jest.fn() },
     wallet: {
@@ -69,6 +70,7 @@ const createService = () => {
     },
   };
   const prisma = {
+    mallOrder: { findUnique: jest.fn().mockResolvedValue({id:'order-1',userId:'user-1',status:'pending_pay',payAmount:1,payChannel:null}), updateMany: jest.fn().mockResolvedValue({count:1}) },
     order: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
     errandOrder: { update: jest.fn(), findUnique: jest.fn() },
     orderLog: { create: jest.fn() },

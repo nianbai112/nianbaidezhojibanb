@@ -4,12 +4,27 @@ import { SystemConfigService } from '../modules/system-config/system-config.serv
 import { FinanceAdminService } from '../modules/finance-admin/finance-admin.service';
 
 describe('commission contracts', () => {
-  it('uses the paid errand base without taking away the coupon subsidy', () => {
-    const order = { price: 10, tip: 2, payAmount: 8 };
-    const fee = errandPlatformFee(order, { enabled: true, rate: 0.05, fixedFee: 0 });
-    expect(fee).toBe(0.4);
-    expect(errandRiderIncome({ ...order, platformFee: fee })).toBe(11.6);
-    expect(errandPlatformFee({ ...order, payAmount: 0 }, { enabled: true, rate: 1, fixedFee: 99 })).toBe(0);
+  it.each([
+    { price: 1.45, rate: 0.1, fee: 0.15 },
+    { price: 0.29, rate: 0.5, fee: 0.15 },
+    { price: 7.5, rate: 0.07, fee: 0.53 },
+  ])('rounds a half-cent fee consistently for $price at $rate', ({ price, rate, fee }) => {
+    const order = { price, tip: 0, payAmount: 0 };
+    expect(errandPlatformFee(order, { enabled: true, rate })).toBe(fee);
+    expect(Math.round((fee + errandRiderIncome({ ...order, platformFee: fee })) * 100)).toBe(Math.round(price * 100));
+  });
+  it.each([10, 2, 0])('takes 10% of a 10-yuan order regardless of customer payment %s', paid => {
+    const order = { price: 10, tip: 0, payAmount: paid, couponDiscount: 10 - paid };
+    const fee = errandPlatformFee(order, { enabled: true, rate: 0.1, fixedFee: 0 });
+    expect(fee).toBe(1);
+    expect(errandRiderIncome({ ...order, platformFee: fee })).toBe(9);
+  });
+
+  it('uses the original total including tips and caps fees at that total', () => {
+    const order = { price: 10, tip: 2, payAmount: 0 };
+    expect(errandPlatformFee(order, { enabled: true, rate: 0.1, fixedFee: 0 })).toBe(1.2);
+    expect(errandPlatformFee(order, { enabled: true, rate: 1, fixedFee: 99 })).toBe(12);
+    expect(errandPlatformFee(order, { enabled: false, rate: 0.1, fixedFee: 0 })).toBe(0);
   });
 
   it('includes self-delivery revenue and subsidy, and removes partial refunds', () => {
@@ -33,8 +48,11 @@ describe('commission contracts', () => {
     const prisma: any = { bizFeeConfig: { findMany: jest.fn().mockResolvedValue([]) } };
     const service = new SystemConfigService(prisma, {} as any);
     expect((await service.getBizFeeConfigs()).data.find(row => row.bizType === 'errand_order')).toMatchObject({ rate: 0, enabled: false });
-    prisma.bizFeeConfig.findMany.mockResolvedValue([{ bizType: 'errand_order', rate: 0.05, fixedFee: 0, enabled: true }]);
-    expect((await service.getBizFeeConfigs()).data.find(row => row.bizType === 'errand_order')).toMatchObject({ rate: 0.05, enabled: true });
+    prisma.bizFeeConfig.findMany.mockResolvedValue([{ bizType: 'errand_order', rate: 0.05, fixedFee: 0, enabled: true,
+      remark: '确认收货时按实付金额计算，扣除抽成后计入骑手收入' }]);
+    expect((await service.getBizFeeConfigs()).data.find(row => row.bizType === 'errand_order')).toMatchObject({
+      rate: 0.05, enabled: true, remark: '确认收货时按优惠前总金额（配送费＋小费）计算，优惠券不减少抽成基数',
+    });
   });
 
   it.each([{ rate: NaN }, { rate: Infinity }, { rate: -1 }, { rate: 1.2 }, { rate: '0.05' }, { fixedFee: -1 }, { fixedFee: null }, { enabled: 'false' }])('rejects invalid fee settings %j', async dto => {

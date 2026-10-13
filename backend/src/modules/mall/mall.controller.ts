@@ -37,8 +37,8 @@ export class MallController {
 
   @Get('api/mall/products/detail/:id')
   @ApiOperation({ summary: '商品详情' })
-  getProductDetail(@Param('id') id: string) {
-    return this.mallService.getProductDetail(id);
+  getProductDetail(@Param('id') id: string, @Query() query: any) {
+    return this.mallService.getProductDetail(id, query);
   }
 
   @Get('api/mall/merchants/list')
@@ -78,6 +78,18 @@ export class MallController {
   removeCartItem(@Param('id') id: string, @CurrentUser('sub') userId: string) {
     return this.mallService.removeCartItem(id, userId);
   }
+
+  @Post('api/mall/orders/quote')
+  @UseGuards(JwtGuard)
+  quoteOrder(@CurrentUser('sub') userId: string, @Body() dto: any) { return this.mallService.quoteOrder(userId, dto); }
+
+  @Get('api/mall/orders/request/:requestId')
+  @UseGuards(JwtGuard)
+  findOrderByRequest(@CurrentUser('sub') userId: string, @Param('requestId') id: string) { return this.mallService.findOrderByRequest(userId, id); }
+
+  @Post('api/mall/cart/item/:id/update')
+  @UseGuards(JwtGuard)
+  updateCartItemPost(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) { return this.mallService.updateCartItem(id,userId,dto); }
 
   @Post('api/mall/orders/submit')
   @UseGuards(JwtGuard)

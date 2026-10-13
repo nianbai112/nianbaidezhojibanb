@@ -27,6 +27,7 @@ describe('audit request identity', () => {
     expect(result.after.enabled).toBe(true);
     expect(JSON.stringify(result)).not.toContain('old');
     expect(redactAuditDetail({ apiV3Key: 'pay-key', certPem: 'cert-body' })).toEqual({ apiV3Key: '已隐藏敏感信息', certPem: '已隐藏敏感信息' });
+    expect(redactAuditDetail({ encodingAESKey: 'callback-key', callbackToken: 'callback-token' })).toEqual({ encodingAESKey: '已隐藏敏感信息', callbackToken: '已隐藏敏感信息' });
     expect(redactAuditDetail({ base64: 'binary-content' }).base64).toContain('文件内容不写入日志');
   });
 });

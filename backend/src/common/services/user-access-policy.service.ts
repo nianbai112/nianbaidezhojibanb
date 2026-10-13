@@ -1,3 +1,4 @@
+import { effectiveStudentIdentity, identityInclude } from '../../modules/student-identity/student-identity.policy';
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { UserStatus } from '@prisma/client';
 import { PrismaService } from './prisma.service';
@@ -56,44 +57,35 @@ export class UserAccessPolicyService {
     await this.assertDailyQuota(userId, action, scene);
   }
 
-  async assertStudentProtectedAction(userId: string, regionId?: string | null, scene: StudentProtectedAction = '操作') {
-    if (!userId) return;
-
-    // AUD-P1-179: 必须先校验用户为 ACTIVE，再检查学生认证。
-    // 此前这个函数会绕过封禁/禁用检查，导致未开启学生认证区域的 BANNED 用户仍可操作。
-    await this.assertActiveUser(userId, scene);
-
+  async assertStudentProtectedAction(userId: string, regionId?: string | null, scene: StudentProtectedAction = '操作', required = false) {
+    if (userId) await this.assertActiveUser(userId, scene);
     let effectiveRegionId = regionId ? String(regionId) : '';
-    if (!effectiveRegionId) {
-      const profile = await this.prisma.userProfile.findUnique({
-        where: { userId },
-        select: { regionId: true },
-      }).catch(() => null);
+    if (!effectiveRegionId && userId) {
+      const profile = await this.prisma.userProfile.findUnique({ where: { userId }, select: { regionId: true } });
       effectiveRegionId = profile?.regionId || '';
     }
-    if (!effectiveRegionId) return;
-    const [region, user] = await Promise.all([
-      this.prisma.region.findUnique({
-        where: { id: effectiveRegionId },
-        select: { onlyStudentAuthUsers: true },
-      }).catch(() => null),
-      this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { studentVerify: { select: { status: true } } },
-      }).catch(() => null),
-    ]);
-    if (!region?.onlyStudentAuthUsers) return;
-    const status = String(user?.studentVerify?.status || 'none').toLowerCase();
-    if (status === 'approved') return;
-    const isPending = status === 'pending';
+    if (!effectiveRegionId) {
+      if (required) throw new BadRequestException('缺少有效学校区域');
+      return;
+    }
+    const region = await this.prisma.region.findUnique({ where: { id: effectiveRegionId }, select: { onlyStudentAuthUsers: true, settings: true } });
+    if (!region) throw new BadRequestException('区域不存在');
+    const enabled = (value: unknown) => value === true || value === 1 || value === '1';
+    const settings = (region.settings || {}) as any;
+    if (scene === '创建圈子') required ||= enabled(settings.circleConfig?.require_student_auth_create);
+    if (scene === '发布笔记') {
+      const config = await this.prisma.config.findUnique({ where: { key: `content.note_settings.${effectiveRegionId}` }, select: { value: true } });
+      const notes = (config?.value || settings.noteConfig || {}) as any;
+      required ||= enabled(notes.require_student_auth_before_publish) || enabled(notes.force_student_auth);
+    }
+    if (!required && !region.onlyStudentAuthUsers) return;
+    const verification = userId ? await this.prisma.studentVerify.findUnique({ where: { userId }, include: identityInclude }) : null;
+    if (effectiveStudentIdentity(verification, userId, effectiveRegionId)) return;
+    const status = verification?.status === 'APPROVED' ? 'none' : String(verification?.status || 'none').toLowerCase();
     throw new ForbiddenException({
-      success: false,
-      code: 'STUDENT_VERIFICATION_REQUIRED',
-      error_code: 'STUDENT_VERIFICATION_REQUIRED',
-      student_verification_status: status,
-      message: isPending
-        ? `学生认证审核中，审核通过后可${scene}`
-        : `该区域需通过学生认证后才能${scene}`,
+      success: false, code: 'STUDENT_VERIFICATION_REQUIRED', error_code: 'STUDENT_VERIFICATION_REQUIRED',
+      student_verification_status: status, region_id: effectiveRegionId,
+      message: status === 'pending' ? `学生认证审核中，审核通过后可${scene}` : `请完成本校有效学生认证后再${scene}`,
     });
   }
 

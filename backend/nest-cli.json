@@ -4,6 +4,12 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "assets": []
+    "assets": [
+      {
+        "include": "modules/wechat-moments/templates/*.png",
+        "outDir": "dist/src",
+        "watchAssets": true
+      }
+    ]
   }
 }

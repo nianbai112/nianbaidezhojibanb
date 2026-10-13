@@ -9,8 +9,11 @@ describe('OperationService regional titles', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         update: jest.fn(),
       },
+      userProfile: { findUnique: jest.fn().mockResolvedValue({ regionId: 'region-a' }) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       ...overrides,
     };
+    prisma.$transaction = jest.fn((fn: any) => fn(prisma));
     const userAccess: any = {
       assertCurrentRegionStudentProtectedAction: jest.fn().mockResolvedValue(undefined),
     };

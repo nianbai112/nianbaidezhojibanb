@@ -42,6 +42,7 @@ function makeMocks(initialBalance: number) {
     }),
   };
   const mallOrder = {
+    updateMany: jest.fn(async () => ({count:1})),
     findUnique: jest.fn(async () => ({
       id: 'order1',
       userId: 'user1',
@@ -62,8 +63,8 @@ function makeMocks(initialBalance: number) {
     walletTransaction,
     paymentOrder,
     user: { findUnique: jest.fn(async () => ({ openid: 'openid1' })) },
-    // $transaction 直接执行回调并透传 tx 对象（与真实 Prisma 行为一致）
-    $transaction: jest.fn(async (fn: any) => fn({ wallet, walletTransaction, paymentOrder, mallOrder })),
+    // 此替身仅覆盖钱包原子扣款；不模拟数据库回滚/行锁，真实并发另由隔离数据库用例验证。
+    $transaction: jest.fn(async (fn: any) => fn({ mallPromotionUsage:{updateMany:jest.fn().mockResolvedValue({count:0})},wallet, walletTransaction, paymentOrder, mallOrder })),
   };
 
   const redis: any = {

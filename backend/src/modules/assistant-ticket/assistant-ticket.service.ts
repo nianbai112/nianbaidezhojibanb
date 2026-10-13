@@ -89,9 +89,15 @@ export class AssistantTicketService {
     return { ...ticket, title: this.title(content) };
   }
 
-  async listMyTickets(userId: string) {
-    const list = await (this.prisma as any).assistantTicket.findMany({ where: { userId }, include: { replies: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' } });
-    return list.map((ticket: any) => ({ ...ticket, title: this.title(ticket.content), lastMessage: ticket.replies?.[0]?.content || ticket.latestReply || ticket.content, replyCount: ticket.replies?.length || 0 }));
+  async listMyTickets(userId: string, query: any = {}) {
+    const paginated=query.page!==undefined||query.pageSize!==undefined;
+    const page=Number(query.page||1),pageSize=Number(query.pageSize||20);
+    if(!Number.isInteger(page)||page<1||page>100000||!Number.isInteger(pageSize)||pageSize<1||pageSize>100)throw new BadRequestException('咨询分页参数无效');
+    if(query.status&&!['pending','processing','waiting_user','resolved','closed'].includes(query.status))throw new BadRequestException('咨询状态无效');
+    const where={userId,...(query.status?{status:query.status}:{})};
+    const list=await (this.prisma as any).assistantTicket.findMany({where,include:{replies:{orderBy:{createdAt:'desc'},take:1},_count:{select:{replies:true}}},orderBy:[{updatedAt:'desc'},{id:'desc'}],...(paginated?{skip:(page-1)*pageSize,take:pageSize}:{})});
+    const rows=list.map((ticket:any)=>({...ticket,title:this.title(ticket.content),lastMessage:ticket.replies?.[0]?.content||ticket.latestReply||ticket.content,replyCount:ticket._count?.replies||0}));
+    return paginated?{list:rows,total:await (this.prisma as any).assistantTicket.count({where}),page,pageSize}:rows;
   }
 
   async getMyTicket(userId: string, id: string) {

@@ -53,11 +53,14 @@ describe("CircleService - 核心功能", () => {
       findMany: mockTopicGroupFindMany,
       deleteMany: mockTopicGroupDeleteMany,
     },
+    region: { findUnique: jest.fn().mockResolvedValue({ settings: {}, groupChatEnabled: true }) },
     conversation: {
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: mockConversationFindFirst,
       create: mockConversationCreate,
     },
     conversationMember: {
+      createMany: jest.fn(), deleteMany: jest.fn(),
       create: mockConversationMemberCreate,
     },
     $transaction: jest.fn((fn: Function) => fn(mockPrisma)),
@@ -86,7 +89,7 @@ describe("CircleService - 核心功能", () => {
   });
 
   it("inviteMember 应正常邀请成员", async () => {
-    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", regionId: "region-1" });
+    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", regionId: "region-1", status: "active", auditStatus: "approved", memberCount: 1, maxMembers: 10 });
     mockMemberFindUnique
       .mockResolvedValueOnce({ id: "owner-1", circleId: "circle-1", userId: "user-1", role: "OWNER", status: "active" })
       .mockResolvedValueOnce(null);
@@ -99,7 +102,8 @@ describe("CircleService - 核心功能", () => {
   });
 
   it("createGroupChat 应创建群聊", async () => {
-    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", name: "测试圈子", members: [{ userId: "user-1" }] });
+    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", name: "测试圈子", regionId: "r", status: "active", auditStatus: "approved", members: [{ userId: "user-1" }] });
+    mockMemberFindUnique.mockResolvedValue({ role: "OWNER", status: "active" });
     mockConversationCreate.mockResolvedValue({ id: "conv-1" });
 
     const result = await circleService.createGroupChat("circle-1", "user-1", {}, {});
@@ -110,7 +114,8 @@ describe("CircleService - 核心功能", () => {
   it("getPendingMembers 应返回成员列表", async () => {
     mockMemberFindMany.mockResolvedValue([{ id: "cm-1", userId: "user-1" }]);
 
-    const result = await circleService.getPendingMembers("circle-1", {});
+    mockMemberFindUnique.mockResolvedValue({ role: "OWNER", status: "active" });
+    const result = await circleService.getPendingMembers("circle-1", {}, "user-1");
     expect(Array.isArray(result)).toBe(true);
   });
 
@@ -137,7 +142,7 @@ describe("CircleService - 核心功能", () => {
   });
 
   it("join 应正常落库（非假成功）", async () => {
-    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", memberCount: 5 });
+    mockCircleFindUnique.mockResolvedValue({ id: "circle-1", memberCount: 5, maxMembers: 100, status: "active", auditStatus: "approved" });
     mockMemberFindUnique.mockResolvedValue(null);
     mockMemberCreate.mockResolvedValue({ id: "cm-1" });
 

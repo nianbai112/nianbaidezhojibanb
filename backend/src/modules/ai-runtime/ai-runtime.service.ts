@@ -52,6 +52,8 @@ interface AiCallContext {
 
 interface AiChatOptions extends Partial<Pick<AiRuntimeConfig, 'temperature' | 'maxTokens'>>, AiCallContext {
   allowDisabled?: boolean;
+  privateContent?: boolean;
+  timeoutMs?: number;
 }
 
 @Injectable()
@@ -138,6 +140,7 @@ export class AiRuntimeService {
     const message = String(error?.message || '');
     if (error?.name === 'AbortError' || message.includes('timeout')) return 'timeout';
     if (error?.status === 401 || error?.status === 403) return 'auth_error';
+    if (error?.status === 402) return 'provider_payment_required';
     if (error?.status === 429) return 'rate_limited';
     if (error?.status >= 500) return 'provider_5xx';
     if (error?.status >= 400) return 'provider_4xx';
@@ -199,7 +202,7 @@ export class AiRuntimeService {
   }
 
   private async enforceQuotaGuard(config: AiRuntimeConfig, context: AiCallContext) {
-    const ops = await this.readConfig('ai_ops_config').catch(() => ({} as Record<string, any>));
+    const ops = await this.readConfig('ai_ops_config');
     const risk = (ops?.riskControl || {}) as Record<string, any>;
     const maxDailyCalls = Number(risk.maxDailyCalls || 0);
     const maxDailyTokens = Number(risk.maxDailyTokens || 0);
@@ -218,7 +221,7 @@ export class AiRuntimeService {
         outputTokens: true,
         costAmount: true,
       },
-    }).catch(() => null);
+    });
     const callCount = usage?._sum.callCount || 0;
     const tokenCount = (usage?._sum.inputTokens || 0) + (usage?._sum.outputTokens || 0);
     const costAmount = Number(usage?._sum.costAmount || 0);
@@ -355,9 +358,9 @@ export class AiRuntimeService {
     options: AiChatOptions = {},
   ) {
     const config = await this.getRuntimeConfig({ allowDisabled: options.allowDisabled });
-    if (!config.enabled) throw new Error('AI运营未启用，请先在 AI运营中心 / AI配置 中开启');
-    if (!config.apiKey) throw new Error('AI API Key 未配置，请先在 AI运营中心 / AI配置 中填写密钥');
-    if (!config.model) throw new Error('AI 模型未配置，请先填写模型名称');
+    if (!config.enabled) throw Object.assign(new Error('AI运营未启用，请先在 AI运营中心 / AI配置 中开启'), { errorCode: 'ai_disabled' });
+    if (!config.apiKey) throw Object.assign(new Error('AI API Key 未配置，请先在 AI运营中心 / AI配置 中填写密钥'), { errorCode: 'ai_key_missing' });
+    if (!config.model) throw Object.assign(new Error('AI 模型未配置，请先填写模型名称'), { errorCode: 'ai_model_missing' });
 
     const endpoint = options.endpoint || `${config.apiBaseUrl}/chat/completions`;
     const requestId = randomUUID();
@@ -366,7 +369,7 @@ export class AiRuntimeService {
     const purpose = options.purpose || 'generation';
     const source = options.source || 'system';
     let callLogId = '';
-    const timeoutMs = Math.max(3000, Number(this.configService.get('AI_TIMEOUT_MS') || 30000));
+    const timeoutMs = Math.min(60000, Math.max(3000, Number(options.timeoutMs || this.configService.get('AI_TIMEOUT_MS') || 30000)));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -384,7 +387,7 @@ export class AiRuntimeService {
         adminId: options.adminId || null,
         regionId: options.regionId || null,
         promptHash: this.hash(promptText),
-        promptPreview: this.preview(promptText),
+        promptPreview: options.privateContent ? '[微信会话正文不记入通用日志]' : this.preview(promptText),
         status: 'running',
       },
       select: { id: true },
@@ -404,7 +407,10 @@ export class AiRuntimeService {
           model: config.model,
           messages,
           temperature: options.temperature ?? config.temperature,
-          max_tokens: options.maxTokens ?? config.maxTokens,
+          // Explicit zero means no application output cap, never a fallback to config.maxTokens.
+          ...((options.maxTokens ?? config.maxTokens) > 0
+            ? { max_tokens: options.maxTokens ?? config.maxTokens }
+            : {}),
         }),
       });
 
@@ -417,6 +423,9 @@ export class AiRuntimeService {
 
       const result = await response.json();
       const content = String(result.choices?.[0]?.message?.content || '').trim();
+      const rawFinishReason = result.choices?.[0]?.finish_reason;
+      const finishReason = ['stop', 'length', 'content_filter', 'tool_calls', 'insufficient_system_resource'].includes(rawFinishReason)
+        ? rawFinishReason as string : rawFinishReason == null ? null : 'unknown';
       const inputTokens = Number(result.usage?.prompt_tokens) || this.estimateTokens(promptText);
       const outputTokens = Number(result.usage?.completion_tokens) || this.estimateTokens(content);
       const totalTokens = Number(result.usage?.total_tokens) || inputTokens + outputTokens;
@@ -428,7 +437,7 @@ export class AiRuntimeService {
           where: { id: callLogId },
           data: {
             status: 'success',
-            responsePreview: this.preview(content),
+            responsePreview: options.privateContent ? '[微信回复正文不记入通用日志]' : this.preview(content),
             latencyMs,
             inputTokens,
             outputTokens,
@@ -449,7 +458,7 @@ export class AiRuntimeService {
         costAmount,
       });
 
-      return { content, callLogId, inputTokens, outputTokens, totalTokens, costAmount, latencyMs, provider: config.provider, model: config.model };
+      return { content, callLogId, finishReason, inputTokens, outputTokens, totalTokens, costAmount, latencyMs, provider: config.provider, model: config.model };
     } catch (error: any) {
       const status = error?.name === 'AbortError' ? 'timeout' : 'failed';
       const errorCode = this.classifyError(error);
@@ -460,7 +469,7 @@ export class AiRuntimeService {
           data: {
             status,
             errorCode,
-            errorMessage: String(error?.message || 'AI调用失败').slice(0, 1000),
+            errorMessage: options.privateContent ? errorCode : String(error?.message || 'AI调用失败').slice(0, 1000),
             latencyMs,
           },
         }).catch(() => undefined);

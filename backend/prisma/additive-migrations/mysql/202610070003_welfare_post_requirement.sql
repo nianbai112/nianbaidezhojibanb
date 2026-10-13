@@ -1,0 +1,2 @@
+-- Optional visible-post eligibility; existing campaigns remain unrestricted. Idempotent.
+SET @lm_sql = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_campaigns' AND column_name = 'requirePost'), 'SELECT 1', 'ALTER TABLE `welfare_campaigns` ADD COLUMN `requirePost` BOOLEAN NOT NULL DEFAULT false'); PREPARE lm_stmt FROM @lm_sql; EXECUTE lm_stmt; DEALLOCATE PREPARE lm_stmt;

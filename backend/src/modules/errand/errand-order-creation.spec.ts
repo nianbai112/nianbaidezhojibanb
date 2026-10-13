@@ -119,7 +119,6 @@ describe('ErrandService authoritative order creation', () => {
 
   it('activates a zero-pay order without a payment request', async () => {
     quoteService.quote.mockResolvedValue(quote(0));
-
     const result = await service.createOrder('user-1', dto);
 
     expect(result.data.status).toBe('pending_accept');
@@ -170,8 +169,14 @@ describe('ErrandService authoritative order creation', () => {
         budget_unit: 'yuan',
       },
     },
-  ])('persists the $serviceType contract as $internalType', async ({ serviceType, internalType, task }) => {
+  ])('enforces the $serviceType publishing contract', async ({ serviceType, internalType, task }) => {
     quoteService.quote.mockResolvedValue(quote(0));
+
+    if (internalType === 'meal') {
+      await expect(service.createOrder('user-1', { ...dto, service_type: serviceType, tasks: [task] })).rejects.toThrow('代买入口');
+      expect(tx.errandOrder.create).not.toHaveBeenCalled();
+      return;
+    }
 
     const result = await service.createOrder('user-1', {
       ...dto,
@@ -230,38 +235,12 @@ describe('ErrandService authoritative order creation', () => {
     });
   });
 
-  it('帮我取餐把取餐点地址写入订单头和任务快照', async () => {
-    prisma.errandPickupPoint.findMany.mockResolvedValueOnce([{
-      id: 'canteen-1',
-      name: '学生餐厅',
-      address: '学生餐厅',
-    }]);
-    quoteService.quote.mockResolvedValue(quote(0));
-
-    await service.createOrder('user-1', {
-      ...dto,
-      pickup_address: '',
-      service_type: 'food_delivery',
-      tasks: [{
-        task_type: 'food_delivery',
-        platform: '美团',
-        pickup_point_id: 'canteen-1',
-        code: '5678',
-        item_size_id: 'size-1',
-      }],
-    });
-
-    expect(tx.errandOrder.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        type: 'meal',
-        pickupAddress: '学生餐厅',
-      }),
-    });
-    expect(tx.errandOrderTask.createMany).toHaveBeenCalledWith({
-      data: expect.arrayContaining([
-        expect.objectContaining({ pickupAddress: '学生餐厅' }),
-      ]),
-    });
+  it('旧取餐入口和伪造代买类型均不能绕过新交易流程', async () => {
+    for (const type of ['meal', 'food_delivery', 'purchase']) {
+      await expect(service.createOrder('user-1', { ...dto, type: 'custom_task', service_type: type })).rejects.toThrow('代买');
+    }
+    expect(tx.errandOrder.create).not.toHaveBeenCalled();
+    expect(tx.errandOrderTask.createMany).not.toHaveBeenCalled();
   });
 
   it('按明确币种单位保存万能任务预算，不将大于100元误当为分', async () => {
@@ -286,6 +265,22 @@ describe('ErrandService authoritative order creation', () => {
       ]),
     });
   });
+  it.each([10, 20])('accepts a fully covered order and preserves its rider fee with a %s-yuan coupon', async value => {
+    quoteService.quote.mockResolvedValue(quote(10));
+    const coupon = { id: 'coupon-zero', name: '平台推广券', value, minAmount: 0,
+      type: 'FULL_REDUCTION', status: 'active', businessScope: 'errand' };
+    prisma.couponReceive.findFirst.mockResolvedValue({ id: 'receive-zero', couponId: coupon.id, status: 'unused', coupon });
+    tx.couponReceive.updateMany.mockResolvedValue({ count: 1 });
+    jest.spyOn(service as any, 'resolveCouponCampaign').mockResolvedValue(null);
+    const result = await service.createOrder('user-1', { ...dto, coupon_id: 'receive-zero' });
+    expect(result.data).toMatchObject({ price: 10, tip: 0, couponDiscount: 10, payAmount: 0,
+      status: 'pending_accept', payChannel: 'free', payTime: expect.any(Date) });
+    expect(tx.subsidyLedger.create).toHaveBeenCalledTimes(1);
+    expect(tx.subsidyLedger.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      orderId: result.data.id, payerType: 'platform', receiverType: 'rider', amount: 10,
+    }) });
+  });
+
   it.each([{ value: 10, member: 0 }, { value: 7, member: 3 }])('persists only actual benefits and preserves tips for %j', async scenario => {
     quoteService.quote.mockResolvedValue({ ...quote(10), tip: 2 });
     const coupon = { id: 'coupon-1', name: '测试券', value: scenario.value, minAmount: 0,

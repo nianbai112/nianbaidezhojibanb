@@ -68,7 +68,7 @@ describe('ErrandAdminService closed-loop detail', () => {
 
     expect(prisma.regionRider.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { regionId: 'region-a', riderType: 'official', verifyStatus: 'approved' },
-      include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
+      include: { User: { select: { id: true, uid: true, publicUid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
     }));
   });
 

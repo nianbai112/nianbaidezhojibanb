@@ -2,12 +2,14 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  Optional,
   NotFoundException,
 } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { errandPlatformFee } from '../../common/commission';
 import { PrismaService } from "../../common/services/prisma.service";
 import { creditConfirmedRiderIncome } from "../rider-app/rider-income-credit";
+import { RiderPayoutService } from '../rider-payout/rider-payout.service';
 import {
   inspectErrandAssignmentRisk,
   recordErrandAssignmentRisk,
@@ -15,19 +17,21 @@ import {
 import { RedisService } from "../../common/services/redis.service";
 import { NotifyService } from "../notify/notify.service";
 import { errandExtendedConfigKey } from "./errand-config.util";
-import {
-  ERRAND_MARKETING_HOLD_MS,
-  hasErrandMarketingBenefit,
-} from "./errand-transaction-guards";
+import { LEGACY_MARKETING_HOLD_REASONS } from "./errand-transaction-guards";
+
+import { assertPurchaseReadyForDelivery, lockPurchase, purchaseEvent, PURCHASE_TRANSACTION_OPTIONS } from '../errand-purchase/purchase.transactions';
+import { policy as purchasePolicy, purchaseConfigKey } from '../errand-purchase/purchase.policy';
 
 @Injectable()
 export class ErrandLifecycleService {
   private readonly logger = new Logger(ErrandLifecycleService.name);
+  private autoReceiptCursor: { deadline: string; id: string } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis?: RedisService,
     private readonly notifyService?: NotifyService,
+    @Optional() private readonly riderPayout?: RiderPayoutService,
   ) {}
 
   @Interval(10 * 60 * 1000)
@@ -59,7 +63,10 @@ export class ErrandLifecycleService {
 
   async releaseMaturedSettlementHolds(now = new Date()) {
     const holds = await this.prisma.errandSettlementHold.findMany({
-      where: { status: "holding", releaseAt: { lte: now } },
+      where: { status: "holding", OR: [
+        { releaseAt: { lte: now } },
+        { reasonCode: { in: LEGACY_MARKETING_HOLD_REASONS } },
+      ] },
       select: { id: true, orderId: true, riderId: true },
       orderBy: { releaseAt: "asc" },
       take: 100,
@@ -72,14 +79,12 @@ export class ErrandLifecycleService {
           const currentHold = await tx.errandSettlementHold.findUnique({
             where: { id: hold.id },
           });
-          if (
-            !currentHold ||
-            currentHold.status !== "holding" ||
-            !currentHold.releaseAt ||
-            currentHold.releaseAt > now
-          ) return "skipped";
+          const legacyMarketingHold = !!currentHold && LEGACY_MARKETING_HOLD_REASONS.includes(currentHold.reasonCode);
+          if (!currentHold || currentHold.status !== "holding" ||
+            (!legacyMarketingHold && (!currentHold.releaseAt || currentHold.releaseAt > now))) return "skipped";
           const order = await tx.errandOrder.findUnique({ where: { id: hold.orderId } });
-          if (!order || order.status !== "completed" || order.riderId !== hold.riderId) {
+          if (!order || order.status !== "completed" || order.riderId !== hold.riderId ||
+            (legacyMarketingHold && !order.receiptConfirmedAt)) {
             await tx.errandSettlementHold.update({
               where: { id: hold.id },
               data: { releaseAt: null, reasonCode: "order_state_mismatch" },
@@ -146,7 +151,8 @@ export class ErrandLifecycleService {
             return "blocked";
           }
           const claimed = await tx.errandSettlementHold.updateMany({
-            where: { id: hold.id, status: "holding", releaseAt: { lte: now } },
+            where: { id: hold.id, status: "holding", reasonCode: currentHold.reasonCode,
+              ...(legacyMarketingHold ? {} : { releaseAt: { lte: now } }) },
             data: {
               status: "released",
               resolvedAt: now,
@@ -155,7 +161,20 @@ export class ErrandLifecycleService {
             },
           });
           if (claimed.count !== 1) return "skipped";
-          await this.creditConfirmedRiderIncome(tx, order, now);
+          let settlementOrder = { ...order, platformFee: Number(order.platformFee) };
+          // Unsettled legacy coupon holds adopt the new gross-price rule.
+          // Existing settlement items retain their recorded amount and cannot
+          // be credited again by this compatibility release.
+          if (legacyMarketingHold && !await tx.riderSettlementItem.findFirst({ where: {
+            orderType: 'errand', orderId: order.id, riderId: order.riderId,
+            settlement: { status: { not: 'REJECTED' } },
+          }, select: { id: true } })) {
+            const config = await tx.bizFeeConfig.findUnique({ where: { bizType: 'errand_order' } });
+            const platformFee = errandPlatformFee(order, config);
+            await tx.errandOrder.update({ where: { id: order.id }, data: { platformFee } });
+            settlementOrder = { ...order, platformFee };
+          }
+          await this.creditConfirmedRiderIncome(tx, settlementOrder, now);
           await tx.errandOrder.update({
             where: { id: order.id },
             data: { settlementEligibleAt: now },
@@ -171,27 +190,58 @@ export class ErrandLifecycleService {
         );
       }
     }
+    if (released) this.riderPayout?.kick();
     return { checked: holds.length, released, blocked };
   }
 
   async autoConfirmDueOrders(now = new Date()) {
-    const orders = await this.prisma.errandOrder.findMany({
-      where: {
-        status: "arrived",
-        receiptConfirmDeadline: { lte: now },
-      },
-      select: {
-        id: true,
-        orderNo: true,
-        userId: true,
-        regionId: true,
-        refundStatus: true,
-      },
-      orderBy: { receiptConfirmDeadline: "asc" },
-      take: 100,
-    });
-    if (!orders.length) return { checked: 0, completed: 0, held: 0 };
+    const cursorKey = "errand:auto-receipt:cursor";
+    const stored = this.redis?.getJson
+      ? await this.redis.getJson<{ deadline: string; id: string }>(cursorKey)
+      : this.autoReceiptCursor;
+    let cursor = stored?.id && Number.isFinite(new Date(stored.deadline).getTime())
+      ? stored : null;
+    const result = { checked: 0, completed: 0, held: 0 };
+    // A held page must never hide later orders. Bound each run and persist a
+    // stable deadline/id cursor so the next worker run resumes after this batch.
+    for (let page = 0; page < 10; page += 1) {
+      const orders = await this.prisma.errandOrder.findMany({
+        where: {
+          status: "arrived",
+          receiptConfirmDeadline: { lte: now },
+          ...(cursor ? { OR: [
+            { receiptConfirmDeadline: { gt: new Date(cursor.deadline) } },
+            { receiptConfirmDeadline: new Date(cursor.deadline), id: { gt: cursor.id } },
+          ] } : {}),
+        },
+        select: {
+          id: true, orderNo: true, userId: true, regionId: true,
+          refundStatus: true, receiptConfirmDeadline: true,
+        },
+        orderBy: [{ receiptConfirmDeadline: "asc" }, { id: "asc" }],
+        take: 100,
+      });
+      if (orders.length) {
+        const batch = await this.autoConfirmReceiptBatch(orders);
+        result.checked += batch.checked;
+        result.completed += batch.completed;
+        result.held += batch.held;
+      }
+      const last = orders[orders.length - 1];
+      cursor = orders.length === 100
+        ? { deadline: last.receiptConfirmDeadline!.toISOString(), id: last.id }
+        : null;
+      this.autoReceiptCursor = cursor;
+      if (this.redis?.setJson) await this.redis.setJson(cursorKey, cursor, 24 * 60 * 60);
+      if (!cursor) break;
+    }
+    return result;
+  }
 
+  private async autoConfirmReceiptBatch(orders: Array<{
+    id: string; orderNo: string; userId: string; regionId: string | null;
+    refundStatus: string; receiptConfirmDeadline: Date | null;
+  }>) {
     const regionIds = [
       ...new Set(orders.map((order) => order.regionId).filter(Boolean)),
     ] as string[];
@@ -208,7 +258,6 @@ export class ErrandLifecycleService {
             },
             select: { key: true, value: true },
           })
-          .catch(() => [])
       : [];
     const configs = new Map(
       configRows.map((row: any) => [row.key, row.value || {}]),
@@ -252,6 +301,8 @@ export class ErrandLifecycleService {
       const autoReceiptEnabled =
         regionConfig.autoReceiptEnabled ??
         regionConfig.auto_receipt_enabled ??
+        globalConfig.autoReceiptEnabled ??
+        globalConfig.auto_receipt_enabled ??
         true;
       if (
         autoReceiptEnabled === false ||
@@ -262,7 +313,10 @@ export class ErrandLifecycleService {
         continue;
       }
       try {
-        await this.confirmReceipt(order.id, order.userId, "system");
+        const updated = await this.confirmReceipt(order.id, order.userId, "system");
+        // The buyer or an administrator may finish after the scan selected it.
+        // Their completed receipt is idempotent, but is not a system receipt.
+        if (updated.receiptConfirmedBy !== "system") continue;
         completed += 1;
         if (this.notifyService) {
           await this.notifyService
@@ -273,7 +327,7 @@ export class ErrandLifecycleService {
               scene: "errand_order_auto_received",
               title: "跑腿订单已自动确认收货",
               content:
-                "订单送达已满24小时，系统已自动确认收货；如有问题请尽快发起售后。",
+                "订单已达到约定的自动确认时间，系统已确认收货；如有问题请尽快发起售后。",
               data: { orderId: order.id, orderNo: order.orderNo },
               linkType: "page",
               linkValue: `/pagesA/order/errand-detail/errand-detail?order_id=${order.id}`,
@@ -476,9 +530,16 @@ export class ErrandLifecycleService {
       throw error;
     }
     const now = new Date();
-    const receiptConfirmDeadline = new Date(
-      now.getTime() + 24 * 60 * 60 * 1000,
-    );
+    const currentPurchaseConfig = order.type === "purchase"
+      ? await this.prisma.config.findUnique({
+          where: { key: purchaseConfigKey(order.regionId || "global") },
+          select: { value: true },
+        })
+      : null;
+    const receiptHours = order.type === "purchase"
+      ? purchasePolicy(currentPurchaseConfig?.value).autoReceiptHours
+      : 24;
+    const receiptConfirmDeadline = new Date(now.getTime() + receiptHours * 60 * 60 * 1000);
     const updated = await this.transitionRiderOrder(
       orderId,
       riderId,
@@ -498,9 +559,14 @@ export class ErrandLifecycleService {
   async confirmReceipt(
     orderId: string,
     userId: string,
-    source: "user" | "system" | "rider" = "user",
+    source: "user" | "system" | "rider" | "admin" = "user",
     receiptCode?: string,
+    options: { adminReason?: string } = {},
   ) {
+    const adminReason = typeof options.adminReason === "string" ? options.adminReason.trim() : "";
+    if (source === "admin" && (!userId?.trim() || !adminReason || adminReason.length > 500)) {
+      throw new BadRequestException("请填写 1 至 500 字的管理员代确认原因");
+    }
     const order = await this.prisma.errandOrder.findUnique({
       where: { id: orderId },
     });
@@ -539,10 +605,39 @@ export class ErrandLifecycleService {
     if (appeal) throw new BadRequestException("订单售后处理中，暂不能确认收货");
 
     const now = new Date();
+    let confirmed = false;
+    let blockedReason: string | null = null;
+    const initialOrder = order;
     const updated = await this.prisma.$transaction(async (tx) => {
-      const [assignmentRisk, marketingBenefit, existingHold, currentOpenRisk, currentAppeal] = await Promise.all([
+      let order = initialOrder;
+      if (source === "admin" || source === "system") {
+        const current = order.type === "purchase"
+          ? (await lockPurchase(tx, orderId)).order
+          : await tx.errandOrder.findUnique({ where: { id: orderId } });
+        if (!current) throw new NotFoundException("订单不存在");
+        if (current.status === "completed" && current.receiptConfirmedAt) return current;
+        if (current.status !== "arrived") throw new BadRequestException("订单尚未送达，不能确认收货");
+        if (["refunding", "refunded"].includes(String(current.refundStatus || "none"))) {
+          throw new BadRequestException("订单退款处理中，不能确认收货");
+        }
+        if (source === "system" && (!current.receiptConfirmDeadline || new Date(current.receiptConfirmDeadline) > now)) {
+          throw new BadRequestException("尚未达到自动确认收货时间");
+        }
+        if (source === "system") {
+          const [regionConfig, globalConfig] = await Promise.all([
+            tx.config.findUnique({ where: { key: errandExtendedConfigKey(current.regionId || "global") } }),
+            current.regionId ? tx.config.findUnique({ where: { key: errandExtendedConfigKey("global") } }) : Promise.resolve(null),
+          ]);
+          const regional: any = regionConfig?.value || {};
+          const global: any = globalConfig?.value || {};
+          if ((regional.autoReceiptEnabled ?? regional.auto_receipt_enabled ?? global.autoReceiptEnabled ?? global.auto_receipt_enabled ?? true) === false) {
+            throw new BadRequestException("自动确认收货已关闭");
+          }
+        }
+        order = current;
+      }
+      const [assignmentRisk, existingHold, currentOpenRisk, currentAppeal] = await Promise.all([
         inspectErrandAssignmentRisk(tx, order, order.riderId || ""),
-        hasErrandMarketingBenefit(tx, order),
         tx.errandSettlementHold.findUnique({ where: { orderId } }),
         tx.deliveryRiskEvent.findFirst({
           where: {
@@ -584,31 +679,34 @@ export class ErrandLifecycleService {
           ["error", "critical"].includes(String(assignmentRisk.eventLevel || ""))
           && !assignmentManualApproved
         );
+      if ((source === "admin" || source === "system") && riskBlocked) {
+        // Keep newly discovered risk visible to administrators. Throwing here
+        // would roll it back and leave an unresolvable, silently blocked order.
+        // Commit only the risk record; no completion or money mutation follows.
+        blockedReason = "订单存在未处理的严重风险，请先核查处理后再确认收货";
+        return order;
+      }
       const rejected = existingHold?.status === "rejected";
-      const keepExistingHold = existingHold?.status === "holding";
-      const shouldHold = rejected || riskBlocked || marketingBenefit || keepExistingHold;
+      const legacyMarketingHold = existingHold?.status === 'holding' && LEGACY_MARKETING_HOLD_REASONS.includes(existingHold.reasonCode);
+      const keepExistingHold = existingHold?.status === "holding" && !legacyMarketingHold;
+      const shouldHold = rejected || riskBlocked || keepExistingHold;
       const releaseAt = rejected || riskBlocked
         ? null
-        : marketingBenefit
-          ? new Date(now.getTime() + ERRAND_MARKETING_HOLD_MS)
-          : keepExistingHold
-            ? existingHold.releaseAt || now
-            : null;
+        : keepExistingHold ? existingHold.releaseAt || now : null;
       const holdReason = rejected
         ? existingHold.reasonCode
         : riskBlocked
           ? currentOpenRisk?.eventType || assignmentRisk.reasonCode || "risk_review_required"
           : assignmentManualApproved
             ? existingHold.reasonCode
-            : marketingBenefit
-              ? "marketing_cooling_period"
-              : existingHold?.reasonCode || "admin_release_pending_recheck";
+            : existingHold?.reasonCode || "admin_release_pending_recheck";
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,
           userId: order.userId,
           status: "arrived",
           refundStatus: { notIn: ["refunding", "refunded"] },
+          ...(source === "system" ? { receiptConfirmDeadline: { lte: now } } : {}),
         },
         data: {
           status: "completed",
@@ -634,21 +732,40 @@ export class ErrandLifecycleService {
           nodeLabel:
             source === "system"
               ? "超时自动确认收货"
-              : source === "rider"
-                ? "骑手凭收货码确认收货"
-                : "用户已确认收货",
+              : source === "admin"
+                ? "管理员代确认收货"
+                : source === "rider"
+                  ? "骑手凭收货码确认收货"
+                  : "用户已确认收货",
           operatorId: source === "system" ? null : userId,
           operatorType: source,
           riderType: "part_time",
           displayMode: order.deliveryDisplayMode || "status_nodes",
           remark:
             source === "system"
-              ? "送达24小时后系统自动确认"
-              : source === "rider"
-                ? "骑手凭收货码完成核销"
-                : "用户主动确认收货",
+              ? "达到订单约定的自动确认时间，系统自动确认"
+              : source === "admin"
+                ? adminReason
+                : source === "rider"
+                  ? "骑手凭收货码完成核销"
+                  : "用户主动确认收货",
         },
       });
+      if (source === "admin") {
+        await tx.adminOperationLog.create({
+          data: {
+            accountId: userId, action: "CONFIRM_ERRAND_RECEIPT", module: "errand",
+            targetId: orderId, targetType: "errand_order",
+            detail: { orderNo: order.orderNo, reason: adminReason, source, fromStatus: "arrived", toStatus: "completed" },
+          },
+        });
+      }
+      if (order.type === "purchase") {
+        await purchaseEvent(tx, orderId, source === "system" ? "system" : userId, "receipt_confirmed", {
+          source, ...(source === "admin" ? { reason: adminReason } : {}),
+          receiptConfirmedAt: now.toISOString(),
+        });
+      }
       if (shouldHold && order.riderId) {
         await tx.errandSettlementHold.upsert({
           where: { orderId },
@@ -667,10 +784,24 @@ export class ErrandLifecycleService {
           },
         });
       } else {
+        if (legacyMarketingHold) {
+          const released = await tx.errandSettlementHold.updateMany({
+            where: { id: existingHold.id, status: 'holding', reasonCode: existingHold.reasonCode },
+            data: { status: 'released', releaseAt: now, resolvedAt: now,
+              resolvedBy: 'system:receipt', reasonCode: 'receipt_risk_check_passed' },
+          });
+          if (released.count !== 1) throw new BadRequestException('结算状态已变化，请刷新后重试');
+        }
         await this.creditConfirmedRiderIncome(tx, { ...order, platformFee }, now);
       }
+      confirmed = true;
       return tx.errandOrder.findUniqueOrThrow({ where: { id: orderId } });
-    });
+    }, initialOrder.type === "purchase" ? PURCHASE_TRANSACTION_OPTIONS : undefined);
+    if (blockedReason) throw new BadRequestException(blockedReason);
+    if (!confirmed) return updated;
+    this.riderPayout?.kick();
+    // Income that could not be sent to WeChat is announced now; transfers announce themselves when they settle.
+    await this.riderPayout?.announceKept(orderId).catch(() => undefined);
     await this.dispatchLifecycleNotification(updated, "errand_delivered");
     return updated;
   }
@@ -692,6 +823,7 @@ export class ErrandLifecycleService {
       deliveryFeeAmount: Number(order.price || 0),
       tipAmount: Number(order.tip || 0),
       platformFeeAmount: Number(order.platformFee || 0),
+      reserveAutoPayout: this.riderPayout ? (tx, amount) => this.riderPayout!.reserve(tx, order, amount) : undefined,
       now,
     });
   }
@@ -710,6 +842,10 @@ export class ErrandLifecycleService {
       (await this.requireRiderOrder(orderId, riderId, fromStatus));
     const proofImages = this.proofImages(evidence);
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (order.type === 'purchase') {
+        const purchase = await lockPurchase(tx, orderId);
+        if (toStatus === 'in_progress') await assertPurchaseReadyForDelivery(tx, purchase.order);
+      }
       const claimed = await tx.errandOrder.updateMany({
         where: {
           id: orderId,

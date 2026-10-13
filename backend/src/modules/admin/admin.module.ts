@@ -10,9 +10,10 @@ import { FinanceAdminModule } from '../finance-admin/finance-admin.module';
 import { MembershipModule } from '../membership/membership.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { NotifyModule } from '../notify/notify.module';
+import { StudentIdentityModule } from '../student-identity/student-identity.module';
 
 @Module({
-  imports: [PaymentModule, FinanceAdminModule, MembershipModule, WebsocketModule, NotifyModule],
+  imports: [PaymentModule, FinanceAdminModule, MembershipModule, WebsocketModule, NotifyModule, StudentIdentityModule],
   controllers: [PublicConfigCompatController, AdminController, SupplementController, NewUiCompatController, ApiCompatController],
   providers: [AdminService],
   exports: [AdminService],

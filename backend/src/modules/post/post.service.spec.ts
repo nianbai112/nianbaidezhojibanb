@@ -42,6 +42,7 @@ const makeMockPrisma = () => {
       createMany: jest.fn().mockResolvedValue({ count: 0 }),
       upsert: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       deleteMany: jest.fn().mockResolvedValue({}),
       count: jest.fn().mockResolvedValue(0),
     },
@@ -63,6 +64,7 @@ const makeMockPrisma = () => {
       createMany: jest.fn().mockResolvedValue({}),
     },
     postVoteRecord: {
+      count: jest.fn().mockResolvedValue(0),
       findUnique: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
       upsert: jest.fn().mockResolvedValue({}),
@@ -362,6 +364,7 @@ describe('PostService', () => {
 
   // ============ vote ============
   describe('vote', () => {
+    beforeEach(() => { prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'owner', status: 'PUBLISHED', regionId: 'r1' }); });
     it('should throw if no vote_id', async () => {
       await expect(service.vote('u1', {})).rejects.toThrow(BadRequestException);
     });
@@ -403,7 +406,9 @@ describe('PostService', () => {
 
   // ============ unvote ============
   describe('unvote', () => {
+    beforeEach(() => { prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'owner', status: 'PUBLISHED', regionId: 'r1' }); });
     it('should delete vote record', async () => {
+      prisma.postVote.findUnique.mockResolvedValue({ id: 'v1', postId: 'p1', allowAdd: true });
       const result = await service.unvote('u1', { vote_id: 'v1' });
       expect(result.voted).toBe(false);
       expect(prisma.postVoteRecord.deleteMany).toHaveBeenCalledWith({ where: { voteId: 'v1', userId: 'u1' } });
@@ -416,6 +421,7 @@ describe('PostService', () => {
 
   // ============ getVoteStats ============
   describe('getVoteStats', () => {
+    beforeEach(() => { prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'owner', status: 'PUBLISHED', regionId: 'r1' }); });
     it('should return empty stats for no vote', async () => {
       const result = await service.getVoteStats('p1');
       expect(result.totalVotes).toBe(0);
@@ -448,8 +454,8 @@ describe('PostService', () => {
     });
 
     it('should create options', async () => {
-      prisma.postVote.findUnique.mockResolvedValue({ id: 'v1', postId: 'p1' });
-      prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1' });
+      prisma.postVote.findUnique.mockResolvedValue({ id: 'v1', postId: 'p1', options: [], maxSelect: 1 });
+      prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1', regionId: 'r', status: 'PUBLISHED', deletedAt: null });
       const result = await service.createVoteOptions('u1', {
         vote_id: 'v1',
         options: [{ text: '选项A' }, { text: '选项B' }],
@@ -480,7 +486,7 @@ describe('PostService', () => {
     });
 
     it('should upsert vote settings', async () => {
-      prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1' });
+      prisma.post.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1', regionId: 'r', status: 'PUBLISHED', deletedAt: null });
       const result = await service.upsertVoteSettings('u1', {
         post_id: 'p1', title: '投票标题', max_select: 3,
       });
@@ -500,50 +506,37 @@ describe('PostService', () => {
       process.env.NODE_ENV = prevEnv;
     });
 
-    it('should reject invalid count', async () => {
-      process.env.NODE_ENV = 'development';
-      prisma.post.findUnique.mockResolvedValue({ id: 'p1' });
-      await expect(
-        service.simulateActions('u1', { post_id: 'p1', action: 'view', count: 200 }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should accept view simulation', async () => {
-      process.env.NODE_ENV = 'development';
-      prisma.post.findUnique.mockResolvedValue({ id: 'p1' });
-      const result = await service.simulateActions('u1', { post_id: 'p1', action: 'view', count: 5 });
-      expect(result.success).toBe(true);
+    it('rejects fake interaction in development as well, without writing counters', async () => {
+      const original = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'development';
+        await expect(service.simulateActions('u1', { post_id: 'p1', action: 'view', count: 5 })).rejects.toThrow(ForbiddenException);
+        expect(prisma.post.update).not.toHaveBeenCalled();
+      } finally { process.env.NODE_ENV = original; }
     });
   });
 
   // ============ co-creators ============
   describe('co-creators', () => {
     it('should create pending co-creator invites', async () => {
-      prisma.post.findUnique.mockResolvedValue({ userId: 'author' });
+      prisma.post.findUnique.mockResolvedValue({ userId: 'author', regionId: 'r', status: 'PUBLISHED', deletedAt: null });
       const result = await service.inviteCoCreators('p1', 'author', {
         user_ids: ['u1'],
         invite_message: '一起写',
       });
       expect(result).toMatchObject({ success: true, count: 1 });
-      expect(prisma.postCollaborator.upsert).toHaveBeenCalledWith(expect.objectContaining({
-        where: { postId_userId: { postId: 'p1', userId: 'u1' } },
-        create: expect.objectContaining({
-          postId: 'p1',
-          userId: 'u1',
-          inviterId: 'author',
-          status: 'pending',
-          inviteMessage: '一起写',
-        }),
-      }));
+      expect(prisma.postCollaborator.createMany).toHaveBeenCalledWith({ data: [{ postId: 'p1', userId: 'u1', inviterId: 'author', status: 'pending', inviteMessage: '一起写' }], skipDuplicates: true });
+      expect(prisma.postCollaborator.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { postId: 'p1', userId: { in: ['u1'] }, status: { not: 'accepted' } } }));
       expect(prisma.post.update).toHaveBeenCalledWith({ where: { id: 'p1' }, data: { isCoCreate: true } });
     });
 
     it('should accept an existing co-creator invite', async () => {
+      prisma.post.findUnique.mockResolvedValue({ userId: 'author', regionId: 'r', status: 'PUBLISHED', deletedAt: null });
       prisma.postCollaborator.findUnique.mockResolvedValue({ id: 'c1', postId: 'p1', userId: 'u1', status: 'pending' });
       const result = await service.respondCoCreatorInvite('p1', 'u1', { action: 'accept' });
       expect(result).toMatchObject({ success: true, accepted: true });
-      expect(prisma.postCollaborator.update).toHaveBeenCalledWith(expect.objectContaining({
-        where: { postId_userId: { postId: 'p1', userId: 'u1' } },
+      expect(prisma.postCollaborator.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { postId: 'p1', userId: 'u1', status: 'pending' },
         data: expect.objectContaining({
           status: 'accepted',
           rejectedAt: null,

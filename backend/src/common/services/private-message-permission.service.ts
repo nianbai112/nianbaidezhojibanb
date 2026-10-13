@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { effectiveStudentIdentity, identityInclude } from '../../modules/student-identity/student-identity.policy';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 
 type ReceiverInput = string | {
@@ -42,18 +43,19 @@ export class PrivateMessagePermissionService {
       where: { id: senderId },
       select: {
         profile: { select: { regionId: true } },
-        studentVerify: { select: { status: true } },
+        studentVerify: { include: identityInclude },
       },
-    }).catch(() => null);
+    });
     const regionId = user?.profile?.regionId;
     if (!regionId) return null;
     const region = await this.prisma.region.findUnique({
       where: { id: regionId },
       select: { onlyStudentAuthUsers: true },
-    }).catch(() => null);
-    if (!region?.onlyStudentAuthUsers) return null;
+    });
+    if (!region) throw new ForbiddenException('学校区域不存在，暂不能发送私信');
+    if (!region.onlyStudentAuthUsers) return null;
     const status = String(user?.studentVerify?.status || 'none').toLowerCase();
-    if (status === 'approved') return null;
+    if (effectiveStudentIdentity(user?.studentVerify, senderId, regionId)) return null;
     return {
       allowed: false,
       canSend: false,
@@ -63,7 +65,7 @@ export class PrivateMessagePermissionService {
         : '该区域需通过学生认证后才能发送私信',
       code: 'STUDENT_VERIFICATION_REQUIRED',
       error_code: 'STUDENT_VERIFICATION_REQUIRED',
-      student_verification_status: status,
+      student_verification_status: status === 'approved' ? 'none' : status,
       messagePermission: null,
       messagePermissionText: '',
       relation: {

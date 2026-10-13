@@ -210,6 +210,9 @@ async function main() {
     { code: 'coupon:redeem-code:view', name: '查看卡券兑换码', module: 'coupon', action: 'redeem-code:view' },
     { code: 'coupon:redeem-code:create', name: '生成卡券兑换码', module: 'coupon', action: 'redeem-code:create' },
     { code: 'coupon:redeem-code:edit', name: '管理卡券兑换码', module: 'coupon', action: 'redeem-code:edit' },
+    { code: 'academic:view', name: '查看课表', module: 'academic', action: 'view' },
+    { code: 'academic:edit', name: '管理课表', module: 'academic', action: 'edit' },
+    { code: 'academic:config', name: '配置课程提醒', module: 'academic', action: 'config' },
     { code: 'activity:view', name: '查看活动', module: 'activity', action: 'view' },
     { code: 'activity:edit', name: '管理活动', module: 'activity', action: 'edit' },
     { code: 'activity:audit', name: '审核活动订单', module: 'activity', action: 'audit' },
@@ -361,6 +364,16 @@ async function main() {
     { code: 'abtest:edit', name: '编辑A/B测试', module: 'abtest', action: 'edit' },
 
     // AI
+    { code: 'wechat:conversation:view', name: '查看微信会话', module: 'wechat', action: 'view' },
+    { code: 'wechat:content:view', name: '查看微信聊天正文', module: 'wechat', action: 'content' },
+    { code: 'wechat:reply:edit', name: '管理微信自动回复', module: 'wechat', action: 'edit' },
+    { code: 'wechat:log:view', name: '查看微信回复任务', module: 'wechat', action: 'log' },
+    { code: 'wechat:knowledge:edit', name: '管理微信问答资料', module: 'wechat', action: 'knowledge' },
+    { code: 'wechat:broadcast:view', name: '查看订单群播报', module: 'wechat', action: 'broadcast_view' },
+    { code: 'wechat:broadcast:edit', name: '管理订单群播报', module: 'wechat', action: 'broadcast_edit' },
+    { code: 'skill:view', name: '查看微信 Skill', module: 'skill', action: 'view' },
+    { code: 'skill:edit', name: '编辑微信 Skill 草稿', module: 'skill', action: 'edit' },
+    { code: 'skill:publish', name: '发布及停用微信 Skill', module: 'skill', action: 'publish' },
     { code: 'ai:view', name: '查看AI配置', module: 'ai', action: 'view' },
     { code: 'ai:edit', name: '编辑AI配置', module: 'ai', action: 'edit' },
 
@@ -676,6 +689,7 @@ async function main() {
     { name: '贴纸管理', path: '/sticker', icon: 'SmileOutlined', sortOrder: 27 },
     { name: '分类管理', path: '/sticker/categories', parentPath: '/sticker', sortOrder: 0 },
     { name: '贴纸审核', path: '/sticker/list', parentPath: '/sticker', sortOrder: 1 },
+    { name: '课表管理', path: '/academic/schedule', icon: 'CalendarOutlined', sortOrder: 30 },
     // 活动管理
     { name: '活动管理', path: '/activity', icon: 'ScheduleOutlined', sortOrder: 28 },
     { name: '活动列表', path: '/activity/list', parentPath: '/activity', sortOrder: 0 },

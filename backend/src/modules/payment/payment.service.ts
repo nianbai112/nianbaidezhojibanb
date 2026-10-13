@@ -1,3 +1,7 @@
+import { settleActivityPayment, settleActivityRefund } from '../activity/activity-settlement';
+import { applyPurchasePayment } from '../errand-purchase/purchase.transactions';
+import { paymentClient, canStartWechatPayment, assertPaymentGoodsAllowed } from '../../common/payment-client';
+import { CHANGE_BIZ, PURCHASE_BIZ } from '../errand-purchase/purchase.policy';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/services/prisma.service';
@@ -12,8 +16,9 @@ import { errandExtendedConfigKey, normalizeErrandExtendedConfig } from '../erran
 import { assessApprovedRiderFallbackEligibility } from '../errand/errand-order-taking-policy';
 import { restoreErrandOrderCoupon } from '../errand/errand-coupon-restoration';
 
-type WxPayRuntimeConfig = {
+export type WxPayRuntimeConfig = {
   appid: string;
+  appAppid?: string;
   mchid: string;
   apiV3Key: string;
   certSerialNo: string;
@@ -136,6 +141,7 @@ export class PaymentService {
 
     return {
       appid: this.text(miniapp.appId) || this.text(this.config.get('WX_MINI_APPID')),
+      appAppid: this.text(pay.appAppId) || this.text(this.config.get('WX_APP_APPID')),
       mchid: this.text(pay.mchId || pay.mchid) || this.text(this.config.get('WX_PAY_MCHID')),
       apiV3Key: this.text(pay.apiV3Key) || this.text(this.config.get('WX_PAY_APIV3_KEY')),
       certSerialNo: this.text(pay.certSerialNo) || this.text(this.config.get('WX_PAY_CERT_SERIAL_NO')),
@@ -149,20 +155,51 @@ export class PaymentService {
     };
   }
 
+  /** Server-only credentials shared with the merchant transfer adapter. */
+  async getWechatTransferRuntime(): Promise<WxPayRuntimeConfig> {
+    return this.getWxPayConfig();
+  }
+
   // ============ 微信支付 V3 下单 ============
 
   async wxUnifiedOrder(dto: { bizType: string; bizId: string; orderNo: string; amount: number; description: string; openid: string; userId?: string }) {
+    if (!canStartWechatPayment(dto.openid)) throw new BadRequestException('请先使用微信小程序绑定账号后再发起支付');
+    if (paymentClient() !== 'miniapp' && !dto.userId) throw new BadRequestException('请先登录后发起支付');
+    assertPaymentGoodsAllowed(dto.bizType);
     return this.runWithLock(`payment:unified:${dto.bizType}:${dto.bizId}`, '支付单正在创建中，请勿重复提交', () => this.wxUnifiedOrderUnlocked(dto), 45);
   }
 
   private async wxUnifiedOrderUnlocked(dto: { bizType: string; bizId: string; orderNo: string; amount: number; description: string; openid: string; userId?: string }) {
     const wxPayConfig = await this.getWxPayConfig();
-    const { mchid, appid, notifyUrl } = wxPayConfig;
+    const app = paymentClient() !== 'miniapp';
+    const { mchid, notifyUrl } = wxPayConfig;
+    const appid = app ? wxPayConfig.appAppid : wxPayConfig.appid;
+    const channel = app ? 'wx_app' : 'wx_pay';
 
     if (!mchid || !appid || !notifyUrl) {
-      throw new BadRequestException('微信支付未配置完整：请在后台填写商户号、小程序 AppID 和支付回调地址');
+      throw new BadRequestException(app ? 'App 微信支付尚未配置完整，请联系平台客服' : '微信支付未配置完整：请在后台填写商户号、小程序 AppID 和支付回调地址');
     }
 
+    // Claim a business payment channel before creating an external intent. A pending WeChat intent must not race a balance debit.
+    if (['mall_order','group_buy'].includes(dto.bizType)) {
+      const model = dto.bizType === 'mall_order' ? this.prisma.mallOrder : this.prisma.groupBuyOrder;
+      const order: any = await (model as any).findUnique({where:{id:dto.bizId}});
+      const amount = dto.bizType === 'mall_order' ? Number(order?.payAmount) : Number(order?.amount);
+      if (!order || order.status !== 'pending_pay' || order.userId !== dto.userId || Math.round(amount*100)!==Math.round(dto.amount*100)) throw new BadRequestException('订单身份、金额或状态不允许支付');
+      if (dto.bizType === 'group_buy' && (!order.createdAt || new Date(order.createdAt).getTime() <= Date.now()-15*60000)) throw new BadRequestException('团购订单已超时，请刷新订单');
+      const claimed = await (model as any).updateMany({where:{id:dto.bizId,status:'pending_pay',...(dto.bizType === 'group_buy' ? {createdAt:{gt:new Date(Date.now()-15*60000)}} : {}),OR:[{payChannel:null},{payChannel:'wx_pay'},{payChannel:'wx_app'}]},data:{payChannel:channel}});
+      if (claimed.count!==1) throw new BadRequestException('订单已在其它渠道支付，请先查询订单');
+    }
+    if(dto.bizType==='topup'||dto.bizType==='second_hand'){
+      const model=dto.bizType==='topup'?this.prisma.topupOrder:this.prisma.secondHandOrder;
+      const order:any=await (model as any).findUnique({where:{id:dto.bizId}});
+      const allowed=dto.bizType==='topup'?['pending','paying']:['pending_pay'];
+      const owner=dto.bizType==='topup'?order?.userId:order?.buyerId;
+      const amount=Number(dto.bizType==='topup'?order?.amount:order?.price);
+      if(!order||!allowed.includes(order.status)||owner!==dto.userId||!Number.isFinite(amount)||Math.round(amount*100)!==Math.round(dto.amount*100))throw new BadRequestException('订单身份、金额或状态不允许支付');
+      const resource:any=dto.bizType==='topup'?await this.prisma.post.findUnique({where:{id:order.postId||''}}):await this.prisma.secondHand.findUnique({where:{id:order.productId}});
+      if(!resource||(dto.bizType==='topup'?(resource.status!=='PUBLISHED'||resource.auditStatus!=='approved'||!!resource.deletedAt):resource.status!=='ON_SALE'))throw new BadRequestException('订单内容当前不可购买，请刷新订单');
+    }
     // 幂等检查：如果已有支付单且已支付，直接返回
     const existing = await this.prisma.paymentOrder.findFirst({
       where: { bizType: dto.bizType, bizId: dto.bizId, status: 'paid' },
@@ -175,6 +212,7 @@ export class PaymentService {
       const errandOrderBeforePay = await this.prisma.errandOrder.findUnique({
         where: { id: dto.bizId },
       });
+      if (errandOrderBeforePay?.type === 'purchase') throw new BadRequestException('请从代买入口支付');
       this.assertErrandOrderPayableNow(errandOrderBeforePay);
     }
 
@@ -215,6 +253,10 @@ export class PaymentService {
     }
 
     const amountFen = Math.round(dto.amount * 100);
+    if (!Number.isSafeInteger(amountFen) || amountFen <= 0 || Math.abs(dto.amount * 100 - amountFen) > 0.00001) throw new BadRequestException('支付金额无效');
+    if (paymentOrder && (paymentOrder.channel || 'wx_pay') !== channel) {
+      throw new BadRequestException('该订单已在另一支付渠道发起，请先在原渠道确认结果');
+    }
     const paymentNo = `PAY${Date.now()}${Math.floor(Math.random() * 10000)
       .toString()
       .padStart(4, '0')}`;
@@ -228,7 +270,7 @@ export class PaymentService {
           orderNo: dto.orderNo,
           userId: dto.userId || '',
           amount: dto.amount,
-          channel: 'wx_pay',
+          channel,
           status: 'pending',
           expireTime: new Date(Date.now() + 15 * 60 * 1000), // 15分钟过期
         },
@@ -243,16 +285,17 @@ export class PaymentService {
       out_trade_no: paymentOrder.paymentNo,
       notify_url: notifyUrl,
       amount: { total: amountFen, currency: 'CNY' },
-      payer: { openid: dto.openid },
+      ...(!app ? { payer: { openid: dto.openid } } : {}),
       time_expire: this.formatRfc3339(paymentOrder.expireTime || new Date(Date.now() + 15 * 60 * 1000)),
     };
 
     try {
       // 使用 wechatpay-axios-plugin 或直接 HTTP 调用
-      const url = `/v3/pay/transactions/jsapi`;
+      const url = app ? '/v3/pay/transactions/app' : '/v3/pay/transactions/jsapi';
       const response = await this.wxPayRequest('POST', url, params, wxPayConfig);
 
       const prepayId = response.prepay_id;
+      if (typeof prepayId !== 'string' || !prepayId) throw new Error('支付平台未返回预支付凭证');
 
       // 更新支付单
       await this.prisma.paymentOrder.update({
@@ -263,6 +306,15 @@ export class PaymentService {
       // 生成小程序调起支付参数
       const timeStamp = String(Math.floor(Date.now() / 1000));
       const nonceStr = this.generateNonceStr(32);
+      if (app) {
+        return {
+          paymentNo: paymentOrder.paymentNo,
+          appOrderInfo: {
+            appid, partnerid: mchid, prepayid: prepayId, package: 'Sign=WXPay', noncestr: nonceStr, timestamp: timeStamp,
+            sign: this.generatePaySign(appid, timeStamp, nonceStr, prepayId, wxPayConfig),
+          },
+        };
+      }
       const packageStr = `prepay_id=${prepayId}`;
       const paySign = this.generatePaySign(appid, timeStamp, nonceStr, packageStr, wxPayConfig);
 
@@ -378,6 +430,19 @@ export class PaymentService {
     // 使用事务更新支付单和业务订单
     let bizUpdateResult: any = {};
     await this.prisma.$transaction(async (tx) => {
+      // Purchase callbacks claim the payment row before changing goods or activating delivery.
+      if ([PURCHASE_BIZ, CHANGE_BIZ].includes(payment.bizType)) {
+        const claimed = await tx.paymentOrder.updateMany({ where: { id: payment.id, status: { notIn: ['paid', 'refunding', 'refunded'] } },
+          data: { wxTransId, status: 'paid', payTime: new Date() } });
+        bizUpdateResult = claimed.count ? await applyPurchasePayment(tx, payment) : { skipPostPayNotify: true };
+        if (claimed.count) await tx.platformLedger.create({ data: { orderNo: payment.paymentNo, orderType: payment.bizType, amount: payment.amount, type: 'income', channel: 'wx_pay', status: 'completed', description: '代买用户预付（含代收货款）' } });
+        return;
+      }
+      if (['mall_order', 'group_buy', 'topup', 'second_hand', 'activity_order'].includes(payment.bizType)) {
+        const claimed = await tx.paymentOrder.updateMany({where:{id:payment.id,status:{notIn:['paid','refunding','refunded']}},data:{wxTransId,status:'paid',payTime:new Date()}});
+        bizUpdateResult = claimed.count === 1 ? await this.updateBizOrder(tx,payment) : {skipPostPayNotify:true};
+        return;
+      }
       // 1. 更新支付单
       await tx.paymentOrder.update({
         where: { id: payment.id },
@@ -396,10 +461,15 @@ export class PaymentService {
       (payment.bizType === 'errand_order' && bizUpdateResult.refundExpiredErrand)
       || (payment.bizType === 'order' && bizUpdateResult.refundCancelledShopOrder)
       || (payment.bizType === 'self_unban' && bizUpdateResult.refundInvalidSelfUnban)
+      || (payment.bizType === 'mall_order' && bizUpdateResult.refundCancelledMallOrder)
+      || (payment.bizType === 'group_buy' && bizUpdateResult.refundCancelledGroupBuy)
+      || (payment.bizType === 'topup' && bizUpdateResult.refundCancelledTopup)
+      || (payment.bizType === 'second_hand' && bizUpdateResult.refundCancelledSecondHand)
+      || (payment.bizType === 'activity_order' && bizUpdateResult.refundCancelledActivity)
     ) {
       const reason = bizUpdateResult.refundInvalidSelfUnban
         ? bizUpdateResult.refundInvalidSelfUnbanReason || '封禁状态已变化，迟到的解封付款自动退款'
-        : bizUpdateResult.refundCancelledShopOrder
+        : bizUpdateResult.refundCancelledShopOrder || bizUpdateResult.refundCancelledMallOrder || bizUpdateResult.refundCancelledGroupBuy || bizUpdateResult.refundCancelledTopup || bizUpdateResult.refundCancelledSecondHand || bizUpdateResult.refundCancelledActivity
           ? '订单取消后支付成功自动退款'
           : '跑腿订单时间已过期自动退款';
       await this.refund({
@@ -420,7 +490,7 @@ export class PaymentService {
       return;
     }
 
-    if (payment.bizType === 'errand_order' && !bizUpdateResult.skipPostPayNotify) {
+    if (['errand_order', PURCHASE_BIZ].includes(payment.bizType) && !bizUpdateResult.skipPostPayNotify) {
       await this.notifyAvailableErrandRiders(payment.bizId).catch((error) => {
         this.logger.warn(`跑腿订单支付后通知骑手失败: ${payment.bizId} ${error?.message || ''}`);
       });
@@ -467,18 +537,22 @@ export class PaymentService {
       return;
     }
 
+    if (payment.bizType === 'group_buy') {
+      await this.prisma.$transaction(async tx=>{
+        const closed=await tx.paymentOrder.updateMany({where:{id:payment.id,status:{in:['pending','paying']}},data:{status:terminalStatus}});
+        if(closed.count!==1)return;
+        const row=await tx.groupBuyOrder.findUnique({where:{id:payment.bizId}});if(!row)return;
+        const claimed=await tx.groupBuyOrder.updateMany({where:{id:row.id,status:'pending_pay'},data:{status:'cancelled'}});
+        if(claimed.count===1)await tx.groupBuyPackage.update({where:{id:row.packageId},data:{stock:{increment:row.quantity}}});
+      });return;
+    }
+
     const updated = await this.prisma.paymentOrder.updateMany({
       where: { id: payment.id, status: { in: ['pending', 'paying'] } },
       data: { status: terminalStatus },
     });
     if (updated.count !== 1) return;
 
-    await this.enqueueReservationRelease(payment);
-
-    this.logger.log(`支付终态同步: ${paymentNo} → ${terminalStatus} (微信: ${tradeState})`);
-  }
-
-  private async enqueueReservationRelease(payment: any) {
     if (!['mall_order', 'order', 'errand_order', 'activity_order'].includes(payment.bizType)) return;
     await this.prisma.paymentReservationRelease
       .upsert({
@@ -525,21 +599,38 @@ export class PaymentService {
         });
         break;
 
-      case 'mall_order':
-        const mallFeeConfig = await this.prisma.bizFeeConfig.findUnique({ where: { bizType: 'mall_order' } }).catch(() => null);
-        const mallFeeRate = mallFeeConfig?.enabled && Number(mallFeeConfig?.rate || 0) ? Number(mallFeeConfig.rate) : 0;
-        const mallFixedFee = mallFeeConfig?.enabled ? Number(mallFeeConfig.fixedFee || 0) : 0;
-        const mallPlatformFee = mallFeeRate > 0 || mallFixedFee > 0 ? Math.round((Number(payment.amount) * mallFeeRate + mallFixedFee) * 100) / 100 : 0;
-        await tx.mallOrder.update({
-          where: { id: payment.bizId },
-          data: {
-            status: 'paid',
-            payChannel: 'wx_pay',
-            payTime: new Date(),
-            ...(mallPlatformFee > 0 ? { platformFee: mallPlatformFee } : {}),
-          },
-        });
+      case 'mall_order': {
+        const config = await tx.bizFeeConfig.findUnique({where:{bizType:'mall_order'}});
+        const fee = config?.enabled ? Math.round((Number(payment.amount)*Number(config.rate||0)+Number(config.fixedFee||0))*100)/100 : 0;
+        const claimed=await tx.mallOrder.updateMany({where:{id:payment.bizId,status:'pending_pay'},data:{status:'paid',payChannel:'wx_pay',payTime:new Date(),platformFee:fee}});
+        if(claimed.count===1)await tx.mallPromotionUsage.updateMany({where:{orderId:payment.bizId,status:'reserved'},data:{status:'consumed'}});
+        if(claimed.count!==1) {
+          const current=await tx.mallOrder.findUnique({where:{id:payment.bizId}});
+          if(current?.status==='cancelled') result={skipPostPayNotify:true,refundCancelledMallOrder:true};
+          else if(current && ['paid','shipped','received','completed'].includes(current.status)) result={skipPostPayNotify:true};
+          else throw new BadRequestException('商城订单状态已变化，不能确认付款');
+        }
         break;
+      }
+
+      case 'group_buy': {
+        const row=await tx.groupBuyOrder.findUnique({where:{id:payment.bizId}});
+        if(!row)throw new BadRequestException('团购订单不存在');
+        // A delayed payment callback cannot revive an expired reservation even when the sweep has not run.
+        if(row.status==='pending_pay'&&(!row.createdAt||new Date(row.createdAt).getTime()<=Date.now()-15*60000)){
+          const expired=await tx.groupBuyOrder.updateMany({where:{id:row.id,status:'pending_pay'},data:{status:'cancelled'}});
+          if(expired.count===1)await tx.groupBuyPackage.update({where:{id:row.packageId},data:{stock:{increment:row.quantity}}});
+          const after=expired.count===1?{status:'cancelled'}:await tx.groupBuyOrder.findUnique({where:{id:row.id}});
+          if(after?.status==='cancelled')result={skipPostPayNotify:true,refundCancelledGroupBuy:true};
+          else if(['paid','completed'].includes(after?.status))result={skipPostPayNotify:true};
+          else throw new BadRequestException('团购订单状态已变化');
+          break;
+        }
+        const changed=await tx.groupBuyOrder.updateMany({where:{id:row.id,status:'pending_pay'},data:{status:'paid',payChannel:'wx_pay',payTime:new Date(),verifyStatus:'pending',verifyCode:crypto.randomBytes(12).toString('hex').toUpperCase()}});
+        if(changed.count===1)await tx.groupBuyPackage.update({where:{id:row.packageId},data:{soldCount:{increment:row.quantity}}});
+        else {const current=await tx.groupBuyOrder.findUnique({where:{id:row.id}});if(current?.status==='cancelled')result={skipPostPayNotify:true,refundCancelledGroupBuy:true};else if(!['paid','completed'].includes(current?.status))throw new BadRequestException('团购订单状态不允许确认支付')}
+        break;
+      }
 
       case 'delivery_order':
         await tx.deliveryOrder.update({
@@ -614,143 +705,48 @@ export class PaymentService {
         }
         break;
 
-      case 'topup':
-        const topup = await tx.topupOrder.findUnique({
-          where: { id: payment.bizId },
-        });
-        if (topup) {
-          const post = topup.postId
-            ? await tx.post.findUnique({
-                where: { id: topup.postId },
-                select: { topExpireAt: true },
-              })
-            : null;
-          const duration = Math.max(1, Number(topup.duration || 24));
-          const unit = String(topup.durationUnit || 'hours');
-          const unitMs: Record<string, number> = {
-            minutes: 60 * 1000,
-            hours: 60 * 60 * 1000,
-            days: 24 * 60 * 60 * 1000,
-            weeks: 7 * 24 * 60 * 60 * 1000,
-            months: 30 * 24 * 60 * 60 * 1000,
-          };
-          const now = new Date();
-          const base = post?.topExpireAt && post.topExpireAt > now ? post.topExpireAt : now;
-          const topExpireAt = new Date(base.getTime() + duration * (unitMs[unit] || unitMs.hours));
-          await tx.topupOrder.update({
-            where: { id: payment.bizId },
-            data: {
-              status: 'success',
-              payTime: new Date(),
-              paymentNo: payment.paymentNo,
-              topExpireAt,
-            },
-          });
-          if (topup.postId) {
-            await tx.post.update({
-              where: { id: topup.postId },
-              data: { isTop: true, topExpireAt },
-            });
-          }
+      case 'topup': {
+        const topup = await tx.topupOrder.findUnique({where:{id:payment.bizId}});
+        if (!topup) throw new BadRequestException('置顶订单不存在');
+        if (topup.status === 'success') { result={skipPostPayNotify:true}; break; }
+        const claimed = await tx.topupOrder.updateMany({where:{id:payment.bizId,status:{in:['pending','paying']}},data:{status:'success',payTime:new Date(),paymentNo:payment.paymentNo}});
+        if (claimed.count !== 1) {
+          const latest=await tx.topupOrder.findUnique({where:{id:payment.bizId}});
+          if (latest?.status === 'success') result={skipPostPayNotify:true};
+          else result={skipPostPayNotify:true,refundCancelledTopup:true};
+          break;
         }
+        const post = topup.postId ? await tx.post.updateMany({where:{id:topup.postId,deletedAt:null,status:'PUBLISHED',auditStatus:'approved'},data:{isTop:true}}) : {count:0};
+        if (post.count !== 1) {
+          await tx.topupOrder.update({where:{id:payment.bizId},data:{status:'cancelled',cancelledAt:new Date()}});
+          result={skipPostPayNotify:true,refundCancelledTopup:true};break;
+        }
+        // 前一步更新锁住同一帖子，多个置顶订单依次延长，不能覆盖掉另一笔已支付时长。
+        const current=await tx.post.findUniqueOrThrow({where:{id:topup.postId!},select:{topExpireAt:true}});
+        const units:Record<string,number>={minutes:60000,hours:3600000,days:86400000,weeks:604800000,months:2592000000};
+        const now=new Date(),base=current.topExpireAt&&current.topExpireAt>now?current.topExpireAt:now;
+        const topExpireAt=new Date(base.getTime()+Math.max(1,Number(topup.duration||24))*(units[String(topup.durationUnit||'hours')]||units.hours));
+        await tx.topupOrder.update({where:{id:payment.bizId},data:{topExpireAt}});
+        await tx.post.update({where:{id:topup.postId!},data:{isTop:true,topExpireAt}});
         break;
+      }
 
       case 'second_hand': {
-        const order = await tx.secondHandOrder.findUnique({
-          where: { id: payment.bizId },
-        });
-        await tx.secondHandOrder.update({
-          where: { id: payment.bizId },
-          data: {
-            status: 'paid',
-            payChannel: 'wx_pay',
-            payTime: new Date(),
-            paymentNo: payment.paymentNo,
-          },
-        });
-        if (order?.productId) {
-          await tx.secondHand
-            .update({
-              where: { id: order.productId },
-              data: { status: 'SOLD' },
-            })
-            .catch(() => null);
+        const order=await tx.secondHandOrder.findUnique({where:{id:payment.bizId}});
+        if(order&&['paid','shipped','completed'].includes(order.status)){result={skipPostPayNotify:true};break;}
+        const claimed=await tx.secondHandOrder.updateMany({where:{id:payment.bizId,status:'pending_pay'},data:{status:'paid',payChannel:payment.channel||'wx_pay',payTime:new Date(),paymentNo:payment.paymentNo}});
+        if(!order||claimed.count!==1){result={skipPostPayNotify:true,refundCancelledSecondHand:true};break;}
+        // 闲置仅一件：先成功的真实付款取得商品，其他迟到付款原路退回。
+        const sold=await tx.secondHand.updateMany({where:{id:order.productId,status:'ON_SALE'},data:{status:'SOLD'}});
+        if(sold.count!==1){
+          await tx.secondHandOrder.update({where:{id:order.id},data:{status:'cancelled'}});
+          result={skipPostPayNotify:true,refundCancelledSecondHand:true};
         }
         break;
       }
 
       case 'activity_order': {
-        const order = await tx.activityOrder.findUnique({
-          where: { id: payment.bizId },
-          include: { package: true },
-        });
-        if (!order) break;
-        if (order.payStatus === 'paid' || order.orderStatus === 'paid' || order.orderStatus === 'joined') break;
-
-        await tx.activityOrder.update({
-          where: { id: order.id },
-          data: {
-            payStatus: 'paid',
-            orderStatus: 'paid',
-            payChannel: 'wx_pay',
-            payTime: new Date(),
-          },
-        });
-        await tx.activityJoin.upsert({
-          where: {
-            activityId_userId: {
-              activityId: order.activityId,
-              userId: order.userId,
-            },
-          },
-          create: {
-            activityId: order.activityId,
-            userId: order.userId,
-            status: 'joined',
-          },
-          update: { status: 'joined' },
-        });
-        await tx.activity.update({
-          where: { id: order.activityId },
-          data: { joinCount: { increment: order.quantity } },
-        });
-        if (order.packageId) {
-          // AUD-P1-009: 原子库存扣减 — 防止超卖。只有 availableTickets >= quantity 才扣减。
-          const stockResult = await tx.activityPackage.updateMany({
-            where: {
-              id: order.packageId,
-              availableTickets: { gte: order.quantity },
-            },
-            data: { availableTickets: { decrement: order.quantity } },
-          });
-          if (stockResult.count === 0) {
-            // 库存不足 — 不生成票券，订单进入待退款
-            await tx.activityOrder.update({
-              where: { id: order.id },
-              data: {
-                orderStatus: 'pending_refund',
-                remark: '库存不足，自动退款',
-              },
-            });
-            result.needsRefund = true;
-            break;
-          }
-        }
-        const ticketCount = await tx.activityTicket.count({
-          where: { orderId: order.id },
-        });
-        if (ticketCount === 0) {
-          await tx.activityTicket.createMany({
-            data: Array.from({ length: order.quantity }).map((_, index) => ({
-              orderId: order.id,
-              packageId: order.packageId,
-              activityId: order.activityId,
-              userId: order.userId,
-              ticketNumber: `${order.orderNo}-${String(index + 1).padStart(2, '0')}`,
-              ticketStatus: 'valid',
-            })),
-          });
-        }
+        result = await settleActivityPayment(tx, payment.bizId, Number(payment.amount));
         break;
       }
 
@@ -926,6 +922,9 @@ export class PaymentService {
         bizOrder = await this.prisma.mallOrder.findUnique({
           where: { id: payment.bizId },
         });
+        break;
+      case 'group_buy':
+        bizOrder=await this.prisma.groupBuyOrder.findUnique({where:{id:payment.bizId}});
         break;
       case 'delivery_order':
         bizOrder = await this.prisma.deliveryOrder.findUnique({
@@ -1410,11 +1409,132 @@ export class PaymentService {
     );
   }
 
+  /** Recover accepted refunds when a callback is delayed or cannot be delivered. Never creates a refund. */
+  async reconcileProcessingRefunds(limit = 20) {
+    const refunds = await this.prisma.paymentRefund.findMany({
+      where: {
+        status: 'processing',
+        payment: { channel: 'wx_pay' },
+        updatedAt: { lte: new Date(Date.now() - 60_000) },
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: Math.max(1, Math.min(100, Math.trunc(limit) || 20)),
+      select: { id: true, refundNo: true },
+    });
+    const result = { checked: refunds.length, success: 0, failed: 0, errors: 0 };
+    for (const refund of refunds) {
+      try {
+        // Rotate the oldest attempted rows so an unavailable provider cannot starve later refunds.
+        await this.prisma.paymentRefund.updateMany({
+          where: { id: refund.id, status: 'processing' },
+          data: { updatedAt: new Date() },
+        });
+        const status = await this.reconcileProcessingRefund(refund.refundNo);
+        if (status === 'success') result.success += 1;
+        if (status === 'failed') result.failed += 1;
+      } catch (error: any) {
+        result.errors += 1;
+        this.logger.warn(`退款自动核对未完成: ${refund.refundNo} ${String(error?.message || 'unknown').slice(0, 200)}`);
+      }
+    }
+    return result;
+  }
+
+  async reconcileProcessingRefund(refundNo: string): Promise<string> {
+    // Share the callback lock and its existing atomic settlement path.
+    const status = await this.redis.withRenewingLock(`wxpay_refund_notify_lock:${refundNo}`, 60, async () => {
+      const refund = await this.prisma.paymentRefund.findUnique({
+        where: { refundNo }, include: { payment: true },
+      });
+      if (!refund || refund.status !== 'processing' || refund.payment.channel !== 'wx_pay') return 'skipped';
+      const data = await this.queryWechatRefund(refundNo);
+      const amount = Math.round(Number(refund.amount) * 100);
+      const total = Math.round(Number(refund.payment.amount) * 100);
+      if (data.out_refund_no !== refundNo || data.out_trade_no !== refund.payment.paymentNo ||
+        !this.text(data.refund_id) || (refund.wxRefundId && data.refund_id !== refund.wxRefundId) ||
+        !this.text(data.transaction_id) || (refund.payment.wxTransId && data.transaction_id !== refund.payment.wxTransId) ||
+        !Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(total) ||
+        data.amount?.refund !== amount || data.amount?.total !== total || data.amount?.currency !== 'CNY') {
+        throw new BadRequestException('微信退款查单的订单或金额与本地记录不一致');
+      }
+      if (data.status === 'SUCCESS') {
+        const confirmedAt = new Date(data.success_time);
+        if (!data.success_time || !Number.isFinite(confirmedAt.getTime())) {
+          throw new BadRequestException('微信退款查单缺少有效的成功时间');
+        }
+        await this.handleRefundSuccess(refundNo, data.refund_id, confirmedAt);
+        return 'success';
+      }
+      if (['ABNORMAL', 'CLOSED'].includes(data.status)) {
+        await this.handleRefundFailure(refundNo, data.status);
+        return 'failed';
+      }
+      if (data.status !== 'PROCESSING') throw new BadRequestException('微信退款查单返回未知状态');
+      return 'processing';
+    });
+    return status || 'locked';
+  }
+
+  private async queryWechatRefund(refundNo: string): Promise<any> {
+    const cfg = await this.getWxPayConfig();
+    if (!cfg.mchid || !cfg.certSerialNo || !cfg.merchantPrivateKey) {
+      throw new BadRequestException('微信退款查单缺少商户配置');
+    }
+    // Request a signature that can actually be verified; a public-key ID alone is insufficient.
+    const certificates = { ...cfg.platformCertificates };
+    if (cfg.platformCert) certificates[new crypto.X509Certificate(cfg.platformCert).serialNumber] = cfg.platformCert;
+    const verifySerial = cfg.platformPublicKey && cfg.platformPublicKeyId
+      ? cfg.platformPublicKeyId : Object.keys(certificates)[0];
+    if (!verifySerial) throw new BadRequestException('微信退款查单缺少验签证书或公钥');
+    const path = `/v3/refund/domestic/refunds/${encodeURIComponent(refundNo)}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const nonce = this.generateNonceStr(32);
+    const signature = crypto.sign('RSA-SHA256', Buffer.from(`GET\n${path}\n${timestamp}\n${nonce}\n\n`), cfg.merchantPrivateKey).toString('base64');
+    let response;
+    try {
+      response = await axios({
+        method: 'GET', url: `${this.wxPayBaseUrl}${path}`,
+        headers: {
+          Authorization: `WECHATPAY2-SHA256-RSA2048 mchid="${cfg.mchid}",nonce_str="${nonce}",signature="${signature}",timestamp="${timestamp}",serial_no="${cfg.certSerialNo}"`,
+          Accept: 'application/json', 'Wechatpay-Serial': verifySerial,
+        },
+        responseType: 'text', transformResponse: [(raw) => raw],
+        timeout: 15_000, maxRedirects: 0, validateStatus: () => true,
+      });
+    } catch {
+      // An uncertain query must leave the accepted refund pending; never log signed request credentials.
+      throw new BadRequestException('微信退款查单暂不可用，等待下次核对');
+    }
+    const headers = response.headers;
+    if (typeof response.data !== 'string' || !headers['wechatpay-serial']) {
+      throw new BadRequestException('微信退款查单缺少签名信息');
+    }
+    this.verifyWxPaySign(response.data, headers['wechatpay-signature'], headers['wechatpay-timestamp'],
+      headers['wechatpay-nonce'], { ...cfg, platformCertificates: certificates }, headers['wechatpay-serial']);
+    if (response.status !== 200) throw new BadRequestException(`微信退款查单返回 HTTP ${response.status}，等待下次核对`);
+    return JSON.parse(response.data);
+  }
+
   async refund(dto: { bizType: string; bizId: string; amount: number; reason: string; operatorId?: string; sourceType?: string; sourceId?: string }) {
     return this.runWithLock(`payment:refund:${dto.bizType}:${dto.bizId}`, '退款正在处理中，请勿重复提交', () => this.refundUnlocked(dto), 60);
   }
 
   private async refundUnlocked(dto: { bizType: string; bizId: string; amount: number; reason: string; operatorId?: string; sourceType?: string; sourceId?: string }) {
+    if ([PURCHASE_BIZ, CHANGE_BIZ].includes(dto.bizType)) {
+      if (dto.sourceType !== 'purchase_refund' || !dto.sourceId) throw new BadRequestException('代买退款必须由代买业务单发起');
+      const [jobId, paymentId] = dto.sourceId.split(':');
+      const job = await this.prisma.purchaseRefund.findUnique({ where: { id: jobId } });
+      const allocations = Array.isArray(job?.allocations) ? job.allocations as any[] : [];
+      if (!allocations.some(a => a.paymentId === paymentId && a.bizType === dto.bizType && a.bizId === dto.bizId && a.amountCents === Math.round(dto.amount * 100))) {
+        throw new BadRequestException('退款申请与代买退款台账不匹配');
+      }
+      const existingRefund = await this.prisma.paymentRefund.findFirst({ where: { sourceType: 'purchase_refund', sourceId: dto.sourceId } });
+      if (existingRefund) {
+        if (existingRefund.status === 'failed' || existingRefund.status === 'rejected') throw new BadRequestException(existingRefund.failReason || '退款失败，请在财务退款管理处理');
+        if (existingRefund.status === 'pending') return this.executeRefund(existingRefund.id);
+        return { success: true, refundNo: existingRefund.refundNo, status: existingRefund.status };
+      }
+    }
     // 查找支付单
     const payment = await this.prisma.paymentOrder.findFirst({
       where: {
@@ -1985,6 +2105,7 @@ export class PaymentService {
   }
 
   private async markBizRefunded(tx: any, bizType: string, bizId: string, amount: number, isFullRefund = true, refundedAmount = amount, refundId?: string) {
+    if (bizType === 'activity_order') { await settleActivityRefund(tx, bizId, isFullRefund, refundedAmount); return; }
     switch (bizType) {
       case 'order': {
         const order = await tx.order.findUnique({
@@ -2054,16 +2175,30 @@ export class PaymentService {
         });
         break;
       }
-      case 'mall_order':
-        await tx.mallOrder.update({
-          where: { id: bizId },
-          data: { refundStatus: isFullRefund ? 'refunded' : 'refunding' },
-        });
-        await tx.mallRefund.updateMany({
-          where: { orderId: bizId, status: 'processing' },
-          data: { status: 'refunded', refundTime: new Date() },
-        });
+      case 'mall_order': {
+        const order=await tx.mallOrder.findUnique({where:{id:bizId},include:{items:true}});
+        if(!order)throw new BadRequestException('商城订单不存在');
+        if(isFullRefund)await tx.mallPromotionUsage.updateMany({where:{orderId:bizId,status:{in:['reserved','consumed']}},data:{status:'released'}});
+        // Only a fully refunded, never-shipped paid order releases inventory. Cancelled orders released it at cancellation.
+        const restored=isFullRefund && order.status==='paid' ? await tx.mallOrder.updateMany({where:{id:bizId,status:'paid',refundStatus:{not:'refunded'}},data:{refundStatus:'refunded'}}) : {count:0};
+        if(restored.count===1) for(const item of order.items) {
+          await tx.mallProduct.updateMany({where:{id:item.productId},data:{stock:{increment:item.quantity},saleCount:{decrement:item.quantity}}});
+          if(item.skuId)await tx.mallProductSku.updateMany({where:{id:item.skuId,productId:item.productId},data:{stock:{increment:item.quantity}}});
+        }
+        if(!restored.count)await tx.mallOrder.update({where:{id:bizId},data:{refundStatus:isFullRefund?'refunded':'partial'}});
+        await tx.mallRefund.updateMany({where:{orderId:bizId,status:'processing'},data:{status:'refunded',refundTime:new Date()}});
         break;
+      }
+      case 'group_buy': {
+        const order=await tx.groupBuyOrder.findUnique({where:{id:bizId}});
+        if(!order)throw new BadRequestException('团购订单不存在');
+        if(isFullRefund) {
+          const released=await tx.groupBuyOrder.updateMany({where:{id:bizId,status:{in:['paid','refunding']},verifyStatus:'pending'},data:{status:'refunded',refundTime:new Date(),refundAmount:refundedAmount,verifyCode:null}});
+          if(released.count===1)await tx.groupBuyPackage.update({where:{id:order.packageId},data:{stock:{increment:order.quantity},soldCount:{decrement:order.quantity}}});
+          else if(order.status==='cancelled')await tx.groupBuyOrder.updateMany({where:{id:bizId,status:'cancelled'},data:{status:'refunded',refundTime:new Date(),refundAmount:refundedAmount,verifyCode:null}});
+        } else await tx.groupBuyOrder.updateMany({where:{id:bizId,verifyStatus:'pending',status:{in:['paid','refunding']}},data:{status:'refunding',refundAmount:refundedAmount}});
+        break;
+      }
       case 'delivery_order':
         await tx.deliveryOrder.update({
           where: { id: bizId },
@@ -2124,28 +2259,18 @@ export class PaymentService {
         await this.adjustErrandRiderSettlementForRefund(tx, bizId, refundId, amount);
         if (isFullRefund) await this.restoreErrandOrderBenefits(tx, errandOrder);
         break;
-      case 'second_hand':
-        const order = await tx.secondHandOrder.findUnique({
-          where: { id: bizId },
-        });
-        await tx.secondHandOrder
-          .update({
-            where: { id: bizId },
-            data: { status: 'refunded' },
-          })
-          .catch(() => null);
-        if (order?.productId) {
-          await tx.secondHand
-            .update({
-              where: { id: order.productId },
-              data: {
-                status: 'ON_SALE',
-                auditReason: '二手订单已退款，商品自动恢复上架',
-              },
-            })
-            .catch(() => null);
+      case 'second_hand': {
+        const order=await tx.secondHandOrder.findUnique({where:{id:bizId}});
+        if(!order||!isFullRefund)break;
+        const updated=await tx.secondHandOrder.updateMany({where:{id:bizId,status:{not:'refunded'}},data:{status:'refunded'}});
+        // 只有原本取得商品且尚未发货的全额退款恢复库存；取消/抢购失败退款不得上架他人已购商品。
+        if(updated.count===1&&order.status==='paid'){
+          await tx.secondHand.updateMany({where:{id:order.productId,status:'SOLD'},data:{wantCount:{increment:0}}});
+          const other=await tx.secondHandOrder.findFirst({where:{productId:order.productId,id:{not:bizId},status:{in:['paid','shipped','completed']}}});
+          if(!other)await tx.secondHand.updateMany({where:{id:order.productId,status:'SOLD'},data:{status:'ON_SALE',auditReason:'未发货订单已全额退款'}});
         }
         break;
+      }
       case 'membership_order':
         await tx.membershipOrder.update({
           where: { id: bizId },
@@ -2208,6 +2333,9 @@ export class PaymentService {
           where: { id: bizId },
           data: { refundStatus: 'refunding' },
         });
+        break;
+      case 'group_buy':
+        await tx.groupBuyOrder.updateMany({where:{id:bizId,status:'paid',verifyStatus:'pending'},data:{status:'refunding',refundAmount:amount}});
         break;
       case 'delivery_order':
         await tx.deliveryOrder.update({
@@ -2302,7 +2430,10 @@ export class PaymentService {
   ): void {
     // 时间戳容差：微信回调时间戳误差在5分钟内有效
     const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - parseInt(timestamp)) > 300) {
+    if (!signature || !nonce || !/^\d+$/.test(String(timestamp || '')) || !Number.isSafeInteger(Number(timestamp))) {
+      throw new BadRequestException('微信支付签名参数无效');
+    }
+    if (Math.abs(now - Number(timestamp)) > 300) {
       throw new BadRequestException(`回调时间戳偏差过大: ${timestamp}`);
     }
 
@@ -2478,7 +2609,7 @@ export class PaymentService {
     return map[type] || null;
   }
 
-  private async handleRefundSuccess(outRefundNo: string, wxRefundId: string) {
+  private async handleRefundSuccess(outRefundNo: string, wxRefundId: string, confirmedAt = new Date()) {
     const refundRecord = await this.prisma.paymentRefund.findFirst({
       where: { refundNo: outRefundNo },
     });
@@ -2504,7 +2635,8 @@ export class PaymentService {
         data: {
           wxRefundId,
           status: 'success',
-          refundedAt: new Date(),
+          refundedAt: confirmedAt,
+          failReason: null,
         },
       });
       if (updated.count === 0) {

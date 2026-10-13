@@ -1,11 +1,20 @@
-import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray, IsIn, MaxLength } from 'class-validator'
+import { Allow, IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject, IsArray, IsIn, IsNotEmpty, MaxLength } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
-import { Type } from 'class-transformer'
+import { Transform, Type } from 'class-transformer'
 
 export class RepairErrandCouponDto {
   @IsString()
   @MaxLength(500)
   note: string
+}
+
+export class ConfirmErrandReceiptDto {
+  @ApiProperty({ description: '管理员核实收货的说明', maxLength: 500 })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason: string
 }
 
 // ==================== Rider ====================
@@ -45,12 +54,22 @@ export class RiderQueryDto {
 export class AuditRiderDto {
   @ApiProperty({ description: 'approved | rejected' })
   @IsString()
+  @IsIn(['approved', 'rejected'])
   status: string
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   remark?: string
+}
+
+export class RevokeRiderDto {
+  @ApiProperty({ description: '撤销骑手认证原因', maxLength: 500 })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason: string
 }
 
 export class RiderStatusDto {

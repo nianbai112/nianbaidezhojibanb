@@ -37,7 +37,7 @@
       </el-table-column>
       <el-table-column prop="logo" label="Logo" width="80">
         <template #default="{ row }">
-          <el-image v-if="row.logo" :src="row.logo" :preview-src-list="[row.logo]" style="width: 40px; height: 40px" fit="cover" />
+          <el-image preview-teleported v-if="row.logo" :src="row.logo" :preview-src-list="[row.logo]" style="width: 40px; height: 40px" fit="cover" />
           <span v-else>-</span>
         </template>
       </el-table-column>

@@ -1,7 +1,16 @@
+import { GroupBuyConsumerService } from '../group-buy/group-buy.consumer.service';
+import { createHash } from 'crypto';
+import { readRiderRanking } from './rider-ranking';
+import { canStartWechatPayment } from '../../common/payment-client';
+import { effectiveStudentIdentity, identityInclude } from '../student-identity/student-identity.policy';
 import { reserveCouponIssue, couponDiscountAmount } from '../../common/coupon-policy';
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { agreementContentHash, findPublishedAgreement, normalizeAgreementRegion, normalizeAgreementType, recordAgreementConsents } from '../../common/agreement-consent';
+import { readUserGuidanceTags } from '../../common/user-guidance-tags';
+import { isMiniappOpenid } from '../../common/wechat-identity';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Optional } from '@nestjs/common';
 import { Gender } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
+import { RedisService } from '../../common/services/redis.service';
 import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 import { PaymentService } from '../payment/payment.service';
 import { MembershipService } from '../membership/membership.service';
@@ -19,6 +28,8 @@ export class OperationService {
     private readonly membershipService: MembershipService,
     private readonly growthService: GrowthService,
     private readonly userAccess: UserAccessPolicyService,
+    @Optional() private readonly redis?: RedisService,
+    @Optional() private readonly groupBuy?: GroupBuyConsumerService,
   ) {}
 
   private getNoteSettingConfigKey(regionId: string) {
@@ -53,44 +64,6 @@ export class OperationService {
   private async getMemberNumericBenefit(userId: string, benefitKey: string) {
     const grant = await this.getMemberGrant(userId, benefitKey);
     return Math.max(0, Number(grant?.amount || 0));
-  }
-
-  private readonly agreementDefaults = [
-    { type: 'TERMS_OF_SERVICE', title: '用户协议', scene: 'login', isRequired: true },
-    { type: 'PRIVACY_POLICY', title: '隐私政策', scene: 'login', isRequired: true },
-    { type: 'CONTENT_RULES', title: '社区内容规范', scene: 'post', isRequired: true },
-    { type: 'PAYMENT_RULES', title: '支付与退款规则', scene: 'payment', isRequired: true },
-    { type: 'PINNING_SERVICE', title: '付费置顶服务说明', scene: 'paid_pinning', isRequired: true },
-    { type: 'DORM_SHOP_RULES', title: '宿舍小店经营规范', scene: 'dorm_shop', isRequired: true },
-    { type: 'RIDER_RULES', title: '骑手服务规范', scene: 'rider', isRequired: true },
-    { type: 'MERCHANT_RULES', title: '商家入驻与经营规范', scene: 'merchant', isRequired: true },
-    { type: 'REGION_AGENT_RULES', title: '区域合作入驻规则', scene: 'city_agent', isRequired: true },
-  ];
-
-  private normalizeAgreementType(type: any) {
-    const aliasMap: Record<string, string> = {
-      SERVICE: 'TERMS_OF_SERVICE',
-      USER: 'TERMS_OF_SERVICE',
-      TERMS: 'TERMS_OF_SERVICE',
-      PRIVACY: 'PRIVACY_POLICY',
-      CONTENT: 'CONTENT_RULES',
-      POST: 'CONTENT_RULES',
-      PAYMENT: 'PAYMENT_RULES',
-      PAY: 'PAYMENT_RULES',
-      PINNING: 'PINNING_SERVICE',
-      PAID_PINNING: 'PINNING_SERVICE',
-      DORM_SHOP: 'DORM_SHOP_RULES',
-      DORMSHOP: 'DORM_SHOP_RULES',
-      RIDER: 'RIDER_RULES',
-      MERCHANT: 'MERCHANT_RULES',
-      CITY_AGENT: 'REGION_AGENT_RULES',
-      REGION_AGENT: 'REGION_AGENT_RULES',
-    };
-    const raw = String(type || '').trim().replace(/[-\s]+/g, '_').toUpperCase();
-    const normalized = aliasMap[raw] || raw;
-    const hit = this.agreementDefaults.find((item) => item.type === normalized);
-    if (!hit) throw new NotFoundException('协议不存在');
-    return hit;
   }
 
   private getNoteSettingDefaults(regionId = "") {
@@ -792,8 +765,9 @@ export class OperationService {
     const price = this.moneyValue(item?.price);
     const originPrice = item?.originPrice === undefined || item?.originPrice === null ? null : this.moneyValue(item.originPrice);
     const user = item?.user || {};
+    const { clientRequestId: _requestId, clientPayloadHash: _payloadHash, ...publicItem } = item || {};
     return {
-      ...item,
+      ...publicItem,
       images,
       tags,
       location,
@@ -868,17 +842,6 @@ export class OperationService {
     if (!setting.enableSecondHand) throw new ForbiddenException('当前区域暂未开放二手交易');
     if (setting.requirePhone && !user.phone) throw new BadRequestException('发布二手闲置前需要先绑定手机号');
 
-    const memberPublishExtra = await this.getMemberNumericBenefit(userId, 'second_hand_publish_limit');
-    if (setting.maxListings) {
-      const maxListings = Number(setting.maxListings) + memberPublishExtra;
-      const activeCount = await this.prisma.secondHand.count({
-        where: { userId, regionId, status: { in: ['PENDING', 'ON_SALE'] as any } },
-      });
-      if (activeCount >= maxListings) {
-        throw new BadRequestException(`当前区域最多可发布 ${maxListings} 个在架闲置`);
-      }
-    }
-
     const description = this.textValue(dto?.description || dto?.content);
     if (!description) throw new BadRequestException('请填写商品描述');
     const images = this.jsonArray(dto?.images);
@@ -893,15 +856,44 @@ export class OperationService {
     if (this.requiresSecondHandLocation(deliveryType) && !this.hasSecondHandLocation(location)) {
       throw new BadRequestException(`${deliveryType}需要选择交易位置`);
     }
+    const clientRequestId = dto.client_request_id == null ? null : String(dto.client_request_id).trim();
+    if (clientRequestId != null && !/^[A-Za-z0-9_-]{8,100}$/.test(clientRequestId)) throw new BadRequestException('发布请求标识无效');
+    const payload = { regionId, title, description, images, price, originPrice, deliveryType, location, category: this.textValue(dto?.category, '闲置'), condition: this.textValue(dto?.condition, 'good'), tags: this.jsonArray(dto?.tags), freight: deliveryType === '运费到付' ? this.moneyValue(dto?.freight) : 0, syncToFeed: dto?.sync_to_feed === true || dto?.sync_to_feed === 1 || dto?.syncToFeed === true || dto?.syncToFeed === 1 };
+    const stable = (value: any): any => Array.isArray(value) ? value.map(stable) : value != null && typeof value === 'object' ? Object.keys(value).sort().reduce((result: any, key: string) => { result[key] = stable(value[key]); return result; }, {}) : value;
+    const clientPayloadHash = clientRequestId ? createHash('sha256').update(JSON.stringify(stable(payload))).digest('hex') : null;
+    const replay = async () => {
+      if (!clientRequestId) return null;
+      const old = await this.prisma.secondHand.findUnique({ where: { userId_clientRequestId: { userId, clientRequestId } }, include: { user: { select: { id: true, uid: true, nickname: true, avatar: true } }, region: { select: { id: true, name: true } } } });
+      if (!old) return null;
+      if (old.status === 'DELETED' as any) throw new NotFoundException('商品不存在');
+      if (old.clientPayloadHash !== clientPayloadHash) throw new ConflictException('同一发布请求内容已变化，请重新发起发布');
+      const mapped = this.mapSecondHandProduct(old, setting);
+      return { success: true, idempotent_replay: true, message: old.status === 'PENDING' ? '商品已提交，请留意审核结果' : '商品已提交', data: mapped, ...mapped };
+    };
+    const previous = await replay();
+    if (previous) return previous;
+    const memberPublishExtra = await this.getMemberNumericBenefit(userId, 'second_hand_publish_limit');
+    if (setting.maxListings) {
+      const maxListings = Number(setting.maxListings) + memberPublishExtra;
+      const activeCount = await this.prisma.secondHand.count({
+        where: { userId, regionId, status: { in: ['PENDING', 'ON_SALE'] as any } },
+      });
+      if (activeCount >= maxListings) {
+        throw new BadRequestException(`当前区域最多可发布 ${maxListings} 个在架闲置`);
+      }
+    }
+
     const risk = await this.detectSecondHandPublishRisk({ title, description, images });
     const hasAuditPriority = await this.hasMemberBenefit(userId, 'content_audit_priority');
     const status = setting.requireAudit || risk.hasRisk ? 'PENDING' : 'ON_SALE';
     const auditReason = risk.hasRisk ? risk.reason : setting.requireAudit ? '等待后台审核' : null;
 
-    const item = await this.prisma.secondHand.create({
+    let item: any;
+    try { item = await this.prisma.secondHand.create({
       data: {
         userId,
         regionId,
+        ...(clientRequestId ? { clientRequestId, clientPayloadHash } : {}),
         title,
         description,
         images,
@@ -922,10 +914,11 @@ export class OperationService {
         region: { select: { id: true, name: true } },
       },
     });
+    } catch (error: any) { if (clientRequestId && error?.code === 'P2002') { const old = await replay(); if (old) return old; }; throw error; }
     if (status === 'PENDING') {
       await this.writeSecondHandAuditRecord(item, status, hasAuditPriority ? '会员优先审核：' + (auditReason || '等待后台审核') : auditReason || '等待后台审核');
     }
-    if (dto?.sync_to_feed || dto?.syncToFeed) {
+    if (payload.syncToFeed) {
       await this.syncSecondHandToFeed(item, images, setting);
     }
     const mapped = this.mapSecondHandProduct(item, setting);
@@ -963,105 +956,41 @@ export class OperationService {
   async createSecondHandOrder(userId: string, dto: any) {
     const productId = this.textValue(dto?.productId || dto?.product_id);
     if (!productId) throw new BadRequestException('缺少商品ID');
-    const product = await this.prisma.secondHand.findUnique({
-      where: { id: productId },
-      include: { user: { select: { id: true, nickname: true } } },
-    });
+    const product = await this.prisma.secondHand.findUnique({where:{id:productId}});
     if (!product) throw new NotFoundException('商品不存在');
-    if (product.status !== 'ON_SALE') throw new BadRequestException('该商品当前不能交易');
-    if (product.userId === userId) throw new BadRequestException('不能购买自己发布的商品');
-    await this.userAccess.assertStudentProtectedAction(userId, product.regionId, '购买二手闲置');
-
-    const setting = await this.loadSecondHandRegionSetting(product.regionId);
-    if (!setting.enableSecondHand) throw new ForbiddenException('当前区域暂未开放二手交易');
-
-    const activeOrder = await this.prisma.secondHandOrder.findFirst({
-      where: {
-        buyerId: userId,
-        productId,
-        status: { in: ['contacting', 'pending_pay', 'paid', 'shipped'] },
-      },
-      orderBy: { createdAt: 'desc' },
+    if (product.userId===userId) throw new BadRequestException('不能购买自己发布的商品');
+    await this.userAccess.assertStudentProtectedAction(userId,product.regionId,'购买二手闲置');
+    const setting=await this.loadSecondHandRegionSetting(product.regionId);
+    if(!setting.enableSecondHand)throw new ForbiddenException('当前区域暂未开放二手交易');
+    const allowOnlinePayment=!!setting.enableOnlinePayment&&product.deliveryType==='包邮';
+    const user=allowOnlinePayment?await this.prisma.user.findUnique({where:{id:userId},select:{openid:true}}):null;
+    if(allowOnlinePayment&&!canStartWechatPayment(user?.openid))throw new BadRequestException('当前账号无法发起微信支付');
+    // 锁商品行后查重，两个并发请求不能为同一买家创建两张待付单。
+    const created=await this.prisma.$transaction(async tx=>{
+      await tx.secondHand.updateMany({where:{id:productId},data:{wantCount:{increment:0}}});
+      const active=await tx.secondHandOrder.findFirst({where:{buyerId:userId,productId,status:{in:['contacting','pending_pay','paid','shipped']}},orderBy:{createdAt:'desc'}});
+      if(active)return {order:active,duplicated:true};
+      const current=await tx.secondHand.findUniqueOrThrow({where:{id:productId}});
+      if(current.status!=='ON_SALE')throw new BadRequestException('该商品当前不能交易');
+      if(!Number.isFinite(Number(current.price))||Number(current.price)<=0)throw new BadRequestException('商品价格无效');
+      const order=await tx.secondHandOrder.create({data:{orderNo:`SH${Date.now()}${createHash('sha256').update(userId+productId+Math.random()).digest('hex').slice(0,12)}`,buyerId:userId,userId,sellerId:current.userId,productId,price:current.price,status:allowOnlinePayment?'pending_pay':'contacting',shippingAddress:this.jsonObject(dto?.shippingAddress||dto?.shipping_address),remark:this.textValue(dto?.remark)}});
+      await tx.secondHand.update({where:{id:productId},data:{wantCount:{increment:1}}});
+      return {order,duplicated:false};
     });
-    // AUD-P1-157: pending_pay 状态的旧单支付未初始化成功，取消后允许重新下单
-    if (activeOrder) {
-      if (activeOrder.status === 'pending_pay') {
-        // 支付从未成功初始化，取消旧单，让后续逻辑创建新单
-        await this.prisma.secondHandOrder.update({
-          where: { id: activeOrder.id },
-          data: { status: 'cancelled' },
-        });
-      } else {
-        return {
-          success: true,
-          message: activeOrder.status === 'contacting'
-            ? '已记录过购买意向，可继续私信卖家沟通'
-            : '已有进行中的交易，请到我的闲置查看',
-          contactRequired: activeOrder.status === 'contacting',
-          paymentInfo: null,
-          order: activeOrder,
-          duplicated: true,
-        };
-      }
-    }
-
-    const allowOnlinePayment = !!setting.enableOnlinePayment && product.deliveryType === '包邮';
-    const status = allowOnlinePayment ? 'pending_pay' : 'contacting';
-    const order = await this.prisma.secondHandOrder.create({
-      data: {
-        orderNo: `SH${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
-        buyerId: userId,
-        userId,
-        sellerId: product.userId,
-        productId,
-        price: product.price,
-        status,
-        shippingAddress: this.jsonObject(dto?.shippingAddress || dto?.shipping_address),
-        remark: this.textValue(dto?.remark),
-      },
-    });
-
-    await this.prisma.secondHand.update({
-      where: { id: productId },
-      data: { wantCount: { increment: 1 } },
-    }).catch(() => null);
-
-    if (!allowOnlinePayment) {
-      return {
-        success: true,
-        message: product.deliveryType === '包邮'
-          ? '已记录购买意向，可继续私信卖家沟通'
-          : '已记录交易意向，请与卖家确认交易安排',
-        contactRequired: true,
-        paymentInfo: null,
-        order,
-      };
-    }
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { openid: true } });
-    if (!user?.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
-    const paymentInfo = await this.paymentService.wxUnifiedOrder({
-      bizType: 'second_hand',
-      bizId: order.id,
-      orderNo: order.orderNo,
-      amount: Number(order.price),
-      description: `二手闲置 ${product.title}`,
-      openid: user.openid,
-      userId,
-    });
-    return {
-      success: true,
-      message: '订单已创建，请完成支付',
-      contactRequired: false,
-      paymentInfo,
-      order,
-    };
+    const {order,duplicated}=created;
+    if(order.status!=='pending_pay')return {success:true,message:order.status==='contacting'?'已记录交易意向，请与卖家确认交易安排':'已有进行中的交易，请到我的闲置查看',contactRequired:order.status==='contacting',paymentInfo:null,order,duplicated};
+    if(!allowOnlinePayment)throw new BadRequestException('当前区域已暂停在线支付，请处理原待支付订单');
+    const paymentInfo=await this.paymentService.wxUnifiedOrder({bizType:'second_hand',bizId:order.id,orderNo:order.orderNo,amount:Number(order.price),description:`二手闲置 ${product.title}`,openid:user!.openid,userId});
+    const current=await this.prisma.secondHandOrder.findUniqueOrThrow({where:{id:order.id}});
+    if(current.status!=='pending_pay')throw new ConflictException('订单状态已变化，请刷新本人订单，勿继续支付');
+    return {success:true,message:'请完成原订单支付',contactRequired:false,paymentInfo,order:current,duplicated};
   }
 
   async getMySecondHandProducts(userId: string, query: any) {
     const { page, pageSize, skip } = this.getPaging(query);
     const status = this.textValue(query?.status);
     const where: any = { userId };
+    if(query?.region_id||query?.regionId)where.regionId=this.textValue(query.region_id||query.regionId);
     if (status) where.status = status;
     const [rows, total] = await Promise.all([
       this.prisma.secondHand.findMany({
@@ -1209,6 +1138,10 @@ export class OperationService {
     const role = this.textValue(query?.role, 'all');
     const status = this.textValue(query?.status);
     const where: any = {};
+    if(query?.region_id||query?.regionId){
+      const products=await this.prisma.secondHand.findMany({where:{regionId:this.textValue(query.region_id||query.regionId)},select:{id:true}});
+      where.productId={in:products.map(item=>item.id)};
+    }
     if (role === 'buyer') where.buyerId = userId;
     else if (role === 'seller') where.sellerId = userId;
     else where.OR = [{ buyerId: userId }, { sellerId: userId }];
@@ -1275,19 +1208,19 @@ export class OperationService {
       throw new BadRequestException('不支持的订单操作');
     }
     const updated = await this.prisma.$transaction(async (tx) => {
-      const next = await tx.secondHandOrder.update({
-        where: { id },
-        data: { status, remark: this.textValue(dto?.remark, order.remark || '') },
-      });
-      if (status === 'completed') {
-        await tx.secondHand.update({ where: { id: order.productId }, data: { status: 'SOLD' } }).catch(() => null);
+      // 与付款回调保持相同锁顺序：支付单 -> 业务单 -> 商品。
+      if(status==='cancelled'&&order.status==='pending_pay'){
+        await tx.paymentOrder.updateMany({where:{bizType:'second_hand',bizId:id,status:{in:['pending','paying','failed','closed']}},data:{status:'closed'}});
+        const paid=await tx.paymentOrder.findFirst({where:{bizType:'second_hand',bizId:id,status:{in:['paid','refunding','refunded']}}});
+        if(paid)throw new ConflictException('支付状态已变化，请刷新订单');
       }
-      if (status === 'cancelled' && order.status === 'pending_pay') {
-        await tx.paymentOrder.updateMany({
-          where: { bizType: 'second_hand', bizId: order.id, status: { in: ['pending', 'paying'] } },
-          data: { status: 'closed' },
-        });
+      const claimed=await tx.secondHandOrder.updateMany({where:{id,status:order.status},data:{status,remark:this.textValue(dto?.remark,order.remark||'')}});
+      if(claimed.count!==1)throw new ConflictException('订单状态已变化，请刷新订单');
+      if(status==='completed'&&order.status==='contacting'){
+        const sold=await tx.secondHand.updateMany({where:{id:order.productId,status:'ON_SALE'},data:{status:'SOLD'}});
+        if(sold.count!==1)throw new ConflictException('商品已完成其他交易，不能重复确认');
       }
+      const next=await tx.secondHandOrder.findUniqueOrThrow({where:{id}});
       return next;
     });
     return { success: true, message: '操作成功', data: { ...updated, status_text: this.normalizeSecondHandOrderStatusText(updated.status) } };
@@ -1463,8 +1396,8 @@ export class OperationService {
     return ['immediate', 'manual', 'delayed', 'qualified'].includes(mode) ? mode : 'immediate';
   }
 
-  private isStudentApproved(user: any) {
-    return user?.studentVerify?.status === 'APPROVED';
+  private isStudentApproved(user: any, regionId: string) {
+    return effectiveStudentIdentity(user?.studentVerify, user?.id, regionId);
   }
 
   private addHours(date: Date, hours: number) {
@@ -1679,141 +1612,101 @@ export class OperationService {
   }
 
   // ========== 评分 ==========
+  private ratingPage(query: any) { return {page:this.toInt(query?.page,1,1,1000000),limit:this.toInt(query?.limit,10,1,50)}; }
+  private async ratingRegion(userId: string, regionId?: string | null) {
+    const profile=await this.prisma.userProfile.findUnique({where:{userId},select:{regionId:true}});
+    if(regionId&&profile?.regionId!==regionId)throw new BadRequestException('请切换到评分所属校区');
+    const scope=regionId||profile?.regionId;
+    if(!scope)throw new BadRequestException('请选择校区');
+    const setting=await this.prisma.ratingRegionSetting.findUnique({where:{regionId:scope}});
+    if(setting?.enableRating===false)throw new BadRequestException('当前校区评分已关闭');
+    await this.userAccess.assertStudentProtectedAction(userId,scope,'参与评分');
+    return scope;
+  }
+  private async publicRatingItem(itemId: string) {
+    const item=await this.prisma.ratingItem.findUnique({where:{id:itemId},include:{category:true}});
+    if(!item||item.status!=='enabled'||!item.category?.isActive)throw new NotFoundException('评分对象不存在或尚未开放');
+    const scope=item.regionId||item.category.regionId;
+    const setting=scope?await this.prisma.ratingRegionSetting.findUnique({where:{regionId:scope}}):null;
+    if(setting?.enableRating===false)throw new BadRequestException('当前校区评分已关闭');
+    return {item,scope,setting};
+  }
   async getRatingCategories(regionId: string, query: any) {
-    const { page = 1, limit = 10 } = query;
-    const where = { isActive: true, OR: [{ regionId }, { regionId: null }] };
-    const [rows, total] = await Promise.all([
-      this.prisma.ratingCategory.findMany({
-        where,
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
-        orderBy: { sortOrder: 'asc' },
-        include: { items: { where: { status: 'enabled' }, take: 6, orderBy: [{ avgScore: 'desc' }, { sortOrder: 'asc' }] } },
-      }),
-      this.prisma.ratingCategory.count({ where }),
-    ]);
-    const list = rows.map((category) => ({
-      ...category,
-      top_rating_items: category.items.map((item) => ({
-        ...item,
-        logo: item.cover,
-        score: item.avgScore,
-      })),
-    }));
-    return { list, total, page: Number(page), pageSize: Number(limit) };
+    const {page,limit}=this.ratingPage(query),setting=await this.prisma.ratingRegionSetting.findUnique({where:{regionId}});
+    if(setting?.enableRating===false)return {list:[],total:0,page,pageSize:limit,rating_disabled:true};
+    const where={isActive:true,OR:[{regionId},{regionId:null}]};
+    const [rows,total]=await Promise.all([this.prisma.ratingCategory.findMany({where,skip:(page-1)*limit,take:limit,orderBy:[{sortOrder:'asc'},{id:'asc'}],include:{items:{where:{status:'enabled',OR:[{regionId},{regionId:null}]},take:6,orderBy:[{avgScore:'desc'},{sortOrder:'asc'}]}}}),this.prisma.ratingCategory.count({where})]);
+    return {list:rows.map(category=>({...category,top_rating_items:category.items.map(item=>({...item,logo:item.cover,score:item.avgScore}))})),total,page,pageSize:limit};
   }
-
   async getRatingCategoryDetail(categoryId: string) {
-    return this.prisma.ratingCategory.findUnique({ where: { id: categoryId } });
+    const category=await this.prisma.ratingCategory.findUnique({where:{id:categoryId}});
+    if(!category?.isActive)throw new NotFoundException('评分分类未开放');
+    return category;
   }
-
   async getRatingItems(categoryId: string, query: any) {
-    const { page = 1, limit = 10, search, sort = 'hot' } = query;
-    const where: any = { categoryId, status: 'enabled' };
-    if (search) where.name = { contains: String(search) };
-    return this.prisma.ratingItem.findMany({
-      where,
-      skip: (Number(page) - 1) * Number(limit),
-      take: Number(limit),
-      orderBy: sort === 'latest' ? { createdAt: 'desc' } : { avgScore: 'desc' },
-    });
+    const category=await this.getRatingCategoryDetail(categoryId),{page,limit}=this.ratingPage(query);
+    const region=category.regionId||String(query?.region_id||'').trim();
+    const setting=region?await this.prisma.ratingRegionSetting.findUnique({where:{regionId:region}}):null;
+    if(setting?.enableRating===false)throw new BadRequestException('当前校区评分已关闭');
+    const where:any={categoryId,status:'enabled',OR:region?[{regionId:region},{regionId:null}]:[{regionId:null}]};
+    if(query?.search)where.name={contains:String(query.search).trim().slice(0,100)};
+    return this.prisma.ratingItem.findMany({where,skip:(page-1)*limit,take:limit,orderBy:['latest','newest'].includes(query?.sort)?[{createdAt:'desc'},{id:'asc'}]:query?.sort==='low_score'?[{avgScore:'asc'},{id:'asc'}]:query?.sort==='hot'?[{ratingCount:'desc'},{id:'asc'}]:[{avgScore:'desc'},{id:'asc'}]});
   }
-
-  async getRatingItemDetail(itemId: string) {
-    const item = await this.prisma.ratingItem.findUnique({ where: { id: itemId }, include: { ratings: true } });
-    if (!item) throw new NotFoundException('评分对象不存在');
-    // AUD-P1-043: 检查区域评分开关（关闭时前端不应展示评分入口或提交）
-    if (item.regionId) {
-      const setting = await this.prisma.ratingRegionSetting.findUnique({ where: { regionId: item.regionId } });
-      if (setting?.enableRating === false) {
-        return { ...item, ratings: [], rating_disabled: true, message: '当前区域评分功能已关闭' };
-      }
-    }
-    return item;
+  async getRatingItemDetail(itemId: string, userId?: string) {
+    const {item,setting}=await this.publicRatingItem(itemId);
+    const own=userId?await this.prisma.userRating.findFirst({where:{itemId,userId,status:'active'},orderBy:{createdAt:'desc'},select:{id:true,score:true,content:true,images:true}}):null;
+    const distribution=await this.prisma.userRating.groupBy({by:['score'],where:{itemId,status:'active'},_count:{id:true}});
+    return {...item,user_rating:own,rating_distribution:distribution.map(x=>({stars:x.score,count:x._count.id})),rating_disabled:false,dynamic_disabled:setting?.enableDynamic===false};
   }
-
   async getRatingItemDynamics(itemId: string, query: any) {
-    const { page = 1, limit = 10 } = query;
-    return this.prisma.userRating.findMany({
-      where: { itemId, status: 'active' },
-      skip: (Number(page) - 1) * Number(limit),
-      take: Number(limit),
-      orderBy: { createdAt: 'desc' },
-      include: { User: { select: { id: true, nickname: true, avatar: true } } },
-    });
+    const {setting}=await this.publicRatingItem(itemId),{page,limit}=this.ratingPage(query);
+    if(setting?.enableDynamic===false)return [];
+    return this.prisma.userRating.findMany({where:{itemId,status:'active'},skip:(page-1)*limit,take:limit,orderBy:[{createdAt:'desc'},{id:'asc'}],select:{id:true,itemId:true,score:true,content:true,images:true,likes:true,createdAt:true,User:{select:{id:true,nickname:true,avatar:true}},replies:{where:{status:'approved'},take:5,orderBy:{createdAt:'asc'},select:{id:true,content:true,createdAt:true,user:{select:{id:true,nickname:true,avatar:true}}}}}});
   }
-
   async submitRating(userId: string, dto: any) {
-    const itemId = dto.item_id || dto.itemId;
-    const score = Number(dto.score);
-    if (!itemId) throw new BadRequestException('缺少评分对象ID');
-    if (!Number.isInteger(score) || score < 1 || score > 5) throw new BadRequestException('评分必须在 1-5 之间');
-    const item = await this.prisma.ratingItem.findUnique({ where: { id: itemId } });
-    if (!item || item.status === 'disabled') throw new NotFoundException('评分对象不存在');
-    const regionId = item.regionId || dto.regionId || dto.region_id;
-    const setting = regionId ? await this.prisma.ratingRegionSetting.findUnique({ where: { regionId } }) : null;
-    if (setting?.enableRating === false) throw new BadRequestException('当前区域未开启评分');
-    await this.userAccess.assertStudentProtectedAction(userId, regionId, '提交评分');
-    return this.prisma.$transaction(async (tx) => {
-      const rating = await tx.userRating.create({
-        data: { userId, itemId, regionId, score, content: dto.content, images: dto.images, status: 'active' },
-      });
-      const stats = await tx.userRating.aggregate({
-        where: { itemId, status: 'active' },
-        _avg: { score: true },
-        _count: true,
-      });
-      await tx.ratingItem.update({
-        where: { id: itemId },
-        data: { avgScore: stats._avg.score || 0, ratingCount: stats._count },
-      });
+    const itemId=String(dto.item_id||dto.itemId||''),score=Number(dto.score),content=String(dto.content||'').trim();
+    if(!Number.isInteger(score)||score<1||score>5)throw new BadRequestException('评分必须为 1–5 的整数');
+    if(content.length>1000)throw new BadRequestException('评价最多 1000 字');
+    const images=Array.isArray(dto.images)?dto.images:[];
+    if(images.length>6||images.some((x:any)=>typeof x!=='string'||!/^https:\/\//.test(x)||x.length>2000))throw new BadRequestException('图片最多 6 张且必须先上传');
+    const {scope}=await this.publicRatingItem(itemId),regionId=await this.ratingRegion(userId,scope);
+    return this.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM rating_items WHERE id = ${itemId} FOR UPDATE`;
+      const current=await tx.ratingItem.findUnique({where:{id:itemId},include:{category:true}});
+      if(current?.status!=='enabled'||!current.category.isActive)throw new BadRequestException('评分对象已关闭');
+      const existing=await tx.userRating.findFirst({where:{userId,itemId,status:'active'},orderBy:{createdAt:'desc'}});
+      const data={score,content,images,regionId};
+      const rating=existing?await tx.userRating.update({where:{id:existing.id},data}):await tx.userRating.create({data:{...data,userId,itemId,status:'active'}});
+      const stats=await tx.userRating.aggregate({where:{itemId,status:'active'},_avg:{score:true},_count:true});
+      await tx.ratingItem.update({where:{id:itemId},data:{avgScore:stats._avg.score||0,ratingCount:stats._count}});
       return rating;
     });
   }
-
   async createRatingItem(userId: string, dto: any) {
-    const categoryId = dto.categoryId || dto.category_id;
-    const name = dto.name || dto.title;
-    if (!categoryId) throw new BadRequestException('缺少评分分类ID');
-    if (!name) throw new BadRequestException('缺少评分对象名称');
-    await this.userAccess.assertStudentProtectedAction(userId, dto.regionId || dto.region_id, '创建评分对象');
-    // AUD-P1-042: 用户创建评分对象需审核（status=pending），记录创建人，兼容logo字段
-    return this.prisma.ratingItem.create({
-      data: {
-        categoryId,
-        regionId: dto.regionId || dto.region_id,
-        name,
-        cover: dto.cover || dto.image || dto.image_url || dto.logo,
-        description: dto.description || dto.desc,
-        // AUD-P1-042: userId 字段需 schema migration，当前暂不记录创建人
-        status: 'pending',
-      },
-    });
+    const categoryId=String(dto.categoryId||dto.category_id||''),name=String(dto.name||dto.title||'').trim(),description=String(dto.description||dto.desc||'').trim(),cover=String(dto.cover||dto.logo||'');
+    if(!name||name.length>100||description.length>1000)throw new BadRequestException('名称须为 1–100 字，介绍最多 1000 字');
+    if(cover&&(!/^https:\/\//.test(cover)||cover.length>2000))throw new BadRequestException('请先上传对象封面');
+    const category=await this.getRatingCategoryDetail(categoryId),regionId=await this.ratingRegion(userId,category.regionId);
+    return this.prisma.ratingItem.create({data:{categoryId,regionId,name,description,cover,status:'pending'}});
   }
-
   async getRatingReplies(query: any) {
-    const { rating_id, page = 1, limit = 10 } = query;
-    return this.prisma.ratingReply.findMany({
-      where: rating_id ? { ratingId: rating_id } : {},
-      skip: (page - 1) * limit,
-      take: Number(limit),
-      orderBy: { createdAt: 'desc' },
-    });
+    const ratingId=String(query?.rating_id||''),{page,limit}=this.ratingPage(query);
+    if(!ratingId)throw new BadRequestException('缺少评分编号');
+    const rating=await this.prisma.userRating.findUnique({where:{id:ratingId}});
+    if(!rating||rating.status!=='active')throw new NotFoundException('评分不存在');
+    const {setting}=await this.publicRatingItem(rating.itemId);
+    if(setting?.enableDynamic===false)return [];
+    return this.prisma.ratingReply.findMany({where:{ratingId,status:'approved'},skip:(page-1)*limit,take:limit,orderBy:[{createdAt:'asc'},{id:'asc'}],select:{id:true,content:true,createdAt:true,user:{select:{id:true,nickname:true,avatar:true}}}});
   }
-
   async createRatingReply(userId: string, dto: any) {
-    const ratingId = dto.ratingId || dto.rating_id;
-    if (!ratingId) throw new BadRequestException('缺少评分ID');
-    if (!dto.content) throw new BadRequestException('回复内容不能为空');
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '回复评分');
-    return this.prisma.ratingReply.create({
-      data: {
-        ratingId,
-        userId,
-        content: dto.content,
-        status: 'pending',
-      },
-    });
+    const ratingId=String(dto.rating_id||dto.ratingId||''),content=String(dto.content||'').trim();
+    if(!content||content.length>500)throw new BadRequestException('回复须为 1–500 字');
+    const rating=await this.prisma.userRating.findUnique({where:{id:ratingId}});
+    if(!rating||rating.status!=='active')throw new NotFoundException('评分不存在');
+    const {scope,setting}=await this.publicRatingItem(rating.itemId);
+    if(setting?.enableDynamic===false)throw new BadRequestException('评分动态已关闭');
+    await this.ratingRegion(userId,scope);
+    return this.prisma.ratingReply.create({data:{ratingId,userId,content,status:'pending'}});
   }
 
   // ========== 网盘 ==========
@@ -2093,25 +1986,34 @@ export class OperationService {
     if (!inviterId) throw new BadRequestException('邀请人不存在');
     if (!regionId) throw new BadRequestException('缺少区域信息');
     if (inviterId === userId) throw new BadRequestException('不能邀请自己');
-    const ip = String(dto?.ip || requestMeta.ip || '').trim().slice(0, 120);
-    const userAgent = String(dto?.user_agent || dto?.userAgent || requestMeta.userAgent || '').trim().slice(0, 500);
+    const ip = String(requestMeta.ip || '').trim().slice(0, 120);
+    const userAgent = String(requestMeta.userAgent || '').trim().slice(0, 500);
     const deviceId = String(dto?.device_id || dto?.deviceId || requestMeta.deviceId || '').trim().slice(0, 160);
 
+    return this.prisma.$transaction(async (tx) => {
+      // User locks serialize cross-campus claims; sorted participants avoid inverse-invite deadlocks.
+      for (const id of [userId, inviterId].sort()) {
+        const locked = await tx.user.updateMany({ where: { id }, data: { authVersion: { increment: 0 } } });
+        if (!locked.count) throw new BadRequestException('邀请账号不存在');
+      }
+      // A per-campaign row lock also serializes budget/IP/device and inviter quotas.
+      const campaign = await tx.shareSettings.updateMany({ where: { regionId }, data: { dailyInviteLimit: { increment: 0 } } });
+      if (!campaign.count) throw new BadRequestException('当前区域未开启分享奖励');
     const [settings, invitee, inviter, region, couponConfig] = await Promise.all([
-      this.prisma.shareSettings.findUnique({ where: { regionId } }),
-      this.prisma.user.findUnique({
+      tx.shareSettings.findUnique({ where: { regionId } }),
+      tx.user.findUnique({
         where: { id: userId },
-        select: { id: true, createdAt: true, phone: true, status: true, lastLoginDevice: true, studentVerify: { select: { status: true } } },
+        select: { id: true, createdAt: true, phone: true, status: true, lastLoginDevice: true, studentVerify: { include: identityInclude } },
       }),
-      this.prisma.user.findUnique({
+      tx.user.findUnique({
         where: { id: inviterId },
-        select: { id: true, createdAt: true, phone: true, status: true, lastLoginDevice: true, studentVerify: { select: { status: true } } },
+        select: { id: true, createdAt: true, phone: true, status: true, lastLoginDevice: true, studentVerify: { include: identityInclude } },
       }),
-      this.prisma.region.findUnique({
+      tx.region.findUnique({
         where: { id: regionId },
         select: { id: true, studentOnly: true, onlyStudentAuthUsers: true },
-      }).catch(() => null),
-      this.prisma.config.findUnique({ where: { key: `share_invite_coupon_config_${regionId}` } }).catch(() => null),
+      }),
+      tx.config.findUnique({ where: { key: `share_invite_coupon_config_${regionId}` } }),
     ]);
     if (!settings || !settings.isEnabled) throw new BadRequestException('当前区域未开启分享奖励');
 
@@ -2124,7 +2026,7 @@ export class OperationService {
     if (inviter.status !== 'ACTIVE') throw new BadRequestException('邀请人账号状态异常');
     if (invitee.status !== 'ACTIVE') throw new BadRequestException('被邀请人账号状态异常');
 
-    const existingInvitee = await this.prisma.shareInvite.findFirst({
+    const existingInvitee = await tx.shareInvite.findFirst({
       where: { inviteeId: userId, status: { in: ['SUCCESS', 'PENDING'] } },
     });
     if (existingInvitee) throw new BadRequestException('该用户已接受过邀请');
@@ -2133,8 +2035,8 @@ export class OperationService {
     todayStart.setHours(0, 0, 0, 0);
     const activeRewardStatuses = ['SUCCESS', 'PENDING'] as any[];
     const [todayCount, totalCount] = await Promise.all([
-      this.prisma.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } }),
-      this.prisma.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses } } }),
+      tx.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } }),
+      tx.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses } } }),
     ]);
     if (settings.dailyInviteLimit > 0 && todayCount >= settings.dailyInviteLimit) {
       throw new BadRequestException('邀请人今日奖励次数已达上限');
@@ -2168,8 +2070,8 @@ export class OperationService {
     const requireInviteeStudent = !!settings.requireInviteeStudentVerify || !!region?.studentOnly || !!region?.onlyStudentAuthUsers;
     if (settings.requireInviterPhone && !inviter.phone) riskReasons.push('邀请人未绑定手机号');
     if (settings.requireInviteePhone && !invitee.phone) riskReasons.push('被邀请人未绑定手机号');
-    if (requireInviterStudent && !this.isStudentApproved(inviter)) riskReasons.push('邀请人未通过学生认证');
-    if (requireInviteeStudent && !this.isStudentApproved(invitee)) riskReasons.push('被邀请人未通过学生认证');
+    if (requireInviterStudent && !this.isStudentApproved(inviter, regionId)) riskReasons.push('邀请人未通过学生认证');
+    if (requireInviteeStudent && !this.isStudentApproved(invitee, regionId)) riskReasons.push('被邀请人未通过学生认证');
     const inviterAgeDays = (now.getTime() - inviter.createdAt.getTime()) / (24 * 60 * 60 * 1000);
     if (settings.minInviterAccountAgeDays > 0 && inviterAgeDays < settings.minInviterAccountAgeDays) {
       riskReasons.push(`邀请人注册未满${settings.minInviterAccountAgeDays}天`);
@@ -2183,21 +2085,21 @@ export class OperationService {
     const recentStart = new Date(now.getTime() - Math.max(1, settings.recentWindowMinutes || 10) * 60 * 1000);
     const [cooldownCount, recentCount, sameIpCount, sameDeviceDailyCount, sameDeviceTotalCount, rewardSum] = await Promise.all([
       settings.inviteCooldownMinutes > 0
-        ? this.prisma.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: cooldownStart } } })
+        ? tx.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: cooldownStart } } })
         : Promise.resolve(0),
       settings.maxRecentInvites > 0
-        ? this.prisma.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: recentStart } } })
+        ? tx.shareInvite.count({ where: { inviterId, regionId, status: { in: activeRewardStatuses }, createdAt: { gte: recentStart } } })
         : Promise.resolve(0),
       ip && settings.sameIpDailyLimit > 0
-        ? this.prisma.shareInvite.count({ where: { regionId, ip, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } })
+        ? tx.shareInvite.count({ where: { regionId, ip, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } })
         : Promise.resolve(0),
       effectiveDeviceId && settings.sameDeviceDailyLimit > 0
-        ? this.prisma.shareInvite.count({ where: { regionId, deviceId: effectiveDeviceId, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } })
+        ? tx.shareInvite.count({ where: { regionId, deviceId: effectiveDeviceId, status: { in: activeRewardStatuses }, createdAt: { gte: todayStart } } })
         : Promise.resolve(0),
       effectiveDeviceId && settings.sameDeviceTotalLimit > 0
-        ? this.prisma.shareInvite.count({ where: { regionId, deviceId: effectiveDeviceId, status: { in: activeRewardStatuses } } })
+        ? tx.shareInvite.count({ where: { regionId, deviceId: effectiveDeviceId, status: { in: activeRewardStatuses } } })
         : Promise.resolve(0),
-      this.prisma.shareReward.aggregate({ where: { status: { in: activeRewardStatuses }, invite: { regionId } }, _sum: { amount: true } }),
+      tx.shareReward.aggregate({ where: { status: { in: activeRewardStatuses }, invite: { regionId } }, _sum: { amount: true } }),
     ]);
     if (cooldownCount > 0) riskReasons.push(`邀请冷却期${settings.inviteCooldownMinutes}分钟内不能重复奖励`);
     if (settings.maxRecentInvites > 0 && recentCount >= settings.maxRecentInvites) {
@@ -2234,7 +2136,6 @@ export class OperationService {
         : '等待延迟发放';
     const couponValue = this.parseJsonObject(couponConfig?.value);
 
-    return this.prisma.$transaction(async (tx) => {
       if (postShareClaim) {
         const locked = await (tx as any).postShareLink.updateMany({
           where: {
@@ -2267,8 +2168,8 @@ export class OperationService {
             checks: {
               requireInviterStudent,
               requireInviteeStudent,
-              inviterStudentApproved: this.isStudentApproved(inviter),
-              inviteeStudentApproved: this.isStudentApproved(invitee),
+              inviterStudentApproved: this.isStudentApproved(inviter, regionId),
+              inviteeStudentApproved: this.isStudentApproved(invitee, regionId),
               sameIpCount,
               sameDeviceDailyCount,
               sameDeviceTotalCount,
@@ -2312,35 +2213,18 @@ export class OperationService {
           invitee: inviteeCoupon ? this.formatUserCoupon(inviteeCoupon) : null,
         },
       };
-    }, { isolationLevel: 'ReadCommitted' });
+    }, { isolationLevel: 'ReadCommitted', maxWait: 10000, timeout: 20000 });
   }
 
-  async getInviteRecords(userId: string) {
-    const rows = await this.prisma.shareInvite.findMany({
-      where: { inviterId: userId },
-      include: { invitee: { select: { id: true, nickname: true, avatar: true } } },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayInvites = rows.filter((row) => row.createdAt >= today).length;
-    const totalReward = rows.reduce((sum, row) => row.status === 'SUCCESS' ? sum + this.toNumber(row.rewardAmount, 0) : sum, 0);
-    return {
-      records: rows.map((row) => ({
-        id: row.id,
-        invitee: row.invitee || { id: row.inviteeId, nickname: '用户', avatar: '' },
-        created_at: row.createdAt,
-        reward_amount: this.toNumber(row.rewardAmount, 0).toFixed(2),
-        invitee_reward_amount: this.toNumber(row.inviteeRewardAmount, 0).toFixed(2),
-        status: row.status === 'SUCCESS' ? 'completed' : row.status === 'FAILED' ? 'failed' : 'pending',
-      })),
-      statistics: {
-        today_invites: todayInvites,
-        total_invites: rows.length,
-        total_reward: totalReward.toFixed(2),
-      },
-    };
+  async getInviteRecords(userId: string, query: any = {}) {
+    const page=this.toInt(query.page,1,1,1000000),size=this.toInt(query.page_size,20,1,50),where={inviterId:userId};
+    const today=new Date();today.setHours(0,0,0,0);
+    const [rows,total,todayCount,reward]=await Promise.all([
+      this.prisma.shareInvite.findMany({where,include:{invitee:{select:{id:true,nickname:true,avatar:true}}},orderBy:[{createdAt:'desc'},{id:'desc'}],skip:(page-1)*size,take:size}),
+      this.prisma.shareInvite.count({where}),this.prisma.shareInvite.count({where:{...where,createdAt:{gte:today}}}),
+      this.prisma.shareReward.aggregate({where:{userId,type:'INVITER',status:'SUCCESS',invite:{inviterId:userId}},_sum:{amount:true}})
+    ]);
+    return {records:rows.map(row=>({id:row.id,invitee:row.invitee,created_at:row.createdAt,reward_amount:this.toNumber(row.rewardAmount,0).toFixed(2),invitee_reward_amount:this.toNumber(row.inviteeRewardAmount,0).toFixed(2),status:row.status==='SUCCESS'?'completed':row.status==='FAILED'?'failed':'pending'})),statistics:{today_invites:todayCount,total_invites:total,total_reward:this.toNumber(reward._sum.amount,0).toFixed(2)},total,page,page_size:size};
   }
 
   // ========== 匿名身份 ==========
@@ -2380,54 +2264,7 @@ export class OperationService {
 
     // 骑手排行榜（sort_by = orders / earnings）
     if (sort_by === 'orders' || sort_by === 'earnings') {
-      const now = new Date();
-      let since: Date | undefined;
-      if (time_range === 'day') {
-        since = new Date(now);
-        since.setHours(0, 0, 0, 0);
-      } else if (time_range === 'week') {
-        since = new Date(now);
-        since.setDate(since.getDate() - 7);
-      } else if (time_range === 'month') {
-        since = new Date(now);
-        since.setDate(since.getDate() - 30);
-      }
-
-      const whereOrder: any = { status: 'completed' };
-      if (since) whereOrder.completeTime = { gte: since };
-
-      // 聚合骑手完成订单数和总收益
-      const grouped = await this.prisma.errandOrder.groupBy({
-        by: ['riderId'],
-        where: { ...whereOrder, riderId: { not: null } },
-        _count: { id: true },
-        _sum: { payAmount: true },
-        orderBy: sort_by === 'earnings'
-          ? [{ _sum: { payAmount: dir as any } }]
-          : [{ _count: { id: dir as any } }],
-        take: take + skip,
-      });
-
-      const sliced = grouped.slice(skip, skip + take);
-      if (!sliced.length) return { list: [], total: 0 };
-
-      const riderIds = sliced.map(r => r.riderId!);
-      const users = await this.prisma.user.findMany({
-        where: { id: { in: riderIds } },
-        select: { id: true, nickname: true, avatar: true },
-      });
-      const userMap = new Map(users.map(u => [u.id, u]));
-
-      const list = sliced.map((r, i) => ({
-        rank: skip + i + 1,
-        riderId: r.riderId,
-        nickname: userMap.get(r.riderId!)?.nickname || '骑手',
-        avatar: userMap.get(r.riderId!)?.avatar || '',
-        orderCount: r._count.id,
-        totalEarnings: Number(r._sum.payAmount || 0),
-      }));
-
-      return { list, total: grouped.length };
+      return readRiderRanking(this.prisma, query);
     }
 
     // 用户排行（按注册时间）
@@ -2466,23 +2303,27 @@ export class OperationService {
   }
 
   // ========== 通讯录 ==========
-  async getContacts(query: any) {
-    const where: any = { isPublic: true };
-    // AUD-P1-135: 按区域过滤公开联系人（通过分类间接过滤）
-    const regionId = query?.region_id || query?.regionId;
-    if (regionId) where.category = { regionId: String(regionId) };
-    const list = await this.prisma.contact.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-    });
-    return { success: true, data: { list } };
+  async getContacts(query: any, userId = '') {
+    const regionId = String(query?.region_id || query?.regionId || '').trim();
+    if (!regionId) throw new BadRequestException('请选择学校区域');
+    await this.assertContactAccess(regionId, userId);
+    const where: any = { isPublic: true, category: { regionId } };
+    if (query.category) where.categoryId = String(query.category);
+    const keyword = String(query.keyword || '').trim().slice(0, 100);
+    if (keyword) where.OR = [{ name: { contains: keyword } }, { phone: { contains: keyword } }];
+    const page = this.publicContentPage(query.page, 1, 1000000), limit = this.publicContentPage(query.limit, 20, 50);
+    const [list, total] = await Promise.all([
+      this.prisma.contact.findMany({ where, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: (page - 1) * limit, take: limit }),
+      this.prisma.contact.count({ where }),
+    ]);
+    return { success: true, data: { list: list.map(item => ({ ...item, userId: undefined, canEdit: false })), total, page, limit } };
   }
 
   async getContactCategories(regionId: string) {
     return this.prisma.contactCategory.findMany({ where: { regionId } });
   }
 
-  async getContactDetail(id: string) {
+  async getContactDetail(id: string, userId = '') {
     const contact = await this.prisma.contact.findUnique({
       where: { id },
       include: { category: { select: { regionId: true } } },
@@ -2490,91 +2331,138 @@ export class OperationService {
     if (!contact) throw new NotFoundException('联系人不存在');
     // AUD-P1-135: 详情只返回公开联系人，私密联系人需通过 my 接口访问
     if (!contact.isPublic) throw new NotFoundException('联系人不存在');
+    if (!contact.category?.regionId) throw new NotFoundException('联系人缺少有效学校区域');
+    await this.assertContactAccess(contact.category.regionId, userId);
     return { success: true, data: contact };
   }
 
+  private async contactWriteCategory(userId: string, dto: any, previousRegion = '') {
+    const categoryId = String(dto.categoryId || dto.category || '').trim();
+    if (!categoryId) throw new BadRequestException('请选择通讯录分类');
+    const category = await this.prisma.contactCategory.findUnique({ where: { id: categoryId } });
+    if (!category?.regionId) throw new BadRequestException('通讯录分类不存在或未绑定校区');
+    const regionId = String(dto.region_id || dto.regionId || previousRegion || '').trim();
+    if (!regionId || category.regionId !== regionId || (previousRegion && previousRegion !== regionId)) throw new ForbiddenException('不能使用其他校区的通讯录分类');
+    await this.userAccess.assertStudentProtectedAction(userId, regionId, '管理个人通讯录', true);
+    const name = String(dto.name || '').trim(), phone = String(dto.phone || '').trim();
+    if (!name || name.length > 50) throw new BadRequestException('联系人姓名需填写1至50个字');
+    if (!/^\+?[\d() -]{5,25}$/.test(phone)) throw new BadRequestException('联系电话格式不正确');
+    const address = String(dto.address || '').trim(), remark = String(dto.remark || '').trim();
+    if (address.length > 300 || remark.length > 500) throw new BadRequestException('联系人地址或备注过长');
+    // 普通用户只能维护本人私密联系人；公开联系人由后台管理。
+    return { categoryId, name, phone, address, remark, isPublic: false };
+  }
+
   async createContact(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '发布通讯录');
-    // AUD-P1-134: 映射前端字段到模型字段（Contact 模型无 userId，该字段通过 studentVerify 区域准入校验保护）
-    const data: any = {};
-    if (dto.name) data.name = dto.name;
-    if (dto.phone) data.phone = dto.phone;
-    if (dto.address) data.address = dto.address;
-    if (dto.remark) data.remark = dto.remark;
-    if (dto.category) data.categoryId = dto.category;
-    else if (dto.categoryId) data.categoryId = dto.categoryId;
-    if (dto.isPublic !== undefined) data.isPublic = dto.isPublic === true || dto.isPublic === 1;
-    return this.prisma.contact.create({ data });
+    const data = await this.contactWriteCategory(userId, dto);
+    return this.prisma.contact.create({ data: { ...data, userId } });
   }
 
   async updateContact(id: string, userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '修改通讯录');
-    const contact = await this.prisma.contact.findUnique({ where: { id }, select: { id: true } });
-    if (!contact) throw new NotFoundException('联系人不存在');
-    // AUD-P1-134: 映射前端字段到模型字段（Contact 模型无 userId 字段，归属通过 studentVerify 区域准入保护）
-    const data: any = {};
-    if (dto.name !== undefined) data.name = dto.name;
-    if (dto.phone !== undefined) data.phone = dto.phone;
-    if (dto.address !== undefined) data.address = dto.address;
-    if (dto.remark !== undefined) data.remark = dto.remark;
-    if (dto.category !== undefined) data.categoryId = dto.category;
-    if (dto.isPublic !== undefined) data.isPublic = dto.isPublic === true || dto.isPublic === 1;
-    return this.prisma.contact.update({ where: { id }, data });
-  }
-
-  async deleteContact(id: string, userId: string) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '删除通讯录');
-    await this.prisma.contact.delete({ where: { id } });
+    const contact = await this.prisma.contact.findUnique({ where: { id }, include: { category: true } });
+    if (!contact || contact.userId !== userId || contact.isPublic) throw new NotFoundException('个人联系人不存在');
+    const data = await this.contactWriteCategory(userId, dto, contact.category.regionId || '');
+    const result = await this.prisma.contact.updateMany({ where: { id, userId, isPublic: false, categoryId: contact.categoryId }, data });
+    if (result.count !== 1) throw new BadRequestException('联系人状态已变化，请重新加载');
     return { success: true };
   }
 
+  async deleteContact(id: string, userId: string) {
+    const contact = await this.prisma.contact.findUnique({ where: { id }, include: { category: true } });
+    if (!contact || contact.userId !== userId || contact.isPublic || !contact.category.regionId) throw new NotFoundException('个人联系人不存在');
+    await this.userAccess.assertStudentProtectedAction(userId, contact.category.regionId, '删除个人通讯录', true);
+    const result = await this.prisma.contact.deleteMany({ where: { id, userId, isPublic: false, categoryId: contact.categoryId } });
+    if (result.count !== 1) throw new BadRequestException('联系人状态已变化，请重新加载');
+    return { success: true };
+  }
+
+  private async assertContactAccess(regionId: string, userId: string) {
+    const region = await this.prisma.region.findUnique({ where: { id: regionId }, select: { contactsRequireStudentAuth: true } });
+    if (!region) throw new NotFoundException('学校区域不存在');
+    await this.userAccess.assertStudentProtectedAction(userId, regionId, '查看通讯录', region.contactsRequireStudentAuth);
+  }
+
   async getMyContacts(userId: string, query: any) {
-    const regionId = query?.region_id || query?.regionId;
-    if (regionId) {
-      const region = await this.prisma.region.findUnique({
-        where: { id: String(regionId) },
-        select: { contactsRequireStudentAuth: true },
-      });
-      if (region && region.contactsRequireStudentAuth) {
-        const studentVerify = await this.prisma.studentVerify.findUnique({
-          where: { userId },
-          select: { status: true },
-        });
-        if (!studentVerify || studentVerify.status !== 'APPROVED') {
-          throw new ForbiddenException('当前区域通讯录需要学生认证，请先完成学生认证');
-        }
-      }
-    }
-    // AUD-P1-134: 按 userId 过滤 + 包装 response 格式
-    const where: any = { userId };
-    if (regionId) where.category = { regionId: String(regionId) };
-    const list = await this.prisma.contact.findMany({ where, orderBy: { updatedAt: 'desc' } });
-    return { success: true, data: { list } };
+    const regionId = String(query?.region_id || query?.regionId || '').trim();
+    if (!regionId) throw new BadRequestException('请选择学校区域');
+    await this.assertContactAccess(regionId, userId);
+    const page = this.publicContentPage(query.page, 1, 1000000), limit = this.publicContentPage(query.limit, 20, 50);
+    const where: any = { userId, isPublic: false, category: { regionId } };
+    if (query.category) where.categoryId = String(query.category);
+    const keyword = String(query.keyword || '').trim().slice(0, 100);
+    if (keyword) where.OR = [{ name: { contains: keyword } }, { phone: { contains: keyword } }];
+    const [list, total] = await Promise.all([
+      this.prisma.contact.findMany({ where, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: (page - 1) * limit, take: limit }),
+      this.prisma.contact.count({ where }),
+    ]);
+    return { success: true, data: { list: list.map(item => ({ ...item, canEdit: true })), total, page, limit } };
   }
 
   // ========== 富文本内容 ==========
-  async getRichTextContents(query: any) {
-    const { region_id, page = 1, limit = 10 } = query;
-    return this.prisma.richTextContent.findMany({ where: { regionId: region_id, isShow: true }, skip: (page - 1) * limit, take: Number(limit) });
+  private publicContentRegion(value: unknown): string | null {
+    if (value == null || value === '' || value === 0 || value === '0' || value === '__global__') return null;
+    if ((typeof value !== 'string' && typeof value !== 'number') || !/^[a-zA-Z0-9_-]{1,191}$/.test(String(value))) {
+      throw new BadRequestException('区域编号不合法');
+    }
+    return String(value);
+  }
+
+  private publicContentPage(value: unknown, fallback: number, maximum: number): number {
+    if (value == null || value === '') return fallback;
+    if ((typeof value !== 'number' && typeof value !== 'string') || !/^[1-9]\d*$/.test(String(value))) throw new BadRequestException('分页参数不合法');
+    const page = Number(value);
+    if (!Number.isSafeInteger(page) || page > maximum) throw new BadRequestException('分页参数超出范围');
+    return page;
+  }
+
+  async getRichTextContents(query: any = {}) {
+    const regionId = this.publicContentRegion(query.region_id ?? query.regionId);
+    const page = this.publicContentPage(query.page, 1, 1000000);
+    const limit = this.publicContentPage(query.limit, 10, 50);
+    return this.prisma.richTextContent.findMany({
+      where: {
+        isShow: true,
+        AND: [
+          { OR: regionId ? [{ regionId }, { regionId: null }] : [{ regionId: null }] },
+          { OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }] },
+        ],
+      },
+      orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }, { id: 'asc' }],
+      skip: (page - 1) * limit, take: limit,
+    });
   }
 
   async getRichTextContent(id: string) {
-    return this.prisma.richTextContent.findUnique({ where: { id } });
+    // A published document ID remains shareable across campuses. Listing scope
+    // is separate; an exact ID must never expose a hidden or future document.
+    return this.prisma.richTextContent.findFirst({
+      where: { id, isShow: true, OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }] },
+    });
   }
 
   async getRegionContentTypes(regionId: string) {
+    const scope = this.publicContentRegion(regionId);
     const contents = await this.prisma.richTextContent.findMany({
       where: {
         isShow: true,
-        OR: [
-          { regionId },
-          { regionId: null },
+        AND: [
+          { OR: scope ? [{ regionId: scope }, { regionId: null }] : [{ regionId: null }] },
+          { OR: [{ publishedAt: null }, { publishedAt: { lte: new Date() } }] },
         ],
       },
-      select: { id: true, type: true, title: true, version: true, scene: true, isRequired: true, updatedAt: true },
-      orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }],
+      select: { id: true, regionId: true, type: true, title: true, version: true, scene: true, isRequired: true, updatedAt: true },
+      orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }, { id: 'asc' }],
     });
-    const types = Array.from(new Map(contents.map((item) => [item.type, item])).values()).map((item) => ({
+    const selected = new Map<string, (typeof contents)[number]>();
+    for (const item of contents) {
+      const current = selected.get(item.type);
+      // Keep the first (best sorted) row per scope; a campus override wins even
+      // when its sortOrder places it after a global document.
+      if (!current || (item.regionId === scope && current.regionId !== scope)) {
+        selected.set(item.type, item);
+      }
+    }
+    const types = Array.from(selected.values()).map((item) => ({
       type: item.type,
       content_id: item.id,
       contentId: item.id,
@@ -2588,60 +2476,30 @@ export class OperationService {
   }
 
   async getAgreementDocument(type: string, query: any) {
-    const def = this.normalizeAgreementType(type);
-    const regionId = String(query?.region_id || query?.regionId || '').trim() || null;
-    const doc = await this.prisma.richTextContent.findFirst({
-      where: {
-        type: def.type,
-        isShow: true,
-        OR: regionId ? [{ regionId }, { regionId: null }] : [{ regionId: null }],
-      },
-      orderBy: [{ regionId: 'desc' }, { publishedAt: 'desc' }, { updatedAt: 'desc' }],
-    });
-    const data = doc || {
+    const def = normalizeAgreementType(type);
+    const regionId = normalizeAgreementRegion(query?.region_id ?? query?.regionId);
+    const doc = await findPublishedAgreement(this.prisma, def.type, regionId);
+    const data = doc ? { ...doc, content_hash: agreementContentHash(doc) } : {
       id: '',
       regionId,
       type: def.type,
       title: def.title,
       content: '平台暂未配置该协议内容，请联系运营管理员完善。',
-      version: '1.0.0',
+      version: '',
+      content_hash: '',
       scene: def.scene,
       isRequired: def.isRequired,
-      isShow: true,
+      isShow: false,
       updatedAt: new Date(),
     };
     return { code: 200, data, agreement: data };
   }
 
   async acceptAgreement(userId: string, dto: any) {
-    const def = this.normalizeAgreementType(dto.type || dto.code);
-    const regionId = String(dto.region_id || dto.regionId || 'global').trim() || 'global';
-    const version = String(dto.version || '1.0.0').trim() || '1.0.0';
-    const documentId = dto.document_id || dto.documentId || undefined;
-    const data = await this.prisma.userAgreementConsent.upsert({
-      where: {
-        userId_code_version_regionId: {
-          userId,
-          code: def.type,
-          version,
-          regionId,
-        },
-      },
-      update: {
-        documentId,
-        scene: dto.scene || def.scene,
-        source: dto.source || 'miniapp',
-        acceptedAt: new Date(),
-      },
-      create: {
-        userId,
-        documentId,
-        code: def.type,
-        version,
-        regionId,
-        scene: dto.scene || def.scene,
-        source: dto.source || 'miniapp',
-      },
+    const [data] = await recordAgreementConsents(this.prisma, userId, [dto], {
+      regionId: dto?.region_id ?? dto?.regionId,
+      scene: dto?.scene,
+      source: dto?.source,
     });
     return { code: 200, success: true, data };
   }
@@ -2723,7 +2581,7 @@ export class OperationService {
           where: {
             id: { in: selectedTagIds },
             isActive: true,
-            OR: regionId ? [{ regionId }, { regionId: null }] : undefined,
+            OR: regionId ? [{ regionId }, { regionId: null }] : [{ regionId: null }],
           },
         })
       : [];
@@ -2731,8 +2589,11 @@ export class OperationService {
     if (tagDefs.length !== selectedTagIds.length) {
       throw new BadRequestException('部分标签无效，请重新选择');
     }
+    if (new Set(tagDefs.map((tag) => tag.tagName)).size !== tagDefs.length) {
+      throw new BadRequestException('同名标签只能选择一个，请重新选择');
+    }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const { updated, selection } = await this.prisma.$transaction(async (tx) => {
       if (gender !== undefined) {
         await lockErrandAssignee(tx, userId);
         await assertErrandGenderChangeAllowed(tx, userId, gender);
@@ -2770,24 +2631,34 @@ export class OperationService {
         });
       }
 
-      return tx.user.findUnique({
+      const updated = await tx.user.findUnique({
         where: { id: userId },
         select: {
           id: true,
           uid: true,
           nickname: true,
           avatar: true,
-          profile: { select: { gender: true, birthday: true, grade: true } },
+          profile: { select: { gender: true, birthday: true, grade: true, regionId: true } },
         },
       });
+      const selection = await readUserGuidanceTags(tx, userId, regionId || updated?.profile?.regionId);
+      return { updated, selection };
     });
+
+    // 事务失败不动缓存；成功后同时清理旧键和按校区/查看人缓存的 v2 键。
+    if (this.redis) {
+      await Promise.all([
+        this.redis.delPattern(`user:profile:${userId}:*`).catch(() => undefined),
+        this.redis.delPattern(`user:profile:v2:${userId}:*`).catch(() => undefined),
+      ]);
+    }
 
     return {
       success: true,
       message: '保存成功',
       data: {
-        user: updated,
-        selected_tags: tagDefs.map((tag) => tag.id),
+        user: updated ? { ...updated, ...selection } : updated,
+        ...selection,
         selected_circles: [],
       },
     };
@@ -2949,24 +2820,34 @@ export class OperationService {
   }
 
   // ========== 区域自定义页面 ==========
-  async getRegionCustomPages(regionId: string, query: any) {
-    return this.prisma.regionCustomPage.findMany({ where: { regionId, isShow: true } });
+  async getRegionCustomPages(regionId: string, query: any = {}) {
+    const scope = this.publicContentRegion(regionId);
+    if (!scope) throw new BadRequestException('请先选择区域');
+    const displayScope = query.display_scope ?? query.displayScope ?? 'all';
+    if (!['all', 'module', 'home', 'mine'].includes(displayScope)) throw new BadRequestException('展示位置不合法');
+    const page = this.publicContentPage(query.page, 1, 1000000);
+    const limit = this.publicContentPage(query.page_size, 10, 50);
+    return this.prisma.regionCustomPage.findMany({
+      where: { regionId: scope, isShow: true, displayScope: { in: displayScope === 'all' ? ['all'] : [displayScope, 'all'] } },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * limit, take: limit,
+    });
   }
 
   // ========== 对象匹配 ==========
 
   // ========== 团购 ==========
   async getGroupBuyPackages(query: any) {
-    return this.prisma.groupBuyPackage.findMany({ where: { status: 'active' } });
+    if(!this.groupBuy)throw new BadRequestException('团购服务尚未就绪');
+    return this.groupBuy.packages(query);
   }
-
   async createGroupBuyOrder(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '参与团购');
-    return this.prisma.groupBuyOrder.create({ data: { userId, packageId: dto.package_id, amount: dto.amount, orderNo: `GB${Date.now()}` } });
+    if(!this.groupBuy)throw new BadRequestException('团购服务尚未就绪');
+    return this.groupBuy.create(userId,dto);
   }
-
-  async getGroupBuyOrder(orderSn: string) {
-    return this.prisma.groupBuyOrder.findUnique({ where: { orderNo: orderSn } });
+  async getGroupBuyOrder(orderSn: string, userId: string) {
+    if(!this.groupBuy)throw new BadRequestException('团购服务尚未就绪');
+    return this.groupBuy.order(userId,orderSn,true);
   }
 
   // ========== 社区 ==========
@@ -3080,28 +2961,17 @@ export class OperationService {
 
   async wearTitle(titleId: string, userId: string) {
     await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '佩戴称号');
-    const existing = await this.prisma.userTitleRecord.findUnique({
-      where: { userId_titleId: { userId, titleId } },
-      include: { title: true },
+    return this.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+      const existing=await tx.userTitleRecord.findUnique({where:{userId_titleId:{userId,titleId}},include:{title:true}});
+      if(!existing?.title||!existing.title.isEnabled||existing.title.type!=='title')throw new BadRequestException('称号未获得或已下架');
+      const profile=await tx.userProfile.findUnique({where:{userId},select:{regionId:true}});
+      if(existing.title.regionId&&existing.title.regionId!==profile?.regionId)throw new BadRequestException('请切换到称号所属校区');
+      const scopeRegionId=this.normalizeRegionScope(existing.title.regionId);
+      await tx.userTitleRecord.updateMany({where:{userId,title:{is:{regionId:scopeRegionId}}},data:{isWearing:false}});
+      const record=await tx.userTitleRecord.update({where:{userId_titleId:{userId,titleId}},data:{isWearing:true},include:{title:true}});
+      return {success:true,data:this.toMiniUserTitle(record),message:'佩戴成功'};
     });
-    if (!existing) throw new BadRequestException('请先领取该称号');
-    if (!existing.title || existing.title.isEnabled === false || existing.title.type !== 'title') {
-      throw new BadRequestException('称号不存在或已下架');
-    }
-    const scopeRegionId = this.normalizeRegionScope(existing.title.regionId);
-    await this.prisma.userTitleRecord.updateMany({
-      where: {
-        userId,
-        title: { is: { regionId: scopeRegionId } },
-      },
-      data: { isWearing: false },
-    });
-    const record = await this.prisma.userTitleRecord.update({
-      where: { userId_titleId: { userId, titleId } },
-      data: { isWearing: true },
-      include: { title: true },
-    });
-    return { success: true, data: this.toMiniUserTitle(record), message: '佩戴成功' };
   }
 
   async unwearTitle(userId: string, regionId?: any) {
@@ -3134,27 +3004,31 @@ export class OperationService {
   }
 
   async useRedeemCode(userId: string, dto: any) {
-    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId, '兑换称号');
-    const { code } = dto;
-    const redeemCode = await this.prisma.userTitleRedeemCode.findUnique({ where: { code } });
-    if (!redeemCode) throw new BadRequestException('兑换码不存在');
-    if (redeemCode.usedBy) throw new BadRequestException('兑换码已被使用');
-    if (redeemCode.expireAt && new Date(redeemCode.expireAt) < new Date()) throw new BadRequestException('兑换码已过期');
-    await this.prisma.userTitleRedeemCode.update({
-      where: { id: redeemCode.id },
-      data: { usedBy: userId, usedAt: new Date() },
+    await this.userAccess.assertCurrentRegionStudentProtectedAction(userId,'兑换称号');
+    const code=String(dto?.code||'').trim();
+    if(!code||code.length>128)throw new BadRequestException('兑换码不合法');
+    return this.prisma.$transaction(async tx=>{
+      const row=await tx.userTitleRedeemCode.findUnique({where:{code}});
+      if(!row)throw new BadRequestException('兑换码不存在');
+      const title=await tx.userTitle.findUnique({where:{id:row.titleId}});
+      const profile=await tx.userProfile.findUnique({where:{userId},select:{regionId:true}});
+      if(!title?.isEnabled||title.type!=='title')throw new BadRequestException('称号已下架');
+      if(title.regionId&&profile?.regionId!==title.regionId)throw new BadRequestException('请切换到称号所属校区');
+      const claimed=await tx.userTitleRedeemCode.updateMany({where:{id:row.id,usedBy:null,isUsed:false,OR:[{expireAt:null},{expireAt:{gt:new Date()}}]},data:{usedBy:userId,isUsed:true,usedAt:new Date()}});
+      if(claimed.count!==1)throw new BadRequestException('兑换码已使用或过期');
+      const record=await tx.userTitleRecord.upsert({where:{userId_titleId:{userId,titleId:title.id}},create:{userId,titleId:title.id},update:{},include:{title:true}});
+      return {success:true,data:this.toMiniUserTitle(record),message:'兑换成功'};
     });
-    const record = await this.prisma.userTitleRecord.upsert({
-      where: { userId_titleId: { userId, titleId: redeemCode.titleId } },
-      create: { userId, titleId: redeemCode.titleId },
-      update: {},
-      include: { title: true },
-    });
-    return { success: true, data: this.toMiniUserTitle(record), message: '兑换成功' };
   }
 
-  async getRedeemCodeInfo(code: string) {
-    return this.prisma.userTitleRedeemCode.findUnique({ where: { code } });
+  async getRedeemCodeInfo(value: string) {
+    const code=String(value||'').trim();
+    if(!code||code.length>128)throw new BadRequestException('兑换码不合法');
+    const row=await this.prisma.userTitleRedeemCode.findUnique({where:{code}});
+    if(!row||row.usedBy||row.isUsed||(row.expireAt&&row.expireAt<=new Date()))throw new BadRequestException('兑换码不可用');
+    const title=await this.prisma.userTitle.findUnique({where:{id:row.titleId}});
+    if(!title?.isEnabled||title.type!=='title')throw new BadRequestException('称号已下架');
+    return {title:this.toMiniUserTitle(title),expireAt:row.expireAt};
   }
 
   // ========== AI ==========

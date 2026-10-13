@@ -2,10 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req 
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RegionService } from './region.service';
 import { JwtGuard } from '../../guards/jwt.guard';
-import { Roles } from '../../decorators/roles.decorator';
-import { RolesGuard } from '../../guards/roles.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
-import { RoleType } from '@prisma/client';
 import { Request } from 'express';
 import { IpGeoService } from '../ip-geo/ip-geo.service';
 import { Throttle } from '@nestjs/throttler';
@@ -48,28 +45,32 @@ export class RegionController {
     return this.regionService.getContentItems(id);
   }
 
-  @Post('regions/:id/content-item')
-  @UseGuards(JwtGuard, RolesGuard)
-  @Roles(RoleType.ADMIN, RoleType.SUPER_ADMIN)
+  @Get('regions/:id/management')
+  @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  addContentItem(@Param('id') id: string, @Body() dto: any) {
-    return this.regionService.addContentItem(id, dto);
+  getManagement(@Param('id') id: string, @CurrentUser() actor: any) {
+    return this.regionService.getManagement(id, actor);
+  }
+
+  @Post('regions/:id/content-item')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  addContentItem(@Param('id') id: string, @Body() dto: any, @CurrentUser() actor: any) {
+    return this.regionService.addContentItem(id, dto, actor);
   }
 
   @Put('regions/:id/content-item/:itemId')
-  @UseGuards(JwtGuard, RolesGuard)
-  @Roles(RoleType.ADMIN, RoleType.SUPER_ADMIN)
+  @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  updateContentItem(@Param('id') id: string, @Param('itemId') itemId: string, @Body() dto: any) {
-    return this.regionService.updateContentItem(id, itemId, dto);
+  updateContentItem(@Param('id') id: string, @Param('itemId') itemId: string, @Body() dto: any, @CurrentUser() actor: any) {
+    return this.regionService.updateContentItem(id, itemId, dto, actor);
   }
 
   @Delete('regions/:id/content-item/:itemId')
-  @UseGuards(JwtGuard, RolesGuard)
-  @Roles(RoleType.ADMIN, RoleType.SUPER_ADMIN)
+  @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  deleteContentItem(@Param('id') id: string, @Param('itemId') itemId: string) {
-    return this.regionService.deleteContentItem(id, itemId);
+  deleteContentItem(@Param('id') id: string, @Param('itemId') itemId: string, @CurrentUser() actor: any) {
+    return this.regionService.deleteContentItem(id, itemId, actor);
   }
 
   @Get('regions/:id/tabbar')
@@ -92,8 +93,8 @@ export class RegionController {
   @Put('regions/:id')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  updateManagerSettings(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
-    return this.regionService.updateManagerSettings(id, userId, dto);
+  updateManagerSettings(@Param('id') id: string, @CurrentUser() actor: any, @Body() dto: any) {
+    return this.regionService.updateManagerSettings(id, actor.sub, dto, actor.isAdmin === true);
   }
 
   @Get('status/location')

@@ -1,4 +1,5 @@
 import { reserveCouponIssue } from '../../common/coupon-policy';
+import { isAppLoginOpenid, isMiniappOpenid, isPhoneLoginOpenid } from '../../common/wechat-identity';
 import { merchantSettlementBase } from '../../common/commission';
 import { userStatusValue, buildUserStatusHistory } from './user-status-history';
 import { currentRequestMetadata, redactAuditDetail } from '../../common/request-context';
@@ -18,12 +19,15 @@ import { RedisService } from "../../common/services/redis.service";
 import { PaymentService } from "../payment/payment.service";
 import { MembershipService } from "../membership/membership.service";
 import { WsNativeGateway } from "../websocket/ws-native.gateway";
+import { clearRefreshSessionsBefore } from "../../common/session-refresh-cleanup";
 import { UserSessionRevocationService } from "../websocket/user-session-revocation.service";
 import { AdminDataScopeService } from "../../common/services/admin-data-scope.service";
 import { NotifyService } from "../notify/notify.service";
 import * as bcrypt from "bcrypt";
 import * as crypto from "crypto";
 import { checkPasswordStrength } from "../../common/utils/password-policy";
+import { StudentIdentityService } from '../student-identity/student-identity.service';
+import { ReviewStudentIdentityDto } from '../student-identity/student-identity.dto';
 
 @Injectable()
 export class AdminService {
@@ -40,7 +44,17 @@ export class AdminService {
     private readonly userSessionRevocation?: UserSessionRevocationService,
     @Optional()
     private readonly notifyService?: NotifyService,
+    private readonly studentIdentity?: StudentIdentityService,
   ) {}
+
+  private async restrictStudentMaterials(users: any[], operatorId?: string) {
+    if (!operatorId) return;
+    const scope = await this.adminDataScope.getAdminContext(operatorId);
+    if (scope.isSuperAdmin) return;
+    const schools = await this.prisma.school.findMany({ where: { regionId: { in: scope.regionIds } }, select: { id: true } });
+    const allowed = new Set(schools.map((school) => school.id));
+    for (const user of users) if (user.studentVerify && !allowed.has(user.studentVerify.schoolId)) user.studentVerify = null;
+  }
 
   private normalizeUserStatus(status: any): UserStatus {
     const normalized = String(status || "")
@@ -149,11 +163,11 @@ export class AdminService {
       await this.userSessionRevocation.revoke(userId);
       return;
     }
-    await Promise.all([
-      this.redis.del(`refresh:${userId}`).catch(() => undefined),
-      this.redis.delPattern(`refresh:${userId}:*`).catch(() => undefined),
-    ]);
-    this.wsNative?.disconnectUser(userId);
+    const user = await this.prisma.user.update({
+      where: { id: userId }, data: { authVersion: { increment: 1 } }, select: { authVersion: true },
+    });
+    await clearRefreshSessionsBefore(this.redis, userId, user.authVersion).catch(() => undefined);
+    this.wsNative?.disconnectUser(userId, user.authVersion);
   }
 
   private async clearUserStateCache(userId: string) {
@@ -1893,6 +1907,7 @@ export class AdminService {
     ]);
     const regionNameMap = new Map(regions.map((r) => [r.id, r.name]));
 
+    await this.restrictStudentMaterials(list, operatorId);
     return {
       list: list.map((u) => {
         const formalRegionId = (u.profile as any)?.regionId || "";
@@ -1928,15 +1943,13 @@ export class AdminService {
           avatar: u.avatar,
           phone: u.phone,
           phoneBound: !!u.phone,
-          wxBound: !String(u.openid || "").startsWith("phone_login_"),
-          loginIdentifierType: String(u.openid || "").startsWith("phone_login_")
+          wxBound: isMiniappOpenid(u.openid),
+          loginIdentifierType: isPhoneLoginOpenid(u.openid)
             ? "phone"
-            : "wechat",
+            : isAppLoginOpenid(u.openid) ? "app" : "wechat",
           bindingSummary: [
             u.phone ? "已绑手机号" : "未绑手机号",
-            String(u.openid || "").startsWith("phone_login_")
-              ? "待绑定微信"
-              : "已绑微信",
+            isMiniappOpenid(u.openid) ? "已绑微信" : "待绑定微信",
           ].join(" / "),
           userType: u.userType === 4 ? "robot" : "miniapp",
           typeLabel: u.userType === 4 ? "机器人" : "小程序用户",
@@ -2153,7 +2166,8 @@ export class AdminService {
     return { success: true, created, failed };
   }
 
-  async userDetail(id: string) {
+  async userDetail(id: string, operatorId?: string) {
+    if (operatorId) await this.assertUserRegionAccess(operatorId, id);
     const u = await this.prisma.user.findUnique({
       where: { id },
       include: {
@@ -2189,6 +2203,7 @@ export class AdminService {
       },
     });
     if (!u) throw new NotFoundException("用户不存在");
+    await this.restrictStudentMaterials([u], operatorId);
 
     const regions = await this.prisma.region.findMany({
       select: { id: true, name: true },
@@ -2611,15 +2626,13 @@ export class AdminService {
       avatar: u.avatar,
       phone: u.phone,
       phoneBound: !!u.phone,
-      wxBound: !String(u.openid || "").startsWith("phone_login_"),
-      loginIdentifierType: String(u.openid || "").startsWith("phone_login_")
+      wxBound: isMiniappOpenid(u.openid),
+      loginIdentifierType: isPhoneLoginOpenid(u.openid)
         ? "phone"
-        : "wechat",
+        : isAppLoginOpenid(u.openid) ? "app" : "wechat",
       bindingSummary: [
         u.phone ? "已绑手机号" : "未绑手机号",
-        String(u.openid || "").startsWith("phone_login_")
-          ? "待绑定微信"
-          : "已绑微信",
+        isMiniappOpenid(u.openid) ? "已绑微信" : "待绑定微信",
       ].join(" / "),
       userType: u.userType === 4 ? "robot" : "miniapp",
       typeLabel: u.userType === 4 ? "机器人" : "小程序用户",
@@ -3146,36 +3159,8 @@ export class AdminService {
     return { success: true, status };
   }
 
-  async auditCert(
-    userId: string,
-    dto: { status: string; reason?: string },
-    operatorId?: string,
-    ip?: string,
-  ) {
-    const status = dto.status === "approved" ? "APPROVED" : "REJECTED";
-    const existing = await this.prisma.studentVerify.findUnique({
-      where: { userId },
-    });
-    if (!existing)
-      throw new BadRequestException("该用户还没有提交学生认证资料");
-    await this.prisma.studentVerify.update({
-      where: { userId },
-      data: {
-        status,
-        remark: dto.reason,
-        verifiedAt: status === "APPROVED" ? new Date() : null,
-      },
-    });
-    await this.logOperation(
-      operatorId || "",
-      "audit_cert",
-      "user",
-      userId,
-      "student_verify",
-      { status: dto.status, reason: dto.reason },
-      ip,
-    );
-    return { success: true };
+  async auditCert(userId: string, dto: ReviewStudentIdentityDto, operatorId?: string, _ip?: string) {
+    return this.studentIdentity!.review(userId, dto, operatorId || '');
   }
 
   // ==================== 区域管理 ====================
@@ -12171,59 +12156,16 @@ export class AdminService {
   }
 
   /** 学生认证统计 — Model: studentVerify */
-  async getVerificationsStats() {
-    let hasError = false;
-    try {
-      const today = this.getTodayStart();
-      const [pending, todayApproved, rejected, totalApproved] =
-        await Promise.all([
-          this.prisma.studentVerify
-            .count({ where: { status: "PENDING" } })
-            .catch((e: any) => {
-              hasError = true;
-              console.warn("Stats query failed:", e?.message);
-              return 0;
-            }),
-          this.prisma.studentVerify
-            .count({
-              where: { status: "APPROVED", verifiedAt: { gte: today } },
-            })
-            .catch((e: any) => {
-              hasError = true;
-              console.warn("Stats query failed:", e?.message);
-              return 0;
-            }),
-          this.prisma.studentVerify
-            .count({ where: { status: "REJECTED" } })
-            .catch((e: any) => {
-              hasError = true;
-              console.warn("Stats query failed:", e?.message);
-              return 0;
-            }),
-          this.prisma.studentVerify
-            .count({ where: { status: "APPROVED" } })
-            .catch((e: any) => {
-              hasError = true;
-              console.warn("Stats query failed:", e?.message);
-              return 0;
-            }),
-        ]);
-      return {
-        pending,
-        todayApproved,
-        rejected,
-        totalApproved,
-        _error: hasError,
-      };
-    } catch {
-      return {
-        pending: 0,
-        todayApproved: 0,
-        rejected: 0,
-        totalApproved: 0,
-        _error: true,
-      };
-    }
+  async getVerificationsStats(operatorId?: string) {
+    const scope = await this.adminDataScope.getAdminContext(operatorId);
+    const schoolScope = scope.isSuperAdmin ? {} : { school: { regionId: { in: scope.regionIds } } };
+    const [pending, todayApproved, rejected, totalApproved] = await Promise.all([
+      this.prisma.studentVerify.count({ where: { ...schoolScope, status: 'PENDING' } }),
+      this.prisma.studentVerify.count({ where: { ...schoolScope, status: 'APPROVED', verifiedAt: { gte: this.getTodayStart() } } }),
+      this.prisma.studentVerify.count({ where: { ...schoolScope, status: 'REJECTED' } }),
+      this.prisma.studentVerify.count({ where: { ...schoolScope, status: 'APPROVED' } }),
+    ]);
+    return { pending, todayApproved, rejected, totalApproved, _error: false };
   }
 
   /** 内容审核统计 — Models: post, report, comment */

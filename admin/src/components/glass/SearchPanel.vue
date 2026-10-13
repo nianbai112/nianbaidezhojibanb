@@ -1,7 +1,7 @@
 <template>
   <div class="glass-card search-panel">
     <div class="card-body">
-      <el-form :model="model" label-position="top">
+      <el-form :model="model" label-position="top" role="search" @submit.prevent="emit('search', model)">
         <div :class="['form-grid', collapsed && canCollapse ? 'collapsed-grid' : '']">
           <el-form-item v-for="(field, idx) in fields" :key="field.key" v-show="!collapsed || !canCollapse || idx < 3" :label="field.label">
             <el-input v-if="field.type === 'input'" v-model="model[field.key]" :placeholder="field.placeholder || '请输入' + field.label" clearable />
@@ -17,7 +17,7 @@
             {{ collapsed ? '展开筛选' : '收起' }} <el-icon><ArrowDown v-if="collapsed" /><ArrowUp v-else /></el-icon>
           </el-button>
           <el-button :icon="RefreshLeft" @click="reset">重置</el-button>
-          <el-button type="primary" :icon="Search" @click="$emit('search', model)">查询</el-button>
+          <el-button type="primary" :icon="Search" native-type="submit">查询</el-button>
         </div>
       </el-form>
     </div>
@@ -28,12 +28,12 @@ import { computed, reactive, ref } from 'vue'
 import { RefreshLeft, Search, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import type { SearchField } from '@/types/admin'
 const props = defineProps<{ fields: SearchField[] }>()
-defineEmits<{ search:[Record<string, any>] }>()
+const emit = defineEmits<{ search:[Record<string, any>] }>()
 const model = reactive<Record<string, any>>({})
 props.fields.forEach(f => model[f.key] = '')
 const canCollapse = computed(() => props.fields.length > 4)
 const collapsed = ref(true)
-function reset(){ Object.keys(model).forEach(k => model[k] = '') }
+function reset(){ Object.keys(model).forEach(k => model[k] = ''); emit('search', model) }
 </script>
 <style scoped>
 .search-panel {

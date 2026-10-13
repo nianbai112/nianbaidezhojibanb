@@ -22,11 +22,12 @@ export interface AccessContext {
 }
 
 const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
+  { prefix: '/academic', any: ['academic:view'] },
   { prefix: '/dashboard', any: ['dashboard:view'] },
   { prefix: '/region/city-agent', any: ['city:view', 'region:view'] },
   { prefix: '/region', any: ['region:view'] },
 
-  { prefix: '/user/verification', any: ['user:cert'] },
+  { prefix: '/user/verification', any: ['user:view', 'user:cert'] },
   { prefix: '/user/private-messages', any: ['message:view'] },
   { prefix: '/user/blacklist', any: ['user:ban', 'user:edit'] },
   { prefix: '/membership', any: ['membership:list', 'membership:plan:list', 'membership:order:list', 'membership:user:list'] },
@@ -36,6 +37,9 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/content/audit', any: ['audit:view', 'report:handle', 'post:audit', 'comment:audit'] },
   { prefix: '/content/sensitive', any: ['content:view', 'system:config'] },
   { prefix: '/content/settings', any: ['content:view', 'system:config'] },
+  { prefix: '/content/wechat-chat', any: ['wechat:conversation:view'] },
+  { prefix: '/content/wechat-moments', any: ['content:audit', 'audit:view', 'system:config'] },
+  { prefix: '/content/wechat-broadcast', any: ['wechat:broadcast:view'] },
   { prefix: '/content/paid-pinning', any: ['post:view', 'post:top'] },
   { prefix: '/content', any: ['content:view', 'post:view'] },
 
@@ -62,6 +66,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
   { prefix: '/mall/reviews', any: ['review:manage', 'mall:view'] },
   { prefix: '/mall', any: ['mall:view', 'product:view'] },
 
+  { prefix: '/errand/purchase', any: ['errand:view'] },
   { prefix: '/errand/riders', any: ['rider:view'] },
   { prefix: '/errand/item-sizes', any: ['errand:item-size:view', 'errand:view'] },
   { prefix: '/errand/pickup-points', any: ['errand:pickup-point:view', 'errand:view'] },
@@ -127,7 +132,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; any: string[] }> = [
 
 const LEGACY_MENU_ALIASES: Record<string, string[]> = {
   '/user/list': ['/users/list'],
-  '/user/verification': ['/users/certifications'],
+  '/user/verification': ['/users/certifications', '/user/student-roster'],
   '/user/tags': ['/users/tags'],
   '/content/audit': ['/content/reports'],
   '/merchant/list': ['/shop/merchants'],

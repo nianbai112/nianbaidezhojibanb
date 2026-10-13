@@ -38,7 +38,7 @@
       <el-table-column prop="images" label="图片" width="120">
         <template #default="{ row }">
           <div v-if="row.images?.length" class="review-images">
-            <el-image
+            <el-image :initial-index="index" preview-teleported
               v-for="(img, index) in row.images.slice(0, 3)"
               :key="index"
               :src="img"
@@ -106,7 +106,7 @@
         <el-descriptions-item label="评价内容" :span="2">{{ selectedReview?.content || '-' }}</el-descriptions-item>
         <el-descriptions-item label="评价图片" :span="2">
           <div v-if="selectedReview?.images?.length" class="review-images">
-            <el-image
+            <el-image :initial-index="index" preview-teleported
               v-for="(img, index) in selectedReview.images"
               :key="index"
               :src="img"

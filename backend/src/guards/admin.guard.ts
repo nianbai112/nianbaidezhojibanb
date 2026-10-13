@@ -84,9 +84,10 @@ export class AdminPermissionGuard implements CanActivate {
       [context.getHandler(), context.getClass()],
     );
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
-      return true; // 无权限要求时放行
-    }
+    const requiredAnyPermissions = this.reflector.getAllAndOverride<string[]>(
+      'admin_permissions_any', [context.getHandler(), context.getClass()],
+    );
+    if (!requiredPermissions?.length && !requiredAnyPermissions?.length) return true;
 
     const { user } = context.switchToHttp().getRequest();
     if (!user?.sub || !user?.isAdmin) {
@@ -147,7 +148,7 @@ export class AdminPermissionGuard implements CanActivate {
       }
     }
 
-    const missing = requiredPermissions.filter((p) => !userPermissions.has(p));
+    const missing = (requiredPermissions || []).filter((p) => !userPermissions.has(p));
     if (missing.length > 0) {
       throw new UnauthorizedException(
         `缺少权限: ${missing.join(', ')}`,
@@ -155,10 +156,6 @@ export class AdminPermissionGuard implements CanActivate {
     }
 
     // AUD-P1-074: 检查 OR 权限（满足任意一个即可）
-    const requiredAnyPermissions = this.reflector.getAllAndOverride<string[]>(
-      'admin_permissions_any',
-      [context.getHandler(), context.getClass()],
-    );
     if (requiredAnyPermissions && requiredAnyPermissions.length > 0) {
       const hasAny = requiredAnyPermissions.some((p) => userPermissions.has(p));
       if (!hasAny) {

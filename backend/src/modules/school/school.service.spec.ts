@@ -1,3 +1,4 @@
+import { PHOTO_FREE_STUDENT_SCHOOL_ID } from '../student-identity/student-identity.policy';
 import { SchoolService } from './school.service';
 
 describe('SchoolService', () => {
@@ -8,6 +9,33 @@ describe('SchoolService', () => {
     },
   });
 
+  it('exposes the photo rule by school ID in public results', async () => {
+    const prisma = createPrisma();
+    prisma.school.findMany.mockResolvedValue([
+      {
+        id: PHOTO_FREE_STUDENT_SCHOOL_ID,
+        name: '重庆城乡发展职业学院',
+        studentVerificationMode: 'ROSTER',
+      },
+      { id: 'other-school', name: '其他学校' },
+    ] as any);
+    const result = await new SchoolService(prisma as any).list({
+      page: 1,
+      page_size: 10,
+    } as any);
+    expect(result.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: PHOTO_FREE_STUDENT_SCHOOL_ID,
+          student_card_required: false,
+        }),
+        expect.objectContaining({
+          id: 'other-school',
+          student_card_required: true,
+        }),
+      ]),
+    );
+  });
   it('builds provider-safe keyword filters for public school search', async () => {
     const prisma = createPrisma();
     const service = new SchoolService(prisma as any);

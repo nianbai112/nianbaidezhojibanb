@@ -42,6 +42,7 @@ export const MINI_PROGRAM_ROOT_PREFIX_LIST = [
   "delivery-distance",
   "delivery-orders",
   "upload",
+  "student-identity",
   "auth",
   "city-agent",
   "activity",

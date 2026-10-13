@@ -7,6 +7,7 @@ import { MembershipService } from '../membership/membership.service';
 import { PaymentService } from '../payment/payment.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { OperationController } from './operation.controller';
 import { OperationService } from './operation.service';
 
@@ -31,7 +32,8 @@ describe('Anonymous identity HTTP privacy flow', () => {
         { provide: GrowthService, useValue: {} },
         { provide: UserAccessPolicyService, useValue: {} },
       ],
-    }).overrideGuard(JwtGuard).useValue({ canActivate: () => true }).compile();
+    }).overrideGuard(JwtGuard).useValue({ canActivate: () => true })
+      .overrideGuard(OptionalAuthGuard).useValue({ canActivate: () => true }).compile();
     app = module.createNestApplication();
     await app.listen(0, '127.0.0.1');
   });

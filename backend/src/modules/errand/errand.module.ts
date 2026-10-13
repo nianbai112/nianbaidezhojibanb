@@ -8,9 +8,10 @@ import { MembershipModule } from '../membership/membership.module';
 import { PaymentModule } from '../payment/payment.module';
 import { ErrandQuoteService } from './errand-quote.service';
 import { ErrandLifecycleService } from './errand-lifecycle.service';
+import { RiderPayoutModule } from '../rider-payout/rider-payout.module';
 
 @Module({
-  imports: [NotifyModule, MembershipModule, PaymentModule],
+  imports: [NotifyModule, MembershipModule, PaymentModule, RiderPayoutModule],
   controllers: [ErrandController, ErrandAdminController],
   providers: [ErrandService, ErrandQuoteService, ErrandLifecycleService, WalletService],
   exports: [ErrandService, ErrandQuoteService, ErrandLifecycleService],

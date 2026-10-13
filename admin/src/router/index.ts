@@ -13,6 +13,7 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     component: MainLayout,
     children: [
+      { path: 'academic/schedule', component: () => import('@/views/academic/CourseSchedule.vue'), meta: { title: '课表管理' } },
       // ========== 运营工作台 ==========
       { path: 'dashboard', component: () => import('@/views/dashboard/OperationsDashboard.vue'), meta: { title: '数据总览' } },
       { path: 'dashboard/todos', component: () => import('@/views/dashboard/TodayTodos.vue'), meta: { title: '今日待办' } },
@@ -35,6 +36,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'user/list', component: () => import('@/views/modules/UsersPage.vue'), meta: { title: '用户列表' } },
       { path: 'user/private-messages', component: () => import('@/views/user/PrivateMessages.vue'), meta: { title: '私信审核' } },
       { path: 'user/verification', component: () => import('@/views/modules/VerificationPage.vue'), meta: { title: '学生认证' } },
+      { path: 'user/student-roster', redirect: to => ({ path: '/user/verification', query: to.query, hash: to.hash }) },
       { path: 'user/schools', component: () => import('@/views/user/SchoolLibrary.vue'), meta: { title: '学校库管理' } },
       { path: 'user/tags', component: () => import('@/views/user/UserTags.vue'), meta: { title: '用户标签' } },
       { path: 'user/guidance', component: () => import('@/views/user/UserGuidanceConfig.vue'), meta: { title: '用户引导' } },
@@ -53,6 +55,9 @@ const routes: RouteRecordRaw[] = [
       { path: 'content/audit', component: () => import('@/views/content/ContentAudit.vue'), meta: { title: '审核举报' } },
       { path: 'content/sensitive', component: () => import('@/views/content/SensitiveWords.vue'), meta: { title: '敏感词库' } },
       { path: 'content/settings', component: () => import('@/views/content/ContentSettings.vue'), meta: { title: '内容配置' } },
+      { path: 'content/wechat-chat', component: () => import('@/views/content/WechatChat.vue'), meta: { title: '微信 AI 聊天' } },
+      { path: 'content/wechat-moments', component: () => import('@/views/content/WechatMoments.vue'), meta: { title: '朋友圈同步' } },
+      { path: 'content/wechat-broadcast', component: () => import('@/views/content/WechatBroadcast.vue'), meta: { title: '订单群播报' } },
 
       // ========== 商家中心 ==========
       { path: 'merchant/workbench', component: () => import('@/views/merchant/FoodDeliveryWorkbench.vue'), meta: { title: '外卖工作台' } },
@@ -91,6 +96,7 @@ const routes: RouteRecordRaw[] = [
 
       // ========== 跑腿管理 ==========
       { path: 'errand/dashboard', component: () => import('@/views/delivery/ErrandDashboard.vue'), meta: { title: '跑腿工作台' } },
+      { path: 'errand/purchase', component: () => import('@/views/delivery/PurchaseService.vue'), meta: { title: '代买服务' } },
       { path: 'errand/orders', component: () => import('@/views/delivery/ErrandOrdersPage.vue'), meta: { title: '跑腿订单' } },
       { path: 'errand/pickup-points', component: () => import('@/views/delivery/ErrandPickupPoints.vue'), meta: { title: '取件点管理' } },
       { path: 'errand/item-sizes', component: () => import('@/views/delivery/ErrandItemSizes.vue'), meta: { title: '物品大小' } },

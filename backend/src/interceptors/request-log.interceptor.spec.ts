@@ -9,6 +9,21 @@ describe("RequestLogInterceptor", () => {
       switchToHttp: () => ({ getRequest: () => request }),
     }) as ExecutionContext;
 
+  it.each(['app-login', 'apple/notifications'])('does not log App authorization codes or notification JWTs: %s', async (endpoint) => {
+    const prisma = { serverLog: { createMany: jest.fn().mockResolvedValue({ count: 1 }) } };
+    const interceptor = new RequestLogInterceptor(prisma as any);
+    const request = { method: 'POST', url: `/api/v1/wx-auth/${endpoint}?code=PRIVATE_QUERY`, headers: {},
+      body: { code: 'PRIVATE_CODE', identityToken: 'PRIVATE_JWT', openid: 'PRIVATE_ID', payload: 'PRIVATE_APPLE_NOTIFICATION_JWT' } };
+    await expect(lastValueFrom(interceptor.intercept(contextFor(request), {
+      handle: () => throwError(() => Object.assign(new Error('failed'), { status: 400 })),
+    }))).rejects.toThrow('failed');
+    await interceptor.onModuleDestroy();
+    const saved = JSON.stringify(prisma.serverLog.createMany.mock.calls);
+    expect(saved).not.toContain('PRIVATE_');
+    expect(saved).toContain('appLoginCredentials');
+    expect(prisma.serverLog.createMany).toHaveBeenCalledTimes(1);
+  });
+
   it('records a successful admin mutation when the business handler has no audit writer', async () => {
     const prisma = { serverLog: { createMany: jest.fn().mockResolvedValue({ count: 1 }) }, adminOperationLog: { create: jest.fn().mockResolvedValue({}) } };
     const interceptor = new RequestLogInterceptor(prisma as any);

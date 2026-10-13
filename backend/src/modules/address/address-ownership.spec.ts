@@ -36,7 +36,7 @@ describe('address detail ownership', () => {
 
   it('passes the authenticated user into the service instead of trusting the address ID alone', async () => {
     const service: any = { getDetail: jest.fn() };
-    await new AddressController(service).getSpecifiedDetail('private', 'owner');
+    await new AddressController(service, {} as any).getSpecifiedDetail('private', 'owner');
     expect(service.getDetail).toHaveBeenCalledWith('private', 'owner');
   });
 });

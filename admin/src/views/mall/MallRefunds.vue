@@ -102,7 +102,7 @@
         <el-descriptions-item label="详细描述" :span="2">{{ selectedRefund?.description || '-' }}</el-descriptions-item>
         <el-descriptions-item label="凭证图片" :span="2">
           <div v-if="selectedRefund?.images?.length" class="refund-images">
-            <el-image
+            <el-image :initial-index="index" preview-teleported
               v-for="(img, index) in selectedRefund.images"
               :key="index"
               :src="img"

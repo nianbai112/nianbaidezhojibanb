@@ -1,0 +1,66 @@
+/* Only the disposable local DB; no payments, notifications or external services. */
+const assert = require('node:assert/strict');
+const url = process.env.PURCHASE_TEST_DATABASE_URL || '';
+if (!/^postgresql:\/\/[^@]+@127\.0\.0\.1:55439\/purchase_review(?:\?|$)/.test(url)) throw new Error('Use disposable purchase_review on port 55439');
+require('ts-node').register({transpileOnly:true});
+const {PrismaClient}=require('@prisma/client');
+const {PurchaseService}=require('../src/modules/errand-purchase/purchase.service');
+const db=new PrismaClient({datasources:{db:{url}}});
+const regionId='catalog-test-school',userId='catalog-test-user',operator='catalog-test-admin';
+const service=new PurchaseService(db,{assertStudentProtectedAction:async()=>{}},{assertRegionAccess:async(a,r)=>{assert.equal(a,operator);assert.equal(r,regionId)}},{},{},{createAndDispatch:async()=>{}});
+const save=(body)=>service.saveCategory(operator,regionId,body);
+async function main(){
+  await db.region.create({data:{id:regionId,name:'分类验证校区',code:regionId}});
+  await db.user.create({data:{id:userId,openid:userId}});
+  await db.address.create({data:{id:'catalog-test-address',userId,regionId,name:'测试收货人',phone:'13800000000',detail:'一号楼101',latitude:30,longitude:120}});
+  await service.savePolicy(operator,regionId,{enabled:true});
+  const shop=await service.saveShop(operator,regionId,{name:'茶点店',address:'测试路1号',latitude:30.001,longitude:120,opensAt:'00:00',closesAt:'00:00',enabled:true});
+  const other=await service.saveShop(operator,regionId,{name:'超市',address:'测试路2号',latitude:30.002,longitude:120,opensAt:'00:00',closesAt:'00:00',enabled:true});
+  const root=await save({shopId:shop.id,name:'奶茶',enabled:true,sortOrder:1});
+  const child=await save({shopId:shop.id,parentId:root.id,name:'鲜奶茶',enabled:true,sortOrder:1});
+  await assert.rejects(save({shopId:shop.id,parentId:child.id,name:'三级',enabled:true}),/一级分类/);
+  await assert.rejects(save({...root,parentId:root.id}),/自己的上级/);
+  await assert.rejects(save({shopId:other.id,parentId:root.id,name:'串店',enabled:true}),/本店/);
+  const another=await save({shopId:shop.id,name:'小吃',enabled:true});
+  await assert.rejects(save({...root,parentId:another.id}),/不能移动/);
+  const duplicate=await Promise.allSettled([1,2].map(()=>save({shopId:shop.id,name:'并发分类',enabled:true})));
+  assert.equal(duplicate.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(await db.purchaseCategory.count({where:{shopId:shop.id,name:'并发分类'}}),1);
+  console.log('PASS category depth, cross-shop, cycle and concurrent duplicate guards');
+  const ids=[];
+  for(let i=0;i<23;i++){
+    const product=await service.saveProduct(operator,regionId,{shopId:shop.id,categoryId:child.id,name:`鲜奶茶 ${String(i).padStart(2,'0')}`,enabled:true,sortOrder:i,skus:[{name:'标准',priceCents:1200,weightGrams:100,enabled:true}]});ids.push(product.id);
+  }
+  await assert.rejects(service.saveProduct(operator,regionId,{shopId:other.id,categoryId:child.id,name:'串店商品',enabled:true,skus:[{name:'标准',priceCents:100,weightGrams:100,enabled:true}]}),/分类不属于/);
+  const first=await service.products({regionId,shopId:shop.id,categoryId:root.id,page:1,pageSize:20});
+  const second=await service.products({regionId,shopId:shop.id,categoryId:child.id,page:2,pageSize:20});
+  assert.equal(first.total,23);assert.equal(first.items.length,20);assert.equal(first.hasMore,true);assert.equal(second.items.length,3);assert.equal(second.hasMore,false);
+  assert.equal(new Set([...first.items,...second.items].map(p=>p.id)).size,23);
+  assert.equal((await service.products({regionId,shopId:shop.id,keyword:'鲜奶茶 01'})).total,1);
+  await assert.rejects(service.products({regionId:'wrong',shopId:shop.id}),/未开放|不属于/);
+  await assert.rejects(service.products({regionId,shopId:shop.id,pageSize:999}),/每页数量/);
+  console.log('PASS deterministic pagination, first/second-level filters and shop-scoped search');
+  const nav=await service.catalog(regionId,'navigation');
+  assert.equal(nav.shops[0].products,undefined);
+  assert.equal(nav.shops.find(s=>s.id===shop.id).categories.find(c=>c.id===root.id).children[0].id,child.id);
+  assert.equal((await service.catalog(regionId)).shops.find(s=>s.id===shop.id).products.length,23);
+  const sku=first.items[0].skus[0].id, body={regionId,addressId:'catalog-test-address',items:[{skuId:sku,quantity:2}]};
+  const quote=await service.quote(userId,body);
+  const order=await service.create(userId,{...body,quoteHash:quote.quoteHash,requestKey:'catalog-history-snapshot'});
+  await save({...root,enabled:false});
+  assert.equal((await service.products({regionId,shopId:shop.id})).total,0);
+  assert.equal((await service.cartItems({regionId,skuIds:[sku]})).items.length,0);
+  await assert.rejects(service.products({regionId,shopId:shop.id,categoryId:child.id}),/分类不可用/);
+  await assert.rejects(service.quote(userId,body),/不可购买/);
+  const detail=await service.detail(order.id,userId);
+  assert.equal(detail.stops[0].items[0].snapshot.productName,'鲜奶茶 00');
+  await assert.rejects(save({...root,enabled:true}),/已被修改/);
+  const current=await db.purchaseCategory.findUnique({where:{id:root.id}});await save({...current,enabled:true});
+  assert.equal((await service.products({regionId,shopId:shop.id})).total,23);
+  console.log('PASS parent disable blocks browsing/cart/quote, preserves order snapshots, detects stale writes and restores children');
+  const legacy=await service.saveProduct(operator,regionId,{shopId:shop.id,name:'旧版商品',category:'旧版分类',enabled:true,skus:[{name:'标准',priceCents:100,weightGrams:0,enabled:true}]});
+  const stored=await db.purchaseProduct.findUnique({where:{id:legacy.id},include:{catalogCategory:true}});
+  assert.equal(stored.catalogCategory.name,'旧版分类');assert.equal(stored.catalogCategory.parentId,null);
+  console.log('PASS legacy flat-category clients get a managed first-level category');
+}
+main().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>db.$disconnect());

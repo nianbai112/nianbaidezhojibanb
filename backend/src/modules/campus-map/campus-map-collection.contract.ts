@@ -75,7 +75,7 @@ export const COLLECTION_APPLY_FIELDS = [
   "geometry",
   "media",
 ] as const;
-export const COLLECTION_CLIENTS = ["miniapp", "rider_app"] as const;
+export const COLLECTION_CLIENTS = ["miniapp", "rider_app", "user_app"] as const;
 export const COLLECTION_OBJECT_REVIEW_DECISIONS = [
   "approved",
   "resample",

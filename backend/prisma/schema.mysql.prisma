@@ -42,6 +42,7 @@ enum StudentVerifyStatus {
   PENDING
   APPROVED
   REJECTED
+  REVOKED
 }
 
 enum RoleType {
@@ -141,6 +142,7 @@ enum TransactionType {
   TRANSFER_OUT
   COMMISSION
   PENALTY
+  PURCHASE_REIMBURSEMENT
 }
 
 enum TransactionStatus {
@@ -246,6 +248,8 @@ enum PriceAdjustmentScope {
 // ==================== 用户与权限 ====================
 
 model User {
+  academicSubscriptions AcademicSubscription[]
+  academicReminders AcademicReminder[]
   id                      String     @id @default(cuid())
   uid                     Int        @unique @default(autoincrement())
   publicUid               Int?       @unique
@@ -256,6 +260,7 @@ model User {
   phone                   String?
   status                  UserStatus @default(ACTIVE)
   banVersion              Int        @default(0)
+  authVersion             Int        @default(0)
   userType                Int        @default(1) // 1=normal user, 4=bot
   systemRole              String?    @unique // OFFICIAL_ASSISTANT 等平台唯一系统身份；普通机器人保持为空
   muteEndAt               DateTime?
@@ -275,9 +280,12 @@ model User {
   deletedAt               DateTime?
 
   // Relations
+  authIdentities           UserAuthIdentity[]
+  appleAuthorizations      AppleAuthorization[]
   profile                  UserProfile?
   settings                 UserSettings?
   studentVerify            StudentVerify?
+  schoolStudent            SchoolStudent? @relation("StudentAccount")
   roles                    UserRole[]
   posts                    Post[]
   postEchoInteractions     PostEchoInteraction[]
@@ -335,11 +343,16 @@ model User {
   shareRewards             ShareReward[]
   postShareLinks           PostShareLink[]          @relation("PostShareSharer")
   claimedPostShareLinks    PostShareLink[]          @relation("PostShareClaimant")
+  welfarePrizeVerifiers    WelfarePrizeVerifier[]
+  welfarePrizeReserveds    WelfarePrizeReserved[]
+  welfareCheckinStaff      WelfareCheckinStaff[]
+  welfareCheckinRecords    WelfareCheckinRecord[]
   punchInRecords           PunchInRecord[]
   punchInWishlists         PunchInWishlist[]
   punchInComments          PunchInComment[]
   userRatings              UserRating[]
   mallMerchants            MallMerchant[]
+  mallPromotionUsages      MallPromotionUsage[]
   mallOrders               MallOrder[]
   mallReviews              MallReview[]
   distributor              MallDistributor?
@@ -550,6 +563,76 @@ model MembershipFaq {
   @@map("membership_faqs")
 }
 
+// Channel identities never replace the mini-program openid used by payments/messages.
+// Hash keys preserve case-sensitive provider identifiers on both database dialects.
+model UserAuthIdentity {
+  id          String   @id @default(cuid())
+  identityKey String   @unique @db.VarChar(64)
+  provider    String   @db.VarChar(32)
+  appId       String   @db.VarChar(191)
+  subject     String   @db.VarChar(191)
+  userId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_auth_identities")
+}
+
+// A notification can arrive before the first local login; keep an unbound tombstone.
+model AppleAuthorization {
+  identityKey  String    @id @db.VarChar(64)
+  appId        String    @db.VarChar(191)
+  subject      String    @db.VarChar(191)
+  userId       String?
+  state        String    @default("active") @db.VarChar(32)
+  authorizedAt DateTime?
+  revokedAt    DateTime?
+  lastEventAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  tokens       AppleOAuthToken[]
+
+  @@index([userId])
+  @@map("apple_authorizations")
+}
+
+// Durable outbox: encrypted provider tokens never enter business JWTs or logs.
+model AppleOAuthToken {
+  id               String    @id @db.VarChar(64)
+  identityKey      String    @db.VarChar(64)
+  tokenCiphertext  String?   @db.Text
+  state            String    @default("active") @db.VarChar(24)
+  attempts         Int       @default(0)
+  nextAttemptAt    DateTime?
+  leaseId          String?   @db.VarChar(64)
+  leaseUntil       DateTime?
+  lastErrorCode    String?   @db.VarChar(80)
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  authorization    AppleAuthorization @relation(fields: [identityKey], references: [identityKey], onDelete: Restrict)
+
+  @@index([state, nextAttemptAt])
+  @@index([identityKey])
+  @@map("apple_oauth_tokens")
+}
+
+model AppleServerEvent {
+  id          String   @id @db.VarChar(64)
+  eventId     String   @db.VarChar(191)
+  identityKey String   @db.VarChar(64)
+  type        String   @db.VarChar(32)
+  eventAt     DateTime
+  issuedAt    DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([identityKey])
+  @@map("apple_server_events")
+}
+
 model UserProfile {
   id        String    @id @default(cuid())
   userId    String    @unique
@@ -578,6 +661,8 @@ model UserSettings {
   id                   String   @id @default(cuid())
   userId               String   @unique
   user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wechatContactPermission Int @default(3) // 0:followers 1:following 2:mutual 3:forbidden
+  phoneContactPermission  Int @default(3)
   privacyLevel         Int      @default(0) // 0:公开 1:粉丝 2:互关 3:私密
   allowFollow          Boolean  @default(true)
   allowComment         Boolean  @default(true)
@@ -631,6 +716,12 @@ model StudentVerify {
   verifiedAt DateTime?
   createdAt  DateTime            @default(now())
   updatedAt  DateTime            @updatedAt
+  submissionVersion Int         @default(1)
+  proofMethod String            @default("LEGACY")
+  rosterStudentId String?        @map("roster_student_id")
+  rosterStudent SchoolStudent?   @relation(fields: [rosterStudentId], references: [id], onDelete: Restrict)
+  materialId String?
+  material StudentVerificationMaterial? @relation(fields: [materialId], references: [id], onDelete: Restrict)
 
   @@index([schoolId])
   @@map("student_verifies")
@@ -659,11 +750,85 @@ model School {
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   studentVerifies StudentVerify[]
+  studentVerificationMode String @default("MANUAL")
+  rosterRevision Int @default(0)
+  students SchoolStudent[]
+  rosterBatches SchoolRosterBatch[]
 
   @@index([regionId])
   @@index([name])
   @@index([province, city])
   @@map("schools")
+}
+
+// Roster identities exist before an account submits an application.
+model SchoolStudent {
+  id String @id @default(cuid())
+  schoolId String @map("school_id")
+  school School @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  studentId String @db.VarChar(191)
+  identityKey String @db.VarChar(64)
+  realName String @db.VarChar(191)
+  enrollmentStatus String @default("ACTIVE")
+  boundUserId String? @unique @map("bound_user_id")
+  boundUser User? @relation("StudentAccount", fields: [boundUserId], references: [id], onDelete: SetNull)
+  boundAt DateTime?
+  version Int @default(1)
+  lastBatchId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  verifications StudentVerify[]
+
+  @@unique([schoolId, identityKey])
+  @@index([schoolId, enrollmentStatus])
+  @@map("school_students")
+}
+
+model SchoolRosterBatch {
+  id String @id @default(cuid())
+  schoolId String @map("school_id")
+  school School @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  digest String @db.VarChar(64)
+  status String @default("PREVIEW")
+  baseRevision Int
+  rows Json
+  summary Json
+  sourceName String
+  createdBy String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  committedAt DateTime?
+  @@index([schoolId, digest, status])
+  @@map("school_roster_batches")
+}
+
+model StudentVerificationEvent {
+  id String @id @default(cuid())
+  schoolId String?
+  rosterStudentId String?
+  userId String?
+  actorId String
+  action String
+  submissionVersion Int?
+  materialId String?
+  material StudentVerificationMaterial? @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  detail Json
+  createdAt DateTime @default(now())
+  @@index([schoolId, createdAt])
+  @@index([userId, createdAt])
+  @@index([materialId])
+  @@map("student_verification_events")
+}
+
+model StudentVerificationMaterial {
+  id String @id @default(cuid())
+  userId String
+  content Bytes
+  createdAt DateTime @default(now())
+  verifications StudentVerify[]
+  events StudentVerificationEvent[]
+  @@index([userId, createdAt])
+  @@map("student_verification_materials")
 }
 
 model Role {
@@ -932,6 +1097,8 @@ model RegionTabBar {
 // ==================== 内容社区 ====================
 
 model Post {
+  clientRequestId String?
+  clientPayloadHash String?
   id                  String             @id @default(cuid())
   userId              String
   user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -979,6 +1146,7 @@ model Post {
   reports          Report[]
   echoInteractions PostEchoInteraction[]
   shareLinks       PostShareLink[]
+  wechatMomentItem WechatMomentItem?
 
   @@index([userId, createdAt])
   @@index([regionId, status, createdAt])
@@ -989,6 +1157,7 @@ model Post {
   @@index([type])
   @@index([regionId, interactionIntent, createdAt])
   @@index([isAnonymous, anonymousIdentityId])
+  @@unique([userId, clientRequestId])
   @@map("posts")
 }
 
@@ -2034,6 +2203,58 @@ model Withdraw {
   @@map("withdraws")
 }
 
+// One current authorization per platform user. Payment rows snapshot the recipient.
+model RiderWechatAuthorization {
+  userId             String   @id
+  outAuthorizationNo String   @unique
+  authorizationId    String?
+  appid              String
+  mchid              String
+  openid             String
+  sceneId            String
+  state              String   @default("WAIT_USER_CONFIRM")
+  enabled            Boolean  @default(true)
+  packageInfo        String?  @db.Text
+  requestedAt        DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([mchid, appid, openid, sceneId], map: "rider_wx_auth_recipient_key")
+  @@map("rider_wechat_authorizations")
+}
+
+model RiderWechatPayout {
+  id                 String   @id
+  orderId            String
+  // delivery_fee: the rider's delivery income; purchase_principal: goods the rider paid for an errand purchase.
+  kind               String   @default("delivery_fee")
+  orderNo            String
+  userId             String
+  withdrawId         String?  @unique
+  amountFen          Int
+  status             String   @default("QUEUED")
+  appid              String
+  mchid              String
+  openid             String
+  sceneId            String
+  authorizationId    String
+  outAuthorizationNo String
+  requestBody        Json?
+  transferNo         String?
+  reason             String?  @db.Text
+  attempts           Int      @default(0)
+  firstSentAt        DateTime?
+  lastSentAt         DateTime?
+  nextAttemptAt      DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([orderId, kind])
+  @@index([status, nextAttemptAt])
+  @@index([userId, createdAt])
+  @@index([mchid, lastSentAt])
+  @@map("rider_wechat_payouts")
+}
+
 model Recharge {
   id        String         @id @default(cuid())
   userId    String
@@ -2574,6 +2795,8 @@ model SecondHand {
   id           String           @id @default(cuid())
   userId       String
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientRequestId String?
+  clientPayloadHash String?
   regionId     String?
   region       Region?          @relation(fields: [regionId], references: [id], onDelete: SetNull)
   title        String
@@ -2596,6 +2819,7 @@ model SecondHand {
 
   @@index([regionId, status])
   @@index([userId, createdAt])
+  @@unique([userId, clientRequestId])
   @@map("second_hands")
 }
 
@@ -3174,6 +3398,9 @@ model Address {
   phone              String
   detail             String
   gender             Int      @default(0)
+  provinceCode       String?
+  cityCode           String?
+  districtCode       String?
   fullAddress        String?  @map("full_address")
   dormitoryNumber    String?  @map("dormitory_number")
   specifiedAddressId String?  @map("specified_address_id")
@@ -3303,6 +3530,7 @@ model ErrandOrder {
   RegionRider            RegionRider?      @relation(fields: [riderId], references: [userId])
   tasks                  ErrandOrderTask[]
   settlementHold         ErrandSettlementHold?
+  purchase               ErrandPurchase?
 
   @@index([userId, createdAt])
   @@index([riderId, status])
@@ -3320,7 +3548,7 @@ model ErrandAssigneeMutex {
   @@map("errand_assignee_mutexes")
 }
 
-// 跑腿收益冻结台账。营销单至少冷静 48 小时，命中强风控时须人工处置；
+// 跑腿收益冻结台账。普通用券单确认收货即可结算，命中强风控时须人工处置；
 // 只有 released 状态才允许进入自动/人工结算。
 model ErrandSettlementHold {
   id             String      @id @default(cuid())
@@ -3529,24 +3757,45 @@ model ActivityOrder {
 model WelfareCampaign {
   id             String   @id @default(cuid())
   title          String
+  shareTitle     String?  @map("share_title")
   description    String   @db.Text
   cover          String? @db.Text
-  mode           String   // instant, scheduled
+  shareCover     String?  @db.Text @map("share_cover")
+  mode           String   // scheduled only
   status         String   @default("draft") // draft, published, paused, finished, cancelled
   regionId       String?
-  requireStudent Boolean  @default(false)
+  requireStudent Boolean  @default(true)
+  requireProfile Boolean  @default(false)
+  requirePost    Boolean  @default(false) // Approved visible campus post created since this campaign was first published; rechecked at draw
+  minRegistrationDays Int  @default(0) // 0 disables the requirement; elapsed 24-hour days at registration
+  checkinSessionId String?
+  checkinSession WelfareCheckinSession? @relation(fields: [checkinSessionId], references: [id], onDelete: Restrict)
   memberOnly     Boolean  @default(false)
+  requireOfficial Boolean @default(true)
+  requireGroup   Boolean  @default(false)
+  groupVerificationMode String @default("wechat_card") // wechat_card or wecom_member
+  groupRecheckAtDraw Boolean @default(false)
+  groupIds       Json?    // verified group identifiers; never taken from a client URL
+  joinImage      String?  @db.Text
+  joinGuide      String?  @db.Text
+  claimMethod    String   @default("pickup") // pickup, shipping
   startAt        DateTime
-  endAt          DateTime // instant: end time; scheduled: registration cutoff
-  drawAt         DateTime?
+  endAt          DateTime // registration cutoff
+  drawAt         DateTime
   claimUntil     DateTime
-  dailyLimit     Int      @default(1)
-  totalLimit     Int      @default(1)
   maxEntries     Int      @default(10000)
   entryCount     Int      @default(0)
+  // 开奖人数门槛：0 不限；到开奖时间不足则报名与开奖一起顺延 extendHours，
+  // maxExtensions 次后仍不足则活动作废（0 表示一直顺延）。
+  minParticipants Int     @default(0)
+  extendHours    Int      @default(24)
+  maxExtensions  Int      @default(0)
+  extensionCount Int      @default(0)
   version        Int      @default(0) // increment acquires a database row lock
   pickupLocation String? @db.Text
   contact        String?
+  claimContactImage String? @db.Text
+  claimInstructions String? @db.Text
   publishedAt    DateTime?
   drawnAt        DateTime?
   lastError      String?  @db.Text
@@ -3556,12 +3805,112 @@ model WelfareCampaign {
 
   prizes  WelfarePrize[]
   entries WelfareEntry[]
-  gifts   WelfareGift[]
   draw    WelfareDraw?
+  shareLinks WelfareShareLink[]
 
   @@index([status, mode, drawAt])
   @@index([regionId, status, createdAt])
+  @@index([checkinSessionId])
   @@map("welfare_campaigns")
+}
+
+// Independent of join-way QR configuration: removing a full group from a QR
+// must not remove its members from the official group registry.
+model WelfareWecomGroup {
+  id String @id
+  corpId String
+  chatId String
+  name String
+  owner String
+  regionId String?
+  memberCount Int @default(0)
+  identifiableCount Int @default(0)
+  isDismissed Boolean @default(false)
+  memberHashes Json?
+  memberVersion String?
+  configFingerprint String?
+  dirtyVersion Int @default(0)
+  snapshotVersion Int @default(-1)
+  syncedAt DateTime?
+  rosterSyncedAt DateTime?
+  syncError String? @db.Text
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members WelfareWecomMember[]
+  @@unique([corpId, chatId])
+  @@index([regionId, updatedAt])
+  @@index([syncedAt])
+  @@map("welfare_wecom_groups")
+}
+
+model WelfareWecomMember {
+  id String @id
+  groupId String
+  group WelfareWecomGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  memberKey String
+  identityHash String?
+  identityScope String? @db.VarChar(256)
+  linkedUserId String?
+  identityState String @default("unlinked")
+  nickname String
+  memberType Int
+  joinedAt DateTime?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt DateTime
+  leftAt DateTime?
+  @@unique([groupId, memberKey])
+  @@index([groupId, leftAt])
+  @@index([linkedUserId])
+  @@map("welfare_wecom_members")
+}
+
+model WelfareCheckinSession {
+  id String @id @default(cuid())
+  title String
+  regionId String?
+  location String
+  startAt DateTime
+  endAt DateTime
+  allowStaffScan Boolean @default(true)
+  allowSelfScan Boolean @default(true)
+  status String @default("active")
+  qrSecret String
+  version Int @default(0)
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  staff WelfareCheckinStaff[]
+  records WelfareCheckinRecord[]
+  campaigns WelfareCampaign[]
+  @@index([regionId, status, startAt])
+  @@map("welfare_checkin_sessions")
+}
+
+model WelfareCheckinStaff {
+  id String @id @default(cuid())
+  sessionId String
+  userId String
+  session WelfareCheckinSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([sessionId, userId])
+  @@index([userId])
+  @@map("welfare_checkin_staff")
+}
+
+model WelfareCheckinRecord {
+  id String @id @default(cuid())
+  sessionId String
+  userId String
+  source String // staff or self
+  verifiedBy String?
+  signedAt DateTime @default(now())
+  session WelfareCheckinSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@unique([sessionId, userId])
+  @@index([sessionId, signedAt])
+  @@index([userId])
+  @@map("welfare_checkin_records")
 }
 
 model WelfarePrize {
@@ -3570,18 +3919,46 @@ model WelfarePrize {
   campaign       WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   name           String
   image          String? @db.Text
-  kind           String   // physical, coupon
+  kind           String   // physical, coupon, manual（人工兑奖/到店核销）
   couponId       String?
-  quantity       Int      // random prize allocation; gifts are additional
-  probabilityBps Int      @default(0) // instant: out of 10,000, exhausted slots become misses
+  quantity       Int      // random prize allocation
   issuedCount    Int      @default(0)
   couponReserved Int      @default(0) // included in Coupon.receivedCount before publication
   sortOrder      Int      @default(0)
   entries        WelfareEntry[]
-  gifts          WelfareGift[]
+  verifiers      WelfarePrizeVerifier[]
+  reservedUsers  WelfarePrizeReserved[]
 
   @@index([campaignId])
   @@map("welfare_prizes")
+}
+
+model WelfarePrizeVerifier {
+  id         String       @id @default(cuid())
+  prizeId    String
+  userId     String
+  assignedBy String?
+  createdAt  DateTime     @default(now())
+  prize      WelfarePrize @relation(fields: [prizeId], references: [id], onDelete: Cascade)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([prizeId, userId])
+  @@index([userId])
+  @@map("welfare_prize_verifiers")
+}
+
+model WelfarePrizeReserved {
+  id         String       @id @default(cuid())
+  prizeId    String
+  userId     String
+  assignedBy String?      // 管理员ID
+  createdAt  DateTime     @default(now())
+  prize      WelfarePrize @relation(fields: [prizeId], references: [id], onDelete: Cascade)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([prizeId, userId])  // 同一奖项同一用户只能内定一次
+  @@index([userId])
+  @@map("welfare_prize_reserved")
 }
 
 model WelfareEntry {
@@ -3591,40 +3968,36 @@ model WelfareEntry {
   userId      String
   nickname    String   @default("同学") // display snapshot, never phone or legal name
   requestKey  String
-  ordinal     Int      // scheduled: 0; instant: 1..totalLimit
-  dayKey      String   // Asia/Shanghai calendar date
-  source      String   @default("random") // random, gift
   outcome     String   @default("waiting") // waiting, won, lost, excluded, cancelled
   prizeId     String?
   prize       WelfarePrize? @relation(fields: [prizeId], references: [id], onDelete: Restrict)
-  claimStatus String   @default("none") // none, pending, delivered, redeemed
+  claimStatus String   @default("none") // none, pending, processing, shipped, delivered, redeemed
   claimCode   String?  @unique
   couponReceiveId String? @unique
   deliveryError String? @db.Text
+  recipientName String?
+  recipientPhone String?
+  recipientAddress String? @db.Text
+  addressSubmittedAt DateTime?
+  shippingCarrier String?
+  trackingNumber String?
+  shippedAt DateTime?
+  groupVerifiedAt DateTime?
+  groupVerifiedId String?
+  groupCheckedAtDraw DateTime?
+  exclusionReason String?
+  referredByUserId String?
+  referralToken String?
   redeemedBy  String?
   redeemedAt  DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([campaignId, userId, requestKey])
-  @@unique([campaignId, userId, ordinal])
-  @@index([userId, outcome, createdAt])
-  @@index([campaignId, userId, dayKey])
-  @@index([outcome, claimStatus])
-  @@map("welfare_entries")
-}
-
-model WelfareGift {
-  id         String @id @default(cuid())
-  campaignId String
-  campaign   WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  prizeId    String
-  prize      WelfarePrize @relation(fields: [prizeId], references: [id], onDelete: Restrict)
-  userId     String
-  reason     String @db.Text
-  status     String @default("pending") // pending, awarded, skipped
   @@unique([campaignId, userId])
-  @@map("welfare_gifts")
+  @@index([userId, outcome, createdAt])
+  @@index([outcome, claimStatus])
+  @@index([campaignId, referredByUserId])
+  @@map("welfare_entries")
 }
 
 model WelfareDraw {
@@ -3633,7 +4006,6 @@ model WelfareDraw {
   campaign       WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   candidateCount Int
   randomWinners  Int
-  giftedCount    Int
   algorithm      String @default("crypto_random_int_v1")
   rules          Json
   createdAt      DateTime @default(now())
@@ -4206,6 +4578,47 @@ model ShareReward {
   @@map("share_rewards")
 }
 
+/// 朋友圈自动同步：一条记录 = 运营微信号发出的一条朋友圈（最多 9 张海报）
+model WechatMomentBatch {
+  id         String             @id @default(cuid())
+  status     String             @default("uploading") // uploading, posting, posted, failed, unknown, partial
+  source     String             @default("cron") // cron, manual
+  imageCount Int                @default(0)
+  snsId      String? // 朋友圈 id（uint64，按字符串保存）
+  error      String?            @db.Text
+  response   Json?
+  postedAt   DateTime?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  items      WechatMomentItem[]
+
+  @@index([status, updatedAt])
+  @@index([createdAt])
+  @@map("wechat_moment_batches")
+}
+
+/// 朋友圈自动同步：每个审核通过的帖子一条，保证同一帖子只发一次
+model WechatMomentItem {
+  id           String             @id @default(cuid())
+  postId       String             @unique
+  post         Post               @relation(fields: [postId], references: [id], onDelete: Cascade)
+  batchId      String?
+  batch        WechatMomentBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  status       String             @default("pending") // pending, posting, posted, failed, unknown
+  posterUrl    String?            @db.Text
+  posterWidth  Int?
+  posterHeight Int?
+  posterSize   Int?
+  attempts     Int                @default(0)
+  error        String?            @db.Text
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([batchId])
+  @@index([status, updatedAt])
+  @@map("wechat_moment_items")
+}
+
 model PostShareLink {
   id              String              @id @default(cuid())
   code            String              @unique
@@ -4607,6 +5020,8 @@ model MallProduct {
   isHot       Boolean      @default(false)
   isNew       Boolean      @default(false)
   sortOrder   Int          @default(0)
+  weightGrams Int?
+  volumeCm3   Int?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -4625,6 +5040,8 @@ model MallProductSku {
   price     Decimal     @db.Decimal(10, 2)
   stock     Int         @default(0)
   isDefault Boolean     @default(false)
+  weightGrams Int?
+  volumeCm3   Int?
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
@@ -4678,6 +5095,7 @@ model MallOrder {
   updatedAt       DateTime  @updatedAt
   User            User      @relation(fields: [userId], references: [id])
 
+  promotionUsage MallPromotionUsage?
   items   MallOrderItem[]
   refunds MallRefund[]
 
@@ -4755,6 +5173,26 @@ model MallPromotion {
   createdAt  DateTime @default(now())
 
   @@map("mall_promotions")
+  usages MallPromotionUsage[]
+
+}
+
+model MallPromotionUsage {
+  id             String   @id @default(cuid())
+  promotionId    String
+  orderId        String   @unique
+  userId         String
+  discountAmount Decimal  @db.Decimal(10, 2)
+  status         String   @default("reserved")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  promotion      MallPromotion @relation(fields: [promotionId], references: [id], onDelete: Restrict)
+  order          MallOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user           User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([promotionId, status])
+  @@index([promotionId, userId, status])
+  @@map("mall_promotion_usages")
 }
 
 model MallFreightTemplate {
@@ -4906,6 +5344,7 @@ model ContactCategory {
 }
 
 model Contact {
+  userId     String?
   id         String          @id @default(cuid())
   categoryId String
   category   ContactCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -4917,6 +5356,7 @@ model Contact {
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
 
+  @@index([userId, categoryId])
   @@map("contacts")
 }
 
@@ -4924,7 +5364,11 @@ model Contact {
 
 model PrinterConfig {
   id                   String   @id @default(cuid())
-  merchantId           String
+  // 外卖商家打印机填 merchantId；代买店铺出单打印机填 purchaseShopId（每店一台）。
+  merchantId           String?
+  purchaseShopId       String?  @unique
+  // 代买店铺自定义出单小票模板；为空时沿用区域默认模板。
+  ticketTemplate       Json?
   name                 String
   brand                String   @default("feie") // feie, yly
   sn                   String // 打印机编号 / 易联云终端号
@@ -4946,13 +5390,18 @@ model PrintJob {
   orderId       String?
   printerId     String
   provider      String    @default("feie")
-  event         String // auto, manual, test
+  event         String // auto, manual, test, purchase, purchase_cancel
+  bizType       String    @default("shop_order") // shop_order, purchase_stop, test
+  bizId         String?
+  copies        Int       @default(1)
   dedupeKey     String    @unique
-  status        String    @default("queued") // queued, processing, submitted, printed, failed, uncertain
-  content       String
+  status        String    @default("queued") // queued, processing, submitted, printed, failed, uncertain, expired, cancelled
+  content       String    @db.Text
   providerJobId String?
   attempts      Int       @default(0)
-  errorMessage  String?
+  errorMessage  String?   @db.Text
+  // 过了这个时间还没打出来就作废，避免离线打印机重连后吐出旧单。
+  expiresAt     DateTime?
   sentAt        DateTime?
   printedAt     DateTime?
   createdAt     DateTime  @default(now())
@@ -4960,6 +5409,7 @@ model PrintJob {
 
   @@index([status, createdAt])
   @@index([orderId, createdAt])
+  @@index([bizType, bizId])
   @@map("print_jobs")
 }
 
@@ -6940,4 +7390,568 @@ model BizFeeConfig {
   updatedAt DateTime @updatedAt
 
   @@map("biz_fee_configs")
+}
+
+model WelfareShareLink {
+  token      String @id
+  campaignId String @map("campaign_id")
+  campaign   WelfareCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  userId     String @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  visits     WelfareShareVisit[]
+  @@unique([campaignId, userId])
+  @@map("welfare_share_links")
+}
+model WelfareShareVisit {
+  id         String @id @default(cuid())
+  linkToken  String @map("link_token")
+  link       WelfareShareLink @relation(fields: [linkToken], references: [token], onDelete: Cascade)
+  visitorKey String @map("visitor_key") // campaign-scoped hash; no visitor profile exposed
+  groupKey   String @map("group_key") // campaign-scoped hash, or unknown
+  source     String // official, other_group, unknown
+  createdAt  DateTime @default(now()) @map("created_at")
+  @@unique([linkToken, visitorKey, groupKey])
+  @@index([linkToken, source])
+  @@map("welfare_share_visits")
+}
+
+// 代买目录与采购台账；所有金额为整数分，历史商品和店铺信息保存在快照中。
+model PurchaseShop {
+  id           String @id @default(cuid())
+  regionId     String
+  name         String
+  logo         String?
+  address      String
+  latitude     Float
+  longitude    Float
+  phone        String?
+  opensAt      String @default("09:00")
+  closesAt     String @default("21:00")
+  enabled      Boolean @default(true)
+  sortOrder    Int @default(0)
+  version      Int @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  products     PurchaseProduct[]
+  categories   PurchaseCategory[]
+  modifierGroups PurchaseModifierGroup[]
+  @@index([regionId, enabled])
+  @@map("purchase_shops")
+}
+
+model PurchaseProduct {
+  id        String @id @default(cuid())
+  shopId    String
+  shop      PurchaseShop @relation(fields: [shopId], references: [id])
+  name      String
+  image     String?
+  category  String @default("全部商品")
+  categoryId String?
+  catalogCategory PurchaseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  enabled   Boolean @default(true)
+  sortOrder Int @default(0)
+  version   Int @default(1)
+  // [{ groupId, hiddenOptionIds, defaultOptionId }]，数组顺序即小程序展示顺序。
+  modifierBindings Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  skus      PurchaseSku[]
+  @@index([shopId, enabled])
+  @@index([shopId, categoryId, enabled, sortOrder])
+  @@map("purchase_products")
+}
+
+// 店铺规格库：attribute 为温度、糖度等口味属性（每项 1 份），extra 为按份计价的加料。
+// 杯型仍由 PurchaseSku 承载；停用只影响之后的下单，已下单商品保留快照。
+model PurchaseModifierGroup {
+  id               String @id @default(cuid())
+  shopId           String
+  shop             PurchaseShop @relation(fields: [shopId], references: [id])
+  name             String
+  type             String @default("attribute") // attribute, extra
+  required         Boolean @default(false)
+  maxSelect        Int @default(1)
+  maxTotalQuantity Int @default(1)
+  enabled          Boolean @default(true)
+  sortOrder        Int @default(0)
+  version          Int @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  options          PurchaseModifierOption[]
+  @@index([shopId, enabled, sortOrder])
+  @@map("purchase_modifier_groups")
+}
+
+model PurchaseModifierOption {
+  id          String @id @default(cuid())
+  groupId     String
+  group       PurchaseModifierGroup @relation(fields: [groupId], references: [id])
+  name        String
+  priceCents  Int @default(0)
+  maxQuantity Int @default(1)
+  isDefault   Boolean @default(false)
+  soldOut     Boolean @default(false)
+  enabled     Boolean @default(true)
+  sortOrder   Int @default(0)
+  version     Int @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([groupId, enabled, sortOrder])
+  @@map("purchase_modifier_options")
+}
+
+// 店内最多两级；分类停用同时隐藏其商品，历史订单快照不受影响。
+model PurchaseCategory {
+  id        String @id @default(cuid())
+  shopId    String
+  shop      PurchaseShop @relation(fields: [shopId], references: [id])
+  parentId  String?
+  parent    PurchaseCategory? @relation("PurchaseCategoryTree", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  children  PurchaseCategory[] @relation("PurchaseCategoryTree")
+  name      String
+  enabled   Boolean @default(true)
+  sortOrder Int @default(0)
+  version   Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  products  PurchaseProduct[]
+  @@index([shopId, parentId, enabled, sortOrder])
+  @@map("purchase_categories")
+}
+
+model PurchaseSku {
+  id         String @id @default(cuid())
+  productId  String
+  product    PurchaseProduct @relation(fields: [productId], references: [id])
+  name       String @default("标准规格")
+  priceCents Int
+  weightGrams Int @default(0)
+  enabled    Boolean @default(true)
+  version    Int @default(1)
+  @@index([productId, enabled])
+  @@map("purchase_skus")
+}
+
+model PurchaseCombination {
+  id          String @id @default(cuid())
+  regionId    String
+  name        String
+  shopKey       String
+  shopIds     Json
+  extraFeeCents Int @default(0)
+  maxGoodsCents Int @default(20000)
+  enabled     Boolean @default(true)
+  version     Int @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([regionId, shopKey])
+  @@index([regionId, enabled])
+  @@map("purchase_combinations")
+}
+
+model ErrandPurchase {
+  id                   String @id
+  order                ErrandOrder @relation(fields: [id], references: [id])
+  userId               String
+  regionId             String
+  requestKey           String @unique
+  requestHash          String
+  quoteHash            String
+  version              Int @default(1)
+  initialGoodsCents    Int
+  approvedGoodsCents   Int
+  serviceCents         Int
+  feeSnapshot          Json
+  policySnapshot       Json
+  shortagePolicy       String @default("refund_missing")
+  reimbursementStatus String @default("pending")
+  reimbursedCents       Int @default(0)
+  reimbursedAt          DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  stops                 PurchaseStop[]
+  changes               PurchaseChange[]
+  refunds               PurchaseRefund[]
+  events                PurchaseEvent[]
+  @@index([regionId, createdAt])
+  @@index([userId, createdAt])
+  @@map("errand_purchases")
+}
+
+model PurchaseStop {
+  id          String @id @default(cuid())
+  purchaseId  String
+  purchase    ErrandPurchase @relation(fields: [purchaseId], references: [id])
+  shopId      String
+  snapshot    Json
+  sortOrder   Int @default(0)
+  status      String @default("pending")
+  receiptUrls Json?
+  actualCents Int @default(0)
+  auditStatus String @default("unsubmitted")
+  auditNote   String?
+  auditedBy   String?
+  purchasedAt DateTime?
+  auditedAt   DateTime?
+  items       PurchaseItem[]
+  @@unique([purchaseId, shopId])
+  @@map("purchase_stops")
+}
+
+model PurchaseItem {
+  id                String @id @default(cuid())
+  stopId            String
+  stop              PurchaseStop @relation(fields: [stopId], references: [id])
+  skuId             String
+  snapshot          Json
+  quantity          Int
+  approvedUnitCents Int
+  version           Int @default(1)
+  changes           PurchaseChange[]
+  @@index([stopId])
+  @@map("purchase_items")
+}
+
+model PurchaseChange {
+  id              String @id @default(cuid())
+  purchaseId      String
+  purchase        ErrandPurchase @relation(fields: [purchaseId], references: [id])
+  itemId          String
+  item            PurchaseItem @relation(fields: [itemId], references: [id])
+  requestKey      String @unique
+  itemVersion     Int
+  quantity        Int
+  unitCents       Int
+  skuId           String
+  snapshot        Json
+  deltaCents      Int
+  reason          String
+  evidenceUrls    Json
+  status          String @default("pending")
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  resolvedAt      DateTime?
+  @@index([purchaseId, status])
+  @@map("purchase_changes")
+}
+
+model PurchaseRefund {
+  id          String @id @default(cuid())
+  purchaseId  String
+  purchase    ErrandPurchase @relation(fields: [purchaseId], references: [id])
+  requestKey  String @unique
+  amountCents Int
+  kind        String
+  reason      String
+  allocations Json
+  status      String @default("pending")
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([status, createdAt])
+  @@map("purchase_refunds")
+}
+
+model PurchaseEvent {
+  id         String @id @default(cuid())
+  purchaseId String
+  purchase   ErrandPurchase @relation(fields: [purchaseId], references: [id])
+  actorId    String
+  kind       String
+  data       Json
+  createdAt  DateTime @default(now())
+  @@index([purchaseId, createdAt])
+  @@map("purchase_events")
+}
+
+// 微信外部会话与站内 User/Message 独立；默认关闭，配置后先生成草稿。
+model WechatChatSettings {
+  id        String   @id @default("global")
+  revision  Int      @default(1)
+  value     Json
+  updatedAt DateTime @updatedAt
+  @@map("wechat_chat_settings")
+}
+
+model WechatChatConversation {
+  id            String   @id @default(cuid())
+  accountKey    String
+  wxid          String
+  kind          String
+  enabled       Boolean  @default(true)
+  takeover      Boolean  @default(false)
+  style         String   @default("inherit")
+  groupTrigger  String   @default("inherit")
+  allowedSkills Json
+  revision      Int      @default(1)
+  contextAfter  DateTime @default(now())
+  lastReplyAt   DateTime?
+  leaseToken    String?
+  leaseUntil    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      WechatChatMessage[]
+  members       WechatChatMember[]
+  replies       WechatChatReply[]
+  @@unique([accountKey, wxid])
+  @@index([accountKey, updatedAt])
+  @@map("wechat_chat_conversations")
+}
+
+model WechatChatMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   WechatChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  eventKey       String   @unique
+  remoteId       String
+  sender         String?
+  text           String   @db.Text
+  msgType        Int
+  status         String
+  reason         String?
+  createdAt      DateTime @default(now())
+  reply          WechatChatReply?
+  @@index([conversationId, createdAt])
+  @@map("wechat_chat_messages")
+}
+
+model WechatChatReply {
+  id                   String   @id @default(cuid())
+  messageId            String   @unique
+  message              WechatChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  conversationId       String
+  conversation         WechatChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  deviceId             String
+  recipient            String
+  status               String   @default("pending")
+  text                 String?  @db.LongText
+  reason               String?
+  settingsRevision     Int
+  conversationRevision Int
+  sourceVersions       Json?
+  remoteId             String?
+  leaseToken           String?
+  leaseUntil           DateTime?
+  notBefore            DateTime @default(now())
+  sentAt               DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  @@index([status, notBefore])
+  @@index([conversationId, status, createdAt])
+  @@map("wechat_chat_replies")
+}
+
+model WechatChatSkill {
+  id                 String   @id
+  name               String
+  enabled            Boolean  @default(false)
+  publishedVersionId String?
+  scope              String   @default("all")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  versions           WechatChatSkillVersion[]
+  @@map("wechat_chat_skills")
+}
+
+model WechatChatSkillVersion {
+  id         String   @id @default(cuid())
+  skillId    String
+  skill      WechatChatSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  content    String   @db.Text
+  sourceUrl  String
+  commit     String
+  license    String
+  hash       String
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  @@index([skillId, createdAt])
+  @@map("wechat_chat_skill_versions")
+}
+
+model WechatChatKnowledge {
+  id             String   @id @default(cuid())
+  title          String
+  content        String   @db.Text
+  source         String
+  scope          String   @default("private")
+  conversationId String?
+  enabled        Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  @@index([scope, enabled])
+  @@map("wechat_chat_knowledge")
+}
+
+model WechatChatQuota {
+  id             String   @id
+  calls          Int      @default(0)
+  tokens         Int      @default(0)
+  updatedAt      DateTime @updatedAt
+  @@map("wechat_chat_quotas")
+}
+
+model WechatChatMember {
+  id             String @id
+  conversationId String
+  conversation   WechatChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         String
+  banterMuted    Boolean @default(false)
+  updatedAt      DateTime @updatedAt
+  @@index([conversationId])
+  @@map("wechat_chat_members")
+}
+
+// 订单群播报：每个校区绑定一个微信群。
+model WechatOrderBroadcastGroup {
+  regionId  String   @id
+  groupWxid String
+  groupName String   @default("")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("wechat_order_broadcast_groups")
+}
+
+// 一条群消息一行。round 在订单被退回接单池后递增；kind = new / accepted / cancelled。
+model WechatOrderBroadcast {
+  id         String    @id @default(cuid())
+  orderId    String
+  regionId   String
+  groupWxid  String
+  round      Int       @default(1)
+  kind       String
+  status     String    @default("pending") // pending, sending, sent, draft, unknown, failed, skipped, expired
+  reason     String?
+  text       String?   @db.Text
+  remoteId   String?
+  attempts   Int       @default(0)
+  notBefore  DateTime  @default(now())
+  leaseUntil DateTime?
+  sentAt     DateTime?
+  closedAt   DateTime? // 仅 new：本轮已有后续消息或已终止，不再跟踪订单状态
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  @@unique([orderId, round, kind])
+  @@index([status, notBefore])
+  @@index([kind, closedAt, createdAt])
+  @@index([groupWxid, updatedAt])
+  @@index([createdAt])
+  @@map("wechat_order_broadcasts")
+}
+
+
+// Academic scheduling: date strings are school calendar dates (Asia/Shanghai).
+model AcademicTerm {
+  id String @id @default(cuid())
+  regionId String
+  name String
+  monday String
+  startDate String
+  endDate String
+  slots Json
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  rules AcademicRule[]
+  sessions AcademicSession[]
+  @@index([regionId, startDate])
+  @@map("academic_terms")
+}
+model AcademicClass {
+  id String @id @default(cuid())
+  regionId String
+  major String @db.VarChar(80)
+  grade Int
+  name String @db.VarChar(80)
+  active Boolean @default(true)
+  subscriptions AcademicSubscription[]
+  @@unique([regionId, major, grade, name], map: "academic_class_identity")
+  @@map("academic_classes")
+}
+model AcademicTeacher {
+  id String @id @default(cuid())
+  regionId String
+  name String
+  code String @db.VarChar(40)
+  @@unique([regionId, code], map: "academic_teacher_identity")
+  @@map("academic_teachers")
+}
+model AcademicRule {
+  id String @id @default(cuid())
+  termId String
+  term AcademicTerm @relation(fields: [termId], references: [id], onDelete: Restrict)
+  draft Json
+  version Int @default(1)
+  publishedVersion Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sessions AcademicSession[]
+  @@index([termId])
+  @@map("academic_rules")
+}
+model AcademicSession {
+  id String @id @default(cuid())
+  termId String
+  term AcademicTerm @relation(fields: [termId], references: [id], onDelete: Restrict)
+  ruleId String?
+  rule AcademicRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  sourceWeek Int
+  originalDate String
+  date String
+  startTime String
+  endTime String
+  startAt DateTime
+  endAt DateTime
+  courseName String
+  teacherId String
+  location String
+  classIds Json
+  status String @default("scheduled")
+  exception Boolean @default(false)
+  reason String @default("")
+  version Int @default(1)
+  updatedAt DateTime @updatedAt
+  reminders AcademicReminder[]
+  @@unique([ruleId, sourceWeek], map: "academic_source_occurrence")
+  @@index([termId, date])
+  @@index([status, startAt])
+  @@map("academic_sessions")
+}
+model AcademicSubscription {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  regionId String
+  classId String
+  classroom AcademicClass @relation(fields: [classId], references: [id], onDelete: Restrict)
+  enabled Boolean @default(false)
+  consentAt DateTime?
+  updatedAt DateTime @updatedAt
+  @@unique([userId, regionId], map: "academic_user_region")
+  @@index([classId, enabled])
+  @@map("academic_subscriptions")
+}
+model AcademicSetting {
+  regionId String @id
+  enabled Boolean @default(false)
+  leadMinutes Int @default(20)
+  version Int @default(0)
+  updatedAt DateTime @updatedAt
+  @@map("academic_settings")
+}
+model AcademicReminder {
+  id String @id @default(cuid())
+  sessionId String
+  session AcademicSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionVersion Int
+  status String @default("pending")
+  attempts Int @default(0)
+  error String? @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([sessionId, userId], map: "academic_reminder_once")
+  @@index([status, updatedAt])
+  @@map("academic_reminders")
 }

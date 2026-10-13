@@ -13,6 +13,7 @@ export const moduleNames = {
   campus_map: '校园地图', region_decor: '页面装修', security: '安全设置',
 };
 export const actionNames = {
+  revoke_rider: '撤销骑手认证',
   update_app_capabilities: '修改小程序功能开关', update_app_review_mode: '修改小程序审核配置',
   update_config: '修改配置', create: '新增', update: '修改', delete: '删除', audit: '审核',
   login: '登录', logout: '退出登录', ban: '封禁', unban: '解封', dissolve: '解散',
@@ -30,6 +31,7 @@ const fieldNames = {
   icon: '图标', selectedIcon: '选中图标', color: '文字颜色', selectedColor: '选中文字颜色',
   backgroundColor: '背景颜色', borderStyle: '边框样式', messageBadgeStyle: '消息角标样式',
   status: '状态', reason: '原因', remark: '备注', description: '说明', amount: '金额',
+  verifyStatus: '认证状态', riderType: '接单身份',
   quantity: '数量', regionId: '区域编号', userId: '用户编号', id: '编号', key: '配置项',
   regionName: '区域名称', nickname: '用户昵称', realName: '姓名', username: '账号',
   phone: '手机号', email: '邮箱', url: '链接', linkType: '跳转类型', linkValue: '跳转目标',

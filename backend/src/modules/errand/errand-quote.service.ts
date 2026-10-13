@@ -59,6 +59,9 @@ export class ErrandQuoteService {
       this.cleanId(dto?.region_id ?? dto?.regionId) ||
       this.cleanId(savedAddress?.regionId);
     if (!regionId) throw new BadRequestException('region_id 必填');
+    if (savedAddress?.regionId && String(savedAddress.regionId) !== regionId) {
+      throw new BadRequestException('地址不属于当前区域');
+    }
 
     const region = await this.prisma.region.findUnique({
       where: { id: regionId },
@@ -136,7 +139,11 @@ export class ErrandQuoteService {
     }
 
     const routePoints: Coordinate[] = [];
-    for (const task of tasks) {
+    const isSend = serviceType === 'express_send';
+    const senderPoint = isSend ? this.coordinate(savedAddress?.latitude, savedAddress?.longitude, '上门取件地址') : null;
+    if (isSend && (!savedAddress || !senderPoint)) throw new BadRequestException('寄件请选择已标记地图位置的本人上门取件地址');
+    if (senderPoint) routePoints.push(senderPoint);
+    for (const task of isSend ? [] : tasks) {
       const pointId = this.cleanId(task?.pickup_point_id ?? task?.pickupPointId);
       if (!pointId) continue;
       const row: any = pickupMap.get(pointId);
@@ -157,10 +164,11 @@ export class ErrandQuoteService {
     }
 
     const deliveryPoint = this.coordinate(
-      savedAddress?.latitude ?? dto?.deliver_lat ?? dto?.deliverLat,
-      savedAddress?.longitude ?? dto?.deliver_lng ?? dto?.deliverLng,
+      isSend ? dto?.deliver_lat ?? dto?.deliverLat : savedAddress?.latitude ?? dto?.deliver_lat ?? dto?.deliverLat,
+      isSend ? dto?.deliver_lng ?? dto?.deliverLng : savedAddress?.longitude ?? dto?.deliver_lng ?? dto?.deliverLng,
       '送达地址',
     );
+    if (isSend && !deliveryPoint) throw new BadRequestException('寄件收件地址必须标记地图位置');
     if (deliveryPoint) routePoints.push(deliveryPoint);
 
     const distanceRate = this.number(config?.distancePrice, 0);
@@ -222,6 +230,7 @@ export class ErrandQuoteService {
         serviceType,
         receiverType,
         taskCount: tasks.length,
+        routeCoordinates: { pickup: routePoints[0] || null, delivery: deliveryPoint },
         sizeIds,
         pickupPointIds,
         weight,
@@ -304,6 +313,7 @@ export class ErrandQuoteService {
     const absentLat = latValue === undefined || latValue === null || latValue === '';
     const absentLng = lngValue === undefined || lngValue === null || lngValue === '';
     if (absentLat && absentLng) return null;
+    if (absentLat || absentLng || !['string', 'number'].includes(typeof latValue) || !['string', 'number'].includes(typeof lngValue)) throw new BadRequestException(`${label}坐标无效`);
     const latitude = Number(latValue);
     const longitude = Number(lngValue);
     if (

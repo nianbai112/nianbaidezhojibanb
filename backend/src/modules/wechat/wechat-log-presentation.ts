@@ -1,4 +1,5 @@
 export const WECHAT_TEMPLATE_NAMES: Record<string, string> = {
+  course_reminder: '上课提醒',
   new_errand_order: '跑腿骑手新订单通知',
   errand_accepted: '跑腿订单接单通知', errand_picked: '跑腿订单取货通知',
   errand_delivered: '跑腿订单完成通知', errand_abnormal: '跑腿订单异常通知',

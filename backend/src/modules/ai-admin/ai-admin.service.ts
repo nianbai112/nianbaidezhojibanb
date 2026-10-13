@@ -1353,30 +1353,35 @@ export class AiAdminService {
     const [list, total] = await Promise.all([
       this.prisma.aiConfigVersion.findMany({
         where: { configKey },
+        select: { id: true, configKey: true, version: true, maskedValue: true, changedBy: true, changeReason: true, createdAt: true },
         orderBy: { version: 'desc' },
         skip,
         take: pageSize,
       }),
       this.prisma.aiConfigVersion.count({ where: { configKey } }),
     ]);
-    return { success: true, data: { list, total, page, pageSize } };
+    const safeList = list.map((row) => ({ ...row, maskedValue: this.maskConfigValue(row.maskedValue), value: this.maskConfigValue(row.maskedValue) }));
+    return { success: true, data: { list: safeList, total, page, pageSize } };
   }
 
   async rollbackConfigVersion(id: string, operatorId: string) {
     const version = await this.prisma.aiConfigVersion.findUnique({ where: { id } });
     if (!version) throw new NotFoundException('AI配置版本不存在');
+    const current = await this.prisma.config.findUnique({ where: { key: version.configKey } });
+    // Secrets never travel with history; rollback keeps the current credential.
+    const restored = { ...((version.value || {}) as any), apiKey: (current?.value as any)?.apiKey || '' };
     await this.prisma.config.upsert({
       where: { key: version.configKey },
-      update: { value: version.value as any, updatedAt: new Date() },
-      create: { key: version.configKey, value: version.value as any, group: 'ai' },
+      update: { value: restored, updatedAt: new Date() },
+      create: { key: version.configKey, value: restored, group: 'ai' },
     });
     const nextVersion = await this.nextConfigVersion(version.configKey);
     await this.prisma.aiConfigVersion.create({
       data: {
         configKey: version.configKey,
         version: nextVersion,
-        value: version.value as any,
-        maskedValue: this.maskConfigValue(version.value),
+        value: this.maskConfigValue(restored),
+        maskedValue: this.maskConfigValue(restored),
         changedBy: operatorId || null,
         changeReason: `回滚到版本 ${version.version}`,
       },
@@ -1600,7 +1605,7 @@ export class AiAdminService {
       data: {
         configKey: 'ai_ops_config',
         version,
-        value: incoming,
+        value: this.maskConfigValue(incoming),
         maskedValue: this.maskConfigValue(incoming),
         changedBy: operatorId || null,
         changeReason: data.changeReason || data.remark || '后台保存 AI 配置',

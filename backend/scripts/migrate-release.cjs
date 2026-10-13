@@ -3,6 +3,7 @@ const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 
 const root = path.resolve(__dirname, "..");
 
@@ -186,13 +187,67 @@ async function status(prisma, provider) {
 
 async function apply(prisma, provider, install) {
   const schema = path.join(root, "prisma", `schema.${provider}.prisma`);
-  if (install && await databaseIsEmpty(prisma, provider)) {
-    console.log("检测到全新空数据库，创建当前版本初始结构。");
-    prismaCli(["db", "push", "--schema", schema, "--skip-generate", "--accept-data-loss"]);
-  }
+  const empty = await databaseIsEmpty(prisma, provider);
   await ensureLedger(prisma, provider);
-  const rows = await ledgerRows(prisma);
-  for (const migration of migrationFiles(provider)) {
+  let rows = await ledgerRows(prisma);
+  const migrations = migrationFiles(provider);
+  // A fresh schema already contains every structural migration. Replaying old
+  // DDL here recreates retired lottery tables/columns and fails on CREATE TABLE.
+  // Existing databases always take the incremental path below. Initial seed data
+  // remains the responsibility of the release's separate seed command.
+  const bootstrap = {
+    name: "__current_schema_bootstrap__",
+    checksum: crypto.createHash("sha256")
+      .update(fs.readFileSync(schema))
+      .update(JSON.stringify(migrations.map(({ name, checksum }) => ({ name, checksum }))))
+      .digest("hex"),
+  };
+  const interrupted = rows.get(bootstrap.name)?.status === "RUNNING";
+  if (install && (empty || interrupted)) {
+    if (interrupted && rows.get(bootstrap.name).checksum !== bootstrap.checksum) {
+      throw new Error("空库初始化曾中断，请先使用同一版本完成 install，再更新版本");
+    }
+    if ([...rows.keys()].some((name) => name !== bootstrap.name)) {
+      throw new Error("数据库已有迁移记录，拒绝按空库初始化，请核查数据库状态");
+    }
+    if (!interrupted) await markRunning(prisma, provider, bootstrap);
+    console.log("创建当前版本初始结构并登记迁移基线。");
+    // No --accept-data-loss: interrupted installation must never silently remove data.
+    // The ledger is managed by this script and is deliberately absent from the
+    // application schema. Include it in a temporary bootstrap schema so db push
+    // preserves the RUNNING marker, including after an interrupted installation.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lingmeng-bootstrap-"));
+    const bootstrapSchema = path.join(directory, "schema.prisma");
+    const dateType = provider === "mysql" ? "DateTime(3)" : "Timestamp(3)";
+    fs.writeFileSync(bootstrapSchema, fs.readFileSync(schema, "utf8") + `
+model ReleaseMigrationLedger {
+  migration_name String @id @db.VarChar(191)
+  checksum String @db.VarChar(64)
+  status String @db.VarChar(16)
+  started_at DateTime @default(now()) @db.${dateType}
+  finished_at DateTime? @db.${dateType}
+  error_message String? @db.Text
+  @@map("lingmeng_schema_migrations")
+  @@ignore
+}
+`);
+    try {
+      prismaCli(["db", "push", "--schema", bootstrapSchema, "--skip-generate"]);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+    await prisma.$transaction(async (tx) => {
+      for (const migration of migrations) {
+        await markRunning(tx, provider, migration);
+        await markFinished(tx, provider, migration, "APPLIED");
+      }
+      await markFinished(tx, provider, bootstrap, "APPLIED");
+    }, { timeout: 60000 });
+    rows = await ledgerRows(prisma);
+  } else if (interrupted) {
+    throw new Error("空库初始化尚未完成，请先使用同一版本执行 install");
+  }
+  for (const migration of migrations) {
     const recorded = rows.get(migration.name);
     if (recorded?.status === "APPLIED" && recorded.checksum === migration.checksum) continue;
     if (recorded?.status === "APPLIED" && recorded.checksum !== migration.checksum) {

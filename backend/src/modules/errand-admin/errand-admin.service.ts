@@ -1,7 +1,11 @@
+import { randomInt } from 'crypto';
+import { PURCHASE_TRANSACTION_OPTIONS } from '../errand-purchase/purchase.transactions';
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException, Optional } from '@nestjs/common'
 import { PrismaService } from '../../common/services/prisma.service'
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service'
+import { currentRequestMetadata, requestContext } from '../../common/request-context'
 import { ErrandService } from '../errand/errand.service'
+import { ErrandLifecycleService } from '../errand/errand-lifecycle.service'
 import { enforceErrandAssignmentGuard } from '../errand/errand-assignment-guard'
 import { errandDeliveryRequirementFields } from '../errand/errand-delivery-requirements'
 import { lockErrandAssignee } from '../errand/errand-transaction-guards'
@@ -9,11 +13,12 @@ import { inspectRefundedErrandCoupon } from '../errand/errand-refund-coupon-repa
 import { restoreErrandOrderCoupon } from '../errand/errand-coupon-restoration'
 import { errandRiskDescription } from '../errand/errand-risk-presentation'
 import {
-  RiderQueryDto, AuditRiderDto, RiderStatusDto,
+  RiderQueryDto, AuditRiderDto, RiderStatusDto, RevokeRiderDto,
   DeliveryOrderQueryDto, AssignOrderDto, CancelOrderDto,
   UpdateFeeConfigDto,
   UpdatePageConfigDto,
   UpdateRewardPunishDto, ResolveRiskEventDto, RepairErrandCouponDto,
+  ConfirmErrandReceiptDto,
 } from './dto/errand-admin.dto'
 import {
   ERRAND_EXTENDED_CONFIG_GROUP,
@@ -30,6 +35,7 @@ export class ErrandAdminService {
     private readonly prisma: PrismaService,
     @Optional() private readonly adminDataScope?: AdminDataScopeService,
     @Optional() private readonly errandService?: ErrandService,
+    @Optional() private readonly lifecycle?: ErrandLifecycleService,
   ) {}
 
   private async adminRegionIds(operatorId?: string): Promise<string[] | undefined> {
@@ -109,6 +115,7 @@ export class ErrandAdminService {
   private normalizeRiderType(value?: string) {
     const text = String(value || '').trim().toLowerCase()
     const map: Record<string, string> = {
+      ordinary_user: 'ordinary_user',
       official: 'official',
       platform: 'official',
       full_time: 'official',
@@ -311,7 +318,8 @@ export class ErrandAdminService {
   // ==================== Rider ====================
 
   async getRiders(query: RiderQueryDto, operatorId?: string) {
-    const { page = 1, pageSize = 20, keyword, auditStatus, status, regionId } = query
+    const { page = 1, pageSize = 20, auditStatus, status, regionId } = query
+    const keyword = String(query.keyword || '').trim()
     const riderType = this.normalizeRiderType((query as any).riderType)
     const where: any = {}
     if (auditStatus) where.verifyStatus = auditStatus
@@ -327,7 +335,17 @@ export class ErrandAdminService {
         { realName: { contains: keyword } },
         { phone: { contains: keyword } },
         { User: { is: { nickname: { contains: keyword } } } },
+        { User: { is: { phone: { contains: keyword } } } },
       ]
+      const uidKeyword = keyword.replace(/^uid\s*[:：]?\s*/i, '')
+      const numericUid = Number(uidKeyword)
+      // Prisma Int is signed 32-bit; phone numbers must stay text search terms.
+      if (/^\d+$/.test(uidKeyword) && Number.isSafeInteger(numericUid) && numericUid > 0 && numericUid <= 2147483647) {
+        where.OR.push({ User: { is: { OR: [
+          { publicUid: numericUid },
+          { publicUid: null, uid: numericUid },
+        ] } } })
+      }
     }
 
     const [list, total] = await Promise.all([
@@ -336,7 +354,7 @@ export class ErrandAdminService {
         skip: (+page - 1) * +pageSize,
         take: +pageSize,
         orderBy: { createdAt: 'desc' },
-        include: { User: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
+        include: { User: { select: { id: true, uid: true, publicUid: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
       }),
       this.prisma.regionRider.count({ where }),
     ])
@@ -346,31 +364,102 @@ export class ErrandAdminService {
   async getRiderDetail(id: string, operatorId?: string) {
     const r = await this.prisma.regionRider.findUnique({
       where: { id },
-      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
+      include: { User: { select: { id: true, uid: true, publicUid: true, nickname: true, avatar: true, phone: true } } },
     })
     if (!r) throw new NotFoundException('骑手不存在')
     await this.assertOrderRegion(r.regionId, operatorId)
+    if (r.verifyStatus === 'revoked') {
+      const log = await this.prisma.adminOperationLog.findFirst({
+        where: { targetId: id, targetType: 'region_rider', action: 'REVOKE_RIDER' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, detail: true },
+      })
+      return { ...r, revocation: log ? { revokedAt: log.createdAt, reason: (log.detail as any)?.reason || '' } : null }
+    }
     return r
   }
 
   async auditRider(id: string, dto: AuditRiderDto, operatorId?: string) {
-    const rider = await this.prisma.regionRider.findUnique({ where: { id }, select: { regionId: true } })
+    if (!['approved', 'rejected'].includes(dto.status)) throw new BadRequestException('不支持的审核状态，请使用专门的撤销认证操作')
+    const rider = await this.prisma.regionRider.findUnique({ where: { id }, select: { regionId: true, userId: true } })
     if (!rider) throw new NotFoundException('骑手不存在')
     await this.assertOrderRegion(rider.regionId, operatorId)
-    const data: any = { verifyStatus: dto.status }
-    return this.prisma.regionRider.update({ where: { id }, data })
+    return this.prisma.$transaction(async tx => {
+      await lockErrandAssignee(tx, rider.userId)
+      const current = await tx.regionRider.findUnique({ where: { id } })
+      if (!current) throw new NotFoundException('骑手不存在')
+      await this.assertOrderRegion(current.regionId, operatorId)
+      if (current.verifyStatus !== 'pending') throw new BadRequestException('仅待审核申请可以审核；已撤销的骑手须重新申请')
+      return tx.regionRider.update({
+        where: { id },
+        data: { verifyStatus: dto.status, status: 'offline', riderType: current.riderType === 'official' ? 'official' : 'part_time' },
+      })
+    })
+  }
+
+  async revokeRider(id: string, dto: RevokeRiderDto, operatorId: string) {
+    if (!operatorId) throw new ForbiddenException('需要管理员身份')
+    const reason = typeof dto?.reason === 'string' ? dto.reason.trim() : ''
+    if (!reason || reason.length > 500) throw new BadRequestException('请填写 1 至 500 字的撤销原因')
+    const rider = await this.prisma.regionRider.findUnique({ where: { id }, select: { userId: true, regionId: true } })
+    if (!rider) throw new NotFoundException('骑手不存在')
+    await this.assertOrderRegion(rider.regionId, operatorId)
+    const metadata = currentRequestMetadata()
+    const result = await this.prisma.$transaction(async tx => {
+      // Share the assignment mutex with direct acceptance, dispatch and transfer acceptance.
+      await lockErrandAssignee(tx, rider.userId)
+      const current = await tx.regionRider.findUnique({ where: { id } })
+      if (!current) throw new NotFoundException('骑手不存在')
+      await this.assertOrderRegion(current.regionId, operatorId)
+      if (current.verifyStatus !== 'approved') throw new BadRequestException('仅已通过认证的骑手可以撤销，请刷新列表')
+      const [errands, shopOrders] = await Promise.all([
+        tx.errandOrder.count({ where: { riderId: current.userId, status: { in: ['accepted', 'in_progress', 'arrived'] } } }),
+        tx.order.count({ where: { riderId: current.userId, status: 'SHIPPED' } }),
+      ])
+      if (errands + shopOrders > 0) throw new BadRequestException('该骑手还有未完成订单，请先完成或转交订单后再撤销认证')
+      const data = { verifyStatus: 'revoked', status: 'offline', riderType: 'ordinary_user' }
+      const changed = await tx.regionRider.updateMany({ where: { id, userId: current.userId, regionId: current.regionId, verifyStatus: 'approved' }, data })
+      if (changed.count !== 1) throw new BadRequestException('骑手认证状态已变化，请刷新后重试')
+      await tx.transferRequest.updateMany({ where: { toRiderId: current.userId, status: 'pending' }, data: { status: 'rejected' } })
+      await tx.adminOperationLog.create({
+        data: {
+          accountId: operatorId, action: 'REVOKE_RIDER', module: 'rider', targetId: id, targetType: 'region_rider',
+          ip: metadata.ip, ua: metadata.ua,
+          detail: {
+            reason, userId: current.userId, regionId: current.regionId,
+            before: { verifyStatus: current.verifyStatus, status: current.status, riderType: current.riderType },
+            after: data,
+          },
+        },
+      })
+      return { success: true, message: '骑手认证已撤销，符合条件时仍可作为普通用户接单', data: { id, ...data } }
+    })
+    const context = requestContext.getStore()
+    if (context) context.operationLogged = true
+    return result
   }
 
   async updateRiderStatus(id: string, dto: RiderStatusDto, operatorId?: string) {
-    const rider = await this.prisma.regionRider.findUnique({ where: { id }, select: { regionId: true } })
+    const rider = await this.prisma.regionRider.findUnique({ where: { id }, select: { regionId: true, userId: true } })
     if (!rider) throw new NotFoundException('骑手不存在')
     await this.assertOrderRegion(rider.regionId, operatorId)
     const data: any = {}
     if (dto.status !== undefined) data.status = this.normalizeRiderStatus(dto.status)
+    if (dto.riderType !== undefined && !['official', 'part_time'].includes(dto.riderType)) throw new BadRequestException('请选择官方骑手或兼职骑手；取消骑手资格请使用撤销认证')
     if (dto.riderType !== undefined) data.riderType = this.normalizeRiderType(dto.riderType)
     if (dto.riskLevel !== undefined) data.riskLevel = String(dto.riskLevel || 'normal').trim() || 'normal'
     if (!Object.keys(data).length) throw new BadRequestException('没有可更新的骑手信息')
-    return this.prisma.regionRider.update({ where: { id }, data })
+    if (data.status && !['offline', 'online', 'busy'].includes(data.status)) throw new BadRequestException('不支持的在线状态')
+    return this.prisma.$transaction(async tx => {
+      await lockErrandAssignee(tx, rider.userId)
+      const current = await tx.regionRider.findUnique({ where: { id } })
+      if (!current) throw new NotFoundException('骑手不存在')
+      await this.assertOrderRegion(current.regionId, operatorId)
+      if (current.verifyStatus !== 'approved' && (data.riderType || ['online', 'busy'].includes(data.status))) {
+        throw new BadRequestException('骑手未通过认证或认证已撤销，请先重新申请并审核')
+      }
+      return tx.regionRider.update({ where: { id }, data })
+    })
   }
 
   async getRiderRecords(id: string, query: any, operatorId?: string) {
@@ -687,6 +776,27 @@ export class ErrandAdminService {
     })
   }
 
+  async confirmReceipt(id: string, dto: ConfirmErrandReceiptDto, operatorId: string) {
+    if (!operatorId) throw new ForbiddenException('需要管理员身份')
+    const reason = typeof dto?.reason === 'string' ? dto.reason.trim() : ''
+    if (!reason || reason.length > 500) throw new BadRequestException('请填写 1 至 500 字的代确认收货说明')
+    const order = await this.prisma.errandOrder.findUnique({ where: { id } })
+    if (!order) throw new NotFoundException('订单不存在')
+    await this.assertOrderRegion(order.regionId, operatorId)
+    if (order.type !== 'purchase') throw new BadRequestException('本入口仅支持代买订单确认收货')
+    if (!this.lifecycle) throw new BadRequestException('收货确认服务不可用')
+    // The shared flow owns the transaction, receipt audit and guarded settlement.
+    const updated = await this.lifecycle.confirmReceipt(id, operatorId, 'admin', undefined, { adminReason: reason })
+    return {
+      success: true,
+      message: '订单已确认收货',
+      orderId: updated.id,
+      status: updated.status,
+      receiptConfirmedAt: updated.receiptConfirmedAt,
+      receiptConfirmedBy: updated.receiptConfirmedBy,
+    }
+  }
+
   async cancelOrder(id: string, dto: CancelOrderDto, operatorId?: string) {
     const order = await this.prisma.errandOrder.findUnique({ where: { id } })
     if (!order) throw new NotFoundException('订单不存在')
@@ -739,6 +849,7 @@ export class ErrandAdminService {
           status: 'accepted',
           acceptTime: new Date(),
           deliveryDisplayMode: this.deliveryDisplayModeForRider(freshRider),
+          receiptCode: String(randomInt(100000, 1000000)),
         },
       })
       if (claimed.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试')
@@ -752,7 +863,7 @@ export class ErrandAdminService {
       })
       await tx.regionRider.update({ where: { userId: rider.userId }, data: { status: 'busy' } })
       return tx.errandOrder.findUniqueOrThrow({ where: { id } })
-    })
+    }, currentOrder.type === 'purchase' ? PURCHASE_TRANSACTION_OPTIONS : {})
   }
 
   async getOrderTimeline(id: string, operatorId?: string) {

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsNotEmpty, IsIn, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Gender } from '@prisma/client';
 
@@ -182,6 +182,7 @@ export class UpdateSettingsDto {
 }
 
 export class StudentVerifyDto {
+  @ApiProperty({ required: false, description: '已鉴权上传的学生证材料ID' }) @IsOptional() @IsString() @MaxLength(191) materialId?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() realName?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() studentId?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() schoolName?: string;

@@ -286,7 +286,7 @@
 
                 <h4>现场照片</h4>
                 <div v-if="photoAttachments.length" class="photo-strip">
-                  <el-image
+                  <el-image preview-teleported
                     v-for="(photo, index) in photoAttachments"
                     :key="photo.url || index"
                     :src="photo.url"

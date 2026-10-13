@@ -1,3 +1,4 @@
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req, GoneException } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
@@ -76,8 +77,9 @@ export class OperationController {
   }
 
   @Get('second-hand/:id')
-  getSecondHandDetail(@Param('id') id: string, @Query('userId') userId?: string, @CurrentUser('sub') currentUserId?: string) {
-    return this.operationService.getSecondHandDetail(id, userId || currentUserId);
+  @UseGuards(OptionalAuthGuard)
+  getSecondHandDetail(@Param('id') id: string, @CurrentUser('sub') currentUserId?: string) {
+    return this.operationService.getSecondHandDetail(id, currentUserId);
   }
 
   @Put('second-hand/:id')
@@ -195,8 +197,9 @@ export class OperationController {
   }
 
   @Get('api/rating/items/detail/:itemId')
-  getRatingItemDetail(@Param('itemId') itemId: string) {
-    return this.operationService.getRatingItemDetail(itemId);
+  @UseGuards(OptionalAuthGuard)
+  getRatingItemDetail(@Param('itemId') itemId: string, @CurrentUser('sub') userId?: string) {
+    return this.operationService.getRatingItemDetail(itemId, userId);
   }
 
   @Get('api/rating/items/dynamics/:itemId')
@@ -289,7 +292,7 @@ export class OperationController {
   @ApiBearerAuth()
   beInvited(@CurrentUser('sub') userId: string, @Body() dto: any, @Req() req: Request) {
     return this.operationService.beInvited(userId, dto, {
-      ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '',
+      ip: req.ip || req.socket?.remoteAddress || '',
       userAgent: (req.headers['user-agent'] as string) || '',
       deviceId: (req.headers['x-device-id'] as string) || '',
     });
@@ -301,7 +304,7 @@ export class OperationController {
   @ApiOperation({ summary: '认领笔记分享带来的新用户奖励' })
   claimPostShare(@CurrentUser('sub') userId: string, @Body() dto: any, @Req() req: Request) {
     return this.operationService.claimPostShare(userId, String(dto?.code || dto?.share_code || ''), {
-      ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '',
+      ip: req.ip || req.socket?.remoteAddress || '',
       userAgent: (req.headers['user-agent'] as string) || '',
       deviceId: (req.headers['x-device-id'] as string) || dto?.device_id || dto?.deviceId || '',
     });
@@ -310,8 +313,8 @@ export class OperationController {
   @Get('api/share/invites')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  getInviteRecords(@CurrentUser('sub') userId: string) {
-    return this.operationService.getInviteRecords(userId);
+  getInviteRecords(@CurrentUser('sub') userId: string, @Query() query: any) {
+    return this.operationService.getInviteRecords(userId, query);
   }
 
   @Get('AnonymousIdentity/random')
@@ -335,8 +338,9 @@ export class OperationController {
   }
 
   @Get('api/contacts')
-  getContacts(@Query() query: any) {
-    return this.operationService.getContacts(query);
+  @UseGuards(OptionalAuthGuard)
+  getContacts(@Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.operationService.getContacts(query, userId);
   }
 
   @Get('api/contacts/categories/region/:regionId')
@@ -352,8 +356,9 @@ export class OperationController {
   }
 
   @Get('api/contacts/:id')
-  getContactDetail(@Param('id') id: string) {
-    return this.operationService.getContactDetail(id);
+  @UseGuards(OptionalAuthGuard)
+  getContactDetail(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.getContactDetail(id, userId);
   }
 
   @Post('api/contacts')
@@ -476,8 +481,10 @@ export class OperationController {
   }
 
   @Get('api/groupbuy/payment/query/:orderSn')
-  getGroupBuyOrder(@Param('orderSn') orderSn: string) {
-    return this.operationService.getGroupBuyOrder(orderSn);
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getGroupBuyOrder(@Param('orderSn') orderSn: string, @CurrentUser('sub') userId: string) {
+    return this.operationService.getGroupBuyOrder(orderSn,userId);
   }
 
   @Get('api/community/:communityId')

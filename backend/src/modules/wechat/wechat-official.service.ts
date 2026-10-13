@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import { XMLParser } from 'fast-xml-parser';
 import { getManagedWechatTemplateContract, validateErrandNewOrderTemplate } from './wechat-template-contracts';
 import { currentRequestMetadata } from '../../common/request-context';
+import { bindOfficialSubscriber } from './wechat-official-identity';
 import { hasWechatTemplatePayload, wechatFailure } from './wechat-log-presentation';
 
 @Injectable()
@@ -175,7 +176,7 @@ export class WechatOfficialService {
     templateType: string;
     page?: string;
     data: Record<string, any>;
-  }): Promise<{ success: boolean; error?: string }> {
+  }): Promise<{ success: boolean; error?: string; errorCode?: string; uncertain?: boolean }> {
     const { userId, templateType, page, data } = params;
     let templateId = '';
     let openid = '';
@@ -212,7 +213,7 @@ export class WechatOfficialService {
         where: { userId },
         select: { regionId: true },
       }).catch(() => null);
-      const templateRegionId = templateType === 'new_errand_order' ? data.regionId : profile?.regionId;
+      const templateRegionId = ['new_errand_order', 'course_reminder'].includes(templateType) ? data.regionId : profile?.regionId;
       const templates = await this.prisma.wechatTemplateConfig.findMany({
         where: {
           platformType: 'official',
@@ -257,7 +258,7 @@ export class WechatOfficialService {
           };
         }
       }
-      const requiredTemplateKeys = templateType === 'new_errand_order' || managedContract ? Object.keys(fieldMapping) : [];
+      const requiredTemplateKeys = ['new_errand_order', 'course_reminder'].includes(templateType) || managedContract ? Object.keys(fieldMapping) : [];
       const missingRequiredFields = requiredTemplateKeys
         .filter((templateKey) => !templateData[templateKey]);
       const mappingInvalid = !Object.keys(fieldMapping).length
@@ -287,6 +288,9 @@ export class WechatOfficialService {
         template_id: templateId,
         data: templateData,
       };
+      if (templateType === 'course_reminder') {
+        requestBody.client_msg_id = crypto.createHash('sha256').update(`${templateType}:${userId}:${data.sessionId}`).digest('hex').slice(0, 32);
+      }
       if (templateType === 'new_errand_order') {
         requestBody.client_msg_id = crypto.createHash('sha256').update(`${templateType}:${userId}:${data.orderId}`).digest('hex').slice(0, 32);
       }
@@ -305,7 +309,7 @@ export class WechatOfficialService {
           errorCode: String(response?.errcode ?? 'wechat_error'),
           errorMessage: String(response?.errmsg || '微信服务号发送失败'),
         });
-        return { success: false, error: wechatFailure(String(response?.errcode ?? 'unknown'), response?.errmsg).errorMessageZh };
+        return { success: false, errorCode: String(response?.errcode ?? 'unknown'), uncertain: response?.errcode === undefined, error: wechatFailure(String(response?.errcode ?? 'unknown'), response?.errmsg).errorMessageZh };
       }
 
       const wechatMsgId = String(response?.msgid || '').trim();
@@ -321,7 +325,7 @@ export class WechatOfficialService {
           errorCode: 'missing_msgid',
           errorMessage: '微信接口未返回消息 ID，无法跟踪送达结果',
         });
-        return { success: false, error: '微信接口未返回消息 ID' };
+        return { success: false, uncertain: true, error: '微信接口未返回消息 ID' };
       }
 
       await this.writeMessageLog({
@@ -348,7 +352,7 @@ export class WechatOfficialService {
         errorCode: 'exception',
         errorMessage: err.message,
       });
-      return { success: false, error: err.message };
+      return { success: false, uncertain: templateType === 'course_reminder', error: templateType === 'course_reminder' ? '发送结果待核实' : err.message };
     }
   }
 
@@ -356,6 +360,7 @@ export class WechatOfficialService {
     const log = await this.prisma.wechatMessageLog.findUnique({ where: { id: logId } });
     if (!log) throw new BadRequestException('日志不存在');
     if (log.platformType !== 'official') throw new BadRequestException('不是服务号消息日志');
+    if (log.templateType === 'course_reminder') throw new BadRequestException('课程提醒不可直接重发，请先核对课次、授权和发送结果');
     if (log.templateType === 'new_errand_order') throw new BadRequestException('新单通知必须通过通知中心重新检查订单和骑手资格后重试');
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
     if (log.status === 'pending') return { success: true, message: '微信已受理，正在等待送达回执' };
@@ -791,50 +796,28 @@ export class WechatOfficialService {
   }
 
   private async handleSubscribe(openid: string, eventKey: string) {
-    this.logger.log(`公众号关注: openid=${openid} eventKey=${eventKey}`);
-
-    // 尝试从 eventKey 中提取 userId
     let userId: string | null = null;
     if (eventKey.startsWith('qrscene_bind_')) {
       const scene = eventKey.replace('qrscene_', '');
       userId = await this.redis_get(`wechat:bind:scene:${scene}`);
     }
-
-    // 通过 unionid 尝试匹配
-    if (!userId) {
-      // 获取用户信息
-      try {
-        const accessToken = await this.tokenService.getOfficialAccessToken();
-        const { data } = await axios.get(
-          `https://api.weixin.qq.com/cgi-bin/user/info?access_token=${accessToken}&openid=${openid}&lang=zh_CN`,
-        );
-        if (data.unionid) {
-          const user = await this.prisma.user.findFirst({
-            where: { unionid: data.unionid },
-          });
-          if (user) userId = user.id;
-        }
-      } catch {}
-    }
-
     if (userId) {
-      await this.prisma.wechatOfficialBinding.upsert({
-        where: { userId },
-        create: {
-          userId,
-          officialOpenid: openid,
-          subscribe: true,
-          subscribeAt: new Date(),
-          qrScene: eventKey,
-        },
-        update: {
-          officialOpenid: openid,
-          subscribe: true,
-          subscribeAt: new Date(),
-          unsubscribedAt: null,
-        },
-      });
+      await bindOfficialSubscriber(this.prisma, { officialOpenid: openid, eventKey, userId });
+      return;
     }
+    // The official account must explicitly confirm the same Open Platform scope.
+    // App/mini configuration alone is insufficient evidence for this third channel.
+    const unionScope = String(this.config.get('WX_OPEN_PLATFORM_ACCOUNT_ID') || '').trim();
+    const officialScope = String(this.config.get('WX_OFFICIAL_OPEN_PLATFORM_ACCOUNT_ID') || '').trim();
+    if (!unionScope || officialScope !== unionScope) return;
+    const accessToken = await this.tokenService.getOfficialAccessToken();
+    const { data } = await axios.get('https://api.weixin.qq.com/cgi-bin/user/info', {
+      params: { access_token: accessToken, openid, lang: 'zh_CN' }, timeout: 10000,
+    });
+    if (data?.errcode || data?.openid !== openid || data?.subscribe !== 1) return;
+    await bindOfficialSubscriber(this.prisma, {
+      officialOpenid: openid, eventKey, unionId: data.unionid, unionScope,
+    });
   }
 
   private async handleUnsubscribe(openid: string) {
@@ -846,31 +829,9 @@ export class WechatOfficialService {
   }
 
   private async handleScan(openid: string, eventKey: string) {
-    this.logger.log(`公众号扫码: openid=${openid} eventKey=${eventKey}`);
-
-    let userId: string | null = null;
-    if (eventKey.startsWith('bind_')) {
-      userId = await this.redis_get(`wechat:bind:scene:${eventKey}`);
-    }
-
-    if (userId) {
-      await this.prisma.wechatOfficialBinding.upsert({
-        where: { userId },
-        create: {
-          userId,
-          officialOpenid: openid,
-          subscribe: true,
-          subscribeAt: new Date(),
-          qrScene: eventKey,
-        },
-        update: {
-          officialOpenid: openid,
-          subscribe: true,
-          subscribeAt: new Date(),
-          unsubscribedAt: null,
-        },
-      });
-    }
+    if (!eventKey.startsWith('bind_')) return;
+    const userId = await this.redis_get(`wechat:bind:scene:${eventKey}`);
+    if (userId) await bindOfficialSubscriber(this.prisma, { officialOpenid: openid, eventKey, userId });
   }
 
   private async getCallbackConfig(): Promise<{

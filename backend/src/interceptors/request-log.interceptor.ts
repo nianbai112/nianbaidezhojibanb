@@ -17,6 +17,9 @@ import { clientIp, redactAuditDetail, requestContext } from '../common/request-c
 
 /** 字段名关键字（不区分大小写）——命中则脱敏处理 */
 const SENSITIVE_KEYS = [
+  "studentid",
+  "realname",
+  "activation",
   "password",
   "token",
   "secret",
@@ -168,6 +171,12 @@ export class RequestLogInterceptor implements NestInterceptor, OnModuleDestroy {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
     const { method, url, headers, body, user, ip } = request;
+    const wechatPrivateRequest = /(?:wechat-chat|wechat-channel|wechat-moments)\/(?:webhook|.*)|\/wechat\/wecom\/callback/.test(url);
+    const studentIdentityRequest = /student-identity|student-verification|user\/verification/.test(url);
+    const appLoginRequest = /(?:^|\/)wx-auth\/(?:app-login|apple\/notifications)(?:\?|$)/.test(url);
+    const loggedUrl = (studentIdentityRequest || wechatPrivateRequest || appLoginRequest) ? url.split('?')[0] : url;
+    // Identity details belong in the school-scoped history, not the general server log.
+    const logBody = appLoginRequest ? { appLoginCredentials: '[redacted]' } : wechatPrivateRequest ? { wechatContent: '[redacted]' } : studentIdentityRequest ? { studentIdentityData: '[redacted]' } : body;
     const start = Date.now();
 
     // 跳过静态资源、Swagger、安装向导探活接口
@@ -202,14 +211,14 @@ export class RequestLogInterceptor implements NestInterceptor, OnModuleDestroy {
         level:
           statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info",
         module: isAdminPath ? "admin" : "request",
-        message: `${method} ${url} ${statusCode} ${duration}ms`,
-        detail: body ? maskSensitive(body) : undefined,
+        message: `${method} ${loggedUrl} ${statusCode} ${duration}ms`,
+        detail: logBody ? maskSensitive(logBody) : undefined,
         requestId: (safeHeaders["x-request-id"] as string) || undefined,
         userId,
         adminId,
         ip: clientIp(request),
         userAgent: (safeHeaders["user-agent"] as string) || undefined,
-        path: url,
+        path: loggedUrl,
         method,
         statusCode,
         durationMs: duration,
@@ -230,7 +239,7 @@ export class RequestLogInterceptor implements NestInterceptor, OnModuleDestroy {
             accountId: adminId, action, module: parts[1] || 'system',
             targetId: request.params?.id || request.params?.regionId || null,
             ip: clientIp(request), ua: request.headers?.['user-agent'],
-            detail: redactAuditDetail({ requestPath: url.split('?')[0], submitted: body || {}, outcome: '成功' }),
+            detail: redactAuditDetail({ requestPath: url.split('?')[0], submitted: logBody || {}, outcome: '成功' }),
           } }).catch((error: any) => this.logger.warn(`后台操作日志写入失败：${error.message}`));
         }
         return result;

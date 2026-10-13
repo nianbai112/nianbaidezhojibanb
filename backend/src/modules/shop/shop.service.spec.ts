@@ -1220,7 +1220,7 @@ describe("ShopService SKU checkout bridge", () => {
 
     expect(prisma.merchant.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { regionId: "region-1" },
+        where: { regionId: "region-1", status:{in:["approved","closed"]} },
         data: {
           businessHours: expect.stringMatching(/^\[\[0,"09:00","22:00"\]/),
         },
@@ -1287,11 +1287,11 @@ describe("ShopService SKU checkout bridge", () => {
       expect.objectContaining({ data: { status: "closed" } }),
     );
     expect(prisma.merchant.updateMany).toHaveBeenNthCalledWith(1, {
-      where: { regionId: "region-1" },
+      where: { regionId: "region-1", status:{in:["approved","closed"]} },
       data: { status: "approved" },
     });
     expect(prisma.merchant.updateMany).toHaveBeenNthCalledWith(2, {
-      where: { regionId: "region-1" },
+      where: { regionId: "region-1", status:{in:["approved","closed"]} },
       data: { status: "closed" },
     });
   });
@@ -1318,13 +1318,14 @@ describe("ShopService SKU checkout bridge", () => {
           .mockResolvedValue({ id: "address-1", regionId: null }),
       },
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, {} as any, {} as any);
     const isOpenAt = jest
       .spyOn(service as any, "isMerchantOpenAt")
       .mockReturnValue(false);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
         address_id: "address-1",
         specified_address_id: "address-1",
         delivery_time: deliveryTime,
@@ -1396,12 +1397,13 @@ describe("ShopService SKU checkout bridge", () => {
     const notifyService: any = {
       createAndDispatch: jest.fn().mockResolvedValue({}),
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, notifyService, {
       getUserBenefits: jest.fn(),
     } as any);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
         address_id: "address-1",
       }),
     ).resolves.toEqual(
@@ -1485,13 +1487,14 @@ describe("ShopService SKU checkout bridge", () => {
       },
       $transaction: jest.fn((handler: any) => handler(tx)),
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(
       prisma,
       { createAndDispatch: jest.fn() } as any,
       { getUserBenefits: jest.fn().mockResolvedValue({ list: [] }) } as any,
     );
 
-    await service.createOrder("merchant-1", "user-1", {
+    await service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
       address_id: "address-1",
       specified_address_id: "region-1",
       receiver_name: "伪造姓名",
@@ -1534,10 +1537,11 @@ describe("ShopService SKU checkout bridge", () => {
         }),
       },
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, {} as any, {} as any);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
         address_id: "address-1",
         specified_address_id: "region-b",
       }),
@@ -1562,10 +1566,11 @@ describe("ShopService SKU checkout bridge", () => {
         }),
       },
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, {} as any, {} as any);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
         address_id: "address-1",
         specified_address_id: "region-b",
       }),
@@ -1608,10 +1613,11 @@ describe("ShopService SKU checkout bridge", () => {
         }),
       },
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, {} as any, {} as any);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",
         address_id: "address-1",
       }),
     ).rejects.toThrow("商品「可乐」请先选择规格");
@@ -1629,10 +1635,11 @@ describe("ShopService SKU checkout bridge", () => {
       cart: { findMany: jest.fn().mockResolvedValue([]) },
       address: { findFirst: jest.fn() },
     };
+    prisma.order = { ...(prisma.order || {}), findUnique: jest.fn().mockResolvedValue(null) };
     const service = new ShopService(prisma, {} as any, {} as any);
 
     await expect(
-      service.createOrder("merchant-1", "user-1", {}),
+      service.createOrder("merchant-1", "user-1", {request_id:"shop_test_request_12345",}),
     ).rejects.toThrow("请选择收货地址");
     expect(prisma.address.findFirst).not.toHaveBeenCalled();
   });
@@ -2943,9 +2950,11 @@ describe("ShopService SKU checkout bridge", () => {
         update: jest.fn(),
       },
       riderSettlement: {
-        upsert: jest.fn().mockResolvedValue({ id: "settlement-1" }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: "settlement-1" }),
       },
-      wallet: { upsert: jest.fn().mockResolvedValue({ balance: 4 }) },
+      wallet: { createMany: jest.fn().mockResolvedValue({ count: 1 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ balance: 4 }) },
       walletTransaction: { create: jest.fn().mockResolvedValue({}) },
     };
     prisma.order.findUnique.mockResolvedValue(order);
@@ -2959,14 +2968,12 @@ describe("ShopService SKU checkout bridge", () => {
     });
 
     // paid freight 2 + rider subsidy 2 exceeds the original freight 3.
-    expect(tx.riderSettlement.upsert).toHaveBeenCalledWith(
+    expect(tx.riderSettlement.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        create: expect.objectContaining({
-          riderId: "rider-1",
-          deliveryFeeTotal: 4,
-          payableAmount: 4,
-          paidAmount: 4,
-          status: "PAID",
+        data: expect.objectContaining({
+          deliveryFeeTotal: { increment: 4 },
+          payableAmount: { increment: 4 },
+          paidAmount: { increment: 4 },
         }),
       }),
     );
@@ -2978,10 +2985,10 @@ describe("ShopService SKU checkout bridge", () => {
         payableAmount: 4,
       }),
     });
-    expect(tx.wallet.upsert).toHaveBeenCalledWith(
+    expect(tx.wallet.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: "rider-1" },
-        update: expect.objectContaining({ balance: { increment: 4 } }),
+        data: expect.objectContaining({ balance: { increment: 4 } }),
       }),
     );
   });

@@ -1,5 +1,10 @@
+import { riderIncentiveQuery } from './rider-incentive-query';
+import { effectiveStudentIdentity, identityInclude } from '../student-identity/student-identity.policy';
+import { errandStatusFilter } from './errand-order-filter';
+import { PURCHASE_TRANSACTION_OPTIONS, purchaseRiderAccess } from '../errand-purchase/purchase.transactions';
 import { buildErrandDispatchPayload } from './errand-new-order-notification';
 import { couponDiscountAmount as calculateCouponDiscount } from '../../common/coupon-policy';
+import { errandCouponUnavailableReason } from './errand-coupon';
 import { errandPlatformFee, errandRiderIncome } from '../../common/commission';
 import { assertCouponCampaignRules } from './errand-transaction-guards';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
@@ -156,7 +161,8 @@ export class ErrandService {
     const map: Record<string, string> = {
       pickup: '帮我取件',
       deliver: '帮我寄件',
-      meal: '帮我取餐',
+      meal: '取餐历史订单',
+      purchase: '代买服务',
       universal: '万能任务',
     }
     return map[type] || '跑腿任务'
@@ -768,6 +774,8 @@ export class ErrandService {
     if (value === 'approved') return 'normal'
     if (value === 'rejected') return 'rejected'
     if (value === 'banned') return 'banned'
+    if (value === 'revoked') return 'revoked'
+    if (value === 'ordinary_user') return 'ordinary_user'
     return 'pending'
   }
 
@@ -1134,11 +1142,7 @@ export class ErrandService {
         include: {
           profile: { select: { gender: true } },
           studentVerify: {
-            select: {
-              status: true,
-              schoolId: true,
-              school: { select: { regionId: true } },
-            },
+            include: identityInclude,
           },
         },
       }).catch(() => null),
@@ -1161,7 +1165,7 @@ export class ErrandService {
       }
     }
 
-    const verifiedSchoolRegionId = String(user?.studentVerify?.status || '').toLowerCase() === 'approved'
+    const verifiedSchoolRegionId = effectiveStudentIdentity(user?.studentVerify, userId)
       ? this.cleanRegionId(user?.studentVerify?.school?.regionId)
       : ''
     if (queryRegionId && verifiedSchoolRegionId && queryRegionId !== verifiedSchoolRegionId) {
@@ -1409,18 +1413,7 @@ export class ErrandService {
   }
 
   private errandCouponUnavailableReason(coupon: any, amount: number, regionId?: string) {
-    if (!coupon || coupon.status !== 'active') return '优惠券已下架';
-    const now = new Date();
-    if (coupon.startAt && now < coupon.startAt) return '未到可用时间';
-    if (coupon.endAt && now > coupon.endAt) return '优惠券已过期';
-    const scope = String(coupon.businessScope || 'all').toLowerCase();
-    if (!['all', 'errand'].includes(scope)) return '该优惠券不适用于跑腿';
-    if (coupon.merchantId) return '商家专属券不能用于跑腿';
-    if (coupon.regionId && String(coupon.regionId) !== String(regionId || '')) return '不适用于当前区域';
-    if (amount <= 0) return '请先完善订单信息';
-    if (Number(coupon.minAmount || 0) > amount) return `满 ¥${Number(coupon.minAmount || 0).toFixed(2)} 可用`;
-    if (this.couponDiscountAmount(coupon, amount) <= 0) return '当前金额不可用';
-    return '';
+    return errandCouponUnavailableReason(coupon, amount, regionId);
   }
 
   private formatErrandCouponReceive(receive: any, amount: number, regionId?: string) {
@@ -1576,11 +1569,13 @@ export class ErrandService {
   }
 
   private async createOrderUnlocked(userId: string, dto: any) {
+    if (['meal', 'food_delivery', 'purchase'].includes(String(dto.type || dto.service_type || dto.serviceType || ''))) throw new BadRequestException('帮我取餐已升级为代买服务，请从代买入口下单');
     dto = { ...dto, ...normalizeErrandDeliveryRequirements(dto) };
     const orderNo = `ERR${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const tasks = Array.isArray(dto?.tasks) ? dto.tasks : []
     const firstTask = tasks[0] || {}
     const type = this.normalizeServiceType(dto?.service_type ?? dto?.type)
+    if (['meal', 'purchase'].includes(type)) throw new BadRequestException('请使用代买服务入口下单');
     const addressId = dto?.address_id ?? dto?.addressId
     const savedAddress = addressId
       ? await this.prisma.address.findFirst({ where: { id: String(addressId), userId } })
@@ -1766,8 +1761,12 @@ export class ErrandService {
             dto?.deliver_phone || firstTask.deliver_phone || firstTask.recipient_phone || (type === 'deliver' ? '' : savedAddress?.phone),
             40,
           ) || null,
-          deliverLat: type === 'deliver' ? dto?.deliver_lat ?? null : savedAddress?.latitude ?? dto?.deliver_lat ?? null,
-          deliverLng: type === 'deliver' ? dto?.deliver_lng ?? null : savedAddress?.longitude ?? dto?.deliver_lng ?? null,
+          ...(type === 'deliver' ? {
+            pickupLat: (quote.pricingSnapshot?.routeCoordinates as any)?.pickup?.latitude ?? null,
+            pickupLng: (quote.pricingSnapshot?.routeCoordinates as any)?.pickup?.longitude ?? null,
+          } : {}),
+          deliverLat: type === 'deliver' ? (quote.pricingSnapshot?.routeCoordinates as any)?.delivery?.latitude ?? null : savedAddress?.latitude ?? dto?.deliver_lat ?? null,
+          deliverLng: type === 'deliver' ? (quote.pricingSnapshot?.routeCoordinates as any)?.delivery?.longitude ?? null : savedAddress?.longitude ?? dto?.deliver_lng ?? null,
           weight: dto?.weight ? this.numberValue(dto.weight) : null,
           distance: quote.distanceMeters / 1000,
           price: orderPrice,
@@ -1925,6 +1924,7 @@ export class ErrandService {
     if (!orderId) throw new BadRequestException('缺少订单ID');
     const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('订单不存在');
+    if (order.type === 'purchase') throw new BadRequestException('请在代买订单详情操作；已采购订单请联系后台');
     if (order.userId !== userId) throw new BadRequestException('无权支付该订单');
     if (order.status !== 'pending_pay') throw new BadRequestException('订单状态不允许支付');
     const now = new Date();
@@ -1991,14 +1991,16 @@ export class ErrandService {
 
     // AUD-P0-003: 微信支付 - 必须走支付中心，由回调推进订单状态
     if (payChannel === 'wx_pay' || payChannel === 'wechat') {
-      // 微信支付已经由外部 /wxpay/createOrder 入口处理，这里只做转发
+      // 同一用户可从小程序或 App 发起；openid 只能来自数据库。
+      const payer = await this.prisma.user.findUnique({ where: { id: userId }, select: { openid: true } });
+      if (!payer) throw new BadRequestException('用户不存在');
       const paymentResult = await this.paymentService.wxUnifiedOrder({
         bizType: 'errand_order',
         bizId: order.id,
         orderNo: order.orderNo || orderId,
         amount,
         description: `跑腿订单-${order.orderNo || orderId}`,
-        openid: '', // 由 payment service 自行查询
+        openid: payer.openid,
         userId,
       });
       return {
@@ -2061,7 +2063,7 @@ export class ErrandService {
       ? ''
       : settlementHold?.status === 'holding'
         ? settlementHold.releaseAt
-          ? '该单收益处于48小时风控冻结期，复核通过后自动进入可提现余额。'
+          ? '该单收益待复核，通过后自动结算；用券订单不设固定等待期。'
           : '该单收益正在进行风险复核，风险或申诉解除前不可提现。'
         : settlementHold?.status === 'rejected'
           ? '该单收益已被风控拒绝结算，如有异议请提交申诉。'
@@ -2193,6 +2195,7 @@ export class ErrandService {
   private async cancelOrderUnlocked(orderId: string, userId: string, dto: any) {
     const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('订单不存在');
+    if (order.type === 'purchase') throw new BadRequestException('请在代买订单详情操作；已采购订单请联系后台');
     if (order.userId !== userId) throw new BadRequestException('只能取消自己的跑腿订单');
     if (!['pending_pay', 'pending_accept'].includes(order.status)) {
       throw new BadRequestException('订单已被接单或已结束，不能直接取消');
@@ -2395,11 +2398,11 @@ export class ErrandService {
 	        where: { id: userId },
 	        include: {
 	          studentVerify: {
-	            select: { status: true, schoolId: true, school: { select: { regionId: true } } },
+	            include: identityInclude,
 	          },
 	        },
 	      })
-	      const verifiedSchoolRegionId = String(user?.studentVerify?.status || '').toLowerCase() === 'approved'
+	      const verifiedSchoolRegionId = effectiveStudentIdentity(user?.studentVerify, userId)
 	        ? this.cleanRegionId(user?.studentVerify?.school?.regionId)
 	        : ''
 	      if (!user?.phone) throw new BadRequestException('请先完成手机号验证后再接单')
@@ -2452,7 +2455,7 @@ export class ErrandService {
 	        displayMode: 'status_nodes',
 	      });
 	      return updated;
-	    });
+	    }, errandExists.type === 'purchase' ? PURCHASE_TRANSACTION_OPTIONS : {});
     const [formatted] = await this.formatMiniOrders([updated]);
     await this.recordErrandLearningSnapshot('order_accepted', {
       orderId: updated.id,
@@ -2796,6 +2799,7 @@ export class ErrandService {
       where: { id: orderId },
     });
     if (!order) throw new NotFoundException('订单不存在');
+    if (order.type === 'purchase') throw new BadRequestException('请在代买订单详情操作；已采购订单请联系后台');
     if (order.userId !== userId) throw new BadRequestException('无权操作该订单');
 
     // 用户自助退款仅限尚未被接走的已支付订单，配送异常走申诉/运营处置。
@@ -2874,6 +2878,10 @@ export class ErrandService {
     const itemSizeMap = new Map(itemSizes.map(item => [item.id, item]))
     const pickupPointMap = new Map(pickupPoints.map(point => [point.id, point]))
 
+    const purchaseIds = rows.filter(row => row.type === 'purchase').map(row => row.id);
+    const purchases = purchaseIds.length ? await this.prisma.errandPurchase.findMany({ where: { id: { in: purchaseIds } }, select: { id: true, approvedGoodsCents: true, stops: { select: { id: true } }, _count: { select: { changes: { where: { status: { in: ['pending', 'awaiting_payment'] } } } } } } }) : [];
+    const purchaseMap = new Map(purchases.map(p => [p.id, p]));
+
     return rows.map(row => {
       const remark = this.parseOrderRemark(row)
       const rawTasks = this.rawOrderTasks(row, taskMap)
@@ -2930,6 +2938,7 @@ export class ErrandService {
         order_no: row.orderNo,
         orderNo: row.orderNo,
         service_type: miniType,
+        ...(purchaseMap.has(row.id) ? { purchase_goods_cents: purchaseMap.get(row.id)!.approvedGoodsCents, purchase_shop_count: purchaseMap.get(row.id)!.stops.length, ...(options.receiptCodeViewerId === row.userId ? { purchase_attention_count: purchaseMap.get(row.id)!._count?.changes || 0 } : {}) } : {}),
         subType: miniType,
         type: 'errand',
         raw_type: row.type,
@@ -3148,7 +3157,11 @@ export class ErrandService {
       const normalizedType = this.normalizeServiceType(filterType)
       if (normalizedType) where.type = normalizedType
     }
-	    const include = {
+    if (filterType !== 'pending_orders') {
+      const status = errandStatusFilter(query.status_group);
+      if (status) where.status = status;
+    }
+    const include = {
 	      User: { select: { id: true, nickname: true, avatar: true, phone: true } },
 	      RegionRider: {
 	        include: {
@@ -3390,8 +3403,14 @@ export class ErrandService {
 	    const dispatchRows = normalizedStatus === 'pending_accept' && identity.role === 'approved_rider'
 	      ? enrichErrandOrdersForDispatch(pageRows, { rider: await this.getRiderDispatchContext(userId) })
 	      : pageRows;
+	    // Purchase orders stay visible to a rider whose tier is closed; the reason greys out the accept button.
+	    const purchaseAccess = normalizedStatus === 'pending_accept' && identity.role === 'approved_rider' && pageRows.some(row => row.service_type === 'purchase')
+	      ? await purchaseRiderAccess(this.prisma, regionId, identity.rider)
+	      : null
 	    const visibleRows = normalizedStatus === 'pending_accept'
-        ? dispatchRows.map(row => row.type === 'errand' ? poolErrandProjection(row) : poolShopProjection(row))
+        ? dispatchRows.map(row => row.type === 'errand'
+          ? poolErrandProjection(purchaseAccess?.blockedReason && row.service_type === 'purchase' ? { ...row, purchase_blocked_reason: purchaseAccess.blockedReason } : row)
+          : poolShopProjection(row))
         : dispatchRows;
 	    const total = errandTotal + shopTotal;
 	    return {
@@ -3434,6 +3453,7 @@ export class ErrandService {
   private async returnToPoolUnlocked(orderId: string, userId: string, dto: any) {
     const order = await this.prisma.errandOrder.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('订单不存在');
+    if (order.type === 'purchase') throw new BadRequestException('请在代买订单详情操作；已采购订单请联系后台');
     if (order.riderId !== userId) throw new BadRequestException('无权退回该订单');
     if (['refunding', 'refunded'].includes(String(order.refundStatus || 'none'))) {
       throw new BadRequestException('订单退款处理中，不能退回接单池');
@@ -3514,6 +3534,9 @@ export class ErrandService {
     }
     if (dto?.anonymous !== undefined) data.anonymous = Number(dto.anonymous) === 1 || dto.anonymous === true
     if (dto?.status !== undefined) data.status = this.normalizeRiderStatus(dto.status)
+    if (['online', 'busy'].includes(data.status) && existing.verifyStatus !== 'approved') {
+      throw new BadRequestException('骑手未通过认证或认证已撤销，请先重新申请并审核');
+    }
     if (data.status === 'offline') {
       const [activeErrands, activeShopOrders] = await Promise.all([
         this.prisma.errandOrder.count({ where: { riderId: userId, status: { in: ['accepted', 'in_progress'] } } }),
@@ -3522,7 +3545,7 @@ export class ErrandService {
       if (activeErrands + activeShopOrders > 0) throw new BadRequestException('还有进行中的订单，完成后才能下线');
     }
     const updateArgs = {
-      where: { userId },
+      where: { userId, verifyStatus: existing.verifyStatus },
       data,
       include: { User: { select: { id: true, nickname: true, avatar: true, phone: true, profile: { select: { gender: true } } } } },
     };
@@ -3569,45 +3592,48 @@ export class ErrandService {
     if (!regionId) throw new BadRequestException('请选择申请区域');
     if (!realName) throw new BadRequestException('请输入姓名');
     if (!phone) throw new BadRequestException('请输入手机号');
-    // SEC-P0-B4: upsert 的 update 分支会把 approved 骑手打回 pending+offline，
-    // 绕过“有进行中订单不能下线”的校验。已认证且有在途订单时禁止重新提交申请。
-    const existingRider = await this.prisma.regionRider.findUnique({
-      where: { userId },
-      select: { verifyStatus: true },
-    });
-    if (existingRider?.verifyStatus === 'approved') {
-      const [activeErrands, activeShopOrders] = await Promise.all([
-        this.prisma.errandOrder.count({ where: { riderId: userId, status: { in: ['accepted', 'in_progress'] } } }),
-        this.prisma.order.count({ where: { riderId: userId, status: 'SHIPPED' as any } }),
-      ]);
-      if (activeErrands + activeShopOrders > 0) {
-        throw new BadRequestException('还有进行中的订单，完成后才能修改认证信息');
+    const rider = await this.prisma.$transaction(async tx => {
+      await lockErrandAssignee(tx, userId);
+      const existingRider = await tx.regionRider.findUnique({
+        where: { userId },
+        select: { verifyStatus: true, riderType: true },
+      });
+      if (existingRider?.verifyStatus === 'banned') throw new BadRequestException('骑手账号当前受限，请联系区域负责人');
+      if (existingRider) {
+        const [activeErrands, activeShopOrders] = await Promise.all([
+          tx.errandOrder.count({ where: { riderId: userId, status: { in: ['accepted', 'in_progress', 'arrived'] } } }),
+          tx.order.count({ where: { riderId: userId, status: 'SHIPPED' as any } }),
+        ]);
+        if (activeErrands + activeShopOrders > 0) {
+          throw new BadRequestException('还有进行中的订单，完成后才能修改认证信息');
+        }
       }
-    }
-    const rider = await this.prisma.regionRider.upsert({
-      where: { userId },
-      update: {
-        regionId,
-        realName,
-        phone,
-        idCard,
-        alipayAccount: dto?.alipay_account ?? dto?.alipayAccount ?? null,
-        riderBio: dto?.rider_bio ?? dto?.riderBio ?? null,
-        verifyStatus: 'pending',
-        status: 'offline',
-      },
-      create: {
-        userId,
-        regionId,
-        realName,
-        phone,
-        idCard,
-        alipayAccount: dto?.alipay_account ?? dto?.alipayAccount ?? null,
-        riderBio: dto?.rider_bio ?? dto?.riderBio ?? null,
-        verifyStatus: 'pending',
-        status: 'offline',
-      },
-      include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
+      return tx.regionRider.upsert({
+        where: { userId },
+        update: {
+          regionId,
+          realName,
+          phone,
+          idCard,
+          alipayAccount: dto?.alipay_account ?? dto?.alipayAccount ?? null,
+          riderBio: dto?.rider_bio ?? dto?.riderBio ?? null,
+          verifyStatus: 'pending',
+          status: 'offline',
+          ...((existingRider?.verifyStatus === 'revoked' || existingRider?.riderType === 'ordinary_user') ? { riderType: 'part_time' } : {}),
+        },
+        create: {
+          userId,
+          regionId,
+          realName,
+          phone,
+          idCard,
+          alipayAccount: dto?.alipay_account ?? dto?.alipayAccount ?? null,
+          riderBio: dto?.rider_bio ?? dto?.riderBio ?? null,
+          verifyStatus: 'pending',
+          status: 'offline',
+        },
+        include: { User: { select: { id: true, nickname: true, avatar: true, phone: true } } },
+      });
     });
     return { success: true, message: '申请已提交，请等待审核', data: this.formatRiderInfo(rider, true) };
   }
@@ -3960,8 +3986,15 @@ export class ErrandService {
   }
 
   async getMyIncentiveRecords(userId: string, query: any) {
-    const { page = 1, pageSize = 20 } = query;
-    return this.prisma.incentiveRecord.findMany({ where: { userId }, skip: (page - 1) * pageSize, take: Number(pageSize), orderBy: { createdAt: 'desc' } });
+    const { page, pageSize, where, orderBy } = riderIncentiveQuery(userId, query);
+    const [records, total] = await Promise.all([
+      this.prisma.incentiveRecord.findMany({ where, orderBy: orderBy as any, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.incentiveRecord.count({ where }),
+    ]);
+    return { records: records.map(row => ({ ...row, amount: Number(row.amount), raw_type: row.type,
+      type: row.type.endsWith('penalty') ? 'penalty' : row.type.endsWith('reward') ? 'reward' : row.type,
+      rule_type: row.ruleType, order_id: row.orderId, order_type: row.orderType, region_id: row.regionId, created_at: row.createdAt,
+    })), pagination: { current_page: page, page_size: pageSize, total, total_pages: Math.ceil(total / pageSize) } };
   }
 
   // ================= 后台管理 (Admin) =================

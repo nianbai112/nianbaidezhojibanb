@@ -13,6 +13,9 @@ import { RedisService } from "../../common/services/redis.service";
 
 const FEIE_PRINT_URL = "https://api.feieyun.cn/Api/Open/printMsg";
 const FEIE_QUERY_URL = "https://api.feieyun.cn/Api/Open/queryOrderState";
+const FEIE_ADD_URL = "https://api.feieyun.cn/Api/Open/printerAddlist";
+const FEIE_STATUS_URL = "https://api.feieyun.cn/Api/Open/queryPrinterStatus";
+const SUBMITTED_POLL_WINDOW_MS = 24 * 60 * 60_000;
 const YLY_BASE_URL = "https://open-api.10ss.net/v2";
 const XPYUN_BASE_URL = "https://open.xpyun.net/api/openapi/xprinter";
 const GPRINTER_BASE_URL = "https://api.poscom.cn/apisc";
@@ -117,7 +120,94 @@ export class PrintService {
     };
   }
 
+  /** Queues ready-made receipt content (e.g. a 代买 ticket) for the Worker; a repeated dedupeKey is ignored. */
+  enqueue(input: {
+    printer: any;
+    event: string;
+    dedupeKey: string;
+    content: string;
+    orderId?: string;
+    bizType: string;
+    bizId: string;
+    expiresAt?: Date;
+    copies?: number;
+  }) {
+    return this.createQueued({ ...input, content: this.limit(input.content) });
+  }
+
+  /** Adds the device to the owner's Feie account so printMsg accepts it; needs the KEY from the device label. */
+  async bindFeieDevice(printerId: string) {
+    const printer = await this.prisma.printerConfig.findUnique({
+      where: { id: printerId },
+    });
+    if (!printer || this.providerOf(printer) !== "feie") return null;
+    const deviceKey =
+      printer.connectionMode === "platform_managed"
+        ? ""
+        : String(
+            this.decryptCredentials(printer.credentialCiphertext).deviceKey ||
+              "",
+          );
+    if (!deviceKey)
+      return {
+        bound: false,
+        message: "未填写设备 KEY，请确认已在飞鹅云后台添加该设备",
+      };
+    const result = await this.feieRequest(
+      printer,
+      FEIE_ADD_URL,
+      "Open_printerAddlist",
+      { printerContent: `${printer.sn}#${deviceKey}#${this.safe(printer.name).replace(/#/g, "")}` },
+    );
+    if (Number(result.ret) !== 0)
+      return { bound: false, message: String(result.msg || "飞鹅云拒绝添加设备") };
+    const failed: string[] = Array.isArray(result.data?.no) ? result.data.no : [];
+    const reason = failed.map(String).join("；");
+    // Feie reports an already-bound device under "no"; it is still usable.
+    if (!failed.length || /已被添加过/.test(reason)) return { bound: true, message: "" };
+    // Rows echo "SN#KEY#name", so only the error text goes back to the caller.
+    const detail = reason.match(/错误[:：]\s*([^）)]+)/)?.[1];
+    return {
+      bound: false,
+      message: detail?.trim() || "飞鹅云未能添加该设备，请核对 SN 与 KEY",
+    };
+  }
+
+  /** Online / paper state for Feie devices; other brands report unsupported. */
+  async printerStatus(printerId: string) {
+    const printer = await this.prisma.printerConfig.findUnique({
+      where: { id: printerId },
+    });
+    if (!printer) throw new BadRequestException("打印机不存在");
+    if (this.providerOf(printer) !== "feie")
+      return { supported: false, online: null, text: "该品牌暂不支持查询在线状态" };
+    const result = await this.feieRequest(
+      printer,
+      FEIE_STATUS_URL,
+      "Open_queryPrinterStatus",
+      { sn: printer.sn },
+    );
+    if (Number(result.ret) !== 0)
+      throw new BadRequestException(String(result.msg || "飞鹅云查询设备状态失败"));
+    const text = String(result.data || "");
+    return {
+      supported: true,
+      online: /^在线/.test(text),
+      normal: /正常/.test(text) && !/不正常/.test(text),
+      text,
+    };
+  }
+
   async testPrinter(printerId: string, content?: string) {
+    return this.submitTest(printerId, this.testReceipt(content));
+  }
+
+  /** Sends ready-made, already-escaped markup at once, e.g. a template sample ticket. */
+  async printSample(printerId: string, content: string, copies = 1) {
+    return this.submitTest(printerId, this.limit(content), copies);
+  }
+
+  private async submitTest(printerId: string, content: string, copies = 1) {
     const printer = await this.prisma.printerConfig.findUnique({
       where: { id: printerId },
     });
@@ -131,7 +221,9 @@ export class PrintService {
     return this.createAndSubmit({
       printer,
       event: "test",
-      content: this.testReceipt(content),
+      bizType: "test",
+      content,
+      copies,
       dedupeKey: `test:${printer.id}:${Date.now()}`,
     });
   }
@@ -190,17 +282,42 @@ export class PrintService {
   @Cron("0 * * * * *")
   async reconcileSubmittedJobs() {
     await this.redis.withRenewingLock("print:cron:submitted", 50, async () => {
+      // Vendors drop unprinted jobs within days; stop polling after a day.
+      await this.prisma.printJob.updateMany({
+        where: {
+          status: "submitted",
+          sentAt: { lt: new Date(Date.now() - SUBMITTED_POLL_WINDOW_MS) },
+        },
+        data: {
+          status: "expired",
+          errorMessage: "提交后 24 小时仍未确认打印，已停止查询",
+        },
+      });
       const submitted = await this.prisma.printJob.findMany({
         where: {
           status: "submitted",
           provider: { in: ["feie", "xpyun", "gprinter"] },
           providerJobId: { not: null },
         },
-        orderBy: { sentAt: "asc" },
+        orderBy: { updatedAt: "asc" },
         take: 50,
       });
       for (const job of submitted) {
-        await this.reconcile(job).catch(() => undefined);
+        const printed = await this.reconcile(job).catch(() => false);
+        if (printed) continue;
+        // Feie and Xpyun discard a job after the expiry we sent; Gprinter has no such field.
+        const lapsed =
+          job.provider !== "gprinter" &&
+          job.expiresAt &&
+          new Date(job.expiresAt).getTime() < Date.now() - 60_000;
+        // Touching updatedAt rotates checked jobs to the back of the queue,
+        // so a few unconfirmable jobs cannot starve newer ones.
+        await this.prisma.printJob.updateMany({
+          where: { id: job.id, status: "submitted" },
+          data: lapsed
+            ? { status: "expired", errorMessage: "超过出单有效期仍未打印，云打印已作废" }
+            : { updatedAt: new Date() },
+        });
       }
     });
   }
@@ -212,6 +329,11 @@ export class PrintService {
     dedupeKey: string;
     copyLabel?: string;
     content?: string;
+    orderId?: string;
+    bizType?: string;
+    bizId?: string;
+    expiresAt?: Date;
+    copies?: number;
   }) {
     const existing = await this.prisma.printJob.findUnique({
       where: { dedupeKey: input.dedupeKey },
@@ -222,10 +344,14 @@ export class PrintService {
     try {
       return await this.prisma.printJob.create({
         data: {
-          orderId: input.order?.id,
+          orderId: input.orderId ?? input.order?.id,
           printerId: input.printer.id,
           provider: this.providerOf(input.printer),
           event: input.event,
+          ...(input.bizType ? { bizType: input.bizType } : {}),
+          ...(input.bizId ? { bizId: input.bizId } : {}),
+          ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+          ...(input.copies && input.copies > 1 ? { copies: input.copies } : {}),
           dedupeKey: input.dedupeKey,
           content,
         },
@@ -243,6 +369,8 @@ export class PrintService {
     dedupeKey: string;
     copyLabel?: string;
     content?: string;
+    bizType?: string;
+    copies?: number;
   }) {
     const existing = await this.prisma.printJob.findUnique({
       where: { dedupeKey: input.dedupeKey },
@@ -256,6 +384,8 @@ export class PrintService {
         printerId: input.printer.id,
         provider: this.providerOf(input.printer),
         event: input.event,
+        ...(input.bizType ? { bizType: input.bizType } : {}),
+        ...(input.copies && input.copies > 1 ? { copies: input.copies } : {}),
         dedupeKey: input.dedupeKey,
         content,
       },
@@ -274,6 +404,11 @@ export class PrintService {
     ) {
       return this.fail(job, "打印机已停用或不是受支持的云打印设备");
     }
+    if (job.expiresAt && new Date(job.expiresAt).getTime() <= Date.now())
+      return this.prisma.printJob.update({
+        where: { id: job.id },
+        data: { status: "expired", errorMessage: "超过出单有效期仍未发出，已作废" },
+      });
     const provider = this.providerOf(printer);
     try {
       if (provider === "yly") return await this.submitYly(job, printer);
@@ -298,28 +433,24 @@ export class PrintService {
   }
 
   private async submitFeie(job: any, printer: any) {
-    const config = await this.feieCredentials(printer);
-    const stime = Math.floor(Date.now() / 1000);
-    const sig = createHash("sha1")
-      .update(`${config.user}${config.ukey}${stime}`)
-      .digest("hex");
-    const response = await axios.post(
-      FEIE_PRINT_URL,
-      new URLSearchParams({
-        user: config.user,
-        stime: String(stime),
-        sig,
-        apiname: "Open_printMsg",
-        sn: printer.sn,
-        content: job.content,
-        times: "1",
-      }),
-      {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        timeout: 10000,
-      },
-    );
-    const result = response.data || {};
+    const result = await this.feieRequest(printer, FEIE_PRINT_URL, "Open_printMsg", {
+      sn: printer.sn,
+      content: job.content,
+      times: String(job.copies || 1),
+      // Feie drops the job if the device only comes online after this; max 24h ahead.
+      ...(job.expiresAt
+        ? {
+            expired: String(
+              Math.floor(
+                Math.min(
+                  new Date(job.expiresAt).getTime(),
+                  Date.now() + SUBMITTED_POLL_WINDOW_MS - 60_000,
+                ) / 1000,
+              ),
+            ),
+          }
+        : {}),
+    });
     if (Number(result.ret) !== 0)
       return this.fail(job, String(result.msg || "飞鹅云拒绝打印任务"));
     const providerJobId = String(result.data || "").trim();
@@ -329,6 +460,34 @@ export class PrintService {
         "飞鹅云未返回打印订单号，请在设备端核对后再补打",
       );
     return this.submitted(job, providerJobId);
+  }
+
+  private async feieRequest(
+    printer: any,
+    url: string,
+    apiname: string,
+    params: Record<string, string>,
+  ) {
+    const config = await this.feieCredentials(printer);
+    const stime = Math.floor(Date.now() / 1000);
+    const sig = createHash("sha1")
+      .update(`${config.user}${config.ukey}${stime}`)
+      .digest("hex");
+    const response = await axios.post(
+      url,
+      new URLSearchParams({
+        user: config.user,
+        stime: String(stime),
+        sig,
+        apiname,
+        ...params,
+      }),
+      {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        timeout: 10000,
+      },
+    );
+    return response.data || {};
   }
 
   private async submitYly(job: any, printer: any) {
@@ -348,7 +507,7 @@ export class PrintService {
         id: randomUUID(),
         access_token: accessToken,
         machine_code: printer.sn,
-        content: job.content,
+        content: this.withoutFeieVoice(job.content),
         origin_id: String(job.id)
           .replace(/[^a-zA-Z0-9]/g, "")
           .slice(0, 32),
@@ -382,10 +541,18 @@ export class PrintService {
           timestamp,
         ),
         sn: printer.sn,
-        content: job.content,
-        copies: 1,
+        content: this.withoutFeieVoice(job.content),
+        copies: job.copies || 1,
         mode: 1,
-        expiresIn: 3600,
+        expiresIn: job.expiresAt
+          ? Math.max(
+              1,
+              Math.min(
+                86400,
+                Math.floor((new Date(job.expiresAt).getTime() - Date.now()) / 1000),
+              ),
+            )
+          : 3600,
         idempotent: String(job.id).slice(0, 50),
       },
       {
@@ -433,42 +600,33 @@ export class PrintService {
     return this.submitted(job, msgNo);
   }
 
-  private async reconcile(job: any) {
+  /** Resolves true once the vendor confirms the job was printed. */
+  private async reconcile(job: any): Promise<boolean> {
     const printer = await this.prisma.printerConfig.findUnique({
       where: { id: job.printerId },
     });
-    if (!printer || !job.providerJobId) return;
+    if (!printer || !job.providerJobId) return false;
     if (this.providerOf(printer) === "xpyun")
       return this.reconcileXpyun(job, printer);
     if (this.providerOf(printer) === "gprinter")
       return this.reconcileGprinter(job, printer);
-    if (this.providerOf(printer) !== "feie") return;
-    const config = await this.feieCredentials(printer).catch(() => null);
-    if (!config) return;
-    const stime = Math.floor(Date.now() / 1000);
-    const sig = createHash("sha1")
-      .update(`${config.user}${config.ukey}${stime}`)
-      .digest("hex");
-    const response = await axios.post(
+    if (this.providerOf(printer) !== "feie") return false;
+    const result = await this.feieRequest(
+      printer,
       FEIE_QUERY_URL,
-      new URLSearchParams({
-        user: config.user,
-        stime: String(stime),
-        sig,
-        apiname: "Open_queryOrderState",
-        orderid: job.providerJobId,
-      }),
-      {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        timeout: 10000,
-      },
+      "Open_queryOrderState",
+      { orderid: job.providerJobId },
     );
-    if (Number(response.data?.ret) === 0 && response.data?.data === true) {
-      await this.prisma.printJob.update({
-        where: { id: job.id },
-        data: { status: "printed", printedAt: new Date(), errorMessage: null },
-      });
-    }
+    if (Number(result.ret) !== 0 || result.data !== true) return false;
+    await this.markPrinted(job);
+    return true;
+  }
+
+  private markPrinted(job: any) {
+    return this.prisma.printJob.update({
+      where: { id: job.id },
+      data: { status: "printed", printedAt: new Date(), errorMessage: null },
+    });
   }
 
   private async reconcileXpyun(job: any, printer: any) {
@@ -491,12 +649,10 @@ export class PrintService {
         timeout: 10000,
       },
     );
-    if (Number(response.data?.code) === 0 && response.data?.data === true) {
-      await this.prisma.printJob.update({
-        where: { id: job.id },
-        data: { status: "printed", printedAt: new Date(), errorMessage: null },
-      });
-    }
+    if (Number(response.data?.code) !== 0 || response.data?.data !== true)
+      return false;
+    await this.markPrinted(job);
+    return true;
   }
 
   private async reconcileGprinter(job: any, printer: any) {
@@ -516,13 +672,12 @@ export class PrintService {
       timeout: 10000,
     });
     if (Number(response.data?.code) === 1) {
-      await this.prisma.printJob.update({
-        where: { id: job.id },
-        data: { status: "printed", printedAt: new Date(), errorMessage: null },
-      });
+      await this.markPrinted(job);
+      return true;
     }
     if (Number(response.data?.code) === 2)
       await this.fail(job, String(response.data?.msg || "佳博云打印失败"));
+    return false;
   }
 
   private async feieConfig(): Promise<FeieConfig> {
@@ -546,12 +701,17 @@ export class PrintService {
         throw new BadRequestException("只有飞鹅云支持平台托管设备");
       return { connectionMode, credentialCiphertext: null };
     }
-    const credentials = this.cleanCredentials(brand, dto);
-    if (!Object.values(credentials).some(Boolean)) {
-      if (current?.credentialCiphertext && current.brand === brand)
-        return { connectionMode };
+    const typed = this.cleanCredentials(brand, dto);
+    const keepSaved = Boolean(current?.credentialCiphertext && current.brand === brand);
+    if (!Object.values(typed).some(Boolean)) {
+      if (keepSaved) return { connectionMode };
       throw new BadRequestException("请填写商家自己的云打印开发者凭证");
     }
+    // Secret fields left blank on edit keep their saved values.
+    const credentials: PrinterCredentials = {
+      ...(keepSaved ? this.savedCredentials(current.credentialCiphertext) : {}),
+      ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value)),
+    };
     this.assertCredentials(brand, credentials);
     return {
       connectionMode,
@@ -779,6 +939,14 @@ export class PrintService {
     return `v1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${encrypted.toString("base64")}`;
   }
 
+  private savedCredentials(ciphertext: string): PrinterCredentials {
+    try {
+      return this.decryptCredentials(ciphertext);
+    } catch {
+      return {};
+    }
+  }
+
   private decryptCredentials(ciphertext?: string | null): PrinterCredentials {
     if (!ciphertext) throw new BadRequestException("商家云打印凭证未配置");
     const [version, iv, tag, encrypted] = ciphertext.split(":");
@@ -918,6 +1086,9 @@ export class PrintService {
   private money(value: any) {
     return Number(value || 0).toFixed(2);
   }
+  private withoutFeieVoice(content: string) {
+    return content.replace(/<AUDIO-[A-Z]+>/g, "");
+  }
   private gprinterContent(content: string) {
     return content.replace(/<BR>/gi, "\n").replace(/<[^>]+>/g, "");
   }
@@ -945,15 +1116,16 @@ export class PrintService {
   private limit(content: string) {
     if (Buffer.byteLength(content, "utf8") <= FEIE_MAX_CONTENT_BYTES)
       return content;
+    const suffix = "<BR>内容过长已截断";
+    const budget = FEIE_MAX_CONTENT_BYTES - Buffer.byteLength(suffix, "utf8");
     let output = "";
+    let bytes = 0;
     for (const char of content) {
-      if (
-        Buffer.byteLength(`${output}${char}`, "utf8") >
-        FEIE_MAX_CONTENT_BYTES - 12
-      )
-        break;
+      const size = Buffer.byteLength(char, "utf8");
+      if (bytes + size > budget) break;
       output += char;
+      bytes += size;
     }
-    return `${output}<BR>内容过长已截断`;
+    return `${output}${suffix}`;
   }
 }

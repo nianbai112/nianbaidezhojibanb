@@ -2353,6 +2353,7 @@ describe("CampusMapCollectionService", () => {
       name: "一期道路采集",
       instructions: "沿道路中心线行走",
       status: "ready",
+      allowedClients: ["miniapp"],
     });
     expect(result.task).not.toHaveProperty("createdBy");
     expect(result.task).not.toHaveProperty("assignments");

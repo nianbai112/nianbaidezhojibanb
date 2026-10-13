@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 const money = (value: unknown) => {
   const number = Number(value || 0);
   return Number.isFinite(number) ? Math.round(Math.max(0, number) * 100) / 100 : 0;
@@ -5,9 +7,13 @@ const money = (value: unknown) => {
 
 export function errandPlatformFee(order: any, config: any): number {
   if (!config?.enabled) return 0;
-  const paid = money(order.payAmount);
   const gross = money(money(order.price) + money(order.tip));
-  return Math.min(paid, gross, money(paid * Number(config.rate || 0) + Number(config.fixedFee || 0)));
+  // Coupons are funded by the issuer. They never change the commission base,
+  // including a fully subsidized order whose customer payment is zero.
+  // Decimal rounding keeps half-cent fees deterministic (1.45 × 10% = 0.15).
+  const fee = new Prisma.Decimal(gross).mul(Number(config.rate || 0))
+    .plus(Number(config.fixedFee || 0)).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
+  return Math.min(gross, money(fee));
 }
 
 export function errandRiderIncome(order: any): number {

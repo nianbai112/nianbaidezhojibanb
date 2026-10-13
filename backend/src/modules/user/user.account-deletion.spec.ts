@@ -8,20 +8,21 @@ describe('account deletion audit', () => {
   let revoke: jest.Mock;
   beforeEach(() => {
     tx = {
-      user: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ id: 'u1', status: 'ACTIVE', deletedAt: null, authVersion: 3 }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      wallet: { findUnique: jest.fn().mockResolvedValue({ balance: 0, freeze: 0 }) },
+      contact: {deleteMany:jest.fn().mockResolvedValue({count:1})},
+      userPushDevice: {deleteMany:jest.fn().mockResolvedValue({count:1})},
       userProfile: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue({ id: 'u1', status: 'ACTIVE', deletedAt: null }) },
-      wallet: { findUnique: jest.fn().mockResolvedValue({ balance: 0 }) },
       $transaction: jest.fn((task) => task(tx)),
     };
     for (const name of ['order', 'mallOrder', 'errandOrder', 'secondHandOrder', 'withdraw']) {
-      prisma[name] = { findFirst: jest.fn().mockResolvedValue(null) };
+      tx[name] = { findFirst: jest.fn().mockResolvedValue(null) };
     }
-    revoke = jest.fn();
-    service = Object.assign(Object.create(UserService.prototype), { prisma, userSessionRevocation: { revoke } });
+    revoke = jest.fn().mockResolvedValue(undefined);
+    service = Object.assign(Object.create(UserService.prototype), { prisma, userSessionRevocation: { revoke }, appleLifecycle: { queueAccountDeletion: jest.fn().mockResolvedValue({ status: 'not_required' }) } });
   });
 
   it('saves the actor, trusted request metadata and deletion time in the same transaction', async () => {
@@ -36,7 +37,9 @@ describe('account deletion audit', () => {
     expect(tx.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'u1', status: 'ACTIVE', deletedAt: null },
     }));
-    expect(revoke).toHaveBeenCalledWith('u1');
+    expect(tx.contact.deleteMany).toHaveBeenCalledWith({where:{userId:'u1'}});
+    expect(tx.userPushDevice.deleteMany).toHaveBeenCalledWith({where:{userId:'u1'}});
+    expect(revoke).toHaveBeenCalledWith('u1', { versionAlreadyRevoked: true, invalidBeforeVersion: 4 });
   });
 
   it('propagates an audit failure to roll back the transaction, without reporting success', async () => {
@@ -53,10 +56,11 @@ describe('account deletion audit', () => {
   });
 
   it('keeps existing wallet blockers and rejects already deleted accounts', async () => {
-    prisma.wallet.findUnique.mockResolvedValue({ balance: 10 });
+    tx.wallet.findUnique.mockResolvedValue({ balance: 10 });
     await expect(service.cancelAccount('u1')).rejects.toThrow('存在未完成的业务');
-    prisma.user.findUnique.mockResolvedValue({ id: 'u1', status: 'DELETED' });
+    tx.user.findUnique.mockResolvedValue({ id: 'u1', status: 'DELETED' });
     await expect(service.cancelAccount('u1')).rejects.toThrow('账号已注销');
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
   });
 });

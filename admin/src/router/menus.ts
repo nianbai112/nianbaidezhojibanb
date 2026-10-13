@@ -39,6 +39,7 @@ export const menuGroups = [
       { path: '/membership/overview', title: '会员运营', icon: 'Crown' },
       { path: '/user/loyalty', title: '成长中心', icon: 'Trophy' },
       { path: '/user/guidance', title: '用户引导', icon: 'Guide' },
+      { path: '/academic/schedule', title: '课表管理', icon: 'Calendar' },
       { path: '/user/schools', title: '学校库管理', icon: 'School' },
       { path: '/user/private-messages', title: '私信审核', icon: 'ChatDotRound' },
       { path: '/user/blacklist', title: '黑名单处罚', icon: 'Lock' },
@@ -55,6 +56,9 @@ export const menuGroups = [
       { path: '/content/paid-pinning', title: '付费置顶', icon: 'Top' },
       { path: '/content/assets', title: '内容素材', icon: 'Picture', section: '素材与配置' },
       { path: '/content/settings', title: '内容配置', icon: 'Setting' },
+      { path: '/content/wechat-chat', title: '微信 AI 聊天', icon: 'ChatDotRound' },
+      { path: '/content/wechat-moments', title: '朋友圈同步', icon: 'Share' },
+      { path: '/content/wechat-broadcast', title: '订单群播报', icon: 'Position' },
     ]
   },
   {
@@ -80,6 +84,7 @@ export const menuGroups = [
       { path: '/mall/promo', title: '促销分销', icon: 'Flag' },
       { path: '/mall/settings', title: '商城设置', icon: 'Setting' },
       { path: '/errand/orders', title: '跑腿订单', icon: 'List', section: '跑腿' },
+      { path: '/errand/purchase', title: '代买服务', icon: 'ShoppingCart' },
       { path: '/errand/dispatch', title: '调度中心', icon: 'Position' },
       { path: '/errand/riders', title: '骑手管理', icon: 'User' },
       { path: '/errand/pickup-points', title: '取件点管理', icon: 'Location' },

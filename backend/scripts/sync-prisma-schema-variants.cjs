@@ -19,6 +19,10 @@ function variant(provider) {
   let content = source.replace(/provider\s*=\s*"(?:mysql|postgresql)"/, `provider = "${provider}"`)
   if (provider === 'mysql') {
     content = content.replace(/^\s*previewFeatures\s*=\s*\[[^\]]*"fullTextSearch"[^\]]*\]\s*\r?\n?/m, '')
+    // PostgreSQL text is unbounded; MySQL TEXT stops at 64 KiB. Uncapped AI
+    // replies need the wider MySQL type without changing the shared String API.
+    content = content.replace(/(model WechatChatReply \{[\s\S]*?\n\})/, (model) =>
+      model.replace(/(\n\s+text\s+String\?\s+)@db\.Text\b/, '$1@db.LongText'))
   }
   return content
 }

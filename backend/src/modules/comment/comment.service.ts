@@ -5,6 +5,7 @@ import { NotifyService } from '../notify/notify.service';
 import { AiRuntimeService, type AiModerationResult } from '../ai-runtime/ai-runtime.service';
 import { QrcodeModerationService } from '../ai-runtime/qrcode-moderation.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
+import { assertCommunityPostAccessible } from '../post/post.service';
 import { InteractionPermissionService } from '../../common/services/interaction-permission.service';
 
 @Injectable()
@@ -485,16 +486,12 @@ export class CommentService {
     const sonPage = Math.min(50, Math.max(0, Number(query.sonPage) || 10));
     const visibleWhere = this.visibleCommentWhere({ postId });
     const targetCommentId = String(query.targetCommentId || query.target_comment_id || query.commentId || query.comment_id || '').trim();
-    const [post, list, total, visibleTotal] = await Promise.all([
-      this.prisma.post.findUnique({
-        where: { id: postId },
-        select: {
-          userId: true,
-          regionId: true,
-          commentCount: true,
-          region: { select: { managerUserId: true } },
-        },
-      }),
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true, userId: true, isAnonymous: true, status: true, deletedAt: true, regionId: true, commentCount: true, region: { select: { managerUserId: true } } },
+    });
+    await assertCommunityPostAccessible(this.prisma, post, currentUserId);
+    const [list, total, visibleTotal] = await Promise.all([
       this.prisma.comment.findMany({
         where: { ...visibleWhere, parentId: null },
         include: {
@@ -574,19 +571,26 @@ export class CommentService {
         select: { targetId: true },
       })).map((item) => item.targetId))
       : new Set<string>();
+    const replyTotals = finalList.length ? await this.prisma.comment.groupBy({ by: ['parentId'], where: this.visibleCommentWhere({ postId, parentId: { in: finalList.map((comment: any) => comment.id) } }), _count: { _all: true } }) : [];
+    const replyTotalMap = new Map(replyTotals.map((entry) => [entry.parentId, entry._count._all]));
     const commentList = finalList.map((comment: any) => {
       const replies = (comment.replies || []).map((reply: any) => ({
         ...this.formatCommentForMini(reply, comment, memberIds),
+        canDelete: !!currentUserId && (reply.userId === currentUserId || post!.userId === currentUserId),
+        canPin: !!currentUserId && post!.userId === currentUserId,
         is_liked: likedCommentIds.has(reply.id),
         isLiked: likedCommentIds.has(reply.id),
       }));
       return {
         ...this.formatCommentForMini(comment, null, memberIds),
+        canDelete: !!currentUserId && (comment.userId === currentUserId || post!.userId === currentUserId),
+        canPin: !!currentUserId && post!.userId === currentUserId,
         is_liked: likedCommentIds.has(comment.id),
         isLiked: likedCommentIds.has(comment.id),
         list: replies,
         replies,
         list_count: replies.length,
+        reply_count: replyTotalMap.get(comment.id) || replies.length,
       };
     });
     return {
@@ -599,7 +603,8 @@ export class CommentService {
       pageSize,
       comment_count: commentCount,
       visible_comment_count: visibleTotal,
-      AuthorId: post?.userId || '',
+      AuthorId: post?.isAnonymous ? '' : (post?.userId || ''),
+      canManageComments: !!currentUserId && post!.userId === currentUserId,
       RegionalAdministratorId: post?.region?.managerUserId || '',
       region_manager_id: post?.region?.managerUserId || '',
       noteSettings: settings,
@@ -607,14 +612,30 @@ export class CommentService {
     };
   }
 
+  async getReplies(commentId: string, query: any, currentUserId?: string) {
+    const parent = await this.prisma.comment.findUnique({ where: { id: commentId }, include: { post: true, user: this.miniCommentAuthorSelect(), anonymousIdentity: true } });
+    if (!parent || !this.isCountedComment(parent)) throw new NotFoundException('评论不存在');
+    await assertCommunityPostAccessible(this.prisma, parent.post, currentUserId);
+    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const pageSize = Math.min(50, Math.max(1, Math.floor(Number(query.pageSize) || 20)));
+    const where = this.visibleCommentWhere({ postId: parent.postId, parentId: commentId });
+    const [list, total] = await Promise.all([
+      this.prisma.comment.findMany({ where, include: { user: this.miniCommentAuthorSelect(), anonymousIdentity: true, mentions: { include: { user: this.miniCommentAuthorSelect() } } }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { createdAt: 'asc' } }),
+      this.prisma.comment.count({ where }),
+    ]);
+    const liked = currentUserId && list.length ? new Set((await this.prisma.like.findMany({ where: { userId: currentUserId, targetType: 'comment', targetId: { in: list.map((row) => row.id) } }, select: { targetId: true } })).map((row) => row.targetId)) : new Set<string>();
+    return { list: list.map((row) => ({ ...this.formatCommentForMini({ ...row, regionId: parent.post.regionId }, parent), is_liked: liked.has(row.id), canDelete: !!currentUserId && (row.userId === currentUserId || parent.post.userId === currentUserId), canPin: !!currentUserId && parent.post.userId === currentUserId })), total, page, pageSize };
+  }
+
   async likeComment(commentId: string, userId: string) {
     await this.userAccess.assertCanInteract(userId, 'like', '点赞评论');
     const comment = await this.prisma.comment.findUnique({
       where: { id: commentId },
-      include: { post: { select: { id: true, regionId: true, status: true, deletedAt: true } } },
+      include: { post: { select: { id: true, userId: true, regionId: true, status: true, deletedAt: true } } },
     });
     if (!comment || comment.deletedAt || comment.status === 'deleted') throw new NotFoundException('评论不存在');
-    if (!comment.post || comment.post.deletedAt || comment.post.status === 'DELETED') throw new NotFoundException('帖子不存在');
+    await assertCommunityPostAccessible(this.prisma, comment.post, userId);
+    if (comment.status !== 'active' || comment.auditStatus !== 'approved') throw new NotFoundException('评论不存在');
     await this.userAccess.assertStudentProtectedAction(userId, comment.post.regionId, '点赞评论');
     const created = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.like.findUnique({
@@ -903,7 +924,8 @@ export class CommentService {
       include: { post: { select: { id: true, userId: true, status: true, deletedAt: true } } },
     });
     if (!comment || comment.deletedAt || comment.status === 'deleted') throw new NotFoundException('评论不存在');
-    if (!comment.post || comment.post.deletedAt || comment.post.status === 'DELETED') throw new NotFoundException('帖子不存在');
+    await assertCommunityPostAccessible(this.prisma, comment.post, userId);
+    if (comment.status !== 'active' || comment.auditStatus !== 'approved') throw new NotFoundException('评论不存在');
     await this.userAccess.assertNoBlockBetween(userId, comment.userId, '举报评论');
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     // AUD-P1-018: targetId 应为评论 ID（commentId）而非帖子 ID，使评论管理可按评论聚合举报

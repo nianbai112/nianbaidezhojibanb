@@ -402,7 +402,7 @@
               <template #default="{ row }">
                 <div class="post-title">{{ row.title || row.content || '-' }}</div>
                 <div class="post-images" v-if="row.images?.length">
-                  <el-image v-for="(img, index) in row.images.slice(0, 3)" :key="index" :src="img" fit="cover" :preview-src-list="row.images" />
+                  <el-image preview-teleported v-for="(img, index) in row.images.slice(0, 3)" :key="index" :src="img" fit="cover" :preview-src-list="row.images" :initial-index="index" />
                 </div>
               </template>
             </el-table-column>

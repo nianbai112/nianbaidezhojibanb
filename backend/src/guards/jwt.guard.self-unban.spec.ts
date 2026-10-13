@@ -10,7 +10,7 @@ const contextFor = (method: string, path: string) => {
 
 describe('JwtGuard self-unban access', () => {
   it('allows a banned user to create the dedicated self-unban payment request', async () => {
-    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) };
+    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1', token_use: 'access', sv: 0 }) };
     const prisma = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'user-1', status: 'BANNED' }) } };
     const guard = new JwtGuard(jwt as any, { get: jest.fn().mockReturnValue('secret') } as any, prisma as any);
     const { context } = contextFor('POST', '/auth/user/pay-unban');
@@ -19,7 +19,7 @@ describe('JwtGuard self-unban access', () => {
   });
 
   it('does not exempt similarly named write routes', async () => {
-    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) };
+    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1', token_use: 'access', sv: 0 }) };
     const prisma = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'user-1', status: 'BANNED' }) } };
     const guard = new JwtGuard(jwt as any, { get: jest.fn().mockReturnValue('secret') } as any, prisma as any);
     const { context } = contextFor('POST', '/auth/user/pay-unban-extra');
@@ -28,7 +28,7 @@ describe('JwtGuard self-unban access', () => {
   });
 
   it('allows the dedicated route under the global api prefix', async () => {
-    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1' }) };
+    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-1', token_use: 'access', sv: 0 }) };
     const prisma = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'user-1', status: 'BANNED' }) } };
     const guard = new JwtGuard(jwt as any, { get: jest.fn().mockReturnValue('secret') } as any, prisma as any);
     const { context } = contextFor('POST', '/api/auth/user/pay-unban');

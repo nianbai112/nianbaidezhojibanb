@@ -380,8 +380,9 @@ export class SystemAdminService {
 
   private withMiniappSupplementalPages(list: any[]) {
     const supplemental = [
-      { title: '福利抽奖', fullPath: 'pagesA/welfare/index', group: '营销活动', kind: '常用入口' },
-      { title: '我的抽奖', fullPath: 'pagesA/welfare/mine', group: '营销活动', kind: '常用入口' },
+      { title: '我的课表', fullPath: 'pagesAcademic/timetable/index', group: '校园服务', kind: '常用入口' },
+      { title: '福利抽奖', fullPath: 'pagesWelfare/index', group: '营销活动', kind: '常用入口' },
+      { title: '我的抽奖', fullPath: 'pagesWelfare/mine', group: '营销活动', kind: '常用入口' },
       { title: '活动中心', fullPath: 'pagesA/selection/list/list', group: '营销活动', kind: '常用入口', query: 'tabIndex=0' },
       { title: '活动详情', fullPath: 'pagesA/selection/activity/activity', group: '营销活动', kind: '常用入口', query: 'id=' },
       { title: '分享有礼', fullPath: 'pagesA/news/SharingCourtesy/SharingCourtesy', group: '营销活动', kind: '常用入口' },
@@ -761,6 +762,7 @@ export class SystemAdminService {
   }
 
   async saveConfigGroup(group: string, configs: Record<string, any>) {
+    if (group.trim().toLowerCase() === 'welfare_wecom' || Object.keys(configs).some(key => key.trim().toLowerCase() === 'welfare_wecom')) throw new BadRequestException('企业微信请通过福利抽奖的接入配置修改');
     for (const [key, rawValue] of Object.entries(configs)) {
       const value = this.omitBackendManagedConfigFields(group, key, rawValue);
       // Merge secrets for sensitive fields
@@ -796,6 +798,30 @@ export class SystemAdminService {
       return value;
     }
     const safeValue = { ...value };
+    if (safeValue.riderAutoPayoutEnabled === true) {
+      if (String(safeValue.riderTransferSceneId || '1005') !== '1005') {
+        throw new BadRequestException('跑腿自动到账仅支持已获批的佣金报酬场景 1005');
+      }
+      const limits = [
+        ['riderTransferMaxAmount', 200, 1999.99],
+        ['riderTransferDailyUserAmount', 2000, 1000000],
+        ['riderTransferDailyAmount', 50000, 1000000],
+      ];
+      for (const [key, fallback, max] of limits) {
+        const amount = Number(safeValue[String(key)] ?? fallback);
+        if (!Number.isFinite(amount) || amount < 0.1 || amount > Number(max) ||
+          Math.abs(amount * 100 - Math.round(amount * 100)) > 0.000001) {
+          throw new BadRequestException('自动转账额度必须至少为 0.10 元且不超过上限，最多两位小数');
+        }
+      }
+      let callback: URL;
+      try { callback = new URL(String(safeValue.riderAuthorizationNotifyUrl || '')); }
+      catch { throw new BadRequestException('请填写微信收款授权回调地址'); }
+      if (callback.protocol !== 'https:' || callback.search || callback.hash || callback.username || callback.password ||
+        !callback.pathname.endsWith('/wxpay/rider-authorization-notify')) {
+        throw new BadRequestException('请填写正确的 HTTPS 收款授权回调地址');
+      }
+    }
     delete safeValue.platformPublicKeyId;
     delete safeValue.platformPublicKey;
     delete safeValue.platformCert;

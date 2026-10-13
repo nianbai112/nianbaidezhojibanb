@@ -28,7 +28,9 @@ describe('post vote routes behind the mini-program API proxy', () => {
     expect(res.body).toEqual(stats);
     const meta = await request(app.getHttpServer()).get(`${prefix}/meta`).query({ post_id: 'p1' }).expect(200);
     expect(meta.body).toEqual({ user_votes: [] });
-    expect(service.getVoteStats).toHaveBeenLastCalledWith('p1');
+    expect(service.getVoteStats).toHaveBeenLastCalledWith('p1', undefined);
+    await request(app.getHttpServer()).get(`${prefix}/stats`).query({ post_id: 'p1' }).set('Authorization','Bearer session').expect(200);
+    expect(service.getVoteStats).toHaveBeenLastCalledWith('p1', 'u1');
     await request(app.getHttpServer()).get(`${prefix}/meta`).query({ post_id: 'p1' }).set('Authorization','Bearer session').expect(200);
     expect(service.getVoteMeta).toHaveBeenLastCalledWith('p1','u1');
   });

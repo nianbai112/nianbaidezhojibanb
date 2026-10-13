@@ -1,3 +1,5 @@
+import { StudentIdentityService } from '../student-identity/student-identity.service';
+import { StudentIdentityQuery } from '../student-identity/student-identity.dto';
 import {
   Controller,
   Get,
@@ -30,6 +32,7 @@ export class NewUiCompatController {
     private readonly adminService: AdminService,
     private readonly financeAdminService: FinanceAdminService,
     private readonly prisma: PrismaService,
+    private readonly studentIdentity: StudentIdentityService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -243,43 +246,9 @@ export class NewUiCompatController {
   @RequirePermission("user:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "学生认证列表（新后台兼容）" })
-  async userVerification(@Query() query: any) {
-    const { page = 1, pageSize = 20, status, keyword } = query;
-    const where: any = {};
-    if (status) where.status = status.toUpperCase();
-    if (keyword) {
-      where.OR = [
-        { realName: { contains: keyword } },
-        { schoolName: { contains: keyword } },
-      ];
-    }
-    const [list, total] = await Promise.all([
-      this.prisma.studentVerify.findMany({
-        where,
-        skip: (+page - 1) * +pageSize,
-        take: +pageSize,
-        orderBy: { createdAt: "desc" },
-        include: { user: { select: { id: true, nickname: true, avatar: true } } },
-      }),
-      this.prisma.studentVerify.count({ where }),
-    ]);
-    return {
-      list: list.map((v) => ({
-        id: v.id,
-        userId: v.userId,
-        userNickname: v.user?.nickname,
-        userAvatar: v.user?.avatar,
-        realName: v.realName,
-        studentId: v.studentId,
-        schoolName: v.schoolName,
-        cardImage: v.cardImage,
-        status: v.status?.toLowerCase(),
-        createdAt: v.createdAt,
-      })),
-      total,
-      page: +page,
-      pageSize: +pageSize,
-    };
+  async userVerification(@Query() query: StudentIdentityQuery, @CurrentUser('sub') operatorId: string) {
+    const result = await this.studentIdentity.applications(query, operatorId);
+    return { ...result, list: result.list.map((row) => ({ ...row, realName: row.name, studentId: row.student_id, schoolName: row.university, cardImage: row.photo_url, status: row.verification_status })) };
   }
 
   @Get("user/address")

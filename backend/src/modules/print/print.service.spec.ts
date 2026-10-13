@@ -261,4 +261,251 @@ describe("PrintService", () => {
       );
     },
   );
+
+  describe("代买出单所需的通用能力", () => {
+    const KEY = "a-test-only-print-credential-key-that-is-long-enough";
+    const ownFeie = (service: PrintService, extra: any = {}) => ({
+      id: "printer-shop",
+      sn: "916500001",
+      name: "奶茶店出单机",
+      brand: "feie",
+      status: "active",
+      ...service.prepareConnection("feie", {
+        user: "shop-user",
+        ukey: "shop-ukey",
+        deviceKey: "abcd1234",
+        ...extra,
+      }),
+    });
+
+    it("queues ready-made content with its business key and expiry", async () => {
+      const { prisma, service } = createService();
+      const expiresAt = new Date(Date.now() + 60_000);
+      await service.enqueue({
+        printer: { id: "printer-shop", brand: "feie" },
+        event: "purchase",
+        dedupeKey: "purchase:stop-1:new",
+        content: "x".repeat(6000),
+        orderId: "order-1",
+        bizType: "purchase_stop",
+        bizId: "stop-1",
+        expiresAt,
+      });
+      const data = prisma.printJob.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        orderId: "order-1",
+        bizType: "purchase_stop",
+        bizId: "stop-1",
+        expiresAt,
+        event: "purchase",
+      });
+      expect(Buffer.byteLength(data.content, "utf8")).toBeLessThanOrEqual(5000);
+    });
+
+    it("drops a job past its expiry without calling the vendor", async () => {
+      const { prisma, service } = createService();
+      prisma.printJob.findMany.mockResolvedValueOnce([
+        {
+          id: "job-old",
+          printerId: "printer-1",
+          provider: "feie",
+          status: "queued",
+          attempts: 0,
+          content: "receipt",
+          expiresAt: new Date(Date.now() - 1000),
+        },
+      ]);
+      await service.reconcileJobs();
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(prisma.printJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "job-old" },
+          data: expect.objectContaining({ status: "expired" }),
+        }),
+      );
+    });
+
+    it("sends Feie the expiry so an offline printer does not print the ticket later", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { ret: 0, data: "916500001_20261006_1" },
+      });
+      const expiresAt = new Date(Date.now() + 30 * 60_000);
+      prisma.printJob.findMany.mockResolvedValueOnce([
+        {
+          id: "job-1",
+          printerId: "printer-shop",
+          provider: "feie",
+          status: "queued",
+          attempts: 0,
+          content: "ticket<AUDIO-COMMON>",
+          expiresAt,
+        },
+      ]);
+      await service.reconcileJobs();
+      const [url, body] = (axios.post as jest.Mock).mock.calls[0];
+      expect(url).toBe("https://api.feieyun.cn/Api/Open/printMsg");
+      expect(body.get("user")).toBe("shop-user");
+      expect(body.get("expired")).toBe(
+        String(Math.floor(expiresAt.getTime() / 1000)),
+      );
+      expect(body.get("content")).toContain("<AUDIO-COMMON>");
+    });
+
+    it("strips Feie voice tags before sending to another brand", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue({
+        id: "printer-xpy",
+        sn: "XPY-1",
+        brand: "xpyun",
+        status: "active",
+        ...service.prepareConnection("xpyun", { xpyUser: "u", xpyUserKey: "k" }),
+      });
+      (axios.post as jest.Mock).mockResolvedValue({ data: { code: 0, data: "x-1" } });
+      prisma.printJob.findMany.mockResolvedValueOnce([
+        {
+          id: "job-x",
+          printerId: "printer-xpy",
+          provider: "xpyun",
+          status: "queued",
+          attempts: 0,
+          content: "ticket<BR><AUDIO-CANCEL>",
+          expiresAt: new Date(Date.now() + 600_000),
+        },
+      ]);
+      await service.reconcileJobs();
+      const body = (axios.post as jest.Mock).mock.calls[0][1];
+      expect(body.content).toBe("ticket<BR>");
+      expect(body.expiresIn).toBeGreaterThan(590);
+      expect(body.expiresIn).toBeLessThanOrEqual(600);
+    });
+
+    it("stops polling stale jobs and rotates unconfirmed ones so newer jobs are still checked", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      prisma.printJob.findMany.mockResolvedValueOnce([
+        { id: "waiting", printerId: "printer-shop", provider: "feie", providerJobId: "a", status: "submitted" },
+        {
+          id: "lapsed",
+          printerId: "printer-shop",
+          provider: "feie",
+          providerJobId: "b",
+          status: "submitted",
+          expiresAt: new Date(Date.now() - 5 * 60_000),
+        },
+        { id: "done", printerId: "printer-shop", provider: "feie", providerJobId: "c", status: "submitted" },
+      ]);
+      (axios.post as jest.Mock)
+        .mockResolvedValueOnce({ data: { ret: 0, data: false } })
+        .mockResolvedValueOnce({ data: { ret: 0, data: false } })
+        .mockResolvedValueOnce({ data: { ret: 0, data: true } });
+
+      await service.reconcileSubmittedJobs();
+
+      expect(prisma.printJob.updateMany.mock.calls[0][0]).toMatchObject({
+        where: { status: "submitted", sentAt: { lt: expect.any(Date) } },
+        data: { status: "expired" },
+      });
+      expect(prisma.printJob.findMany.mock.calls[0][0].orderBy).toEqual({
+        updatedAt: "asc",
+      });
+      expect(prisma.printJob.updateMany).toHaveBeenCalledWith({
+        where: { id: "waiting", status: "submitted" },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(prisma.printJob.updateMany).toHaveBeenCalledWith({
+        where: { id: "lapsed", status: "submitted" },
+        data: expect.objectContaining({ status: "expired" }),
+      });
+      expect(prisma.printJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "done" },
+          data: expect.objectContaining({ status: "printed" }),
+        }),
+      );
+      expect(prisma.printJob.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "done", status: "submitted" } }),
+      );
+    });
+
+    it("binds the device to the shop's own Feie account and accepts an already-bound device", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      (axios.post as jest.Mock).mockResolvedValueOnce({
+        data: { ret: 0, data: { ok: [], no: ["916500001#abcd1234#奶茶店出单机 （错误：已被添加过）"] } },
+      });
+      await expect(service.bindFeieDevice("printer-shop")).resolves.toEqual({
+        bound: true,
+        message: "",
+      });
+      const [url, body] = (axios.post as jest.Mock).mock.calls[0];
+      expect(url).toBe("https://api.feieyun.cn/Api/Open/printerAddlist");
+      expect(body.get("apiname")).toBe("Open_printerAddlist");
+      expect(body.get("printerContent")).toBe("916500001#abcd1234#奶茶店出单机");
+    });
+
+    it("reports a binding failure without echoing the device KEY", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      (axios.post as jest.Mock).mockResolvedValueOnce({
+        data: { ret: 0, data: { ok: [], no: ["916500001#abcd1234 （错误：打印机编号和KEY不正确）"] } },
+      });
+      const result = await service.bindFeieDevice("printer-shop");
+      expect(result).toEqual({ bound: false, message: "打印机编号和KEY不正确" });
+      expect(JSON.stringify(result)).not.toContain("abcd1234");
+    });
+
+    it("reads Feie online status", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      (axios.post as jest.Mock).mockResolvedValueOnce({
+        data: { ret: 0, data: "在线，工作状态不正常。" },
+      });
+      await expect(service.printerStatus("printer-shop")).resolves.toEqual({
+        supported: true,
+        online: true,
+        normal: false,
+        text: "在线，工作状态不正常。",
+      });
+    });
+
+    it("prints a template sample as-is, with the template's copies", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      prisma.printerConfig.findUnique.mockResolvedValue(ownFeie(service));
+      (axios.post as jest.Mock).mockResolvedValue({ data: { ret: 0, data: "id-1" } });
+      await service.printSample("printer-shop", "<CB>测试小票</CB><BR>", 2);
+      expect(prisma.printJob.create.mock.calls[0][0].data).toMatchObject({
+        event: "test",
+        bizType: "test",
+        copies: 2,
+        content: "<CB>测试小票</CB><BR>",
+      });
+      const body = (axios.post as jest.Mock).mock.calls[0][1];
+      expect(body.get("content")).toBe("<CB>测试小票</CB><BR>");
+      expect(body.get("times")).toBe("2");
+    });
+
+    it("keeps saved secrets when an edit only changes some credential fields", async () => {
+      process.env.PRINT_CREDENTIAL_KEY = KEY;
+      const { prisma, service } = createService();
+      const current = ownFeie(service);
+      const next = service.prepareConnection("feie", { deviceKey: "newkey99" }, current);
+      prisma.printerConfig.findUnique.mockResolvedValue({ ...current, ...next });
+      (axios.post as jest.Mock).mockResolvedValueOnce({
+        data: { ret: 0, data: { ok: ["916500001#newkey99"], no: [] } },
+      });
+      await service.bindFeieDevice("printer-shop");
+      const body = (axios.post as jest.Mock).mock.calls[0][1];
+      expect(body.get("user")).toBe("shop-user");
+      expect(body.get("printerContent")).toContain("916500001#newkey99");
+    });
+  });
 });

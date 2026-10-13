@@ -10,6 +10,20 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 export class PostController {
   constructor(private readonly postService: PostService) {}
 
+  @Post('posts/:postId/favorite')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  favorite(@Param('postId') postId: string, @CurrentUser('sub') userId: string) {
+    return this.postService.setFavorite(postId, userId, true);
+  }
+
+  @Delete('posts/:postId/favorite')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  unfavorite(@Param('postId') postId: string, @CurrentUser('sub') userId: string) {
+    return this.postService.setFavorite(postId, userId, false);
+  }
+
   @Get('posts/region-posts/:regionId')
   @ApiOperation({ summary: '区域帖子列表' })
   listByRegion(@Param('regionId') regionId: string, @Query() query: any) {
@@ -143,9 +157,10 @@ export class PostController {
   }
 
   @Get('posts/:postId/co-creators')
+  @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '共创者列表' })
-  getCoCreators(@Param('postId') postId: string) {
-    return this.postService.getCoCreators(postId);
+  getCoCreators(@Param('postId') postId: string, @CurrentUser('sub') userId?: string) {
+    return this.postService.getCoCreators(postId, userId);
   }
 
   @Post('posts/:postId/co-creators/invite')
@@ -220,9 +235,10 @@ export class PostController {
   }
 
   @Get(['post-votes/stats', 'api/post-votes/stats'])
+  @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '投票统计' })
-  getVoteStats(@Query('post_id') postId: string) {
-    return this.postService.getVoteStats(postId);
+  getVoteStats(@Query('post_id') postId: string, @CurrentUser('sub') userId?: string) {
+    return this.postService.getVoteStats(postId, userId);
   }
 
   @Post(['post-votes/vote', 'api/post-votes/vote'])
@@ -258,9 +274,10 @@ export class PostController {
   }
 
   @Get('api/simulate-post-actions/status/:postId')
+  @UseGuards(OptionalAuthGuard)
   @ApiOperation({ summary: '模拟操作状态' })
-  getPostProgress(@Param('postId') postId: string) {
-    return this.postService.getPostProgress(postId);
+  getPostProgress(@Param('postId') postId: string, @CurrentUser('sub') userId?: string) {
+    return this.postService.getPostProgress(postId, userId);
   }
 
   @Post('api/simulate-post-actions')

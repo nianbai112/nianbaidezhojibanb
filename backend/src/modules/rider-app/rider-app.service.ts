@@ -792,7 +792,7 @@ export class RiderAppService {
         this.toNumber((pendingWithdrawals as any)._sum?.amount),
       ),
       settlement_rule:
-        "普通订单确认收货后入账；营销优惠订单先冻结48小时并复核关联账号，退款、申诉或风险未解决时不可提现。",
+        "确认收货后按优惠前总金额扣除平台抽成立即结算，用券不设等待期；退款、申诉或风险未解决时不可提现。",
     };
   }
 
@@ -1125,7 +1125,9 @@ export class RiderAppService {
       message = "尚未申请成为骑手，请先在小程序提交骑手申请";
     } else if (rider.verifyStatus !== "approved") {
       message =
-        rider.verifyStatus === "rejected"
+        rider.verifyStatus === "revoked"
+          ? "骑手认证已撤销，可在小程序重新申请并等待审核"
+          : rider.verifyStatus === "rejected"
           ? "骑手申请未通过审核，请联系管理员"
           : "骑手申请审核中，请等待管理员审核";
     } else if (rider.riderType !== "official") {

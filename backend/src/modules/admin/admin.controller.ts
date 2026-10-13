@@ -1,3 +1,4 @@
+import { ReviewStudentIdentityDto } from '../student-identity/student-identity.dto';
 import {
   Controller,
   Get,
@@ -82,7 +83,7 @@ export class AdminController {
   @RequirePermission("user:cert")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "学生认证统计" })
-  getVerificationsStats() { return this.adminService.getVerificationsStats(); }
+  getVerificationsStats(@CurrentUser('sub') operatorId: string) { return this.adminService.getVerificationsStats(operatorId); }
 
   @Get("admin/reports/stats")
   @RequirePermission("report:handle")
@@ -269,8 +270,8 @@ export class AdminController {
   @RequirePermission("user:view")
   @UseGuards(AdminPermissionGuard)
   @ApiOperation({ summary: "用户详情" })
-  userDetail(@Param("id") id: string) {
-    return this.adminService.userDetail(id);
+  userDetail(@Param("id") id: string, @CurrentUser('sub') operatorId: string) {
+    return this.adminService.userDetail(id, operatorId);
   }
 
   @Get("admin/self-unban-requests")
@@ -361,7 +362,7 @@ export class AdminController {
   @ApiOperation({ summary: "学生认证审核" })
   certUser(
     @Param("id") id: string,
-    @Body() dto: { status: string; reason?: string },
+    @Body() dto: ReviewStudentIdentityDto,
     @CurrentUser("sub") operatorId: string,
     @Req() req: Request,
   ) {

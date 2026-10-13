@@ -1,9 +1,10 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { GroupBuyConsumerService } from './group-buy.consumer.service';
+import { Injectable, BadRequestException, Optional, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
 export class GroupBuyService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly consumer?: GroupBuyConsumerService) {}
 
   // ================= 概览统计 (Overview) =================
   async getAdminStats(regionId?: string) {
@@ -205,34 +206,21 @@ export class GroupBuyService {
   }
 
   async verifyOrder(id: string, code: string) {
-    const order = await this.prisma.groupBuyOrder.findUnique({ where: { id } });
-    if (!order) throw new BadRequestException('订单不存在');
-    if (order.status !== 'paid') throw new BadRequestException('订单状态不正确，仅已支付订单可核销');
-    if (order.verifyStatus === 'verified') throw new BadRequestException('该订单已核销');
-    if (order.verifyCode && order.verifyCode !== code) throw new BadRequestException('核销码错误');
-
-    return this.prisma.groupBuyOrder.update({
-      where: { id },
-      data: { verifyStatus: 'verified', verifyTime: new Date(), status: 'completed' }
-    });
+    if(!/^[A-F0-9]{24}$/.test(String(code||'')))throw new BadRequestException('请核对完整团购核销码');
+    return this.prisma.$transaction(async tx=>{
+      const order=await tx.groupBuyOrder.findUnique({where:{id}});
+      if(!order||order.status!=='paid'||order.verifyStatus!=='pending'||order.verifyCode!==code)throw new BadRequestException('核销码无效、订单未付款或已处理');
+      const claimed=await tx.groupBuyOrder.updateMany({where:{id,status:'paid',verifyStatus:'pending',verifyCode:code},data:{verifyStatus:'verified',verifyTime:new Date(),status:'completed'}});
+      if(claimed.count!==1)throw new ConflictException('订单已核销或进入退款，请刷新');
+      return tx.groupBuyOrder.findUnique({where:{id}});
+    },{isolationLevel:'Serializable'});
   }
-
   async refundOrder(id: string, reason: string, amount?: number) {
-    const order = await this.prisma.groupBuyOrder.findUnique({ where: { id } });
-    if (!order) throw new BadRequestException('订单不存在');
-    if (['refunding', 'refunded'].includes(order.status)) throw new BadRequestException('订单已在退款流程中');
-    if (order.verifyStatus === 'verified') throw new BadRequestException('已核销订单不可退款');
-
-    const refundAmount = amount || Number(order.amount);
-    return this.prisma.groupBuyOrder.update({
-      where: { id },
-      data: {
-        status: 'refunding',
-        refundReason: reason,
-        refundAmount,
-        refundTime: new Date()
-      }
-    });
+    const order=await this.prisma.groupBuyOrder.findUnique({where:{id}});
+    if(!order)throw new BadRequestException('订单不存在');
+    if(amount!==undefined&&Math.round(Number(amount)*100)!==Math.round(Number(order.amount)*100))throw new BadRequestException('团购整单核销券只支持未核销全额退款');
+    if(!this.consumer)throw new BadRequestException('团购退款服务尚未就绪');
+    return this.consumer.refund(order.userId,id,{reason});
   }
 
   // ================= 评价管理 (Review) =================

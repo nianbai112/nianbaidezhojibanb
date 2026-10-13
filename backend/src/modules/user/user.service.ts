@@ -1,5 +1,8 @@
+import { publicProfile } from './public-profile';
+import { canStartWechatPayment } from '../../common/payment-client';
 import { currentRequestMetadata } from '../../common/request-context';
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { isMiniappOpenid } from '../../common/wechat-identity';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, ServiceUnavailableException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { NotifyService } from '../notify/notify.service';
@@ -17,6 +20,11 @@ import { Gender, RoleType, UserStatus } from '@prisma/client';
 import * as crypto from 'crypto';
 import { assertErrandGenderChangeAllowed } from '../errand/errand-delivery-requirements';
 import { lockErrandAssignee } from '../errand/errand-transaction-guards';
+import { StudentIdentityService } from '../student-identity/student-identity.service';
+import { effectiveStudentIdentity, identityInclude } from '../student-identity/student-identity.policy';
+import { readUserGuidanceTags } from '../../common/user-guidance-tags';
+import { AppleLifecycleService } from '../auth/apple-lifecycle.service';
+import type { AppleRevocationStatus } from '../auth/apple-lifecycle.service';
 
 @Injectable()
 export class UserService {
@@ -33,6 +41,8 @@ export class UserService {
     private readonly wsNative: WsNativeGateway,
     private readonly ipGeo: IpGeoService,
     private readonly paymentService: PaymentService,
+    private readonly studentIdentity?: StudentIdentityService,
+    @Optional() private readonly appleLifecycle?: AppleLifecycleService,
   ) {}
 
   private profileCacheKey(userId: string, regionId?: string, viewerId?: string) {
@@ -77,7 +87,7 @@ export class UserService {
         return await (this.prisma.user as any).update({
           where: { id: user.id },
           data: { publicUid },
-          include: { profile: true, settings: true, studentVerify: true, wallet: true },
+          include: { profile: true, settings: true, studentVerify: { include: identityInclude }, wallet: true },
         });
       } catch (error: any) {
         if (error?.code !== 'P2002') throw error;
@@ -87,7 +97,7 @@ export class UserService {
     return (this.prisma.user as any).update({
       where: { id: user.id },
       data: { publicUid: fallbackUid },
-      include: { profile: true, settings: true, studentVerify: true, wallet: true },
+      include: { profile: true, settings: true, studentVerify: { include: identityInclude }, wallet: true },
     });
   }
 
@@ -336,16 +346,31 @@ export class UserService {
   }
 
   async getProfile(userId: string, regionId?: string, viewerId?: string) {
+    const isSelf = !viewerId || viewerId === userId;
     const cacheKey = this.profileCacheKey(userId, regionId, viewerId || userId);
     const cached = await this.redis.getJson<any>(cacheKey).catch(() => null);
-    if (cached) return cached;
+    if (cached) {
+      if (!isSelf) {
+        const projected = publicProfile(cached);
+        await this.redis.setJson(cacheKey, projected, this.profileCacheTtl).catch(() => undefined);
+        return projected;
+      }
+      if (Array.isArray(cached.selected_tags) && typeof cached.selection_unresolved === 'boolean') return cached;
+      const selection = await readUserGuidanceTags(this.prisma, userId, regionId || cached.profile?.regionId);
+      const refreshed = { ...cached, ...selection };
+      await this.redis.setJson(cacheKey, refreshed, this.profileCacheTtl).catch(() => undefined);
+      return refreshed;
+    }
 
     let user: any = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { profile: true, settings: true, studentVerify: true, wallet: true },
+      include: { profile: true, settings: true, studentVerify: { include: identityInclude }, wallet: true },
     });
     if (!user) throw new NotFoundException('用户不存在');
     user = this.formatPublicUser(await this.ensurePublicUid(user));
+    const guidanceSelection = isSelf
+      ? await readUserGuidanceTags(this.prisma, userId, regionId || user.profile?.regionId)
+      : {};
     const latestLocation = await this.ipGeo.visibleLocation({
       ip: user.lastLoginIp || '',
       country: user.lastLoginCountry || '',
@@ -471,7 +496,7 @@ export class UserService {
     const wearingTitle = currentTitle?.title || null;
     const titleImageUrl = wearingTitle?.image || wearingTitle?.icon || '';
     const badgeList: any[] = [];
-    const isVerifiedMember = isMember && user.studentVerify?.status === 'APPROVED';
+    const isVerifiedMember = isMember && effectiveStudentIdentity(user.studentVerify, userId);
     const privacySettings = this.formatPrivacySettings(user.settings);
     const interactionSettings = privacySettings.interaction_settings;
     const followSettings = privacySettings.follow_settings;
@@ -480,6 +505,7 @@ export class UserService {
     const nextGrowthLevel = growthSummary?.nextLevel || null;
     const userWithPermissions = {
       ...user,
+      ...guidanceSelection,
       name: user.nickname || '',
       nickname: user.nickname || '',
       avatar: user.avatar || '',
@@ -503,8 +529,10 @@ export class UserService {
       wechat: user.profile?.wechat || '',
       qq: user.profile?.qq || '',
       email: user.profile?.email || '',
-      student_verified: user.studentVerify?.status === 'APPROVED',
-      student_verification_status: user.studentVerify?.status?.toLowerCase() || 'none',
+      student_verified: effectiveStudentIdentity(user.studentVerify, userId),
+      student_verification_status: user.studentVerify?.status === 'APPROVED' && !effectiveStudentIdentity(user.studentVerify, userId) ? 'revoked' : user.studentVerify?.status?.toLowerCase() || 'none',
+      school_id: user.studentVerify?.schoolId || '',
+      student_school_region_id: user.studentVerify?.school?.regionId || '',
       student_verification_reason: user.studentVerify?.remark || '',
       is_member: isMember,
       isMember,
@@ -555,8 +583,8 @@ export class UserService {
       memberLevel: activeMembership?.level || 0,
       member_expired_at: activeMembership?.expiredAt || null,
       memberExpiredAt: activeMembership?.expiredAt || null,
-      identity_level: isVerifiedMember ? 'verified_member' : isMember ? 'member' : user.studentVerify?.status === 'APPROVED' ? 'verified' : 'normal',
-      identityLevel: isVerifiedMember ? 'verified_member' : isMember ? 'member' : user.studentVerify?.status === 'APPROVED' ? 'verified' : 'normal',
+      identity_level: isVerifiedMember ? 'verified_member' : isMember ? 'member' : effectiveStudentIdentity(user.studentVerify, userId) ? 'verified' : 'normal',
+      identityLevel: isVerifiedMember ? 'verified_member' : isMember ? 'member' : effectiveStudentIdentity(user.studentVerify, userId) ? 'verified' : 'normal',
       following_count: stats.followingCount,
       followingCount: stats.followingCount,
       follow_count: stats.followingCount,
@@ -652,17 +680,10 @@ export class UserService {
       },
     };
 
-    // AUD-P1-015: 非本人查看时去除联系方式字段，防止手机/微信/QQ/邮箱泄露
-    const isSelf = !viewerId || viewerId === userId;
-    if (!isSelf && userWithPermissions) {
-      (userWithPermissions as any).mobile = '';
-      (userWithPermissions as any).phone = '';
-      (userWithPermissions as any).wechat = '';
-      (userWithPermissions as any).qq = '';
-      (userWithPermissions as any).email = '';
-      (userWithPermissions as any).wechat_permission = 3; // 禁止
-      (userWithPermissions as any).phone_permission = 3;
-      (userWithPermissions as any).latest_location = null;
+    if (!isSelf) {
+      const projected = publicProfile(userWithPermissions);
+      await this.redis.setJson(cacheKey, projected, this.profileCacheTtl).catch(() => undefined);
+      return projected;
     }
 
     if (!regionId) {
@@ -802,49 +823,64 @@ export class UserService {
       throw new BadRequestException('请填写不少于8个字的合作说明');
     }
 
-    const region = await this.prisma.region.findUnique({
-      where: { id: regionId },
-      select: { id: true, name: true, address: true, logo: true, isOpen: true },
-    });
-    if (!region) throw new BadRequestException('申请区域不存在');
-
-    const existingAgent = await this.prisma.cityAgent.findUnique({ where: { userId } });
-    if (existingAgent && existingAgent.status !== 'closed') {
-      throw new BadRequestException('您已经是区域合作负责人，无需重复申请');
-    }
-
-    const latest = await this.prisma.cityAgentApplication.findFirst({
-      where: { userId, regionId },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (latest?.status === 'approved') {
-      throw new BadRequestException('该区域合作申请已通过，无需重复提交');
-    }
-
-    const payload = {
-      realName,
-      phone,
-      companyName: companyName || null,
-      reason,
-      status: 'pending',
-      rejectReason: null,
-      approvedAt: null,
-    };
-    const application = latest
-      ? await this.prisma.cityAgentApplication.update({
-          where: { id: latest.id },
-          data: payload,
-          include: { region: { select: { id: true, name: true, address: true, logo: true, isOpen: true } } },
-        })
-      : await this.prisma.cityAgentApplication.create({
-          data: { ...payload, userId, regionId },
-          include: { region: { select: { id: true, name: true, address: true, logo: true, isOpen: true } } },
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        // One account may apply concurrently from multiple devices. The account row
+        // is stable even before its first application exists, so lock it first.
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM users WHERE id = ${userId} FOR UPDATE
+        `;
+        if (!locked.length) throw new BadRequestException('当前账号无法提交合作申请');
+        const applicant = await tx.user.findUnique({ where: { id: userId }, select: { status: true, deletedAt: true } });
+        if (!applicant || applicant.status !== 'ACTIVE' || applicant.deletedAt) throw new BadRequestException('当前账号无法提交合作申请');
+        const region = await tx.region.findUnique({
+          where: { id: regionId },
+          select: { id: true, name: true, address: true, logo: true, isOpen: true },
         });
+        if (!region) throw new BadRequestException('申请区域不存在');
 
-    return {
-      application: this.serializeCityAgentApplication(application),
-      message: latest ? '申请已更新，等待平台审核' : '申请已提交，等待平台审核',
-    };
+        const existingAgent = await tx.cityAgent.findUnique({ where: { userId } });
+        if (existingAgent && existingAgent.status !== 'closed') {
+          throw new BadRequestException('您已经是区域合作负责人，无需重复申请');
+        }
+
+        const latest = await tx.cityAgentApplication.findFirst({
+          where: { userId, regionId },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (latest?.status === 'approved') {
+          throw new BadRequestException('该区域合作申请已通过，无需重复提交');
+        }
+
+        const payload = {
+          realName,
+          phone,
+          companyName: companyName || null,
+          reason,
+          status: 'pending',
+          rejectReason: null,
+          approvedAt: null,
+        };
+        const application = latest
+          ? await tx.cityAgentApplication.update({
+              where: { id: latest.id, userId, regionId, status: { not: 'approved' } },
+              data: payload,
+              include: { region: { select: { id: true, name: true, address: true, logo: true, isOpen: true } } },
+            })
+          : await tx.cityAgentApplication.create({
+              data: { ...payload, userId, regionId },
+              include: { region: { select: { id: true, name: true, address: true, logo: true, isOpen: true } } },
+            });
+        return { application, existed: !!latest };
+      }, { isolationLevel: 'Serializable' });
+      return {
+        application: this.serializeCityAgentApplication(result.application),
+        message: result.existed ? '申请已更新，等待平台审核' : '申请已提交，等待平台审核',
+      };
+    } catch (error) {
+      if (error?.code === 'P2034' || error?.code === 'P2025') throw new ConflictException('申请或合作资格已变化，请刷新后重试');
+      throw error;
+    }
   }
 
   async getNicknameAvatar(userId: string) {
@@ -858,7 +894,7 @@ export class UserService {
         avatar: true,
         phone: true,
         profile: { select: { gender: true } },
-        studentVerify: { select: { status: true } },
+        studentVerify: { include: identityInclude },
       },
     });
     if (!user) return null;
@@ -876,8 +912,10 @@ export class UserService {
       mobile: user.phone || '',
       gender: this.toMiniGender(user.profile?.gender),
       gender_text: user.profile?.gender || Gender.UNKNOWN,
-      student_verified: user.studentVerify?.status === 'APPROVED',
-      student_verification_status: user.studentVerify?.status?.toLowerCase() || 'none',
+      student_verified: effectiveStudentIdentity(user.studentVerify, userId),
+      student_verification_status: user.studentVerify?.status === 'APPROVED' && !effectiveStudentIdentity(user.studentVerify, userId) ? 'revoked' : user.studentVerify?.status?.toLowerCase() || 'none',
+      school_id: user.studentVerify?.schoolId || '',
+      student_school_region_id: user.studentVerify?.school?.regionId || '',
     };
   }
 
@@ -1090,8 +1128,8 @@ export class UserService {
         followers_list_visible: this.visibilityFlag(settings?.followersListVisible, legacyPublicVisible),
       },
       contact_settings: {
-        wechat: { permission: privacyLevel >= 2 ? 3 : 0, price: 0 },
-        phone: { permission: privacyLevel >= 3 ? 3 : 0, price: 0 },
+        wechat: { permission: this.contactPermission(settings?.wechatContactPermission), price: 0 },
+        phone: { permission: this.contactPermission(settings?.phoneContactPermission), price: 0 },
       },
       notification_settings: {
         like: likeMode !== 'off',
@@ -1138,6 +1176,12 @@ export class UserService {
       }
       return undefined;
     };
+    for (const [field, type] of [['wechatContactPermission', 'wechat'], ['phoneContactPermission', 'phone']]) {
+      const value = dto[field] ?? dto.contact_settings?.[type]?.permission;
+      if (value === undefined) continue;
+      if (![0, 1, 2, 3, '0', '1', '2', '3'].includes(value)) throw new BadRequestException('联系方式权限仅支持关注我的、我关注的、互关或禁止；不支持付费查看');
+      data[field] = Number(value);
+    }
     const privacyLevel = dto.privacyLevel ?? dto.privacy_level;
     if (privacyLevel !== undefined) {
       const parsed = Number(privacyLevel);
@@ -1328,6 +1372,35 @@ export class UserService {
     const target = await this.prisma.user.findUnique({ where: { id: targetId }, select: { id: true } });
     if (!target) throw new NotFoundException('用户不存在');
     return true;
+  }
+
+  private contactPermission(value: any): number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 3 ? value : 3;
+  }
+
+  async getUserContact(targetId: string, viewerId: string, type: string) {
+    if (!viewerId) throw new ForbiddenException('请先登录');
+    if (!['phone', 'wechat'].includes(type)) throw new BadRequestException('联系方式类型无效');
+    await this.userAccess.assertActiveUser(viewerId, '查看联系方式');
+    // A live permission read is intentionally independent of the public-profile cache.
+    return this.prisma.$transaction(async (tx) => {
+      const target = await tx.user.findUnique({ where: { id: targetId }, select: { id: true, status: true, deletedAt: true, phone: true, profile: { select: { wechat: true } }, settings: { select: { wechatContactPermission: true, phoneContactPermission: true } } } });
+      if (!target || target.deletedAt || target.status !== UserStatus.ACTIVE) throw new NotFoundException('用户暂不可查看');
+      const blocked = targetId === viewerId ? null : await tx.block.findFirst({ where: { OR: [{ userId: viewerId, blockedId: targetId }, { userId: targetId, blockedId: viewerId }] }, select: { id: true } });
+      if (blocked) throw new ForbiddenException('对方未允许查看此联系方式');
+      if (targetId !== viewerId) {
+        const permission = this.contactPermission(type === 'phone' ? target.settings?.phoneContactPermission : target.settings?.wechatContactPermission);
+        if (permission === 3) throw new ForbiddenException('对方未允许查看此联系方式');
+        const relations = await tx.follow.findMany({ where: { OR: [{ followerId: viewerId, followingId: targetId }, { followerId: targetId, followingId: viewerId }] }, select: { followerId: true, followingId: true } });
+        const viewerFollowsTarget = relations.some((row) => row.followerId === viewerId && row.followingId === targetId);
+        const targetFollowsViewer = relations.some((row) => row.followerId === targetId && row.followingId === viewerId);
+        const allowed = permission === 0 ? viewerFollowsTarget : permission === 1 ? targetFollowsViewer : viewerFollowsTarget && targetFollowsViewer;
+        if (!allowed) throw new ForbiddenException('对方未允许查看此联系方式');
+      }
+      const value = type === 'phone' ? target.phone : target.profile?.wechat;
+      if (!value || !value.trim()) throw new NotFoundException('对方尚未填写此联系方式');
+      return { user_id: target.id, type, value: value.trim() };
+    }, { isolationLevel: 'RepeatableRead' });
   }
 
   async getPrivacySettings(userId: string) {
@@ -1554,7 +1627,7 @@ export class UserService {
     if (user.status !== UserStatus.BANNED) {
       throw new BadRequestException('当前账号未被封禁，无需申请解封');
     }
-    if (!user.openid) throw new BadRequestException('当前账号未绑定微信，无法发起支付');
+    if (!canStartWechatPayment(user.openid)) throw new BadRequestException('当前账号未绑定微信，无法发起支付');
 
     const config = await this.getSelfUnbanConfig(userId);
     if (!config.enabled && config.request_status !== 'pending_review') {
@@ -1744,162 +1817,135 @@ export class UserService {
    * 校验无未完订单/提现/余额后，置 DELETED + deletedAt + 清除 refresh token。
    */
   async cancelAccount(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, status: true, deletedAt: true },
-    });
-    if (!user) throw new NotFoundException('用户不存在');
-    if (user.status === 'DELETED' || user.deletedAt) throw new BadRequestException('账号已注销');
-
-    // 检查未完订单（普通订单/商城/跑腿/二手）
-    const [pendingShopOrder, pendingMallOrder, pendingErrandOrder, pendingSecondHandOrder] =
-      await Promise.all([
-        this.prisma.order.findFirst({
-          where: { userId, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } },
-          select: { id: true },
-        }),
-        this.prisma.mallOrder.findFirst({
-          where: { userId, status: { notIn: ['completed', 'cancelled', 'refunded'] } },
-          select: { id: true },
-        }),
-        this.prisma.errandOrder.findFirst({
-          where: { userId, status: { notIn: ['completed', 'cancelled'] } },
-          select: { id: true },
-        }),
-        this.prisma.secondHandOrder.findFirst({
-          where: { buyerId: userId, status: { notIn: ['completed', 'cancelled', 'refunded'] } },
-          select: { id: true },
-        }).catch(() => null),
-      ]);
-
-    const blockers: string[] = [];
-    if (pendingShopOrder) blockers.push('有未完成的宿舍小店订单');
-    if (pendingMallOrder) blockers.push('有未完成的商城订单');
-    if (pendingErrandOrder) blockers.push('有未完成的跑腿订单');
-    if (pendingSecondHandOrder) blockers.push('有未完成的二手交易订单');
-
-    // 检查提现
-    const pendingWithdraw = await this.prisma.withdraw.findFirst({
-      where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
-      select: { id: true },
-    });
-    if (pendingWithdraw) blockers.push('有处理中的提现申请');
-
-    // 检查钱包余额
-    const wallet = await this.prisma.wallet.findUnique({
-      where: { userId },
-      select: { balance: true },
-    });
-    if (wallet && Number(wallet.balance) > 0) {
-      blockers.push(`钱包余额 ${Number(wallet.balance).toFixed(2)} 元未提现`);
-    }
-
-    if (blockers.length > 0) {
-      throw new BadRequestException({
-        message: '存在未完成的业务，无法注销账号',
-        blockers,
-      });
-    }
-
+    if (!this.appleLifecycle) throw new ServiceUnavailableException('账号注销服务暂不可用，请稍后重试');
     // 执行注销：置 DELETED + deletedAt + 清除 refresh token
     const now = new Date();
     const { ip, ua } = currentRequestMetadata();
-    await this.prisma.$transaction(async (tx) => {
-      const deleted = await tx.user.updateMany({
-        where: { id: userId, status: user.status, deletedAt: null },
-        data: {
-          status: 'DELETED' as any,
-          deletedAt: now,
-          // AUD-P1-181: 注销时脱敏可公开资料
-          nickname: '已注销用户',
-          avatar: null,
-          phone: null,
-        },
-      });
-      if (deleted.count !== 1) throw new BadRequestException('账号状态已变化，请刷新后重试');
-      // AUD-P1-181: 脱敏用户档案资料
-      await tx.userProfile.updateMany({
-        where: { userId },
-        data: {
-          bio: null,
-          wechat: null,
-          qq: null,
-          email: null,
-          realName: null,
-          idCard: null,
-          school: null,
-          major: null,
-          grade: null,
-          dormitory: null,
-          birthday: null,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          userId, action: 'DELETE', module: 'user', targetId: userId,
-          detail: { source: 'user_self_cancel', beforeStatus: user.status, afterStatus: 'DELETED' },
-          ip, ua, createdAt: now,
-        },
-      });
-    });
+    let appleRevocation: { status: AppleRevocationStatus } = { status: 'not_required' };
+    let invalidBeforeVersion = 0;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true, status: true, deletedAt: true, authVersion: true },
+        });
+        if (!user) throw new NotFoundException('用户不存在');
+        if (user.status === 'DELETED' || user.deletedAt) throw new BadRequestException('账号已注销');
 
-    // 注销后撤销 refresh 和两类实时连接。
-    await this.userSessionRevocation.revoke(userId);
+        // 检查未完订单（普通订单/商城/跑腿/二手）
+        const [pendingShopOrder, pendingMallOrder, pendingErrandOrder, pendingSecondHandOrder] =
+          await Promise.all([
+            tx.order.findFirst({
+              where: { userId, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } },
+              select: { id: true },
+            }),
+            tx.mallOrder.findFirst({
+              where: { userId, status: { notIn: ['completed', 'cancelled', 'refunded'] } },
+              select: { id: true },
+            }),
+            tx.errandOrder.findFirst({
+              where: { OR: [{ userId }, { riderId: userId }], status: { notIn: ['completed', 'cancelled'] } },
+              select: { id: true },
+            }),
+            tx.secondHandOrder.findFirst({
+              where: { OR: [{ buyerId: userId }, { sellerId: userId }], status: { notIn: ['completed', 'cancelled', 'refunded'] } },
+              select: { id: true },
+            }),
+          ]);
 
-    return { success: true, message: '账号已注销', deletedAt: now.toISOString() };
+        const blockers: string[] = [];
+        if (pendingShopOrder) blockers.push('有未完成的宿舍小店订单');
+        if (pendingMallOrder) blockers.push('有未完成的商城订单');
+        if (pendingErrandOrder) blockers.push('有未完成的跑腿订单');
+        if (pendingSecondHandOrder) blockers.push('有未完成的二手交易订单');
+
+        // 检查提现
+        const pendingWithdraw = await tx.withdraw.findFirst({
+          where: { userId, status: { in: ['PENDING', 'PROCESSING'] } },
+          select: { id: true },
+        });
+        if (pendingWithdraw) blockers.push('有处理中的提现申请');
+
+        // 检查钱包余额
+        const wallet = await tx.wallet.findUnique({
+          where: { userId },
+          select: { balance: true, freeze: true },
+        });
+        if (wallet && Number(wallet.balance) > 0) {
+          blockers.push(`钱包余额 ${Number(wallet.balance).toFixed(2)} 元未提现`);
+        }
+        if (wallet && Number(wallet.freeze) > 0) {
+          blockers.push('钱包有尚未结算的冻结资金');
+        }
+
+        if (blockers.length > 0) {
+          throw new BadRequestException({
+            message: '存在未完成的业务，无法注销账号',
+            blockers,
+          });
+        }
+
+        const deleted = await tx.user.updateMany({
+          where: { id: userId, status: user.status, deletedAt: null },
+          data: {
+            status: 'DELETED' as any,
+            deletedAt: now,
+            authVersion: { increment: 1 },
+            // AUD-P1-181: 注销时脱敏可公开资料
+            nickname: '已注销用户',
+            avatar: null,
+            phone: null,
+          },
+        });
+        if (deleted.count !== 1) throw new BadRequestException('账号状态已变化，请刷新后重试');
+        invalidBeforeVersion = user.authVersion + 1;
+        appleRevocation = await this.appleLifecycle!.queueAccountDeletion(tx, userId, now);
+        // 本轮新增的个人联系人和推送绑定必须与账号注销一起清理，避免已撤销令牌无法再解绑。
+        await tx.contact.deleteMany({where:{userId}});
+        await tx.userPushDevice.deleteMany({where:{userId}});
+        // AUD-P1-181: 脱敏用户档案资料
+        await tx.userProfile.updateMany({
+          where: { userId },
+          data: {
+            bio: null,
+            wechat: null,
+            qq: null,
+            email: null,
+            realName: null,
+            idCard: null,
+            school: null,
+            major: null,
+            grade: null,
+            dormitory: null,
+            birthday: null,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId, action: 'DELETE', module: 'user', targetId: userId,
+            detail: { source: 'user_self_cancel', beforeStatus: user.status, afterStatus: 'DELETED' },
+            ip, ua, createdAt: now,
+          },
+        });
+      }, { isolationLevel: 'Serializable', maxWait: 5000, timeout: 10000 });
+    } catch (error: any) {
+      if (error?.code === 'P2034') throw new ConflictException('账号或业务状态正在变化，请刷新后重试注销');
+      throw error;
+    }
+
+    // Local deletion and the durable queue already committed; cleanup failure must
+    // not falsely report that the account is still active. authVersion/status fence it.
+    await this.userSessionRevocation.revoke(userId, { versionAlreadyRevoked: true, invalidBeforeVersion }).catch(() => undefined);
+
+    return { success: true, message: '账号已注销', deletedAt: now.toISOString(), apple_revocation: appleRevocation };
   }
 
   async studentVerify(userId: string, dto: StudentVerifyDto) {
-    const data = this.normalizeStudentVerifyDto(dto);
-    const exists = await this.prisma.studentVerify.findUnique({ where: { userId } });
-    if (exists && exists.status === 'APPROVED') throw new BadRequestException('已认证');
-
-    // 验证学校ID（如果传了的话）
-    let schoolRecord: any = null;
-    if (data.schoolId) {
-      schoolRecord = await this.prisma.school.findUnique({ where: { id: data.schoolId } });
-      if (!schoolRecord) throw new BadRequestException('学校不存在');
-      if (!schoolRecord.isEnabled) throw new BadRequestException('学校已停用');
-      // 用学校库的名称覆盖，保持一致性
-      data.schoolName = schoolRecord.name;
-    }
-
-    const record = exists
-      ? await this.prisma.studentVerify.update({ where: { userId }, data: { ...data, status: 'PENDING' } })
-      : await this.prisma.studentVerify.create({ data: { userId, ...data } });
-
-    await this.prisma.userProfile.upsert({
-      where: { userId },
-      update: {
-        school: data.schoolName,
-        ...(data.major && { major: data.major }),
-        ...(data.grade && { grade: data.grade }),
-      },
-      create: {
-        userId,
-        school: data.schoolName,
-        major: data.major,
-        grade: data.grade,
-      },
-    });
-
-    await this.clearProfileCache(userId);
-    return { success: true, data: this.toMiniStudentVerify(record) };
+    return this.studentIdentity!.submit(userId, dto);
   }
 
   async getStudentVerifyInfo(userId: string) {
-    const record = await this.prisma.studentVerify.findUnique({
-      where: { userId },
-      include: { school: { select: { id: true, name: true, shortName: true } } },
-    });
-    if (!record) return { data: null };
-    const result: any = this.toMiniStudentVerify(record);
-    // 如果有学校记录，补充学校信息
-    if ((record as any).school) {
-      result.school_name = (record as any).school.name;
-      result.school_short_name = (record as any).school.shortName || '';
-    }
-    return { data: result };
+    return this.studentIdentity!.me(userId);
   }
 
   async getUniversities(name: string, page: number, size: number) {
@@ -1964,42 +2010,6 @@ export class UserService {
       total: filtered.length,
       page: currentPage,
       size: pageSize,
-    };
-  }
-
-  private normalizeStudentVerifyDto(dto: StudentVerifyDto) {
-    const realName = String(dto.realName || dto.name || '').trim();
-    const studentId = String(dto.studentId || dto.student_id || '').trim();
-    const schoolName = String(dto.schoolName || dto.university || '').trim();
-    const schoolId = String(dto.schoolId || dto.school_id || '').trim() || null;
-    const cardImage = String(dto.cardImage || dto.photo_url || '').trim();
-    const major = dto.major?.trim();
-    const grade = dto.grade?.trim();
-
-    if (!realName) throw new BadRequestException('请输入姓名');
-    if (!studentId) throw new BadRequestException('请输入学号');
-    if (!schoolName) throw new BadRequestException('请选择学校');
-    if (!cardImage) throw new BadRequestException('请上传学生证照片');
-
-    return { realName, studentId, schoolName, schoolId, major, grade, cardImage };
-  }
-
-  private toMiniStudentVerify(record: any) {
-    return {
-      id: record.id,
-      student_id: record.studentId,
-      name: record.realName,
-      university: record.schoolName,
-      school_id: record.schoolId || '',
-      schoolId: record.schoolId || '',
-      major: record.major || '',
-      grade: record.grade || '',
-      photo_url: record.cardImage || '',
-      verification_status: record.status?.toLowerCase() || 'none',
-      rejection_reason: record.remark || '',
-      created_at: record.createdAt,
-      updated_at: record.updatedAt,
-      verified_at: record.verifiedAt,
     };
   }
 

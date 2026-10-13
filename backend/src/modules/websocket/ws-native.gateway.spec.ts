@@ -1,6 +1,9 @@
 import { isNativeWebSocketPath, WsNativeGateway } from "./ws-native.gateway";
 
 describe("WsNativeGateway account lifecycle", () => {
+  const bypassRecipientPolicyForBusinessTest = (gateway: WsNativeGateway) => {
+    jest.spyOn(gateway as any, "assertActiveClient").mockResolvedValue(true);
+  };
   it("only claims the native WebSocket upgrade path", () => {
     expect(isNativeWebSocketPath("/ws-native?token=test", "localhost")).toBe(
       true,
@@ -13,7 +16,7 @@ describe("WsNativeGateway account lifecycle", () => {
     new WsNativeGateway(
       {} as any,
       {} as any,
-      {} as any,
+      { user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) } } as any,
       {} as any,
       {} as any,
       userAccess,
@@ -30,6 +33,7 @@ describe("WsNativeGateway account lifecycle", () => {
       userId: "user-1",
       isAdmin: false,
       socketId: "socket-1",
+      authPayload: { sub: "user-1", token_use: "access", sv: 0 },
     });
 
     await (gateway as any).handleMessage(
@@ -46,6 +50,7 @@ describe("WsNativeGateway account lifecycle", () => {
 
   it("records an approved official rider connection as rider_app", async () => {
     const prisma: any = {
+      user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) },
       regionRider: {
         findFirst: jest.fn().mockResolvedValue({ id: "rider-1" }),
       },
@@ -55,7 +60,7 @@ describe("WsNativeGateway account lifecycle", () => {
       },
     };
     const gateway = new WsNativeGateway(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1" }) } as any,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1", token_use: "access", sv: 0 }) } as any,
       { get: jest.fn().mockReturnValue("secret") } as any,
       prisma,
       {} as any,
@@ -98,11 +103,12 @@ describe("WsNativeGateway account lifecycle", () => {
 
   it("rejects rider_app identity for a non-official account", async () => {
     const prisma: any = {
+      user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) },
       regionRider: { findFirst: jest.fn().mockResolvedValue(null) },
       realtimeSession: { create: jest.fn(), updateMany: jest.fn() },
     };
     const gateway = new WsNativeGateway(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1" }) } as any,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1", token_use: "access", sv: 0 }) } as any,
       { get: jest.fn().mockReturnValue("secret") } as any,
       prisma,
       {} as any,
@@ -129,6 +135,7 @@ describe("WsNativeGateway account lifecycle", () => {
 
   it("allows an approved dorm-shop owner to connect as partner_app", async () => {
     const prisma: any = {
+      user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) },
       regionRider: { findFirst: jest.fn().mockResolvedValue(null) },
       merchant: {
         findFirst: jest.fn().mockResolvedValue({ id: "merchant-1" }),
@@ -140,7 +147,7 @@ describe("WsNativeGateway account lifecycle", () => {
       },
     };
     const gateway = new WsNativeGateway(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1" }) } as any,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1", token_use: "access", sv: 0 }) } as any,
       { get: jest.fn().mockReturnValue("secret") } as any,
       prisma,
       {} as any,
@@ -176,13 +183,14 @@ describe("WsNativeGateway account lifecycle", () => {
 
   it("rejects partner_app when the account has neither an official rider nor a dorm shop", async () => {
     const prisma: any = {
+      user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) },
       regionRider: { findFirst: jest.fn().mockResolvedValue(null) },
       merchant: { findFirst: jest.fn().mockResolvedValue(null) },
       merchantStaff: { findFirst: jest.fn().mockResolvedValue(null) },
       realtimeSession: { create: jest.fn(), updateMany: jest.fn() },
     };
     const gateway = new WsNativeGateway(
-      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1" }) } as any,
+      { verifyAsync: jest.fn().mockResolvedValue({ sub: "user-1", token_use: "access", sv: 0 }) } as any,
       { get: jest.fn().mockReturnValue("secret") } as any,
       prisma,
       {} as any,
@@ -232,7 +240,7 @@ describe("WsNativeGateway account lifecycle", () => {
         ]),
       },
     };
-    const pushToUser = jest.spyOn(gateway, "pushToUser").mockReturnValue(0);
+    const pushToUser = jest.spyOn(gateway, "pushToUser").mockResolvedValue(0);
 
     await gateway.publishUserPresence("user-1", true);
 
@@ -269,6 +277,7 @@ describe("WsNativeGateway account lifecycle", () => {
       {} as any,
       {} as any,
       {
+        user: { findUnique: jest.fn().mockResolvedValue({id: "user-1", status: "ACTIVE", authVersion: 0}) },
         realtimeSession: { updateMany: jest.fn().mockResolvedValue(undefined) },
       } as any,
       redis as any,
@@ -281,6 +290,7 @@ describe("WsNativeGateway account lifecycle", () => {
       userId: "user-1",
       isAdmin: false,
       socketId: "socket-1",
+      authPayload: { sub: "user-1", token_use: "access", sv: 0 },
       lastPongAt: 0,
     });
 
@@ -309,6 +319,7 @@ describe("WsNativeGateway account lifecycle", () => {
         userId: "user-1",
         isAdmin: false,
         socketId: "socket-1",
+      authPayload: { sub: "user-1", token_use: "access", sv: 0 },
         lastPongAt: 0,
       },
       75001,
@@ -356,6 +367,7 @@ describe("WsNativeGateway account lifecycle", () => {
       {} as any,
       {} as any,
     );
+    bypassRecipientPolicyForBusinessTest(gateway);
     const ws = { readyState: 1, send: jest.fn() };
 
     await (gateway as any).handleGroupMessage(
@@ -377,6 +389,7 @@ describe("WsNativeGateway account lifecycle", () => {
 
   it("returns a correlated error instead of silently timing out for a malformed private message", async () => {
     const gateway = createGateway({});
+    bypassRecipientPolicyForBusinessTest(gateway);
     const ws = { readyState: 1, send: jest.fn() };
 
     await (gateway as any).handlePrivateMessage(
@@ -445,6 +458,7 @@ describe("WsNativeGateway account lifecycle", () => {
     jest
       .spyOn(gateway as any, "pushUnreadSummary")
       .mockResolvedValue(undefined);
+    bypassRecipientPolicyForBusinessTest(gateway);
     const ws = { readyState: 1, send: jest.fn() };
 
     await (gateway as any).handlePrivateMessage(
@@ -453,6 +467,7 @@ describe("WsNativeGateway account lifecycle", () => {
         userId: "user-1",
         isAdmin: false,
         socketId: "socket-1",
+      authPayload: { sub: "user-1", token_use: "access", sv: 0 },
         regionId: "region-1",
       },
       {
@@ -563,6 +578,7 @@ describe("WsNativeGateway account lifecycle", () => {
     const removeClient = jest
       .spyOn(gateway as any, "removeClient")
       .mockResolvedValue(undefined);
+    bypassRecipientPolicyForBusinessTest(gateway);
     const ws = { readyState: 1, send: jest.fn() };
 
     await (gateway as any).handlePrivateMessage(
@@ -612,6 +628,7 @@ describe("WsNativeGateway account lifecycle", () => {
       userId: "user-1",
       isAdmin: false,
       socketId: "socket-1",
+      authPayload: { sub: "user-1", token_use: "access", sv: 0 },
     });
     jest
       .spyOn(gateway as any, "touchSession")

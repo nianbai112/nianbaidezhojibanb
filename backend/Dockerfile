@@ -23,7 +23,8 @@ RUN npm run build
 # =============================================================================
 FROM node:22-alpine AS production
 
-RUN apk add --no-cache ffmpeg
+# font-noto-cjk: 朋友圈海报在服务端渲染中文需要
+RUN apk add --no-cache ffmpeg fontconfig font-noto-cjk
 
 # Create unprivileged user/group (non-root best practice)
 RUN addgroup -g 1001 appgroup && \

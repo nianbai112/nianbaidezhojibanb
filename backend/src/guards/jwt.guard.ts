@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { PrismaService } from '../common/services/prisma.service';
+import { readAccessSession } from '../common/user-token-policy';
 
 type AuthenticatedRequest = Request & {
   user?: unknown;
@@ -24,21 +25,22 @@ export class JwtGuard implements CanActivate {
       throw new UnauthorizedException('未提供认证令牌');
     }
 
+    let payload: any;
     try {
-      const payload = await this.jwtService.verifyAsync(token, {
+      payload = await this.jwtService.verifyAsync(token, {
         secret: this.configService.get('JWT_SECRET'),
       });
-      request['user'] = payload;
-
-      // AUD-P1-179: 普通用户 JWT（非 admin token）必须校验 User.status。
-      // 封禁/禁用/已删除用户即使有未过期 token 也不能访问受保护接口。
-      if (!payload.isAdmin && payload.sub) {
-        await this.assertUserActive(payload.sub, request);
-      }
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;
       throw new UnauthorizedException('令牌无效或已过期');
     }
+
+    if (payload.isAdmin !== true) {
+      // Keep database failures as 5xx; they are not evidence that credentials expired.
+      const user = await readAccessSession(this.prisma, payload);
+      await this.assertUserActive(payload.sub, request, user);
+    }
+    request['user'] = payload;
 
     return true;
   }
@@ -47,10 +49,10 @@ export class JwtGuard implements CanActivate {
    * AUD-P1-179: 校验普通用户状态为 ACTIVE。
    * 少数只读端点（如查询封禁状态）需要豁免此检查，否则用户无法知道自己被封禁。
    */
-  private async assertUserActive(userId: string, request: Request): Promise<void> {
+  private async assertUserActive(userId: string, request: Request, currentUser?: any): Promise<void> {
     // 豁免端点：查询封禁状态、自助解封配置
     if (this.isActiveCheckExempted(request)) {
-      const user = await this.prisma.user.findUnique({
+      const user = currentUser || await this.prisma.user.findUnique({
         where: { id: userId },
         select: { id: true, status: true },
       });
@@ -61,7 +63,7 @@ export class JwtGuard implements CanActivate {
       return;
     }
 
-    const user = await this.prisma.user.findUnique({
+    const user = currentUser || await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, status: true },
     });

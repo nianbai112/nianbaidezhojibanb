@@ -1266,6 +1266,7 @@ export class CampusMapCollectionService {
       name: task.name,
       instructions: task.instructions,
       status: task.status,
+      allowedClients: this.jsonStringArray(task.allowedClients, ["miniapp"]),
     };
     const safeTemplates = templates.map((template) =>
       this.toCollectorTemplate(template),

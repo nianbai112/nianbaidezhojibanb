@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Optional } from '@nestjs/common';
+import { UploadService } from '../upload/upload.service';
 import { PrismaService } from '../../common/services/prisma.service';
 import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
 import { UserAccessPolicyService } from '../../common/services/user-access-policy.service';
@@ -9,6 +10,7 @@ export class CircleService {
     private readonly prisma: PrismaService,
     private readonly adminDataScope: AdminDataScopeService,
     private readonly userAccess: UserAccessPolicyService,
+    @Optional() private readonly upload?: UploadService,
   ) {}
 
   private getCircleConfigDefaults(regionId = "") {
@@ -69,7 +71,7 @@ export class CircleService {
       "allow_circle_post",
       "enable_topic_headers",
     ];
-    for (const key of flagKeys) merged[key] = merged[key] ? 1 : 0;
+    for (const key of flagKeys) merged[key] = this.isTruthyFlag(merged[key]) ? 1 : 0;
     const numericKeys = [
       "circle_name_min_length",
       "circle_name_max_length",
@@ -321,7 +323,7 @@ export class CircleService {
 
   private getCircleOwnerMember(circle: any) {
     const members = Array.isArray(circle?.members) ? circle.members : [];
-    return members.find((member: any) => member.role === 'OWNER') || members[0] || null;
+    return members.find((member: any) => member.role === 'OWNER') || null;
   }
 
   private memberStatusText(status: any) {
@@ -443,16 +445,18 @@ export class CircleService {
     return this.normalizeCircleConfigPayload(settings.circleConfig || {}, regionId);
   }
 
-  async getList(query: any) {
+  async getList(query: any, currentUserId?: string) {
     const regionId = query.region_id || query.regionId;
     if (regionId) {
-      return this.getByRegion(String(regionId), query);
+      return this.getByRegion(String(regionId), query, currentUserId);
     }
 
     const { page = 1, limit = 20, user_id, is_pinned, my_circles, hot_circles } = query;
-    const pageNum = Number(page) || 1;
-    const take = Number(limit) || 20;
-    const userId = typeof user_id === 'string' && user_id.trim() ? user_id.trim() : '';
+    const pageNum = Math.max(1, Math.floor(Number(page) || 1));
+    const take = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
+    const userId = currentUserId || '';
+    const joinedOnly = this.isTruthyFlag(query.joined) || user_id !== undefined;
+    if ((this.isTruthyFlag(my_circles) || joinedOnly) && !userId) throw new ForbiddenException('请先登录');
     const isOwnerList = this.isTruthyFlag(my_circles) && !!userId;
     const where: any = isOwnerList ? {} : { status: this.activeCircleStatusWhere(), auditStatus: 'approved' };
 
@@ -462,7 +466,7 @@ export class CircleService {
         { ownerUserId: userId },
         { members: { some: { userId, role: 'OWNER', status: { in: ['active', 'muted'] } } } },
       ];
-    } else if (userId) {
+    } else if (userId && joinedOnly) {
       where.members = { some: { userId, status: { in: ['active', 'muted'] } } };
     }
 
@@ -484,7 +488,8 @@ export class CircleService {
       }),
       this.prisma.circle.count({ where }),
     ]);
-    const joinedCircleIds = userId ? new Set(list.map((circle) => circle.id)) : undefined;
+    const ownMemberships = userId ? await this.prisma.circleMember.findMany({ where: { userId, circleId: { in: list.map((circle) => circle.id) }, status: { in: ['active', 'muted'] } }, select: { circleId: true } }) : [];
+    const joinedCircleIds = new Set(ownMemberships.map((member) => member.circleId));
     const data = list.map((circle) => this.toMiniCircle(circle, userId, joinedCircleIds));
     return {
       data,
@@ -499,11 +504,13 @@ export class CircleService {
     };
   }
 
-  async getByRegion(regionId: string, query: any) {
+  async getByRegion(regionId: string, query: any, currentUserId?: string) {
     const { page = 1, limit = 20, user_id, is_pinned, my_circles, hot_circles } = query;
-    const pageNum = Number(page) || 1;
-    const take = Number(limit) || 20;
-    const userId = typeof user_id === 'string' && user_id.trim() ? user_id.trim() : '';
+    const pageNum = Math.max(1, Math.floor(Number(page) || 1));
+    const take = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
+    const userId = currentUserId || '';
+    const joinedOnly = this.isTruthyFlag(query.joined) || user_id !== undefined;
+    if ((this.isTruthyFlag(my_circles) || joinedOnly) && !userId) throw new ForbiddenException('请先登录');
     const isOwnerList = this.isTruthyFlag(my_circles) && !!userId;
     const where: any = isOwnerList ? { regionId } : { regionId, status: this.activeCircleStatusWhere(), auditStatus: 'approved' };
     if (is_pinned) where.isOfficial = true;
@@ -512,7 +519,7 @@ export class CircleService {
         { ownerUserId: userId },
         { members: { some: { userId, role: 'OWNER', status: { in: ['active', 'muted'] } } } },
       ];
-    } else if (userId) {
+    } else if (userId && joinedOnly) {
       where.members = { some: { userId, status: { in: ['active', 'muted'] } } };
     }
     const [list, total, regionSettings] = await Promise.all([
@@ -534,7 +541,8 @@ export class CircleService {
       this.prisma.circle.count({ where }),
       this.getRegionCircleSettings(regionId),
     ]);
-    const joinedCircleIds = userId ? new Set(list.map((circle) => circle.id)) : undefined;
+    const ownMemberships = userId ? await this.prisma.circleMember.findMany({ where: { userId, circleId: { in: list.map((circle) => circle.id) }, status: { in: ['active', 'muted'] } }, select: { circleId: true } }) : [];
+    const joinedCircleIds = new Set(ownMemberships.map((member) => member.circleId));
     const data = list.map((circle) => this.toMiniCircle(circle, userId, joinedCircleIds));
     return {
       data,
@@ -683,8 +691,26 @@ export class CircleService {
     };
   }
 
-  async getDetail(circleId: string, query: any = {}) {
-    const userId = typeof query.user_id === 'string' && query.user_id.trim() ? query.user_id.trim() : '';
+  private async assertReadableCircle(circleId: string, userId?: string, db: any = this.prisma) {
+    const circle = await db.circle.findUnique({ where: { id: circleId } });
+    if (!circle || circle.status === 'dissolved') throw new NotFoundException('圈子不存在');
+    const member = userId ? await db.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } }) : null;
+    const manager = !!member && this.isReadableMemberStatus(member.status) && ['OWNER', 'ADMIN'].includes(member.role);
+    if ((this.normalizeCircleStatus(circle.status, 'disabled') !== 'active' || circle.auditStatus !== 'approved') && !manager) throw new NotFoundException('圈子不存在');
+    return { circle, member, manager };
+  }
+
+  private async serialCircle<T>(work: (tx: any) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await this.prisma.$transaction(work, { isolationLevel: 'Serializable' }); }
+      catch (error: any) { if (!['P2034', 'P2002'].includes(error?.code) || attempt === 2) throw error; }
+    }
+    throw new ConflictException('圈子操作繁忙，请重试');
+  }
+
+  async getDetail(circleId: string, query: any = {}, currentUserId?: string) {
+    const userId = currentUserId || '';
+    await this.assertReadableCircle(circleId, userId);
     const [circle, membership] = await Promise.all([
       this.prisma.circle.findUnique({
         where: { id: circleId },
@@ -707,12 +733,14 @@ export class CircleService {
     ]);
     if (!circle) throw new NotFoundException('圈子不存在');
     // AUD-P1-028: 已解散圈子公开详情返回404
-    if (circle.status === 'dissolved' && !query.user_id && !query.userId) {
+    if (circle.status === 'dissolved') {
       throw new NotFoundException('圈子不存在');
     }
-    const miniCircle = this.toMiniCircle(circle, userId, membership ? new Set([circleId]) : undefined);
+    const miniCircle = this.toMiniCircle(circle, userId, membership && this.isReadableMemberStatus(membership.status) ? new Set([circleId]) : undefined);
     return {
       ...miniCircle,
+      canManage: !!membership && this.isReadableMemberStatus(membership.status) && ['OWNER', 'ADMIN'].includes(membership.role),
+      paidJoin: circle.paidJoin, price: Number(circle.price || 0),
       channels: circle.channels || [],
       topic_headers: (circle.topicHeaders || []).map((header: any) => this.normalizeTopicHeader(header)),
       topicHeaders: (circle.topicHeaders || []).map((header: any) => this.normalizeTopicHeader(header)),
@@ -779,11 +807,14 @@ export class CircleService {
     }
     const needsAudit = this.isAuditEnabled(config.create_audit_type || config.circle_audit_type || 'manual');
 
-    const circle = await this.prisma.circle.create({
+    const circle = await this.serialCircle(async (tx) => {
+      const currentCount = await tx.circle.count({ where: { regionId: regionId ? String(regionId) : null, ownerUserId: userId } });
+      if (currentCount >= Number(config.max_circles_per_user || 0)) throw new BadRequestException('已达到创建圈子数量上限');
+      const created = await tx.circle.create({
       data: {
         name,
-        icon: dto.icon || '',
-        cover: dto.cover || '',
+        icon: dto.icon || dto.logo || '',
+        cover: dto.cover || dto.background_image || '',
         description: dto.description || '',
         announcement: dto.announcement || '',
         rules: dto.rules || '',
@@ -800,7 +831,9 @@ export class CircleService {
         auditReason: needsAudit ? '等待运营者审核' : '',
       },
     });
-    await this.prisma.circleMember.create({ data: { circleId: circle.id, userId, role: 'OWNER', status: 'active' } });
+      await tx.circleMember.create({ data: { circleId: created.id, userId, role: 'OWNER', status: 'active' } });
+      return created;
+    });
     await this.ensureDefaultTopicHeaders(circle.id, circle.regionId);
     return {
       ...circle,
@@ -810,63 +843,73 @@ export class CircleService {
   }
 
   async update(circleId: string, userId: string, dto: any) {
-    const member = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
-    if (!member || !this.isReadableMemberStatus(member.status) || (member.role !== 'OWNER' && member.role !== 'ADMIN')) {
-      throw new ForbiddenException('无权操作');
-    }
-    return this.prisma.circle.update({ where: { id: circleId }, data: this.buildCircleMutationData(dto) });
+    const { circle, manager } = await this.assertReadableCircle(circleId, userId);
+    if (!manager) throw new ForbiddenException('无权操作');
+    const protectedKeys = ['status', 'is_banned', 'auditStatus', 'audit_status', 'auditReason', 'audit_reason', 'isOfficial', 'is_pinned', 'ownerUserId', 'owner_user_id', 'regionId', 'region_id', 'riskScore', 'risk_score', 'paidJoin', 'paid_join', 'price', 'inviteCode', 'invite_code'];
+    if (protectedKeys.some((key) => dto[key] !== undefined)) throw new ForbiddenException('无权修改运营审核、归属或付费配置');
+    const config = await this.getRegionCircleSettings(circle.regionId || '');
+    if (dto.name !== undefined && (String(dto.name).trim().length < config.circle_name_min_length || String(dto.name).trim().length > config.circle_name_max_length)) throw new BadRequestException('圈子名称长度不符合当前校区规则');
+    if (dto.description !== undefined && String(dto.description).length > config.circle_desc_max_length) throw new BadRequestException('圈子介绍过长');
+    const allowed: any = {}; for (const key of ['name', 'icon', 'cover', 'description', 'announcement', 'rules', 'joinType', 'join_type', 'join_permission', 'tags']) if (dto[key] !== undefined) allowed[key] = dto[key];
+    if (dto.logo !== undefined) allowed.icon = dto.logo;
+    if (dto.background_image !== undefined) allowed.cover = dto.background_image;
+    return this.prisma.circle.update({ where: { id: circleId }, data: this.buildCircleMutationData(allowed) });
+  }
+
+  private async addCircleConversationMember(tx: any, circleId: string, userId: string) {
+    const rooms = await tx.conversation.findMany({ where: { type: 'circle', title: circleId }, select: { id: true } });
+    if (rooms.length) await tx.conversationMember.createMany({ data: rooms.map((room: any) => ({ conversationId: room.id, userId })), skipDuplicates: true });
   }
 
   async inviteMember(circleId: string, userId: string, dto: any) {
-    const { inviteeId } = dto;
-    const circle = await this.prisma.circle.findUnique({ where: { id: circleId }, select: { id: true, regionId: true } });
-    if (!circle) throw new NotFoundException('圈子不存在');
-    await this.userAccess.assertStudentProtectedAction(userId, circle.regionId, '邀请圈子成员');
-    const operator = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
-    if (!operator || !this.isReadableMemberStatus(operator.status) || !['OWNER', 'ADMIN'].includes(operator.role)) {
-      throw new ForbiddenException('无权邀请成员');
-    }
-    const exists = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId: inviteeId } } });
-    if (exists) throw new BadRequestException('该用户已在圈子中');
-    await this.prisma.circleMember.create({ data: { circleId, userId: inviteeId, role: 'MEMBER', status: 'active', operatorId: userId } });
-    await this.prisma.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } });
-    return { success: true };
+    const inviteeId = String(dto.inviteeId || dto.invitee_id || '').trim();
+    if (!inviteeId || inviteeId === userId) throw new BadRequestException('请选择有效的受邀同学');
+    return this.serialCircle(async (tx) => {
+      const { circle, manager } = await this.assertReadableCircle(circleId, userId, tx);
+      if (!manager) throw new ForbiddenException('无权邀请成员');
+      if (circle.status !== 'active' || circle.auditStatus !== 'approved') throw new BadRequestException('圈子暂未开放');
+      await this.userAccess.assertStudentProtectedAction(userId, circle.regionId, '邀请圈子成员');
+      await this.userAccess.assertStudentProtectedAction(inviteeId, circle.regionId, '加入圈子');
+      const existing = await tx.circleMember.findUnique({ where: { circleId_userId: { circleId, userId: inviteeId } } });
+      if (existing) throw new BadRequestException('该用户已有圈子成员或申请记录');
+      if (circle.memberCount >= circle.maxMembers) throw new BadRequestException('圈子人数已满');
+      await tx.circleMember.create({ data: { circleId, userId: inviteeId, role: 'MEMBER', status: 'active', operatorId: userId } });
+      await tx.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } });
+      await this.addCircleConversationMember(tx, circleId, inviteeId);
+      return { success: true };
+    });
   }
 
-  async getGroupChat(circleId: string, query: any) {
-    const conversation = await this.prisma.conversation.findFirst({
-      where: { type: 'circle', title: circleId },
-      include: { members: { include: { user: { select: { id: true, nickname: true, avatar: true } } } }, messages: { take: 50, orderBy: { createdAt: 'desc' } } },
-    });
+  async getGroupChat(circleId: string, _query: any, userId?: string) {
+    if (!userId) throw new ForbiddenException('请先登录');
+    const { member } = await this.assertReadableCircle(circleId, userId);
+    if (!member || !this.isReadableMemberStatus(member.status)) throw new ForbiddenException('加入圈子后才能查看群聊');
+    // This entry only returns navigation metadata, never message bodies or a full membership list.
+    const conversation = await this.prisma.conversation.findFirst({ where: { type: 'circle', title: circleId, members: { some: { userId } } }, select: { id: true, title: true, avatar: true, type: true, _count: { select: { members: true } } } });
     if (!conversation) throw new NotFoundException('群聊不存在');
-    return conversation;
+    return { ...conversation, group_id: conversation.id, member_count: conversation._count.members };
   }
 
-  async createGroupChat(circleId: string, userId: string, dto: any, query: any) {
-    const circle = await this.prisma.circle.findUnique({ where: { id: circleId }, include: { members: true } });
-    if (!circle) throw new NotFoundException('圈子不存在');
+  async createGroupChat(circleId: string, userId: string, _dto: any, _query: any) {
+    const { circle, manager } = await this.assertReadableCircle(circleId, userId);
+    if (!manager || circle.status !== 'active' || circle.auditStatus !== 'approved') throw new ForbiddenException('只有已开放圈子的圈主或管理员可以创建群聊');
     await this.userAccess.assertStudentProtectedAction(userId, circle.regionId, '创建圈子群聊');
-    if (circle.regionId) {
-      const region = await this.prisma.region.findUnique({
-        where: { id: circle.regionId },
-        select: { groupChatEnabled: true },
-      });
-      if (region && region.groupChatEnabled === false) {
-        throw new ForbiddenException('当前区域未开启群聊功能');
-      }
-    }
-    const conversation = await this.prisma.conversation.create({
-      data: { type: 'circle', title: circleId, avatar: circle.cover || circle.icon || null },
+    const config = await this.getRegionCircleSettings(circle.regionId || '');
+    if (!config.allow_group_chat) throw new ForbiddenException('当前区域未开启圈子群聊');
+    if (circle.regionId) { const region = await this.prisma.region.findUnique({ where: { id: circle.regionId }, select: { groupChatEnabled: true } }); if (region?.groupChatEnabled === false) throw new ForbiddenException('当前区域未开启群聊功能'); }
+    return this.serialCircle(async (tx) => {
+      const current = await this.assertReadableCircle(circleId, userId, tx);
+      if (!current.manager) throw new ForbiddenException('管理身份已变化');
+      const existing = await tx.conversation.findFirst({ where: { type: 'circle', title: circleId } }); if (existing) return existing;
+      const members = await tx.circleMember.findMany({ where: { circleId, status: { in: ['active', 'muted'] } }, select: { userId: true } });
+      const conversation = await tx.conversation.create({ data: { type: 'circle', title: circleId, avatar: circle.cover || circle.icon || null } });
+      await tx.conversationMember.createMany({ data: members.map((member: any) => ({ conversationId: conversation.id, userId: member.userId })), skipDuplicates: true });
+      return conversation;
     });
-    for (const member of circle.members.filter((item: any) => this.isReadableMemberStatus(item.status))) {
-      await this.prisma.conversationMember.create({
-        data: { conversationId: conversation.id, userId: member.userId },
-      });
-    }
-    return conversation;
   }
 
   async getPendingMembers(circleId: string, query: any, userId?: string) {
+    if (!userId) throw new ForbiddenException('请先登录');
     if (userId) {
       const operator = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
       if (!operator || !this.isReadableMemberStatus(operator.status) || !['OWNER', 'ADMIN'].includes(operator.role)) {
@@ -874,8 +917,8 @@ export class CircleService {
       }
     }
     const { page = 1, limit = 50 } = query;
-    const pageNum = Number(page) || 1;
-    const take = Number(limit) || 50;
+    const pageNum = Math.max(1, Math.floor(Number(page) || 1));
+    const take = Math.min(100, Math.max(1, Math.floor(Number(limit) || 50)));
     const list = await this.prisma.circleMember.findMany({
       where: { circleId, status: 'pending' },
       include: { user: { select: { id: true, nickname: true, avatar: true } } },
@@ -891,36 +934,25 @@ export class CircleService {
   }
 
   async auditMember(circleId: string, memberOrUserId: string, userId: string, dto: any) {
-    const { status } = dto;
-    const operator = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
-    if (!operator || !this.isReadableMemberStatus(operator.status) || !['OWNER', 'ADMIN'].includes(operator.role)) {
-      throw new ForbiddenException('无权审核加入申请');
-    }
-    const member = await this.prisma.circleMember.findFirst({
-      where: {
-        circleId,
-        OR: [{ id: memberOrUserId }, { userId: memberOrUserId }],
-      },
+    if (!['approved', 'rejected'].includes(dto.status)) throw new BadRequestException('无效审核操作');
+    return this.serialCircle(async (tx) => {
+      const { circle, manager } = await this.assertReadableCircle(circleId, userId, tx);
+      if (!manager) throw new ForbiddenException('无权审核加入申请');
+      const member = await tx.circleMember.findFirst({ where: { circleId, OR: [{ id: memberOrUserId }, { userId: memberOrUserId }] } });
+      if (!member) throw new NotFoundException('申请不存在');
+      if (member.status !== 'pending' || member.role === 'OWNER' || member.role === 'ADMIN') throw new ConflictException('只能审核待处理的加入申请');
+      if (dto.status === 'approved') {
+        if (circle.memberCount >= circle.maxMembers) throw new BadRequestException('圈子人数已满');
+        await tx.circleMember.update({ where: { id: member.id }, data: { status: 'active', auditedAt: new Date(), auditReason: String(dto.reason || '').slice(0, 300), operatorId: userId } });
+        await tx.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } });
+        await this.addCircleConversationMember(tx, circleId, member.userId);
+      } else await tx.circleMember.delete({ where: { id: member.id } });
+      return { success: true };
     });
-    if (!member || member.circleId !== circleId) throw new NotFoundException('成员不存在');
-    if (status === 'approved') {
-      await this.prisma.circleMember.update({
-        where: { id: member.id },
-        data: { role: 'MEMBER', status: 'active', auditedAt: new Date(), auditReason: dto.reason || '', operatorId: userId },
-      });
-      if (member.status === 'pending') {
-        await this.prisma.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } });
-      }
-    } else {
-      await this.prisma.circleMember.delete({ where: { id: member.id } });
-      if (this.isReadableMemberStatus(member.status)) {
-        await this.prisma.circle.updateMany({ where: { id: circleId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
-      }
-    }
-    return { success: true };
   }
 
-  async getMembers(circleId: string, query: any) {
+  async getMembers(circleId: string, query: any, userId?: string) {
+    await this.assertReadableCircle(circleId, userId);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit || query.pageSize) || 50));
     const [list, total] = await Promise.all([
@@ -938,68 +970,42 @@ export class CircleService {
 
   async join(circleId: string, userId: string) {
     if (!userId) throw new BadRequestException('用户身份缺失，请重新登录');
-    const circle = await this.prisma.circle.findUnique({ where: { id: circleId } });
-    if (!circle) throw new NotFoundException('圈子不存在');
-    await this.userAccess.assertStudentProtectedAction(userId, circle.regionId, '加入圈子');
-    if (circle.status && this.normalizeCircleStatus(circle.status, 'disabled') !== 'active') throw new BadRequestException('圈子未开放，无法加入');
-    if (circle.auditStatus && circle.auditStatus !== 'approved') throw new BadRequestException('圈子还未通过审核，暂不能加入');
-    if (circle.memberCount >= circle.maxMembers) throw new BadRequestException('圈子人数已满');
-    const exists = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
-    if (exists) {
-      if (exists.status === 'pending') {
-        return {
-          success: true,
-          joined: false,
-          isMember: false,
-          pending: true,
-          role: exists.role,
-          status: exists.status,
-          message: '加入申请已提交，等待圈主审核',
-        };
+    return this.serialCircle(async (tx) => {
+      const circle = await tx.circle.findUnique({ where: { id: circleId } });
+      if (!circle) throw new NotFoundException('圈子不存在');
+      await this.userAccess.assertStudentProtectedAction(userId, circle.regionId, '加入圈子');
+      if (this.normalizeCircleStatus(circle.status, 'disabled') !== 'active' || circle.auditStatus !== 'approved') throw new BadRequestException('圈子暂未开放');
+      const exists = await tx.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
+      if (exists) {
+        if (exists.status === 'banned') throw new ForbiddenException('你已被移出该圈子，暂不能重新加入');
+        if (this.isReadableMemberStatus(exists.status)) await this.addCircleConversationMember(tx, circleId, userId);
+        return { success: true, joined: this.isReadableMemberStatus(exists.status), isMember: this.isReadableMemberStatus(exists.status), pending: exists.status === 'pending', role: exists.role, status: exists.status, message: exists.status === 'pending' ? '加入申请已提交，等待圈主审核' : '已在圈子中' };
       }
-      if (exists.status === 'banned') {
-        throw new ForbiddenException('你已被移出该圈子，暂不能重新加入');
-      }
-      return {
-        success: true,
-        joined: this.isReadableMemberStatus(exists.status),
-        isMember: this.isReadableMemberStatus(exists.status),
-        role: exists.role,
-        status: exists.status,
-        message: '已在圈子中',
-      };
-    }
-    if (circle.paidJoin) {
-      throw new BadRequestException('该圈子需要付费加入，请先完成支付');
-    }
-    if (circle.joinType === 'INVITE') {
-      throw new BadRequestException('该圈子为邀请制，请联系圈主邀请加入');
-    }
-    const needApproval = circle.joinType === 'APPLY';
-    await this.prisma.circleMember.create({ data: { circleId, userId, status: needApproval ? 'pending' : 'active' } });
-    if (!needApproval) {
-      await this.prisma.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } });
-    }
-    return {
-      success: true,
-      joined: !needApproval,
-      isMember: !needApproval,
-      pending: needApproval,
-      role: 'MEMBER',
-      status: needApproval ? 'pending' : 'active',
-      message: needApproval ? '加入申请已提交，等待圈主审核' : '加入成功',
-    };
+      if (circle.memberCount >= circle.maxMembers) throw new BadRequestException('圈子人数已满');
+      if (circle.paidJoin) throw new BadRequestException('该圈子需要付费加入，暂不能从此入口加入');
+      if (circle.joinType === 'INVITE') throw new BadRequestException('该圈子为邀请制，请联系圈主邀请加入');
+      const needApproval = circle.joinType === 'APPLY';
+      await tx.circleMember.create({ data: { circleId, userId, status: needApproval ? 'pending' : 'active' } });
+      if (!needApproval) { await tx.circle.update({ where: { id: circleId }, data: { memberCount: { increment: 1 } } }); await this.addCircleConversationMember(tx, circleId, userId); }
+      return { success: true, joined: !needApproval, isMember: !needApproval, pending: needApproval, role: 'MEMBER', status: needApproval ? 'pending' : 'active', message: needApproval ? '加入申请已提交，等待圈主审核' : '加入成功' };
+    });
   }
 
   async leave(circleId: string, targetUserId: string, userId: string) {
-    const member = await this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId, userId: targetUserId } } });
-    if (!member) throw new NotFoundException('不在该圈子中');
-    if (member.role === 'OWNER') throw new ForbiddenException('群主不能退出');
-    await this.prisma.circleMember.delete({ where: { id: member.id } });
-    if (this.isReadableMemberStatus(member.status)) {
-      await this.prisma.circle.updateMany({ where: { id: circleId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
-    }
-    return { success: true };
+    return this.serialCircle(async (tx) => {
+      const member = await tx.circleMember.findUnique({ where: { circleId_userId: { circleId, userId: targetUserId } } });
+      if (!member) throw new NotFoundException('不在该圈子中');
+      if (member.role === 'OWNER') throw new ForbiddenException('圈主不能退出或被移除');
+      if (targetUserId === userId && member.status === 'banned') throw new ForbiddenException('限制成员记录不能自行删除');
+      if (targetUserId !== userId) {
+        const operator = await tx.circleMember.findUnique({ where: { circleId_userId: { circleId, userId } } });
+        if (!operator || !this.isReadableMemberStatus(operator.status) || !['OWNER', 'ADMIN'].includes(operator.role) || member.role === 'ADMIN' && operator.role !== 'OWNER') throw new ForbiddenException('无权移除此成员');
+      }
+      await tx.circleMember.delete({ where: { id: member.id } });
+      if (this.isReadableMemberStatus(member.status)) await tx.circle.updateMany({ where: { id: circleId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
+      await tx.conversationMember.deleteMany({ where: { userId: targetUserId, conversation: { type: 'circle', title: circleId } } });
+      return { success: true };
+    });
   }
 
   async checkMember(circleId: string, userId: string) {
@@ -1019,8 +1025,8 @@ export class CircleService {
     };
   }
 
-  async getTopicHeaders(circleId: string, includeTopics: string) {
-    await this.ensureDefaultTopicHeaders(circleId);
+  async getTopicHeaders(circleId: string, includeTopics: string, userId?: string, options: { skipVisibility?: boolean } = {}) {
+    if (!options.skipVisibility) await this.assertReadableCircle(circleId, userId);
     const withTopics = String(includeTopics || 'true') !== 'false';
     const headers = await this.prisma.circleTopicHeader.findMany({
       where: { circleId },
@@ -1073,11 +1079,7 @@ export class CircleService {
           cover: dto?.logo || dto?.icon || dto?.cover || circle.icon || null,
           status: 'active',
         },
-        update: {
-          description: dto?.description || undefined,
-          cover: dto?.logo || dto?.icon || dto?.cover || undefined,
-          status: 'active',
-        },
+        update: {},
       });
       await tx.circleTopicGroup.upsert({
         where: { circleId_topicId: { circleId, topicId: item.id } },
@@ -1112,6 +1114,18 @@ export class CircleService {
     return { success: true, data, topic: data };
   }
 
+  async updateCircleTopic(circleId: string, topicId: string, userId: string, dto: any) {
+    await this.assertCircleTopicManager(circleId, userId);
+    return this.serialCircle(async (tx) => {
+      const binding = await tx.circleTopicGroup.findFirst({ where: { circleId, topicId }, include: { topic: true } });
+      if (!binding) throw new NotFoundException('话题不属于当前圈子');
+      if (await tx.circleTopicGroup.count({ where: { topicId, circleId: { not: circleId } } })) throw new ForbiddenException('此话题由多个圈子共用，请创建独立话题后调整');
+      const title = String(dto.title ?? dto.name ?? binding.topic.name).trim();
+      if (!title || title.length > 50) throw new BadRequestException('话题名称须为 1–50 字');
+      return tx.topic.update({ where: { id: topicId }, data: { name: title, ...(dto.description !== undefined ? { description: String(dto.description).slice(0, 1000) } : {}), ...(dto.logo !== undefined ? { cover: String(dto.logo) } : {}) } });
+    });
+  }
+
   async batchCreateTopicHeaders(circleId: string, userId: string, dto: any, options: { skipPermission?: boolean } = {}) {
     if (!options.skipPermission) await this.assertCircleTopicManager(circleId, userId);
     const headers = Array.isArray(dto?.headers) ? dto.headers : Array.isArray(dto?.items) ? dto.items : [];
@@ -1122,8 +1136,13 @@ export class CircleService {
     const maxHeaders = Number(config.max_topic_headers || 5);
     const maxTopics = Number(config.max_topics_per_header || 20);
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const [headerIndex, rawHeader] of headers.slice(0, maxHeaders).entries()) {
+    if (headers.some((header: any) => !String(header.title || header.name || '').trim() || String(header.title || header.name || '').trim().length > 40)) throw new BadRequestException('分栏名称须为1至40字');
+    if (headers.some((header: any) => Array.isArray(header.topics) && header.topics.length > maxTopics)) throw new BadRequestException('分栏话题数量超过校区限制');
+    await this.serialCircle(async (tx) => {
+      const existing = await tx.circleTopicHeader.findMany({ where: { circleId }, select: { title: true } });
+      const names = new Set([...existing.map((row: any) => row.title), ...headers.map((row: any) => String(row.title || row.name).trim())]);
+      if (names.size > maxHeaders) throw new BadRequestException('分栏总数量超过校区限制');
+      for (const [headerIndex, rawHeader] of headers.entries()) {
         const title = String(rawHeader.title || rawHeader.name || '').trim();
         if (!title) continue;
         const header = await tx.circleTopicHeader.upsert({
@@ -1149,30 +1168,13 @@ export class CircleService {
         for (const [topicIndex, rawTopic] of topics.slice(0, maxTopics).entries()) {
           const topicName = String(rawTopic.title || rawTopic.name || '').trim();
           if (!topicName) continue;
-          const topic = rawTopic.topicId || rawTopic.topic_id
-            ? await tx.topic.update({
-                where: { id: String(rawTopic.topicId || rawTopic.topic_id) },
-                data: {
-                  name: topicName,
-                  description: rawTopic.description || undefined,
-                  cover: rawTopic.logo || rawTopic.icon || rawTopic.cover || undefined,
-                  status: rawTopic.status || undefined,
-                },
-              })
-            : await tx.topic.upsert({
-                where: { name: topicName },
-                create: {
-                  name: topicName,
-                  description: rawTopic.description || null,
-                  cover: rawTopic.logo || rawTopic.icon || rawTopic.cover || null,
-                  status: rawTopic.status || 'active',
-                },
-                update: {
-                  description: rawTopic.description || undefined,
-                  cover: rawTopic.logo || rawTopic.icon || rawTopic.cover || undefined,
-                  status: rawTopic.status || undefined,
-                },
-              });
+          let topic: any;
+          const requestedId = rawTopic.topicId || rawTopic.topic_id;
+          if (requestedId) {
+            const binding = await tx.circleTopicGroup.findFirst({ where: { circleId, topicId: String(requestedId) }, include: { topic: true } });
+            if (!binding) throw new ForbiddenException('不能修改或绑定其他圈子的指定话题');
+            topic = binding.topic;
+          } else topic = await tx.topic.upsert({ where: { name: topicName }, create: { name: topicName, description: rawTopic.description || null, cover: rawTopic.logo || rawTopic.icon || rawTopic.cover || null, status: 'active' }, update: {} });
           await tx.circleTopicGroup.upsert({
             where: { circleId_topicId: { circleId, topicId: topic.id } },
             create: {
@@ -1189,7 +1191,7 @@ export class CircleService {
         }
       }
     });
-    return this.getTopicHeaders(circleId, 'true');
+    return this.getTopicHeaders(circleId, 'true', userId, { skipVisibility: true });
   }
 
   async updateTopicHeader(circleId: string, headerId: string, userId: string, dto: any, options: { skipPermission?: boolean } = {}) {
@@ -1207,7 +1209,7 @@ export class CircleService {
           : header.isActive,
       },
     });
-    return this.getTopicHeaders(circleId, 'true');
+    return this.getTopicHeaders(circleId, 'true', userId, { skipVisibility: true });
   }
 
   async deleteTopicHeader(circleId: string, headerId: string, userId: string, options: { skipPermission?: boolean } = {}) {
@@ -1225,26 +1227,27 @@ export class CircleService {
     return { success: true };
   }
 
+  async shareCode(circleId: string, userId: string) {
+    if (!userId) throw new ForbiddenException('请先登录');
+    const { circle } = await this.assertReadableCircle(circleId, userId);
+    if (circle.status !== 'active' || circle.auditStatus !== 'approved') throw new ForbiddenException('圈子尚未开放分享');
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(circleId)) throw new BadRequestException('圈子分享标识无效');
+    if (!this.upload) throw new BadRequestException('分享服务暂不可用');
+    return this.upload.generateQrcode({ scene: circleId, page: 'pagesMain/circlelite/Circle-information/Circle-information', width: 430 });
+  }
+
   async search(query: any) {
-    const { keyword, page = 1, limit = 20 } = query;
-    const where: any = {};
-    if (keyword) {
-      where.OR = [
-        { name: { contains: keyword } },
-        { description: { contains: keyword } },
-      ];
-    }
-    return this.prisma.circle.findMany({
-      where,
-      skip: (page - 1) * limit,
-      take: Number(limit),
-      orderBy: { memberCount: 'desc' },
-    });
+    const page = Math.max(1, Math.floor(Number(query.page) || 1)), limit = Math.min(100, Math.max(1, Math.floor(Number(query.limit) || 20)));
+    const where: any = { status: 'active', auditStatus: 'approved' };
+    const regionId = query.region_id || query.regionId;
+    if (regionId) where.regionId = String(regionId);
+    if (query.keyword) where.OR = [{ name: { contains: String(query.keyword) } }, { description: { contains: String(query.keyword) } }];
+    return this.prisma.circle.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: { memberCount: 'desc' } });
   }
 
   async getHotKeywords(query: any) {
     const regionId = query.region_id || query.regionId;
-    const where: any = { status: 'active' };
+    const where: any = { status: 'active', auditStatus: 'approved' };
     if (regionId) where.regionId = String(regionId);
 
     const circles = await this.prisma.circle.findMany({
@@ -1922,7 +1925,7 @@ export class CircleService {
 
   async getAdminCircleTopicHeaders(circleId: string, operatorId?: string) {
     await this.getAdminCircleForScope(circleId, operatorId);
-    return this.getTopicHeaders(circleId, 'true');
+    return this.getTopicHeaders(circleId, 'true', undefined, { skipVisibility: true });
   }
 
   async adminSaveCircleTopicHeaders(circleId: string, dto: any, operatorId?: string, ip?: string) {

@@ -576,7 +576,7 @@ async function loadCommission() {
     commissionSummary.value = ov?.summary || {}
     bizBreakdown.value = ov?.bizBreakdown || []
     regionRates.value = ov?.regionRates || []
-    feeConfigs.value = (feeRes?.data || ov?.feeConfigs || []).map((c: any) => ({ ...c, label: c.bizType === 'order' ? '外卖 / 宿舍小店' : c.label, rate: Number(c.rate || 0), fixedFee: Number(c.fixedFee || 0) }))
+    feeConfigs.value = (feeRes?.data || ov?.feeConfigs || []).map((c: any) => ({ ...c, label: c.bizType === 'order' ? '外卖 / 宿舍小店' : (c.label && c.label !== c.bizType ? c.label : bizTypeLabel(c.bizType)), rate: Number(c.rate || 0), fixedFee: Number(c.fixedFee || 0) }))
     recalc()
   } catch (e: any) { ElMessage.error(e?.message || '加载抽成配置失败') }
 }

@@ -493,6 +493,13 @@ export class ShopController {
     return this.shopService.getDeliveryDistance(merchantId, userId, dto);
   }
 
+  @Get("order/request/:requestId")
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  findOrderByRequest(@CurrentUser("sub") userId: string, @Param("requestId") requestId: string) {
+    return this.shopService.findOrderByRequest(userId, requestId);
+  }
+
   @Get("order/:orderId")
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

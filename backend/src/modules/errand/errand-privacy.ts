@@ -29,6 +29,7 @@ export function poolErrandProjection(order: any) {
     order_no: order?.order_no,
     type: 'errand',
     service_type: order?.service_type,
+    ...(order?.service_type === 'purchase' ? { purchase_goods_cents: numberValue(order.purchase_goods_cents), purchase_shop_count: numberValue(order.purchase_shop_count), ...(order.purchase_blocked_reason ? { purchase_blocked_reason: order.purchase_blocked_reason } : {}) } : {}),
     status: order?.status,
     raw_status: order?.raw_status,
     payment_status: order?.payment_status,

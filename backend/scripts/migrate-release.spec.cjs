@@ -268,6 +268,39 @@ for (const provider of ["postgresql", "mysql"]) {
   }
 }
 
+for (const provider of ["postgresql", "mysql"]) {
+  const legacyEntryMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202609190004_welfare_legacy_entry_defaults",
+  );
+  assert.ok(
+    legacyEntryMigration,
+    `${provider} release migrations must account for retired welfare entry columns`,
+  );
+  const legacyEntrySql = fs.readFileSync(legacyEntryMigration.file, "utf8");
+  if (provider === "mysql") {
+    assert.match(legacyEntrySql, /welfare_entries[\s\S]*ordinal[\s\S]*DEFAULT 0/i);
+    assert.match(legacyEntrySql, /welfare_entries[\s\S]*dayKey[\s\S]*DEFAULT ''''/i);
+    assert.match(legacyEntrySql, /welfare_draws[\s\S]*giftedCount[\s\S]*DEFAULT 0/i);
+    assert.match(legacyEntrySql, /information_schema\.columns/i);
+    assert.match(legacyEntrySql, /PREPARE\s+stmt/i);
+  } else {
+    assert.match(legacyEntrySql, /SELECT 1/i);
+  }
+}
+
+for (const provider of ["postgresql", "mysql"]) {
+  const modifierMigration = migrationFiles(provider).find(
+    (migration) => migration.name === "202609270002_purchase_modifiers",
+  );
+  assert.ok(modifierMigration, `${provider} release migrations must add the purchase modifier library`);
+  const modifierSql = fs.readFileSync(modifierMigration.file, "utf8");
+  assert.match(modifierSql, /CREATE TABLE IF NOT EXISTS [`"]purchase_modifier_groups[`"]/);
+  assert.match(modifierSql, /CREATE TABLE IF NOT EXISTS [`"]purchase_modifier_options[`"]/);
+  assert.match(modifierSql, /modifierBindings/);
+  // A partly applied release must be able to run this file again.
+  assert.match(modifierSql, provider === "mysql" ? /information_schema\.COLUMNS/ : /ADD COLUMN IF NOT EXISTS/);
+}
+
 const disabledConversationMigration = path.resolve(
   __dirname,
   "../prisma/migrations/20260824145429_add_private_conversation_unique_constraint.sql",

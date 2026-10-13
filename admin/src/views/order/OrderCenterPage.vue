@@ -106,7 +106,7 @@
             <small v-if="hasLocation(node)">送达坐标：{{ Number(node.lat).toFixed(6) }}, {{ Number(node.lng).toFixed(6) }}</small>
             <small v-if="node.nodeType === 'arrived' && !nodeProofImages(node).length">暂无送达照片</small>
             <div v-if="nodeProofImages(node).length" class="node-proofs">
-              <el-image v-for="image in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
+              <el-image :initial-index="previewIndex" preview-teleported v-for="(image, previewIndex) in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
             </div>
           </div>
         </section>

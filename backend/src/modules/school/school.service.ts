@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { requiresStudentCard } from '../student-identity/student-identity.policy';
 import { PrismaService } from '../../common/services/prisma.service';
 import {
   CreateSchoolDto,
@@ -9,7 +11,19 @@ import {
 
 @Injectable()
 export class SchoolService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly scope?: AdminDataScopeService) {}
+
+  private async adminWhere(operatorId?: string) {
+    if (!operatorId) return {};
+    const ctx = await this.scope!.getAdminContext(operatorId);
+    return ctx.isSuperAdmin ? {} : { regionId: { in: ctx.regionIds } };
+  }
+
+  private async assertAdminRegion(regionId?: string | null, operatorId?: string) {
+    if (!operatorId) return;
+    const ctx = await this.scope!.getAdminContext(operatorId);
+    if (!ctx.isSuperAdmin && (!regionId || !ctx.regionIds.includes(regionId))) throw new ForbiddenException('无权管理该学校所属区域');
+  }
 
   // ==================== 公开接口（小程序用） ====================
 
@@ -61,10 +75,11 @@ export class SchoolService {
 
   // ==================== 管理接口 ====================
 
-  async adminList(query: AdminSchoolQueryDto) {
+  async adminList(query: AdminSchoolQueryDto, operatorId?: string) {
     const page = Math.max(Number(query.page) || 1, 1);
     const pageSize = Math.min(Math.max(Number(query.pageSize) || 20, 1), 100);
-    const where: any = {};
+    const where: any = { AND: [await this.adminWhere(operatorId)] };
+    if (query.regionId) await this.assertAdminRegion(query.regionId, operatorId);
 
     if (query.keyword) {
       const keyword = query.keyword.trim();
@@ -109,12 +124,13 @@ export class SchoolService {
     };
   }
 
-  async adminStats() {
+  async adminStats(operatorId?: string) {
+    const scope = await this.adminWhere(operatorId);
     const [totalCount, enabledCount, boundCount, unboundCount] = await Promise.all([
-      this.prisma.school.count(),
-      this.prisma.school.count({ where: { isEnabled: true } }),
-      this.prisma.school.count({ where: { regionId: { not: null } } }),
-      this.prisma.school.count({ where: { regionId: null } }),
+      this.prisma.school.count({ where: scope }),
+      this.prisma.school.count({ where: { AND: [scope, { isEnabled: true }] } }),
+      this.prisma.school.count({ where: { AND: [scope, { regionId: { not: null } }] } }),
+      this.prisma.school.count({ where: { AND: [scope, { regionId: null }] } }),
     ]);
     return {
       total: totalCount,
@@ -124,7 +140,8 @@ export class SchoolService {
     };
   }
 
-  async create(dto: CreateSchoolDto) {
+  async create(dto: CreateSchoolDto, operatorId?: string) {
+    await this.assertAdminRegion(dto.regionId, operatorId);
     if (!dto.name || !dto.name.trim()) {
       throw new BadRequestException('学校名称不能为空');
     }
@@ -157,10 +174,12 @@ export class SchoolService {
     return { success: true, data: this.toAdminSchool(school) };
   }
 
-  async update(id: string, dto: UpdateSchoolDto) {
+  async update(id: string, dto: UpdateSchoolDto, operatorId?: string) {
     const existing = await this.prisma.school.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('学校不存在');
+    await this.assertAdminRegion(existing.regionId, operatorId);
 
+    if (dto.regionId !== undefined) await this.assertAdminRegion(dto.regionId, operatorId);
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name.trim();
     if (dto.shortName !== undefined) data.shortName = dto.shortName?.trim() || null;
@@ -180,7 +199,7 @@ export class SchoolService {
     if (dto.remark !== undefined) data.remark = dto.remark?.trim() || null;
 
     const school = await this.prisma.school.update({
-      where: { id },
+      where: { id, regionId: existing.regionId },
       data,
       include: {
         region: { select: { id: true, name: true } },
@@ -191,39 +210,42 @@ export class SchoolService {
     return { success: true, data: this.toAdminSchool(school) };
   }
 
-  async updateStatus(id: string, isEnabled: boolean) {
+  async updateStatus(id: string, isEnabled: boolean, operatorId?: string) {
     const existing = await this.prisma.school.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('学校不存在');
+    await this.assertAdminRegion(existing.regionId, operatorId);
 
     await this.prisma.school.update({
-      where: { id },
+      where: { id, regionId: existing.regionId },
       data: { isEnabled },
     });
 
     return { success: true };
   }
 
-  async delete(id: string) {
+  async delete(id: string, operatorId?: string) {
     const existing = await this.prisma.school.findUnique({
       where: { id },
-      include: { _count: { select: { studentVerifies: true } } },
+      include: { _count: { select: { studentVerifies: true, students: true, rosterBatches: true } } },
     });
     if (!existing) throw new NotFoundException('学校不存在');
+    await this.assertAdminRegion(existing.regionId, operatorId);
 
     // 如果有关联认证记录，只禁用不删除
-    if (existing._count.studentVerifies > 0) {
+    if (existing._count.studentVerifies > 0 || (existing._count.students || 0) > 0 || (existing._count.rosterBatches || 0) > 0) {
       await this.prisma.school.update({
-        where: { id },
+        where: { id, regionId: existing.regionId },
         data: { isEnabled: false },
       });
-      return { success: true, message: '学校已禁用（存在关联认证记录）' };
+      return { success: true, message: '学校已禁用（存在关联认证或名册记录）' };
     }
 
-    await this.prisma.school.delete({ where: { id } });
+    await this.prisma.school.delete({ where: { id, regionId: existing.regionId } });
     return { success: true };
   }
 
-  async getByRegion(regionId: string) {
+  async getByRegion(regionId: string, operatorId?: string) {
+    await this.assertAdminRegion(regionId, operatorId);
     const schools = await this.prisma.school.findMany({
       where: { regionId, isEnabled: true },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
@@ -231,14 +253,20 @@ export class SchoolService {
     return { data: schools.map((s) => this.toPublicSchool(s)) };
   }
 
-  async bindToRegion(regionId: string, schoolIds: string[]) {
+  async bindToRegion(regionId: string, schoolIds: string[], operatorId?: string) {
+    await this.assertAdminRegion(regionId, operatorId);
+    if (operatorId) {
+      const sourceSchools = await this.prisma.school.findMany({ where: { id: { in: schoolIds } }, select: { id: true, regionId: true } });
+      if (sourceSchools.length !== new Set(schoolIds).size) throw new NotFoundException('部分学校不存在');
+      for (const source of sourceSchools) await this.assertAdminRegion(source.regionId, operatorId);
+    }
     // 验证区域存在
     const region = await this.prisma.region.findUnique({ where: { id: regionId } });
     if (!region) throw new NotFoundException('区域不存在');
 
     // 批量更新学校的 regionId
     await this.prisma.school.updateMany({
-      where: { id: { in: schoolIds } },
+      where: { id: { in: schoolIds }, AND: [await this.adminWhere(operatorId)] },
       data: { regionId },
     });
 
@@ -261,6 +289,8 @@ export class SchoolService {
     return {
       id: s.id,
       name: s.name,
+      verification_mode: s.studentVerificationMode || 'MANUAL',
+      student_card_required: requiresStudentCard(s.id),
       short_name: s.shortName || '',
       shortName: s.shortName || '',
       type: s.type,

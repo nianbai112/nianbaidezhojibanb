@@ -15,6 +15,7 @@ import {
 import { mallAdminApiCompatMiddleware } from "./common/middleware/mall-admin-api-compat";
 import { resolveCorsOrigin, resolveListenHost } from "./config/setup-cors";
 import { requestContextMiddleware } from "./common/request-context";
+import { preserveRiderAuthorizationBody } from "./common/middleware/rider-authorization-body";
 
 async function bootstrap() {
   process.env.SERVICE_ROLE ||= "api";
@@ -30,11 +31,27 @@ async function bootstrap() {
   // 微信公众号安全模式使用 XML 回调；Nest 默认只解析 JSON/urlencoded。
   // 必须在通用 body parser 之前保留 XML 字符串，供 msg_signature 验签和 AES 解密。
   app.use(
-    ["/api/wechat/official/callback", "/wechat/official/callback"],
+    ["/api/wechat/official/callback", "/wechat/official/callback", "/api/wechat/wecom/callback", "/wechat/wecom/callback"],
     express.text({ type: ["text/xml", "application/xml"], limit: "64kb" }),
   );
 
+  // 个微协议事件回调用 HMAC(原始 body) 签名，需在通用 JSON 解析前保留原始字节。
+  app.use(
+    ["/api/wechat-moments/webhook", "/api/wechat-channel/webhook"],
+    express.json({
+      limit: "2mb",
+      verify: (req: any, _res: any, buffer: Buffer) => {
+        req.rawBody = Buffer.from(buffer);
+      },
+    }),
+  );
+
   // 校园地图清单可包含内联 GeoJSON；只为该管理端路由放宽请求体限制。
+  // Apple 通知只包含一个签名 JWT，单独限制公开入口的解析开销。
+  app.use(
+    ["/wx-auth/apple/notifications", "/api/wx-auth/apple/notifications", "/api/v1/wx-auth/apple/notifications"],
+    express.json({ limit: "16kb" }),
+  );
   app.use("/admin/campus-map", express.json({ limit: "5mb" }));
   // 小程序代码包素材库走 base64 上传（5MB 图片 ≈ 6.7MB base64），放宽到 10mb。
   app.use("/admin/miniapp/code/assets", express.json({ limit: "10mb" }));
@@ -42,7 +59,7 @@ async function bootstrap() {
   // 修复：全局前缀 + 排除路径场景下 Nest 内置 JSON 解析器未覆盖排除路由，
   // 导致 @Body() 为 undefined（urlencoded 正常、application/json 失效）。
   // 显式注册 JSON/urlencoded 解析，幂等且与 Nest 默认行为一致。
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "2mb", verify: preserveRiderAuthorizationBody }));
   app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
   const logger = app.get(LoggerService);

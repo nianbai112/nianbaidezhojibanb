@@ -74,6 +74,13 @@ export class UserController {
     return this.userService.updateProfile(userId, dto);
   }
 
+  @Get('users/:id/contact')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getUserContact(@Param('id') id: string, @CurrentUser('sub') userId: string, @Query('type') type: string) {
+    return this.userService.getUserContact(id, userId, type);
+  }
+
   @Get('auth/user/privacy-settings')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

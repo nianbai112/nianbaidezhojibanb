@@ -1,3 +1,4 @@
+import { CurrentUser } from '../../decorators/current-user.decorator';
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtGuard } from '../../guards/jwt.guard';
@@ -114,8 +115,8 @@ export class ActivityAdminController {
   @Put('orders/:id/refund-audit')
   @RequirePermission('activity:audit')
   @ApiOperation({ summary: '退款审核' })
-  auditRefund(@Param('id') id: string, @Body() dto: ActivityOrderRefundAuditDto) {
-    return this.service.auditRefund(id, dto);
+  auditRefund(@Param('id') id: string, @Body() dto: ActivityOrderRefundAuditDto, @CurrentUser('sub') adminId: string) {
+    return this.service.auditRefund(id, dto, adminId);
   }
 
   // ==================== Rewards ====================

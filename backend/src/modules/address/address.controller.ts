@@ -1,3 +1,4 @@
+import { AdministrativeDivisionService } from './administrative-division.service';
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AddressService } from './address.service';
@@ -7,7 +8,11 @@ import { CurrentUser } from '../../decorators/current-user.decorator';
 @ApiTags('地址')
 @Controller()
 export class AddressController {
-  constructor(private readonly addressService: AddressService) {}
+  constructor(private readonly addressService: AddressService, private readonly divisions: AdministrativeDivisionService) {}
+
+  @Get('addresses/divisions')
+  @UseGuards(JwtGuard)
+  async listDivisions(@Query('parent_code') parent: string) { return { list: await this.divisions.children(parent || ''), source: 'tencent' }; }
 
   @Get('addresses')
   @UseGuards(JwtGuard)

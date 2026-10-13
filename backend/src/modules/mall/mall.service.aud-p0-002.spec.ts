@@ -39,6 +39,7 @@ function makeMocks(initialBalance: string) {
     }),
   };
   const mallOrder = {
+    updateMany: jest.fn(async () => ({count:1})),
     findUnique: jest.fn(async () => ({
       id: 'order1',
       userId: 'user1',
@@ -62,7 +63,7 @@ function makeMocks(initialBalance: string) {
     $transaction: jest.fn(async (fn: any) => fn(tx)),
   };
 
-  tx = { wallet, walletTransaction, paymentOrder, mallOrder };
+  tx = { mallPromotionUsage:{updateMany:jest.fn().mockResolvedValue({count:0})},wallet, walletTransaction, paymentOrder, mallOrder };
 
   const redis: any = {
     getLock: jest.fn(async () => true),

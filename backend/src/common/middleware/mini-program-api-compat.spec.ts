@@ -11,6 +11,12 @@ describe("rewriteMiniProgramApiPath", () => {
     expect(rewriteMiniProgramApiPath("/api/posts/list?page=1")).toBe(
       "/posts/list?page=1",
     );
+    expect(rewriteMiniProgramApiPath("/api/student-identity/materials")).toBe(
+      "/student-identity/materials",
+    );
+    expect(
+      rewriteMiniProgramApiPath("/api/student-identity/materials/material-a"),
+    ).toBe("/student-identity/materials/material-a");
     expect(rewriteMiniProgramApiPath("/api/post-shares/share-code")).toBe(
       "/post-shares/share-code",
     );
@@ -94,6 +100,8 @@ describe("rewriteMiniProgramApiPath", () => {
     const excludes = getMiniProgramGlobalPrefixExcludes();
 
     expect(excludes).toContain("search");
+    expect(excludes).toContain("student-identity");
+    expect(excludes).toContain("student-identity/{*path}");
     expect(excludes).toContain("post-shares/{*path}");
     expect(excludes).toContain("search/{*path}");
     expect(excludes).toContain("user-mentions/{*path}");

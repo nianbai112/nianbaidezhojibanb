@@ -60,6 +60,13 @@ export class RedisService {
     return this.redis.incr(key);
   }
 
+  async incrementWindow(key: string, seconds: number): Promise<number> {
+    return Number(await this.redis.eval(
+      'local n = redis.call("INCR", KEYS[1]); if n == 1 then redis.call("EXPIRE", KEYS[1], ARGV[1]) end; return n',
+      1, key, seconds,
+    ));
+  }
+
   async expire(key: string, seconds: number): Promise<void> {
     await this.redis.expire(key, seconds);
   }

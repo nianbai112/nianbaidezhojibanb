@@ -134,6 +134,29 @@
               />
               <div class="form-tip" v-if="wechatPay.merchantCert === '******'">已配置证书，留空则不修改</div>
             </el-form-item>
+            <el-form-item label="跑腿收入自动到账">
+              <el-switch v-model="wechatPay.riderAutoPayoutEnabled" />
+              <div class="form-tip">骑手在小程序授权后，符合结算条件的新跑腿收入自动转入微信零钱。关闭后，已发起转账继续查单。</div>
+            </el-form-item>
+            <el-form-item label="商家转账场景 ID">
+              <el-input v-model="wechatPay.riderTransferSceneId" placeholder="佣金报酬：1005" />
+            </el-form-item>
+            <el-form-item label="自动转账单笔上限（元）">
+              <el-input-number v-model="wechatPay.riderTransferMaxAmount" :min="0.1" :max="1999.99" :precision="2" />
+              <div class="form-tip">不得超过微信商户平台获批额度；不足 0.10 元或超额的收入保留在钱包，不拆单。</div>
+            </el-form-item>
+            <el-form-item label="每位骑手每日自动转账上限（元）">
+              <el-input-number v-model="wechatPay.riderTransferDailyUserAmount" :min="0.1" :max="1000000" :precision="2" />
+            </el-form-item>
+            <el-form-item label="商户每日自动转账上限（元）">
+              <el-input-number v-model="wechatPay.riderTransferDailyAmount" :min="0.1" :max="1000000" :precision="2" />
+              <div class="form-tip">其他业务转账也会消耗微信额度，请预留额度和运营账户资金。</div>
+            </el-form-item>
+            <el-form-item label="骑手收款授权回调地址">
+              <el-input v-model="wechatPay.riderAuthorizationNotifyUrl" placeholder="HTTPS 授权回调地址">
+                <template #append><el-button @click="wechatPay.riderAuthorizationNotifyUrl = `${backendApiBase}/wxpay/rider-authorization-notify`">推荐地址</el-button></template>
+              </el-input>
+            </el-form-item>
             <el-form-item class="wide-field" label="商户私钥 KEY">
               <el-input
                 v-model="wechatPay.merchantPrivateKey"
@@ -521,6 +544,12 @@ function copyCallbackUrl() {
 }
 
 const wechatPay = reactive<Record<string, any>>({
+  riderAutoPayoutEnabled: false,
+  riderTransferSceneId: '1005',
+  riderTransferMaxAmount: 200,
+  riderTransferDailyUserAmount: 2000,
+  riderTransferDailyAmount: 50000,
+  riderAuthorizationNotifyUrl: '',
   mchId: '',
   apiV3Key: '',
   certSerialNo: '',

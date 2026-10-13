@@ -258,7 +258,7 @@ const businessScopeOptions = [
   { label: '通用', value: 'all' },
   { label: '外卖/小店', value: 'shop' },
   { label: '商城', value: 'mall' },
-  { label: '跑腿', value: 'errand' },
+  { label: '跑腿/代买', value: 'errand' },
   { label: '活动', value: 'activity' },
   { label: '会员权益', value: 'membership' },
 ]

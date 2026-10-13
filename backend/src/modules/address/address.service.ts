@@ -1,9 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { AdministrativeDivisionService } from './administrative-division.service';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
+import { hasDeliveryCoordinates, joinAddressParts } from './address-location';
 
 @Injectable()
 export class AddressService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly divisions?: AdministrativeDivisionService) {}
 
   async getAddresses(userId: string, regionId: string) {
     const [rows, specifiedAddresses] = await Promise.all([
@@ -23,23 +26,47 @@ export class AddressService {
   }
 
   async addAddress(userId: string, dto: any) {
-    const data = this.normalizeAddressPayload(dto, { userId });
-    if (data.isDefault) {
-      await this.prisma.address.updateMany({ where: { userId }, data: { isDefault: false } });
-    }
-    const address = await this.prisma.address.create({ data });
+    const codes = await this.validateDivisionPayload(dto);
+    const data = { ...this.normalizeAddressPayload(dto, { userId }), ...codes };
+    const address = await this.withAddressTransaction(async (tx) => {
+      if (data.isDefault) {
+        await tx.address.updateMany({ where: { userId }, data: { isDefault: false } });
+      }
+      return tx.address.create({ data });
+    });
     return this.formatAddress(address);
   }
 
   async updateAddress(addressId: string, userId: string, dto: any) {
-    const address = await this.prisma.address.findUnique({ where: { id: addressId } });
-    if (!address || address.userId !== userId) throw new NotFoundException('地址不存在');
-    const data = this.normalizeAddressPayload(dto, address);
-    if (data.isDefault) {
-      await this.prisma.address.updateMany({ where: { userId }, data: { isDefault: false } });
-    }
-    const updated = await this.prisma.address.update({ where: { id: addressId }, data });
+    const codes = await this.validateDivisionPayload(dto);
+    const updated = await this.withAddressTransaction(async (tx) => {
+      // 重试时重新读取，避免旧快照将另一请求已更新的联系人或默认状态写回。
+      const address = await tx.address.findUnique({ where: { id: addressId } });
+      if (!address || address.userId !== userId) throw new NotFoundException('地址不存在');
+      const data = { ...this.normalizeAddressPayload(dto, address), ...codes };
+      if (data.isDefault) {
+        await tx.address.updateMany({ where: { userId }, data: { isDefault: false } });
+      }
+      return tx.address.update({ where: { id: addressId }, data });
+    });
     return this.formatAddress(updated);
+  }
+
+  private async withAddressTransaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    // 默认地址属于用户全局；Serializable 同时保护“尚无地址”的并发新增。
+    // 清旧默认与保存必须一起提交，任何写入失败均由数据库回滚。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(work, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5000,
+          timeout: 10000,
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code !== 'P2034') throw error;
+      }
+    }
+    throw new ConflictException({ code: 'ADDRESS_CONCURRENT_UPDATE', message: '地址正在被其他操作修改，请刷新后重试' });
   }
 
   async removeAddress(addressId: string, userId: string, regionId: string) {
@@ -70,12 +97,36 @@ export class AddressService {
     throw new NotFoundException('地址不存在');
   }
 
+  private async validateDivisionPayload(dto: any, current: any = {}) {
+    const names = ['provinceCode', 'cityCode', 'districtCode'];
+    const aliases = ['province_code', 'city_code', 'district_code'];
+    const supplied = names.some((name, i) => dto[name] !== undefined || dto[aliases[i]] !== undefined);
+    if (!supplied) {
+      // Changed address text cannot silently retain stale shipping area codes.
+      const changed = [dto.full_address, dto.fullAddress, dto.address].some(value => value !== undefined && value !== (current.fullAddress || current.detail));
+      return changed ? { provinceCode: null, cityCode: null, districtCode: null } : {};
+    }
+    const values = names.map((name, i) => String(dto[name] ?? dto[aliases[i]] ?? '').trim());
+    if (values.every(value => !value)) return { provinceCode: null, cityCode: null, districtCode: null };
+    if (!this.divisions) throw new ServiceUnavailableException('省市区服务不可用');
+    const result = await this.divisions.validatePath(values[0], values[1], values[2]);
+    return { provinceCode: result.provinceCode, cityCode: result.cityCode, districtCode: result.districtCode };
+  }
+
   private normalizeAddressPayload(dto: any, current: any = {}) {
     const name = this.clean(dto.name ?? dto.contact ?? dto.receiver_name ?? current.name);
     const phone = this.clean(dto.phone ?? dto.telNumber ?? current.phone);
-    const fullAddress = this.clean(dto.full_address ?? dto.fullAddress ?? dto.address ?? current.fullAddress ?? current.detail);
+    const fullAddress = joinAddressParts([dto.full_address ?? dto.fullAddress ?? dto.address ?? current.fullAddress ?? current.detail]);
     const dormitoryNumber = this.clean(dto.dormitory_number ?? dto.dormitoryNumber ?? current.dormitoryNumber);
-    const detail = this.clean(dto.detail ?? [fullAddress, dormitoryNumber].filter(Boolean).join(' ') ?? current.detail);
+    const detail = joinAddressParts(dto.detail ? [dto.detail] : [fullAddress, dormitoryNumber]);
+    const latitude = this.toCoordinate(dto.latitude, current.latitude, 90, '纬度');
+    const longitude = this.toCoordinate(dto.longitude, current.longitude, 180, '经度');
+    if ((latitude === null) !== (longitude === null)) {
+      throw new BadRequestException('请在地图上重新选择完整的收货位置');
+    }
+    if (this.toBoolean(dto.require_location) && !hasDeliveryCoordinates({ latitude, longitude })) {
+      throw new BadRequestException('代买收货地址需要地图位置，请先在地图上选择收货点');
+    }
 
     if (!current.id && (!name || !phone || !detail)) {
       throw new BadRequestException('请完整填写联系人、手机号和地址');
@@ -89,22 +140,24 @@ export class AddressService {
       gender: this.toInt(dto.gender, current.gender ?? 0),
       fullAddress: fullAddress || detail,
       dormitoryNumber: dormitoryNumber || null,
-      specifiedAddressId: this.clean(dto.specified_address_id ?? dto.specifiedAddressId ?? current.specifiedAddressId) || null,
+      specifiedAddressId: this.clean(dto.specified_address_id !== undefined ? dto.specified_address_id : dto.specifiedAddressId !== undefined ? dto.specifiedAddressId : current.specifiedAddressId) || null,
       regionId: this.clean(dto.region_id ?? dto.regionId ?? current.regionId) || null,
-      latitude: this.toOptionalNumber(dto.latitude, current.latitude),
-      longitude: this.toOptionalNumber(dto.longitude, current.longitude),
+      latitude,
+      longitude,
       isDefault: this.toBoolean(dto.is_default ?? dto.isDefault ?? current.isDefault ?? false),
     };
   }
 
   private formatAddress(address: any) {
-    const fullAddress = address.fullAddress || address.detail || '';
+    const fullAddress = joinAddressParts([address.fullAddress || address.detail]);
     const dormitoryNumber = address.dormitoryNumber || '';
     const specifiedAddress = address.specifiedAddressId
       ? this.formatSpecifiedAddress(address.specifiedAddressId, fullAddress)
       : null;
     return {
       ...address,
+      fullAddress,
+      detail: joinAddressParts([fullAddress, dormitoryNumber]),
       contact: address.name,
       gender: address.gender || 0,
       full_address: fullAddress,
@@ -116,10 +169,10 @@ export class AddressService {
   }
 
   private formatSpecifiedAddress(id: string, addressText: string) {
-    const parts = (addressText || '').split(/\s+/).filter(Boolean);
+    const parts = joinAddressParts([addressText]).split(/\s+/).filter(Boolean);
     const first = parts[0] || addressText || '默认区域';
     const second = parts[1] || '';
-    const third = parts.slice(2).join(' ') || (second ? '' : first);
+    const third = parts.slice(2).join(' ');
     return {
       id,
       first_level_address: first,
@@ -149,6 +202,7 @@ export class AddressService {
               {
                 id: detail.id,
                 name: detail.third_level_address || region.name,
+                full_address: joinAddressParts([region.address, region.name]),
               },
             ],
           },
@@ -170,10 +224,12 @@ export class AddressService {
     return Number.isFinite(num) ? num : fallback;
   }
 
-  private toOptionalNumber(value: any, fallback?: number | null) {
-    if (value === undefined) return fallback ?? null;
-    if (value === null || value === '') return null;
+  private toCoordinate(value: any, fallback: number | null | undefined, max: number, label: string) {
+    if (value === undefined) value = fallback ?? null;
+    if (value === null || typeof value === 'string' && value.trim() === '') return null;
+    if (typeof value !== 'number' && typeof value !== 'string') throw new BadRequestException(`${label}无效，请在地图上选择位置`);
     const num = Number(value);
-    return Number.isFinite(num) ? num : fallback ?? null;
+    if (!Number.isFinite(num) || Math.abs(num) > max) throw new BadRequestException(`${label}无效，请在地图上选择位置`);
+    return num;
   }
 }

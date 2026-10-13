@@ -102,7 +102,7 @@
       <div class="calc-body">
         <div class="calc-inputs">
           <div class="calc-field">
-            <span class="calc-label">交易金额（元）</span>
+            <span class="calc-label">{{ calcBizType === 'errand_order' ? '优惠前总金额（元）' : '交易金额（元）' }}</span>
             <el-input-number
               v-model="calcAmount"
               :min="0" :max="99999" :precision="2" :step="10"
@@ -130,7 +130,7 @@
 
         <div class="calc-result-row">
           <div class="calc-block">
-            <span class="calc-block-label">交易金额</span>
+            <span class="calc-block-label">{{ calcBizType === 'errand_order' ? '优惠前总金额' : '交易金额' }}</span>
             <span class="calc-block-value">{{ money(calcAmount) }}</span>
           </div>
           <span class="calc-op">×</span>
@@ -287,7 +287,15 @@ const editingBizEnabled = ref(true)
 const savingBiz = ref<string | null>(null)
 
 function previewFee(rate: number, fixed: number) {
-  return Math.max(0, Math.min(Math.round((100 * (rate / 100) + fixed) * 100) / 100, 100)).toFixed(2)
+  return roundedPreviewFee(100, rate / 100, fixed).toFixed(2)
+}
+
+function roundedPreviewFee(amount: number, rate: number, fixed: number) {
+  // Database fee rates have six decimal places; calculate from integer cents
+  // so a half-cent result matches the backend's decimal rounding.
+  const cents = Math.round(amount * 100)
+  const feeCents = Math.round(cents * Math.round(rate * 1000000) / 1000000 + Math.round(fixed * 100))
+  return Math.max(0, Math.min(feeCents, cents)) / 100
 }
 
 function startBizEdit(cfg: any) {
@@ -360,9 +368,13 @@ function recalc() {
     remark = '外卖按各区域独立费率计算，此处为当前时段加权平均值，以区域实际配置为准'
   } else {
     const cfg = feeConfigs.value.find(c => c.bizType === calcBizType.value)
-    if (cfg) { rate = Number(cfg.rate || 0); fixedFee = Number(cfg.fixedFee || 0); remark = cfg.remark || '' }
+    if (cfg) {
+      rate = cfg.enabled === false ? 0 : Number(cfg.rate || 0)
+      fixedFee = cfg.enabled === false ? 0 : Number(cfg.fixedFee || 0)
+      remark = cfg.enabled === false ? '该业务已关闭抽成' : cfg.remark || ''
+    }
   }
-  const fee = Math.max(0, Math.min(Math.round((amount * rate + fixedFee) * 100) / 100, amount))
+  const fee = roundedPreviewFee(amount, rate, fixedFee)
   calcResult.value = { platformFee: fee, payout: Math.max(0, amount - fee), rateDisplay: (rate * 100).toFixed(2) + '%', fixedFee, remark }
 }
 

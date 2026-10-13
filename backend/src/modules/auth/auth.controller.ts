@@ -19,6 +19,13 @@ export class AuthController {
 
   // ============ 小程序接口 ============
 
+  @Post('wx-auth/app-login')
+  @ApiOperation({ summary: 'App 微信／Apple 授权登录' })
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  async appLogin(@Body() dto: any, @Req() req: Request) {
+    return this.authService.appLogin(dto, this.getClientIp(req), (req.headers['user-agent'] as string) || '');
+  }
+
   /** 微信小程序登录 — 严格限流防暴力破解 */
   @Post('wx-auth/wx-mini-login')
   @ApiOperation({ summary: '微信小程序登录' })

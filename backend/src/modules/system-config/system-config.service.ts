@@ -4,7 +4,7 @@ import { AiRuntimeService } from '../ai-runtime/ai-runtime.service';
 import { WechatTokenService } from '../wechat/wechat-token.service';
 import { normalizeRiderAppControlConfig } from './rider-app-control.config';
 
-const SECRET_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|ukey|pass$/i;
+const SECRET_PATTERN = /secret|password|token|cert|private|securityJsCode|apiV3Key|accessKey|secretKey|secretId|apiKey|webServiceKey|appCode|app_code|encodingAESKey|aesKey|ukey|pass$/i;
 const SECRET_MASK = '******';
 
 @Injectable()
@@ -161,6 +161,7 @@ export class SystemConfigService {
     if (!Array.isArray(configs)) {
       return { code: 400, message: 'configs 必须是数组' };
     }
+    if (configs.some(c => typeof c?.key === 'string' && c.key.trim().toLowerCase() === 'welfare_wecom')) throw new BadRequestException('企业微信请通过福利抽奖的接入配置修改');
 
     // AUD-P1-167: 记录变更前的配置值用于审计
     const beforeValues: Record<string, any> = {};
@@ -200,6 +201,8 @@ export class SystemConfigService {
 
   async resetGroup(group: string, operatorId?: string, ip?: string) {
     if (!group) return { code: 400, message: '缺少 group' };
+    if (typeof group !== 'string' || group.length > 128) throw new BadRequestException('配置分组格式错误');
+    if (group.trim().toLowerCase() === 'welfare_wecom') throw new BadRequestException('企业微信请通过福利抽奖的接入配置修改');
 
     // AUD-P1-167: 记录重置前的配置
     const beforeConfigs = await this.prisma.config.findMany({ where: { group } });
@@ -236,6 +239,7 @@ export class SystemConfigService {
   }
 
   async setNamedConfig(key: string, value: any, operatorId?: string, ip?: string) {
+    if (typeof key === 'string' && key.trim().toLowerCase() === 'welfare_wecom') throw new BadRequestException('企业微信请通过福利抽奖的接入配置修改');
     // 记录变更前的值
     const before = await this.prisma.config.findUnique({ where: { key } });
     const beforeValue = before?.value ? this.maskSecrets(before).value : null;
@@ -613,7 +617,7 @@ export class SystemConfigService {
   getDefaultBizFeeConfigs(): Array<{ bizType: string; label: string; rate: number; fixedFee: number; enabled: boolean; remark: string }> {
     return [
       { bizType: 'order',              label: '外卖 / 宿舍小店', rate: 0, fixedFee: 0, enabled: true, remark: '按校区商家结算金额与校区费率计算' },
-      { bizType: 'errand_order',       label: '跑腿订单',     rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按实付金额计算，扣除抽成后计入骑手收入' },
+      { bizType: 'errand_order',       label: '跑腿订单',     rate: 0, fixedFee: 0, enabled: false, remark: '确认收货时按优惠前总金额（配送费＋小费）计算，优惠券不减少抽成基数' },
       { bizType: 'mall_order',         label: '商城订单',     rate: 0.03, fixedFee: 0, enabled: true,  remark: '商城订单支付时抽取 3%' },
       { bizType: 'group_buy_order',    label: '拼团订单',     rate: 0.03, fixedFee: 0, enabled: false, remark: '拼团业务暂未开启抽成' },
       { bizType: 'recharge',           label: '余额充值',     rate: 0,    fixedFee: 0, enabled: false, remark: '充值为平台直收，无抽成' },
@@ -632,7 +636,12 @@ export class SystemConfigService {
     const rowMap = new Map(rows.map(r => [r.bizType, r]));
     const merged = defaults.map(d => {
       const row = rowMap.get(d.bizType);
-      return row ? { ...d, ...row, rate: Number(row.rate), fixedFee: Number(row.fixedFee) } : { ...d, id: null };
+      return row ? { ...d, ...row, rate: Number(row.rate), fixedFee: Number(row.fixedFee),
+        // A row saved without a real name shows its key (e.g. errand_order); keep the Chinese default.
+        label: String(row.label || '').trim() && row.label !== row.bizType ? row.label : d.label,
+        ...(d.bizType === 'errand_order' && row.remark === '确认收货时按实付金额计算，扣除抽成后计入骑手收入'
+          ? { remark: d.remark } : {}),
+      } : { ...d, id: null };
     });
     return { success: true, data: merged };
   }
@@ -660,7 +669,7 @@ export class SystemConfigService {
     const result = await this.prisma.bizFeeConfig.upsert({
       where: { bizType },
       update: data,
-      create: { bizType, label: dto.label || bizType, rate: dto.rate ?? 0, fixedFee: dto.fixedFee ?? 0, enabled: dto.enabled ?? true, remark: dto.remark, updatedBy: operatorId },
+      create: { bizType, label: dto.label || this.getDefaultBizFeeConfigs().find(d => d.bizType === bizType)?.label || bizType, rate: dto.rate ?? 0, fixedFee: dto.fixedFee ?? 0, enabled: dto.enabled ?? true, remark: dto.remark, updatedBy: operatorId },
     });
     return { success: true, data: { ...result, rate: Number(result.rate), fixedFee: Number(result.fixedFee) } };
   }

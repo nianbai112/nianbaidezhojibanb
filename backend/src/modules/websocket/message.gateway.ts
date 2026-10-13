@@ -8,7 +8,7 @@ import {
   OnGatewayDisconnect,
   WsException,
 } from "@nestjs/websockets";
-import { Server, Socket } from "socket.io";
+import { Namespace, Socket } from "socket.io";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { Logger } from "@nestjs/common";
@@ -16,6 +16,8 @@ import { RedisService } from "../../common/services/redis.service";
 import { PrismaService } from "../../common/services/prisma.service";
 import { PrivateMessagePermissionService } from "../../common/services/private-message-permission.service";
 import { UserAccessPolicyService } from "../../common/services/user-access-policy.service";
+import { assertRevocationCutoff, isSessionBeforeVersion } from "../../common/session-refresh-cleanup";
+import { readAccessSession } from "../../common/user-token-policy";
 import { SystemConfigService } from "../system-config/system-config.service";
 
 // =============================================================================
@@ -38,7 +40,7 @@ const SENSITIVE_WORD_PATTERN =
 export class MessageGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
-  @WebSocketServer() server: Server;
+  @WebSocketServer() server: Namespace;
   private readonly logger = new Logger(MessageGateway.name);
   private allowedOrigins: Set<string> = new Set();
 
@@ -144,12 +146,14 @@ export class MessageGateway
       });
 
       // ── 4. 挂载身份信息 ──
+      client.data.authPayload = payload;
       client.data.userId = payload.sub;
       client.data.isAdmin = payload.isAdmin === true;
       client.data.username = payload.username || "";
       client.data.openid = payload.openid || "";
 
       if (!client.data.isAdmin) {
+        await readAccessSession(this.prisma, payload);
         await this.userAccess.assertActiveUser(
           client.data.userId,
           "连接实时服务",
@@ -420,7 +424,7 @@ export class MessageGateway
         extra: saved.extra,
         createdAt: saved.createdAt?.toISOString(),
       };
-      this.server.to(`conv:${data.conversationId}`).emit("newMessage", out);
+      await this.emitAuthorized(`conv:${data.conversationId}`, "newMessage", out);
 
       return { event: "messageSent", data: out };
     } catch (err: any) {
@@ -452,7 +456,7 @@ export class MessageGateway
         data: { isRecalled: true, recalledAt: new Date() },
       });
 
-      this.server.to(`conv:${data.conversationId}`).emit("messageRecalled", {
+      await this.emitAuthorized(`conv:${data.conversationId}`, "messageRecalled", {
         messageId: data.messageId,
         conversationId: data.conversationId,
       });
@@ -473,10 +477,10 @@ export class MessageGateway
   ) {
     const userId = client.data.userId;
     await this.assertActiveUser(client, "发送输入状态");
-    client.to(`conv:${data.conversationId}`).emit("userTyping", {
+    await this.emitAuthorized(`conv:${data.conversationId}`, "userTyping", {
       conversationId: data.conversationId,
       userId,
-    });
+    }, client.id);
   }
 
   // ===========================================================================
@@ -540,7 +544,7 @@ export class MessageGateway
         data: { isRecalled: true, recalledAt: new Date() },
       });
 
-      this.server.to(`conv:${data.conversationId}`).emit("messageRecalled", {
+      await this.emitAuthorized(`conv:${data.conversationId}`, "messageRecalled", {
         messageId: data.messageId,
         conversationId: data.conversationId,
       });
@@ -588,9 +592,8 @@ export class MessageGateway
       );
 
       // 通知会话中所有用户
-      this.server
-        .to(`conv:${data.conversationId}`)
-        .emit(data.blocked ? "conversationBlocked" : "conversationUnblocked", {
+      await this.emitAuthorized(`conv:${data.conversationId}`,
+        data.blocked ? "conversationBlocked" : "conversationUnblocked", {
           conversationId: data.conversationId,
         });
 
@@ -606,15 +609,15 @@ export class MessageGateway
   // ===========================================================================
 
   async pushNotification(userId: string, notification: any) {
-    this.server.to(`user:${userId}`).emit("notification", notification);
+    await this.emitAuthorized(`user:${userId}`, "notification", notification);
   }
 
   async pushOrderUpdate(userId: string, order: any) {
-    this.server.to(`user:${userId}`).emit("orderUpdate", order);
+    await this.emitAuthorized(`user:${userId}`, "orderUpdate", order);
   }
 
   async pushNewDeliveryOrder(riderId: string, order: any) {
-    this.server.to(`user:${riderId}`).emit("newDeliveryOrder", order);
+    await this.emitAuthorized(`user:${riderId}`, "newDeliveryOrder", order);
   }
 
   async pushToAdmins(event: string, data: any) {
@@ -624,6 +627,24 @@ export class MessageGateway
   // ===========================================================================
   // 私有工具方法
   // ===========================================================================
+
+  /** Recheck each recipient, including sockets on other Redis-adapter nodes. */
+  private async emitAuthorized(room: string, event: string, data: any, excludeId?: string) {
+    if (!this.server) return;
+    const sockets = await this.server.in(room).fetchSockets();
+    for (const socket of sockets) {
+      if (socket.id === excludeId) continue;
+      try {
+        if (socket.data.isAdmin !== true) {
+          const user = await readAccessSession(this.prisma, socket.data.authPayload);
+          if (user.status !== "ACTIVE") throw new Error("Inactive recipient");
+        }
+        socket.emit(event, data);
+      } catch {
+        socket.disconnect(true);
+      }
+    }
+  }
 
   private extractBearerToken(header?: string): string | null {
     if (!header) return null;
@@ -642,15 +663,28 @@ export class MessageGateway
   private async assertActiveUser(client: Socket, scene: string) {
     this.assertAuth(client.data.userId);
     if (!client.data.isAdmin) {
-      await this.userAccess.assertActiveUser(client.data.userId, scene);
+      try {
+        await readAccessSession(this.prisma, client.data.authPayload);
+        await this.userAccess.assertActiveUser(client.data.userId, scene);
+      } catch {
+        client.disconnect(true);
+        throw new WsException("登录状态已失效，请重新登录");
+      }
     }
   }
 
-  disconnectUser(userId: string): number {
+  async disconnectUser(userId: string, invalidBeforeVersion: number): Promise<number> {
+    assertRevocationCutoff(invalidBeforeVersion);
     if (!this.server) return 0;
-    const room = this.server.sockets.adapter.rooms.get(`user:${userId}`);
-    const count = room?.size || 0;
-    if (count) this.server.in(`user:${userId}`).disconnectSockets(true);
+    // Namespace has its own adapter; fetchSockets also includes remote nodes.
+    const sockets = await this.server.in(`user:${userId}`).fetchSockets();
+    let count = 0;
+    for (const socket of sockets) {
+      if (socket.data.isAdmin !== true && isSessionBeforeVersion(socket.data.authPayload, userId, invalidBeforeVersion)) {
+        socket.disconnect(true);
+        count++;
+      }
+    }
     return count;
   }
 

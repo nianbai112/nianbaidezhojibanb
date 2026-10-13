@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import {nearbyPostIds} from './post-nearby';
+import { createHash } from 'crypto';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { MediaType, PostStatus, PostType } from '@prisma/client';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
@@ -9,6 +11,20 @@ import { UserAccessPolicyService } from '../../common/services/user-access-polic
 import { InteractionPermissionService } from '../../common/services/interaction-permission.service';
 import { MembershipService } from '../membership/membership.service';
 import { GrowthService } from '../growth/growth.service';
+
+// 同一访问边界供帖子详情、评论读取和订阅列表复用；匿名身份只影响展示，不影响所有权。
+export function assertCommunityPostVisible(post: any, userId?: string): void {
+  if (!post || post.deletedAt || post.status === PostStatus.DELETED) throw new NotFoundException('帖子不存在');
+  if ((post.status || PostStatus.PUBLISHED) !== PostStatus.PUBLISHED && post.userId !== userId) {
+    throw new ForbiddenException('帖子未发布，暂无访问权限');
+  }
+}
+export async function assertCommunityPostAccessible(prisma: PrismaService, post: any, userId?: string): Promise<void> {
+  assertCommunityPostVisible(post, userId);
+  if (!userId || !post.userId || post.userId === userId) return;
+  const block = await prisma.block.findFirst({ where: { OR: [{ userId, blockedId: post.userId }, { userId: post.userId, blockedId: userId }] }, select: { id: true } });
+  if (block) throw new ForbiddenException('你无法查看该帖子');
+}
 
 @Injectable()
 export class PostService {
@@ -284,30 +300,9 @@ export class PostService {
     ).filter((id) => id !== ownerId);
   }
 
-  private ensurePostVisible(post: any, userId?: string) {
-    if (!post || post.deletedAt || post.status === PostStatus.DELETED) {
-      throw new NotFoundException('帖子不存在');
-    }
-    const status = post.status || PostStatus.PUBLISHED;
-    if (status !== PostStatus.PUBLISHED && post.userId !== userId) {
-      throw new ForbiddenException('帖子未发布，暂无访问权限');
-    }
-  }
+  private ensurePostVisible(post: any, userId?: string) { assertCommunityPostVisible(post, userId); }
 
-  private async ensurePostAccessible(post: any, userId?: string) {
-    this.ensurePostVisible(post, userId);
-    if (!userId || !post?.userId || post.userId === userId) return;
-    const block = await this.prisma.block.findFirst({
-      where: {
-        OR: [
-          { userId, blockedId: post.userId },
-          { userId: post.userId, blockedId: userId },
-        ],
-      },
-      select: { id: true },
-    });
-    if (block) throw new ForbiddenException('你无法查看该帖子');
-  }
+  private async ensurePostAccessible(post: any, userId?: string) { await assertCommunityPostAccessible(this.prisma, post, userId); }
 
   private publicAssetUrl(value: any): string {
     const raw = String(value || '').trim();
@@ -788,7 +783,10 @@ export class PostService {
     }
     if (dto.latitude !== undefined) data.latitude = this.toFloat(dto.latitude);
     if (dto.longitude !== undefined) data.longitude = this.toFloat(dto.longitude);
-    if (dto.enable_pin !== undefined || dto.is_pinned !== undefined) data.isTop = !!(dto.enable_pin ?? dto.is_pinned);
+    if (dto.enable_pin !== undefined || dto.is_pinned !== undefined) {
+      if (this.toReviewFlag(dto.enable_pin ?? dto.is_pinned, false)) throw new ForbiddenException('置顶权益须通过已支付的推广订单开通');
+      data.isTop = false;
+    }
 
     return {
       data,
@@ -841,8 +839,9 @@ export class PostService {
         avatar: this.publicAssetUrl(item.user?.avatar),
         status: item.status,
       }));
+    const { clientRequestId: _requestId, clientPayloadHash: _payloadHash, ...publicPost } = post;
     return {
-      ...post,
+      ...publicPost,
       raw_type: post.type,
       post_type: post.type,
       type: this.toMiniPostType(post.type),
@@ -1230,6 +1229,13 @@ export class PostService {
   }
 
   async nearbyFollowed(regionId: string, query: any, userId?: string) {
+    if (query.type === 'nearby') {
+      const result = await nearbyPostIds(this.prisma, regionId, query, userId);
+      const list = await this.prisma.post.findMany({ where: { id: { in: result.rows.map(row => row.id) }, regionId, ...this.publicPostWhere }, include: this.miniPostInclude() });
+      const ordered = result.rows.flatMap(row => { const post = list.find(item => item.id === row.id); return post ? [post] : []; });
+      const formatted = (await this.formatMiniPostList(ordered)).map(post => ({ ...post, distance_meters: Math.round(result.rows.find(row => row.id === post.id)?.distance || 0) }));
+      return { list: formatted, posts: formatted, data: formatted, total: result.total, page: result.page, limit: result.limit, pageSize: result.limit, radius: result.radius };
+    }
     if (!userId) return this.listByRegion(regionId, query);
     const page = this.toPositiveInt(query.page, 1);
     const limit = this.toPositiveInt(query.limit ?? query.pageSize, 10);
@@ -1244,6 +1250,7 @@ export class PostService {
     const where: any = {
       regionId,
       userId: { in: authorIds },
+      isAnonymous: false,
       ...this.publicPostWhere,
     };
     const [list, total] = await Promise.all([
@@ -1272,7 +1279,7 @@ export class PostService {
     const regionId = this.normalizeOptionalString(query.region_id ?? query.regionId);
     const basePostWhere: any = { deletedAt: null };
     if (regionId) basePostWhere.regionId = regionId;
-    if (targetUserId !== userId) Object.assign(basePostWhere, this.publicPostWhere);
+    if (targetUserId !== userId) Object.assign(basePostWhere, this.publicPostWhere, { isAnonymous: false });
 
     const buildResponse = async (posts: any[], total: number) => {
       const formatted = await this.formatMiniPostList(posts);
@@ -1295,22 +1302,27 @@ export class PostService {
       };
     };
 
+    if (['favorited', 'favorites', 'collected'].includes(timelineType)) {
+      if (targetUserId !== userId) throw new ForbiddenException('只能查看自己的收藏');
+      const blocks = await this.prisma.block.findMany({ where: { OR: [{ userId }, { blockedId: userId }] }, select: { userId: true, blockedId: true } });
+      const blockedIds = blocks.map((row) => row.userId === userId ? row.blockedId : row.userId);
+      const favoriteWhere: any = { userId, targetType: 'post', post: { is: { ...this.publicPostWhere, ...(regionId ? { regionId } : {}), ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}) } } };
+      const [favorites, total] = await Promise.all([
+        this.prisma.favorite.findMany({ where: favoriteWhere, include: { post: { include: this.miniPostInclude() } }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { createdAt: 'desc' } }),
+        this.prisma.favorite.count({ where: favoriteWhere }),
+      ]);
+      return buildResponse(favorites.map((row) => row.post).filter(Boolean), total);
+    }
+
     if (timelineType === 'liked') {
-      const likeWhere = { userId: targetUserId, targetType: 'post' };
+      const blocks = await this.prisma.block.findMany({ where: { OR: [{ userId }, { blockedId: userId }] }, select: { userId: true, blockedId: true } });
+      const blockedIds = blocks.map((row) => row.userId === userId ? row.blockedId : row.userId);
+      const likeWhere: any = { userId: targetUserId, targetType: 'post', post: { is: { ...this.publicPostWhere, ...(regionId ? { regionId } : {}), ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}) } } };
       const [likes, total] = await Promise.all([
-        this.prisma.like.findMany({
-          where: likeWhere,
-          include: { post: { include: this.miniPostInclude() } },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-          orderBy: { createdAt: 'desc' },
-        }),
+        this.prisma.like.findMany({ where: likeWhere, include: { post: { include: this.miniPostInclude() } }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { createdAt: 'desc' } }),
         this.prisma.like.count({ where: likeWhere }),
       ]);
-      const posts = likes
-        .map((item) => item.post)
-        .filter((post) => post && !post.deletedAt && (!regionId || post.regionId === regionId));
-      return buildResponse(posts, regionId ? posts.length : total);
+      return buildResponse(likes.map((item) => item.post).filter(Boolean), total);
     }
 
     if (timelineType === 'viewed') {
@@ -1405,27 +1417,16 @@ export class PostService {
       isFavorited = !!fav;
     }
     const formatted = await this.formatMiniPostWithDefaultCircle(post);
-    return { ...formatted, isLiked, isFavorited };
+    return { ...formatted, isLiked, isFavorited, isOwner: !!userId && post!.userId === userId, canEdit: !!userId && post!.userId === userId, canManageComments: !!userId && post!.userId === userId };
   }
 
-  async create(userId: string, dto: any) {
-    await this.userAccess.assertCanCreateContent(userId, 'post', '发布笔记');
-    const { data, media, topicIds } = await this.normalizePostPayload(dto);
-    await this.userAccess.assertStudentProtectedAction(userId, data.regionId, '发布笔记');
-    data.interactionIntent = await this.inferCampusEchoIntent(data);
-    Object.assign(data, await this.resolveAnonymousPostPayload(data.regionId, dto));
-    const defaultCircle = !data.circleId ? await this.getRegionDefaultCircle(data.regionId) : null;
-    if (defaultCircle) data.circleId = defaultCircle.id;
-    const mentionIds = this.normalizeMentionUserIds(dto.mentions ?? dto.mention_user_ids ?? dto.mentionUserIds, userId);
-    const coCreatorIds = this.normalizeCoCreatorIds(dto, userId);
-    const inviteMessage = this.normalizeOptionalString(dto.co_creator_invite_message ?? dto.coCreatorInviteMessage ?? dto.invite_message ?? dto.inviteMessage);
-    if (coCreatorIds.length) data.isCoCreate = true;
-    if (data.circleId) {
+  private async assertCirclePublishing(circleId: string | undefined, regionId: string | null, userId: string) {
+    if (circleId) {
       const [circle, member] = await Promise.all([
-        this.prisma.circle.findUnique({ where: { id: data.circleId }, select: { id: true, status: true, auditStatus: true } }),
-        this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId: data.circleId, userId } } }),
+        this.prisma.circle.findUnique({ where: { id: circleId }, select: { id: true, regionId: true, status: true, auditStatus: true } }),
+        this.prisma.circleMember.findUnique({ where: { circleId_userId: { circleId: circleId, userId } } }),
       ]);
-      if (!circle || circle.status !== 'active' || circle.auditStatus !== 'approved') {
+      if (!circle || circle.regionId !== regionId || circle.status !== 'active' || circle.auditStatus !== 'approved') {
         throw new BadRequestException('圈子暂未开放，不能发布圈内笔记');
       }
       if (!member) throw new BadRequestException('请先加入圈子，再发布圈子笔记');
@@ -1435,6 +1436,43 @@ export class PostService {
         throw new ForbiddenException(member.muteReason || '你在该圈子内已被禁言，暂不能发圈内笔记');
       }
     }
+  }
+
+  async create(userId: string, dto: any) {
+    await this.userAccess.assertCanCreateContent(userId, 'post', '发布笔记');
+    const { data, media, topicIds } = await this.normalizePostPayload(dto);
+    if (!data.regionId) throw new BadRequestException('请选择发布校区');
+    await this.userAccess.assertStudentProtectedAction(userId, data.regionId, '发布笔记');
+    const clientRequestId = dto.client_request_id == null ? null : String(dto.client_request_id).trim();
+    if (clientRequestId != null && !/^[A-Za-z0-9_-]{8,100}$/.test(clientRequestId)) throw new BadRequestException('发布请求标识无效');
+    const clientPayloadHash = clientRequestId ? createHash('sha256').update(JSON.stringify(this.stablePayload({
+      data, media, topicIds, mentions: this.normalizeMentionUserIds(dto.mentions ?? dto.mention_user_ids ?? dto.mentionUserIds, userId).sort(),
+      coCreators: this.normalizeCoCreatorIds(dto, userId).sort(), inviteMessage: this.normalizeOptionalString(dto.co_creator_invite_message ?? dto.coCreatorInviteMessage ?? dto.invite_message ?? dto.inviteMessage),
+      anonymous: this.toReviewFlag(dto.is_anonymous ?? dto.isAnonymous, false), anonymousId: this.normalizeOptionalString(dto.anonymous_id ?? dto.anonymousId),
+    }))).digest('hex') : null;
+    const existingResponse = async () => {
+      if (!clientRequestId) return null;
+      const existing = await this.prisma.post.findUnique({ where: { userId_clientRequestId: { userId, clientRequestId } }, include: { ...this.miniPostInclude(), collaborators: true } });
+      if (!existing) return null;
+      await this.ensurePostAccessible(existing, userId);
+      if (existing.clientPayloadHash !== clientPayloadHash) throw new ConflictException('同一发布请求内容已变化，请重新发起发布');
+      return { ...await this.formatMiniPostWithDefaultCircle(existing), post_id: existing.id, isOwner: true, canEdit: true, canManageComments: true, idempotent_replay: true };
+    };
+    const previous = await existingResponse();
+    if (previous) return previous;
+    data.interactionIntent = await this.inferCampusEchoIntent(data);
+    Object.assign(data, await this.resolveAnonymousPostPayload(data.regionId, dto));
+    const defaultCircle = !data.circleId ? await this.getRegionDefaultCircle(data.regionId) : null;
+    if (defaultCircle) data.circleId = defaultCircle.id;
+    const mentionIds = this.normalizeMentionUserIds(dto.mentions ?? dto.mention_user_ids ?? dto.mentionUserIds, userId);
+    const coCreatorIds = this.normalizeCoCreatorIds(dto, userId);
+    const inviteMessage = this.normalizeOptionalString(dto.co_creator_invite_message ?? dto.coCreatorInviteMessage ?? dto.invite_message ?? dto.inviteMessage);
+    if (coCreatorIds.length) {
+      const settings = await this.getRawNoteSettings(data.regionId);
+      if (!this.toReviewFlag(settings.enable_co_create_note, false)) throw new BadRequestException('当前区域未开启共创笔记功能');
+      data.isCoCreate = true;
+    }
+    await this.assertCirclePublishing(data.circleId, data.regionId, userId);
     const [review, hasExposureBoost, hasAuditPriority, mentionUsers, author] = await Promise.all([
       this.resolveInitialReview(data, media, userId),
       this.membershipService.hasBenefit(userId, 'content_exposure_boost').catch(() => false),
@@ -1448,10 +1486,12 @@ export class PostService {
     for (const coCreatorId of coCreatorIds) {
       await this.interactionPermission.assertAllowed(userId, coCreatorId, 'coCreatePermission', '邀请共创');
     }
-    const post = await this.prisma.post.create({
+    let post: any;
+    try { post = await this.prisma.post.create({
       data: {
         ...data,
         userId,
+        ...(clientRequestId ? { clientRequestId, clientPayloadHash } : {}),
         viewCount: hasExposureBoost ? 1 : undefined,
         status: review.status,
         auditStatus: review.auditStatus,
@@ -1476,7 +1516,10 @@ export class PostService {
           : undefined,
       },
       include: { ...this.miniPostInclude(), collaborators: true },
-    });
+    }); } catch (error: any) {
+      if (clientRequestId && error?.code === 'P2002') { const existing = await existingResponse(); if (existing) return existing; }
+      throw error;
+    }
     if (review.status === PostStatus.PUBLISHED) {
       await this.syncTopicPostCounts([], topicIds);
     }
@@ -1520,10 +1563,15 @@ export class PostService {
   async update(postId: string, userId: string, dto: any) {
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException('帖子不存在');
+    this.ensurePostVisible(post, userId);
     if (post.userId !== userId) throw new ForbiddenException('无权修改');
+    if ((dto.region_id || dto.regionId) && String(dto.region_id || dto.regionId) !== post.regionId) throw new BadRequestException('已发布笔记不能移动到其他校区');
     await this.userAccess.assertCanCreateContent(userId, 'post', '修改笔记');
     await this.userAccess.assertStudentProtectedAction(userId, post.regionId, '修改笔记');
     const { data, media, topicIds } = await this.normalizePostPayload(dto, { partial: true });
+    if (data.circleId && data.circleId !== post.circleId) await this.assertCirclePublishing(data.circleId, post.regionId, userId);
+    const hasMediaInput = ['media', 'images', 'video', 'audio'].some((key) => dto[key] !== undefined);
+    if (hasMediaInput && !media.length && !String(data.content ?? post.content ?? '').trim()) throw new BadRequestException('请输入内容或上传图片/视频/音频');
     const hasMentionInput = dto.mentions !== undefined || dto.mention_user_ids !== undefined || dto.mentionUserIds !== undefined;
     const mentionIds = hasMentionInput ? this.normalizeMentionUserIds(dto.mentions ?? dto.mention_user_ids ?? dto.mentionUserIds, userId) : [];
     const mentionUsers = hasMentionInput ? await this.resolveMentionUsers(mentionIds) : [];
@@ -1538,7 +1586,7 @@ export class PostService {
     const review = needsReview
       ? await this.resolveInitialReview(
           { ...post, ...data },
-          media.length
+          hasMediaInput
             ? media
             : await this.prisma.postMedia.findMany({ where: { postId }, select: { type: true, url: true } }),
           userId,
@@ -1548,7 +1596,7 @@ export class PostService {
       ? (await this.prisma.postTopic.findMany({ where: { postId }, select: { topicId: true } })).map((item) => item.topicId)
       : [];
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (media.length) {
+      if (hasMediaInput) {
         await tx.postMedia.deleteMany({ where: { postId } });
       }
       if (this.hasTopicInput(dto)) {
@@ -1796,17 +1844,28 @@ export class PostService {
 
   // ============ 共创者 ============
 
-  async getCoCreators(postId: string) {
-    return this.prisma.postCollaborator.findMany({
-      where: { postId, status: 'accepted' },
-      include: { user: this.miniAuthorSelect() },
+  async getCoCreators(postId: string, currentUserId?: string) {
+    const post = await this.prisma.post.findUnique({ where: { id: postId }, include: { user: this.miniAuthorSelect(), anonymousIdentity: true } });
+    await this.ensurePostAccessible(post, currentUserId);
+    const owner = !!currentUserId && post!.userId === currentUserId;
+    const rows = await this.prisma.postCollaborator.findMany({
+      where: { postId, ...(owner ? {} : { OR: [{ status: 'accepted' }, ...(currentUserId ? [{ userId: currentUserId }] : [])] }) },
+      include: { user: this.miniAuthorSelect() }, orderBy: { createdAt: 'asc' },
     });
+    const author = this.formatMiniPost(post).user;
+    return { success: true, canManage: owner, data: [
+      { user_id: author?.id || '', nickname: author?.nickname || '作者', avatar: author?.avatar || '', role: 'initiator', status: 'accepted', canRemove: false, canRespond: false },
+      ...rows.map((row) => ({ id: row.id, user_id: row.userId, nickname: row.user?.nickname || '同学', avatar: this.publicAssetUrl(row.user?.avatar), role: 'collaborator', status: row.status === 'pending' ? 'invited' : row.status, invite_message: owner || row.userId === currentUserId ? row.inviteMessage || '' : '', canRemove: owner && row.status !== 'removed', canRespond: row.userId === currentUserId && row.status === 'pending' })),
+    ] };
   }
 
   async inviteCoCreators(postId: string, userId: string, dto: any) {
-    const post = await this.prisma.post.findUnique({ where: { id: postId }, select: { userId: true, regionId: true } });
+    const post = await this.prisma.post.findUnique({ where: { id: postId }, select: { userId: true, regionId: true, status: true, deletedAt: true } });
+    await this.ensurePostAccessible(post, userId);
     if (!post) throw new NotFoundException('帖子不存在');
     if (post.userId !== userId) throw new ForbiddenException('只有作者可以邀请共创者');
+    await this.userAccess.assertCanCreateContent(userId, 'post', '邀请共创者');
+    await this.userAccess.assertStudentProtectedAction(userId, post.regionId, '邀请共创者');
     // AUD-P1-142: 校验区域是否允许共创笔记
     const coConfig = await this.prisma.config.findUnique({
       where: { key: `content.note_settings.${post.regionId}` },
@@ -1822,24 +1881,9 @@ export class PostService {
     }
     const inviteMessage = this.normalizeOptionalString(dto.co_creator_invite_message ?? dto.coCreatorInviteMessage ?? dto.invite_message ?? dto.inviteMessage);
     await this.prisma.$transaction(async (tx) => {
-      await Promise.all(userIds.map((coUserId) => tx.postCollaborator.upsert({
-        where: { postId_userId: { postId, userId: coUserId } },
-        create: {
-          postId,
-          userId: coUserId,
-          inviterId: userId,
-          status: 'pending',
-          inviteMessage,
-        },
-        update: {
-          inviterId: userId,
-          status: 'pending',
-          inviteMessage,
-          acceptedAt: null,
-          rejectedAt: null,
-          operatorId: null,
-        },
-      })));
+      // Existing accepted collaborators keep their consent. Only inactive invitations are renewed.
+      await tx.postCollaborator.updateMany({ where: { postId, userId: { in: userIds }, status: { not: 'accepted' } }, data: { inviterId: userId, status: 'pending', inviteMessage, acceptedAt: null, rejectedAt: null, operatorId: null } });
+      await tx.postCollaborator.createMany({ data: userIds.map((coUserId) => ({ postId, userId: coUserId, inviterId: userId, status: 'pending', inviteMessage })), skipDuplicates: true });
       await tx.post.update({ where: { id: postId }, data: { isCoCreate: true } });
     });
     return { success: true, count: userIds.length };
@@ -1847,36 +1891,18 @@ export class PostService {
 
   async respondCoCreatorInvite(postId: string, userId: string, dto: any) {
     const action = String(dto.action || dto.status || '').toLowerCase();
-    const invite = await this.prisma.postCollaborator.findUnique({
-      where: { postId_userId: { postId, userId } },
-    });
+    const next = ['accept', 'accepted'].includes(action) ? 'accepted' : ['reject', 'rejected', 'decline'].includes(action) ? 'rejected' : '';
+    if (!next) throw new BadRequestException('不支持的共创操作');
+    const invite = await this.prisma.postCollaborator.findUnique({ where: { postId_userId: { postId, userId } } });
     if (!invite) throw new NotFoundException('共创邀请不存在');
-
-    if (action === 'accept' || action === 'accepted') {
-      const item = await this.prisma.postCollaborator.update({
-        where: { postId_userId: { postId, userId } },
-        data: {
-          status: 'accepted',
-          acceptedAt: new Date(),
-          rejectedAt: null,
-          operatorId: userId,
-        },
-      });
-      return { success: true, accepted: true, data: item };
-    }
-    if (action === 'reject' || action === 'rejected' || action === 'decline') {
-      await this.prisma.postCollaborator.update({
-        where: { postId_userId: { postId, userId } },
-        data: {
-          status: 'rejected',
-          rejectedAt: new Date(),
-          acceptedAt: null,
-          operatorId: userId,
-        },
-      });
-      return { success: true, accepted: false };
-    }
-    throw new BadRequestException('不支持的共创操作');
+    const post = await this.prisma.post.findUnique({ where: { id: postId } });
+    await this.ensurePostAccessible(post, userId);
+    await this.userAccess.assertStudentProtectedAction(userId, post!.regionId, '回应共创邀请');
+    if (invite.status === next) return { success: true, accepted: next === 'accepted' };
+    if (invite.status !== 'pending') throw new ConflictException('邀请状态已变化，请刷新后重试');
+    const result = await this.prisma.postCollaborator.updateMany({ where: { postId, userId, status: 'pending' }, data: { status: next, acceptedAt: next === 'accepted' ? new Date() : null, rejectedAt: next === 'rejected' ? new Date() : null, operatorId: userId } });
+    if (result.count !== 1) throw new ConflictException('邀请已被撤回或处理，请刷新后重试');
+    return { success: true, accepted: next === 'accepted' };
   }
 
   async removeCoCreator(postId: string, userId: string, coCreatorId: string) {
@@ -1892,17 +1918,19 @@ export class PostService {
   }
 
   async myCoCreatorInvites(userId: string, query: any) {
-    const { page = 1, pageSize = 20 } = query;
+    const page = this.toPositiveInt(query.page, 1);
+    const pageSize = Math.min(50, this.toPositiveInt(query.pageSize ?? query.page_size, 10));
     const where: any = { userId };
+    if (query.region_id) where.post = { regionId: String(query.region_id) };
     const status = this.normalizeOptionalString(query.status);
-    if (status) where.status = status;
+    if (status && status !== 'all') where.status = status === 'invited' ? 'pending' : status;
     // 查询用户作为共创者的记录，排除自己发的帖子
     const [list, total] = await Promise.all([
       this.prisma.postCollaborator.findMany({
         where,
         include: {
           post: {
-            select: { id: true, title: true, content: true, user: this.miniAuthorSelect() },
+            select: { id: true, title: true, content: true, status: true, deletedAt: true, regionId: true, userId: true, isAnonymous: true, anonymousName: true, anonymousAvatar: true, user: this.miniAuthorSelect() },
           },
         },
         skip: (page - 1) * pageSize,
@@ -1918,12 +1946,14 @@ export class PostService {
         list: list.map((c) => ({
           id: c.id,
           post_id: c.postId,
-          post_title: c.post?.title,
+          region_id: c.post?.regionId || '',
+          post_title: c.post?.status === 'PUBLISHED' && !c.post.deletedAt ? c.post.title : '',
+          unavailable: !c.post || c.post.status !== 'PUBLISHED' || !!c.post.deletedAt,
           invited_at: c.createdAt,
-          inviter_avatar: c.post?.user?.avatar,
-          inviter_nickname: c.post?.user?.nickname,
-          inviter_id: c.post?.user?.id,
-          status: c.status,
+          inviter_avatar: c.post?.isAnonymous ? c.post.anonymousAvatar || '' : c.post?.user?.avatar,
+          inviter_nickname: c.post?.isAnonymous ? c.post.anonymousName || '匿名作者' : c.post?.user?.nickname,
+          inviter_id: c.post?.isAnonymous ? '' : c.post?.user?.id,
+          status: c.status === 'pending' ? 'invited' : c.status,
           invite_message: c.inviteMessage || '',
         })),
         pagination: { total, page, pageSize },
@@ -1979,6 +2009,24 @@ export class PostService {
     return { success: true, isSquatting: true };
   }
 
+  async setFavorite(postId: string, userId: string, selected: boolean) {
+    await this.userAccess.assertCanInteract(userId, 'like', selected ? '收藏帖子' : '取消收藏');
+    const post = await this.prisma.post.findUnique({ where: { id: postId } });
+    await this.ensurePostAccessible(post, userId);
+    if (selected) await this.userAccess.assertStudentProtectedAction(userId, post!.regionId, '收藏帖子');
+    return this.prisma.$transaction(async (tx) => {
+      const changed = selected
+        ? await tx.favorite.createMany({ data: [{ userId, targetType: 'post', targetId: postId }], skipDuplicates: true })
+        : await tx.favorite.deleteMany({ where: { userId, targetType: 'post', targetId: postId } });
+      if (changed.count) await tx.post.updateMany({
+        where: { id: postId, ...(selected ? {} : { favoriteCount: { gt: 0 } }) },
+        data: { favoriteCount: selected ? { increment: 1 } : { decrement: 1 } },
+      });
+      const latest = await tx.post.findUnique({ where: { id: postId }, select: { favoriteCount: true } });
+      return { favorited: selected, changed: changed.count > 0, favorite_count: latest?.favoriteCount ?? 0 };
+    });
+  }
+
   async checkSquat(postId: string, userId: string) {
     const squat = await this.prisma.postSquat.findUnique({
       where: { postId_userId: { postId, userId } },
@@ -1994,43 +2042,27 @@ export class PostService {
   }
 
   async mySquats(userId: string, query: any) {
-    const { page = 1, pageSize = 20 } = query;
+    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const pageSize = Math.min(50, Math.max(1, Math.floor(Number(query.pageSize) || 20)));
     const [list, total] = await Promise.all([
-      this.prisma.postSquat.findMany({
-        where: { userId },
-        skip: (page - 1) * pageSize,
-        take: Number(pageSize),
-        orderBy: { createdAt: 'desc' },
-      }),
+      this.prisma.postSquat.findMany({ where: { userId }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { createdAt: 'desc' } }),
       this.prisma.postSquat.count({ where: { userId } }),
     ]);
-
-    // 批量查帖子信息
-    const postIds = list.map((s) => s.postId);
-    const posts = postIds.length > 0
-      ? await this.prisma.post.findMany({
-          where: { id: { in: postIds } },
-          select: { id: true, title: true, content: true, user: this.miniAuthorSelect() },
-        })
-      : [];
+    const ids = list.map((s) => s.postId);
+    const posts = ids.length ? await this.prisma.post.findMany({ where: { id: { in: ids } }, include: this.miniPostInclude() }) : [];
     const postMap = new Map(posts.map((p) => [p.id, p]));
-
-    return {
-      list: list.map((s) => {
-        const p = postMap.get(s.postId);
-        return {
-          id: s.id,
-          postId: s.postId,
-          postTitle: p?.title,
-          postContent: p?.content?.slice(0, 200),
-          postUser: p?.user,
-          createdAt: s.createdAt,
-        };
-      }),
-      total,
-      page,
-      pageSize,
-    };
+    const entries = await Promise.all(list.map(async (subscription) => {
+      const post = postMap.get(subscription.postId);
+      try { await this.ensurePostAccessible(post, userId); }
+      catch (error) {
+        if (!(error instanceof NotFoundException) && !(error instanceof ForbiddenException)) throw error;
+        // 保留订阅标识供本人取消；不可见内容、作者及媒体一律不返回。
+        return { id: subscription.id, postId: subscription.postId, post_id: subscription.postId, unavailable: true, postTitle: '', createdAt: subscription.createdAt };
+      }
+      const formatted = this.formatMiniPost(post);
+      return { ...formatted, id: subscription.id, postId: subscription.postId, post_id: subscription.postId, post: formatted, postTitle: formatted.title, postContent: String(formatted.content || '').slice(0, 200), postUser: formatted.user, unavailable: false, createdAt: subscription.createdAt };
+    }));
+    return { list: entries, squats: entries, total, page, pageSize };
   }
 
   // ============ 投票 ============
@@ -2070,6 +2102,7 @@ export class PostService {
   }
 
   async getVoteMeta(postId: string, userId?: string) {
+    await this.ensurePostAccessible(await this.prisma.post.findUnique({ where: { id: postId } }), userId);
     const vote = await this.prisma.postVote.findUnique({
       where: { postId },
       include: { options: { orderBy: { sortOrder: 'asc' } } },
@@ -2101,7 +2134,8 @@ export class PostService {
     };
   }
 
-  async getVoteStats(postId: string) {
+  async getVoteStats(postId: string, userId?: string) {
+    await this.ensurePostAccessible(await this.prisma.post.findUnique({ where: { id: postId } }), userId);
     const vote = await this.prisma.postVote.findUnique({
       where: { postId },
       include: { options: { orderBy: { sortOrder: 'asc' } } },
@@ -2148,124 +2182,82 @@ export class PostService {
   }
 
   async vote(userId: string, dto: any) {
-    let voteId = dto.vote_id || dto.voteId;
     const postId = dto.post_id || dto.postId;
-    const optionIds: string[] = (dto.option_ids || dto.optionIds || (dto.option_id || dto.optionId ? [dto.option_id || dto.optionId] : []))
-      .map((id: any) => String(id || '').trim())
-      .filter(Boolean);
-    const wantsAnonymous = [dto.is_anonymous, dto.isAnonymous, dto.anonymous].some((value) => value === true || value === 1 || value === '1');
-
-    if (!voteId && postId) {
-      const existing = await this.prisma.postVote.findUnique({ where: { postId: String(postId) }, select: { id: true } });
-      voteId = existing?.id;
-    }
+    let voteId = dto.vote_id || dto.voteId;
+    const rawOptions = dto.option_ids || dto.optionIds || (dto.option_id || dto.optionId ? [dto.option_id || dto.optionId] : []);
+    if (!Array.isArray(rawOptions)) throw new BadRequestException('投票选项格式错误');
+    const optionIds = [...new Set(rawOptions.map((id: any) => String(id || '').trim()).filter(Boolean))] as string[];
+    if (!voteId && postId) voteId = (await this.prisma.postVote.findUnique({ where: { postId: String(postId) }, select: { id: true } }))?.id;
     if (!voteId) throw new BadRequestException('缺少 vote_id');
-    if (optionIds.length === 0) throw new BadRequestException('请选择投票选项');
-
-    // 确认投票存在
-    const vote = await this.prisma.postVote.findUnique({
-      where: { id: voteId },
-      include: { options: true },
-    });
-    if (!vote) throw new NotFoundException('投票不存在');
-
-    // 检查选项是否属于该投票
-    const validOptionIds = new Set(vote.options.map((o) => o.id));
-    for (const oid of optionIds) {
-      if (!validOptionIds.has(oid)) {
-        throw new BadRequestException(`无效的投票选项: ${oid}`);
-      }
+    if (!optionIds.length) throw new BadRequestException('请选择投票选项');
+    await this.userAccess.assertCanInteract(userId, 'like', '参与投票');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const vote = await tx.postVote.findUnique({ where: { id: voteId }, include: { options: true } });
+          if (!vote) throw new NotFoundException('投票不存在');
+          const post = await tx.post.findUnique({ where: { id: vote.postId } });
+          await assertCommunityPostAccessible(tx as any, post, userId);
+          await this.userAccess.assertStudentProtectedAction(userId, post!.regionId, '参与投票');
+          if (vote.endAt && Date.now() >= new Date(vote.endAt).getTime()) throw new BadRequestException('投票已截止');
+          const allowed = new Set(vote.options.map((option) => option.id));
+          if (optionIds.some((id) => !allowed.has(id))) throw new BadRequestException('无效的投票选项');
+          if (vote.maxSelect > 0 && optionIds.length > vote.maxSelect) throw new BadRequestException(`该投票最多选择 ${vote.maxSelect} 项`);
+          const existing = await tx.postVoteRecord.findUnique({ where: { voteId_userId: { voteId, userId } } });
+          if (existing && !vote.allowAdd) {
+            const previous = Array.isArray(existing.optionIds) ? existing.optionIds.map(String) : [];
+            if (previous.length !== optionIds.length || previous.some((id) => !optionIds.includes(id))) throw new BadRequestException('该投票不允许修改投票');
+            return { success: true, voted: true, vote_id: voteId, voteId, option_ids: previous, optionIds: previous };
+          }
+          const isAnonymous = vote.isAnonymousVote || [dto.is_anonymous, dto.isAnonymous, dto.anonymous].some((value) => value === true || value === 1 || value === '1');
+          await tx.postVoteRecord.upsert({ where: { voteId_userId: { voteId, userId } }, create: { voteId, userId, optionIds, isAnonymous }, update: { optionIds, isAnonymous } });
+          return { success: true, voted: true, vote_id: voteId, voteId, option_ids: optionIds, optionIds };
+        }, { isolationLevel: 'Serializable' });
+      } catch (error: any) { if (error?.code !== 'P2034' || attempt === 2) throw error; }
     }
-
-    // AUD-P1-140: 投票规则服务端校验（截止时间、是否允许改投）
-    if (vote.endAt && new Date() > new Date(vote.endAt)) {
-      throw new BadRequestException('投票已截止');
-    }
-    // 检查如果已投票且不允许修改，拒绝改投
-    const existingVote = await this.prisma.postVoteRecord.findUnique({
-      where: { voteId_userId: { voteId, userId } },
-    }).catch(() => null);
-    if (existingVote && !vote.allowAdd) {
-      throw new BadRequestException('该投票不允许修改投票');
-    }
-
-    // 检查单选/多选限制
-    if (vote.maxSelect > 0 && optionIds.length > vote.maxSelect) {
-      throw new BadRequestException(`该投票最多选择 ${vote.maxSelect} 项`);
-    }
-
-    // 幂等写入
-    await this.prisma.postVoteRecord.upsert({
-      where: { voteId_userId: { voteId, userId } },
-      create: { voteId, userId, optionIds, isAnonymous: !!((vote as any).isAnonymousVote || wantsAnonymous) },
-      update: { optionIds, isAnonymous: !!((vote as any).isAnonymousVote || wantsAnonymous) },
-    });
-
-    return { success: true, voted: true, vote_id: voteId, voteId, option_ids: optionIds, optionIds };
+    throw new BadRequestException('投票繁忙，请重试');
   }
 
   async unvote(userId: string, dto: any) {
     let voteId = dto.vote_id || dto.voteId;
     const postId = dto.post_id || dto.postId;
-    if (!voteId && postId) {
-      const existing = await this.prisma.postVote.findUnique({ where: { postId: String(postId) }, select: { id: true } });
-      voteId = existing?.id;
-    }
+    if (!voteId && postId) voteId = (await this.prisma.postVote.findUnique({ where: { postId: String(postId) }, select: { id: true } }))?.id;
     if (!voteId) throw new BadRequestException('缺少 vote_id');
-
-    // AUD-P1-140: 取消投票也需校验规则
-    const vote = await this.prisma.postVote.findUnique({ where: { id: voteId }, select: { endAt: true, allowAdd: true } });
-    if (vote?.endAt && new Date() > new Date(vote.endAt)) {
-      throw new BadRequestException('投票已截止，无法取消');
-    }
-    if (vote && !vote.allowAdd) {
-      throw new BadRequestException('该投票不允许修改投票');
-    }
-
-    await this.prisma.postVoteRecord.deleteMany({
-      where: { voteId, userId },
-    });
-
+    await this.userAccess.assertCanInteract(userId, 'like', '取消投票');
+    const vote = await this.prisma.postVote.findUnique({ where: { id: voteId } });
+    if (!vote) throw new NotFoundException('投票不存在');
+    const post = await this.prisma.post.findUnique({ where: { id: vote.postId } });
+    await this.ensurePostAccessible(post, userId);
+    if (vote.endAt && Date.now() >= new Date(vote.endAt).getTime()) throw new BadRequestException('投票已截止，无法取消');
+    if (!vote.allowAdd) throw new BadRequestException('该投票不允许修改投票');
+    await this.prisma.postVoteRecord.deleteMany({ where: { voteId, userId } });
     return { success: true, voted: false };
   }
 
   async createVoteOptions(userId: string, dto: any) {
-    const { options } = dto;
     let voteId = dto.vote_id || dto.voteId;
-    if (!voteId && (dto.post_id || dto.postId)) {
-      const result = await this.upsertVoteSettings(userId, { post_id: dto.post_id || dto.postId });
-      voteId = result.voteId;
-    }
+    if (!voteId && (dto.post_id || dto.postId)) voteId = (await this.upsertVoteSettings(userId, { post_id: dto.post_id || dto.postId })).voteId;
     if (!voteId) throw new BadRequestException('缺少 vote_id');
-    if (!options || !Array.isArray(options) || options.length === 0) {
-      throw new BadRequestException('缺少投票选项');
+    if (!Array.isArray(dto.options) || dto.options.length < 2 || dto.options.length > 10) throw new BadRequestException('投票需要 2–10 个选项');
+    const texts = dto.options.map((opt: any) => String(opt?.text ?? opt?.option_text ?? opt?.title ?? opt ?? '').trim());
+    if (texts.some((text: string) => !text || text.length > 100) || new Set(texts).size !== texts.length) throw new BadRequestException('投票选项不能为空、重复或超过 100 字');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await this.prisma.$transaction(async (tx) => {
+        const vote = await tx.postVote.findUnique({ where: { id: voteId }, include: { options: { orderBy: { sortOrder: 'asc' } } } });
+        if (!vote) throw new NotFoundException('投票不存在');
+        const post = await tx.post.findUnique({ where: { id: vote.postId } });
+        await assertCommunityPostAccessible(tx as any, post, userId);
+        if (post!.userId !== userId) throw new ForbiddenException('无权修改此帖子的投票选项');
+        await this.userAccess.assertStudentProtectedAction(userId, post!.regionId, '修改投票');
+        if (JSON.stringify(vote.options.map((option) => option.text)) === JSON.stringify(texts)) return { success: true, count: texts.length, unchanged: true };
+        if (await tx.postVoteRecord.count({ where: { voteId } })) throw new ConflictException('已有人参与投票，不能替换选项');
+        if (vote.maxSelect > texts.length) throw new BadRequestException('可选数量不能超过投票选项数');
+        await tx.postVoteOption.deleteMany({ where: { voteId } });
+        await tx.postVoteOption.createMany({ data: texts.map((text: string, sortOrder: number) => ({ voteId, text, sortOrder })) });
+        return { success: true, count: texts.length };
+      }, { isolationLevel: 'Serializable' }) } catch (error: any) { if (error?.code !== 'P2034' || attempt === 2) throw error; }
     }
-
-    // 确认投票存在且属于该用户（通过帖子归属校验）
-    const vote = await this.prisma.postVote.findUnique({
-      where: { id: voteId },
-    });
-    if (!vote) throw new NotFoundException('投票不存在');
-
-    // 查帖子确认归属
-    const post = await this.prisma.post.findUnique({
-      where: { id: vote.postId },
-      select: { userId: true },
-    });
-    if (!post || post.userId !== userId) {
-      throw new ForbiddenException('无权修改此帖子的投票选项');
-    }
-
-    const data = options.map((opt: any, idx: number) => ({
-      voteId,
-      text: String(opt.text || opt.option_text || opt.title || opt).trim(),
-      sortOrder: opt.sortOrder ?? idx,
-    })).filter((item: any) => item.text);
-    if (!data.length) throw new BadRequestException('缺少投票选项');
-
-    await this.prisma.postVoteOption.deleteMany({ where: { voteId } });
-    await this.prisma.postVoteOption.createMany({ data });
-    return { success: true, count: data.length };
+    throw new ConflictException('投票设置繁忙，请重试');
   }
 
   async upsertVoteSettings(userId: string, dto: any) {
@@ -2293,6 +2285,9 @@ export class PostService {
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException('帖子不存在');
     if (post.userId !== userId) throw new ForbiddenException('无权修改此帖子的投票设置');
+    await this.ensurePostAccessible(post, userId);
+    await this.userAccess.assertCanCreateContent(userId, 'post', '修改投票');
+    await this.userAccess.assertStudentProtectedAction(userId, post.regionId, '修改投票');
 
     // AUD-P1-139: 校验区域是否允许投票（服务端最终裁决，不依赖前端）
     const voteConfig = await this.prisma.config.findUnique({
@@ -2307,7 +2302,10 @@ export class PostService {
     const normalizedMaxSelect = max_select ?? maxSelect ?? max_votes_per_user;
     const normalizedAllowAdd = allow_add ?? allowAdd ?? allow_change_vote ?? allowChangeVote;
     const normalizedAnonymousVote = is_anonymous_vote ?? isAnonymousVote ?? anonymous;
-    const normalizedEndAt = end_at ?? endAt ?? voting_end_time;
+    const normalizedEndAt = end_at !== undefined ? end_at : endAt !== undefined ? endAt : voting_end_time;
+    if (normalizedMaxSelect !== undefined && (!Number.isInteger(Number(normalizedMaxSelect)) || Number(normalizedMaxSelect) < 1 || Number(normalizedMaxSelect) > 10)) throw new BadRequestException('可选数量须为 1–10 的整数');
+    if (title !== undefined && (!String(title).trim() || String(title).trim().length > 100)) throw new BadRequestException('投票标题须为 1–100 字');
+    if (normalizedEndAt && !Number.isFinite(new Date(normalizedEndAt).getTime())) throw new BadRequestException('投票截止时间无效');
     const usesAdvancedConfig =
       Number(normalizedMaxSelect || 1) > 1 ||
       normalizedAllowAdd === true || normalizedAllowAdd === 1 || normalizedAllowAdd === '1' ||
@@ -2315,12 +2313,13 @@ export class PostService {
     if (usesAdvancedConfig && !(await this.membershipService.hasBenefit(userId, 'advanced_content_tools').catch(() => false))) {
       throw new BadRequestException('多选/追加选项/截止时间属于会员高级配置，请先开通会员');
     }
-    if (title !== undefined) data.title = title;
+    if (title !== undefined) data.title = String(title).trim();
     if (normalizedMaxSelect !== undefined) data.maxSelect = Number(normalizedMaxSelect) || 1;
     if (normalizedAllowAdd !== undefined) data.allowAdd = normalizedAllowAdd === true || normalizedAllowAdd === 1 || normalizedAllowAdd === '1';
     if (normalizedAnonymousVote !== undefined) data.isAnonymousVote = normalizedAnonymousVote === true || normalizedAnonymousVote === 1 || normalizedAnonymousVote === '1';
     if (normalizedEndAt !== undefined) data.endAt = normalizedEndAt ? new Date(normalizedEndAt) : null;
 
+    if (dto.is_enabled === false || dto.is_enabled === 0 || dto.is_enabled === '0') data.endAt = new Date(0);
     const vote = await this.prisma.postVote.upsert({
       where: { postId },
       create: {
@@ -2329,7 +2328,7 @@ export class PostService {
         maxSelect: Number(normalizedMaxSelect) || 1,
         allowAdd: normalizedAllowAdd === true || normalizedAllowAdd === 1 || normalizedAllowAdd === '1',
         isAnonymousVote: normalizedAnonymousVote === true || normalizedAnonymousVote === 1 || normalizedAnonymousVote === '1',
-        endAt: normalizedEndAt ? new Date(normalizedEndAt) : null,
+        endAt: data.endAt !== undefined ? data.endAt : null,
       },
       update: data,
     });
@@ -2339,11 +2338,12 @@ export class PostService {
 
   // ============ 帖子进度（保留，无副作用） ============
 
-  async getPostProgress(postId: string) {
+  async getPostProgress(postId: string, userId?: string) {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { _count: { select: { likes: true, comments: true, favorites: true } }, viewCount: true, likeCount: true, commentCount: true },
+      select: { userId: true, status: true, deletedAt: true, _count: { select: { likes: true, comments: true, favorites: true } }, viewCount: true, likeCount: true, commentCount: true },
     });
+    await this.ensurePostAccessible(post, userId);
     if (!post) throw new NotFoundException('帖子不存在');
     return {
       postId,
@@ -2354,53 +2354,9 @@ export class PostService {
     };
   }
 
-  // ============ 模拟操作（仅开发/测试环境） ============
+  // ============ 旧模拟入口（所有普通用户明确拒绝） ============
 
-  async simulateActions(userId: string, dto: any) {
-    const nodeEnv = process.env.NODE_ENV;
-    if (nodeEnv === 'production') {
-      throw new ForbiddenException('生产环境不允许模拟操作');
-    }
-
-    const { post_id, action, count = 1 } = dto;
-    if (!post_id) throw new BadRequestException('缺少 post_id');
-    if (!action) throw new BadRequestException('缺少 action');
-    if (count < 1 || count > 100) throw new BadRequestException('count 范围 1~100');
-
-    const post = await this.prisma.post.findUnique({ where: { id: post_id } });
-    if (!post) throw new NotFoundException('帖子不存在');
-
-    switch (action) {
-      case 'view':
-        await this.prisma.post.update({
-          where: { id: post_id },
-          data: { viewCount: { increment: count } },
-        });
-        break;
-      case 'like':
-        await this.prisma.post.update({
-          where: { id: post_id },
-          data: { likeCount: { increment: count } },
-        });
-        // 批量创建 likes
-        for (let i = 0; i < count; i++) {
-          await this.prisma.like
-            .create({
-              data: { userId: `sim_${Date.now()}_${i}`, targetType: 'post', targetId: post_id },
-            })
-            .catch(() => {}); // 忽略重复
-        }
-        break;
-      case 'comment':
-        await this.prisma.post.update({
-          where: { id: post_id },
-          data: { commentCount: { increment: count } },
-        });
-        break;
-      default:
-        throw new BadRequestException(`不支持的操作类型: ${action}`);
-    }
-
-    return { success: true, action, count, postId: post_id };
+  async simulateActions(_userId: string, _dto: any) {
+    throw new ForbiddenException('此入口不支持生成虚假点赞、浏览或评论');
   }
 }

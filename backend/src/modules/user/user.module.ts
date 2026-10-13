@@ -8,9 +8,11 @@ import { FinanceModule } from '../finance/finance.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { IpGeoModule } from '../ip-geo/ip-geo.module';
 import { PaymentModule } from '../payment/payment.module';
+import { StudentIdentityModule } from '../student-identity/student-identity.module';
+import { AppleLifecycleModule } from '../auth/apple-lifecycle.module';
 
 @Module({
-  imports: [NotifyModule, GrowthModule, FinanceModule, WebsocketModule, IpGeoModule, PaymentModule],
+  imports: [NotifyModule, GrowthModule, FinanceModule, WebsocketModule, IpGeoModule, PaymentModule, StudentIdentityModule, AppleLifecycleModule],
   controllers: [UserController],
   providers: [UserService, UserAccessPolicyService],
   exports: [UserService],

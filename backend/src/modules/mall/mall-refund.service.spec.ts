@@ -4,13 +4,14 @@ import { MallAdminService } from './mall-admin.service';
 
 function makeMallService(order: any, item: any, activeRefund: any = null) {
   const prisma: any = {
-    mallOrder: { findUnique: jest.fn().mockResolvedValue(order) },
+    mallOrder: { findUnique: jest.fn().mockResolvedValue(order), findFirst: jest.fn().mockResolvedValue({...order,payAmount:order?.payAmount ?? 19.8,items:item?[item]:[],refunds:activeRefund?[activeRefund]:[]}), update:jest.fn() },
     mallOrderItem: { findFirst: jest.fn().mockResolvedValue(item) },
     mallRefund: {
       findFirst: jest.fn().mockResolvedValue(activeRefund),
       create: jest.fn().mockImplementation(async ({ data }: any) => ({ id: 'refund-1', ...data })),
     },
   };
+  prisma.$transaction = jest.fn((fn: any) => fn(prisma));
   const service = new MallService(
     prisma,
     { getLock: jest.fn().mockResolvedValue(true), releaseLock: jest.fn().mockResolvedValue(undefined) } as any,
@@ -56,7 +57,7 @@ describe('商城售后退款状态机', () => {
 
     await expect(service.applyRefund('user-1', {
       order_id: 'order-1', order_item_id: 'item-1', reason: '质量问题', refund_quantity: 1, refund_amount: 9.91,
-    })).rejects.toThrow('退款金额超过该商品可退金额');
+    })).rejects.toThrow('退款金额超过该商品或订单剩余可退金额');
 
     await service.applyRefund('user-1', {
       order_id: 'order-1', order_item_id: 'item-1', reason: '质量问题', refund_quantity: 1, refund_amount: '9.90',

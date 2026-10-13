@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { RedisService } from "../../common/services/redis.service";
+import { assertRevocationCutoff } from "../../common/session-refresh-cleanup";
 import { MessageGateway } from "./message.gateway";
 import { WsNativeGateway } from "./ws-native.gateway";
 
@@ -68,14 +69,16 @@ export class RealtimeControlService implements OnModuleInit, OnModuleDestroy {
     return this.subscribed;
   }
 
-  private handleCommand(raw: string) {
+  private async handleCommand(raw: string) {
     try {
       const message = JSON.parse(raw);
       if (message?.command !== "disconnect_user") return;
       const userId = String(message?.data?.userId || "").trim();
       if (!userId) return;
-      const nativeSockets = this.wsNative.disconnectUserLocal(userId);
-      const socketIoSockets = this.messageGateway.disconnectUser(userId);
+      const cutoff = message?.data?.invalidBeforeVersion;
+      assertRevocationCutoff(cutoff);
+      const nativeSockets = this.wsNative.disconnectUserLocal(userId, cutoff);
+      const socketIoSockets = await this.messageGateway.disconnectUser(userId, cutoff);
       this.logger.log(
         `Realtime disconnect command applied: userId=${userId} native=${nativeSockets} socketIo=${socketIoSockets}`,
       );

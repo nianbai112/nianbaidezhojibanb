@@ -215,7 +215,6 @@ describe("NotifyService partner push payload", () => {
         data: expect.objectContaining({
           orderId: "order-1",
           merchantId: "merchant-1",
-          orderNo: "DS-1",
           scene: "new_dorm_shop_order",
         }),
       }),

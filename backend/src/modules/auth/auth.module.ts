@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AppleLifecycleModule } from './apple-lifecycle.module';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { AdminGuard, AdminPermissionGuard } from '../../guards/admin.guard';
 import { IpGeoModule } from '../ip-geo/ip-geo.module';
@@ -10,6 +11,7 @@ import { IpGeoModule } from '../ip-geo/ip-geo.module';
 @Global()
 @Module({
   imports: [
+    AppleLifecycleModule,
     IpGeoModule,
     JwtModule.registerAsync({
       useFactory: (config: ConfigService) => ({

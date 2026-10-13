@@ -10,12 +10,12 @@ describe("MessageGateway legacy write entry", () => {
       {} as any,
       { get: jest.fn().mockReturnValue("test") } as any,
       {} as any,
-      {} as any,
+      { user: { findUnique: jest.fn().mockResolvedValue({ id: "user-1", status: "ACTIVE", authVersion: 0 }) } } as any,
       {} as any,
       userAccess as any,
       {} as any,
     );
-    const client = { data: { userId: "user-1", isAdmin: false } };
+    const client = { data: { userId: "user-1", isAdmin: false, authPayload: { sub: "user-1", token_use: "access", sv: 0 } } };
 
     await expect(
       gateway.rejectLegacySendMessage(client as any),

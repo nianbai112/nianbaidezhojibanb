@@ -30,12 +30,20 @@ describe('ErrandLifecycleService auto receipt', () => {
   });
 
   it('auto-confirms an arrived order after its deadline', async () => {
-    jest.spyOn(service, 'confirmReceipt').mockResolvedValue({ ...dueOrder, status: 'completed' } as any);
+    jest.spyOn(service, 'confirmReceipt').mockResolvedValue({ ...dueOrder, status: 'completed', receiptConfirmedBy: 'system' } as any);
 
     const result = await service.autoConfirmDueOrders(now);
 
     expect(result).toEqual({ checked: 1, completed: 1, held: 0 });
     expect(service.confirmReceipt).toHaveBeenCalledWith('order-1', 'user-1', 'system');
+  });
+
+  it.each(['user', 'admin', 'rider'])('扫描后已被%s确认的订单不计自动完成，也不误发系统通知', async source => {
+    const notify: any = { createAndDispatch: jest.fn().mockResolvedValue({}) };
+    service = new ErrandLifecycleService(prisma, undefined, notify);
+    jest.spyOn(service, 'confirmReceipt').mockResolvedValue({ ...dueOrder, status: 'completed', receiptConfirmedBy: source } as any);
+    await expect(service.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 1, completed: 0, held: 0 });
+    expect(notify.createAndDispatch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -65,6 +73,73 @@ describe('ErrandLifecycleService auto receipt', () => {
     const confirm = jest.spyOn(service, 'confirmReceipt');
 
     await expect(service.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 1, completed: 0, held: 1 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  function pagedDatabase(rows: any[]) {
+    return {
+      errandOrder: { findMany: jest.fn(async ({ where, take }: any) => rows.filter(row => {
+        if (row.status !== 'arrived' || !row.receiptConfirmDeadline || row.receiptConfirmDeadline > where.receiptConfirmDeadline.lte) return false;
+        if (!where.OR) return true;
+        const after = where.OR[0].receiptConfirmDeadline.gt;
+        return row.receiptConfirmDeadline > after || (+row.receiptConfirmDeadline === +after && row.id > where.OR[1].id.gt);
+      }).slice(0, take)) },
+      config: { findMany: jest.fn().mockResolvedValue([
+        { key: 'errand.extended_config.disabled', value: { autoReceiptEnabled: false } },
+      ]) },
+      orderAppeal: { findMany: jest.fn(async ({ where }: any) => rows.filter(row => row.held && where.orderId.in.includes(row.id)).map(row => ({ orderId: row.id }))) },
+      deliveryRiskEvent: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+  }
+
+  it('超过100个冻结或关闭校区的订单不会挡住后面的正常到期单', async () => {
+    const rows = Array.from({ length: 202 }, (_, index) => ({
+      ...dueOrder, id: `order-${String(index).padStart(4, '0')}`,
+      held: index < 100, regionId: index >= 100 && index < 200 ? 'disabled' : 'region-1',
+    }));
+    rows.push({ ...dueOrder, id: 'legacy-null-deadline', receiptConfirmDeadline: null, held: false } as any);
+    const db = pagedDatabase(rows);
+    const scanner = new ErrandLifecycleService(db as any);
+    const confirm = jest.spyOn(scanner, 'confirmReceipt').mockImplementation(async (id: string) => {
+      const row = rows.find(row => row.id === id)!;
+      row.status = 'completed';
+      return { ...row, receiptConfirmedBy: 'system' } as any;
+    });
+    await expect(scanner.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 202, completed: 2, held: 200 });
+    expect(confirm.mock.calls.map(call => call[0])).toEqual(['order-0200', 'order-0201']);
+    expect(rows.find(row => row.id === 'legacy-null-deadline')?.status).toBe('arrived');
+    expect(db.errandOrder.findMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('单轮上限1000条后把游标存入Redis，下一Worker实例继续处理后续并回到开头', async () => {
+    const rows = Array.from({ length: 1002 }, (_, index) => ({
+      ...dueOrder, id: `order-${String(index).padStart(4, '0')}`, held: index < 1001,
+    }));
+    const db = pagedDatabase(rows);
+    let cursor: any = null;
+    const redis: any = {
+      getJson: jest.fn(async () => cursor),
+      setJson: jest.fn(async (_key: string, value: any) => { cursor = value; }),
+    };
+    const first = new ErrandLifecycleService(db as any, redis);
+    const firstConfirm = jest.spyOn(first, 'confirmReceipt').mockResolvedValue({ receiptConfirmedBy: 'system' } as any);
+    await expect(first.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 1000, completed: 0, held: 1000 });
+    expect(firstConfirm).not.toHaveBeenCalled();
+    expect(cursor.id).toBe('order-0999');
+    const second = new ErrandLifecycleService(db as any, redis);
+    const secondConfirm = jest.spyOn(second, 'confirmReceipt').mockResolvedValue({ receiptConfirmedBy: 'system' } as any);
+    await expect(second.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 2, completed: 1, held: 1 });
+    expect(secondConfirm).toHaveBeenCalledWith('order-1001', 'user-1', 'system');
+    expect(cursor).toBeNull();
+    rows.splice(0, rows.length, { ...dueOrder, id: 'order-0001', held: false });
+    await expect(second.autoConfirmDueOrders(now)).resolves.toEqual({ checked: 1, completed: 1, held: 0 });
+    expect(secondConfirm).toHaveBeenLastCalledWith('order-0001', 'user-1', 'system');
+  });
+
+  it('配置读取失败时停止自动确认，不把暂时读取失败当成默认开启', async () => {
+    prisma.config.findMany.mockRejectedValueOnce(new Error('config unavailable'));
+    const confirm = jest.spyOn(service, 'confirmReceipt');
+    await expect(service.autoConfirmDueOrders(now)).rejects.toThrow('config unavailable');
     expect(confirm).not.toHaveBeenCalled();
   });
 

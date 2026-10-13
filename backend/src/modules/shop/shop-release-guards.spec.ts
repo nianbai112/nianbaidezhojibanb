@@ -12,6 +12,7 @@ function checkoutHarness() {
     subsidyLedger: { create: jest.fn().mockResolvedValue({}) },
   };
   const prisma: any = {
+    order:{findUnique:jest.fn().mockResolvedValue(null)},
     merchant: { findUnique: jest.fn().mockResolvedValue(merchant) },
     cart: { findMany: jest.fn().mockResolvedValue([cartItem]) },
     address: { findFirst: jest.fn().mockResolvedValue({ id: 'address-1', regionId: 'region-1', specifiedAddressId: 'region-1', name: '测试用户', phone: '13800000000', fullAddress: '宿舍 101' }) },
@@ -27,7 +28,7 @@ describe('shop checkout and cart release guards', () => {
     const { service, tx, cartItem } = checkoutHarness();
     const liveCart = { ...cartItem, quantity: 2 };
     tx.cart.deleteMany.mockImplementation(async ({ where }: any) => ({ count: where.OR.some((row: any) => row.id === liveCart.id && row.quantity === liveCart.quantity && row.updatedAt === liveCart.updatedAt) ? 1 : 0 }));
-    await expect(service.createOrder('merchant-1', 'user-1', { address_id: 'address-1' })).rejects.toThrow('购物车已变化');
+    await expect(service.createOrder('merchant-1', 'user-1', { request_id:'shop_test_request_12345', address_id: 'address-1' })).rejects.toThrow('购物车已变化');
     expect(tx.product.updateMany).not.toHaveBeenCalled();
     expect(tx.order.create).not.toHaveBeenCalled();
   });
@@ -35,7 +36,7 @@ describe('shop checkout and cart release guards', () => {
   it('propagates subsidy ledger failures through the order transaction', async () => {
     const { service, tx } = checkoutHarness();
     tx.subsidyLedger.create.mockRejectedValue(new Error('ledger unavailable'));
-    await expect(service.createOrder('merchant-1', 'user-1', { address_id: 'address-1' })).rejects.toThrow('ledger unavailable');
+    await expect(service.createOrder('merchant-1', 'user-1', { request_id:'shop_test_request_12345', address_id: 'address-1' })).rejects.toThrow('ledger unavailable');
   });
 
   it('removes an off-sale selection using its saved key without consulting the live catalog', async () => {

@@ -36,6 +36,15 @@ const PROD_BASE = {
 const VALID_JWT = 'this-is-a-very-long-secret-key-for-production-use-32chars';
 
 describe('环境变量校验 - 生产安全', () => {
+  it.each([true, false])('preserves optional App OAuth settings through validation (wizard=%s)', (wizard) => {
+    const app = {
+      TENCENT_MAP_WEB_SERVICE_KEY: 'synthetic-map-key', TENCENT_MAP_WEB_SERVICE_SECRET: 'synthetic-map-secret',
+      WX_APP_APPID: 'wxapp0123456789ab', WX_APP_SECRET: 'synthetic-app-secret',
+      WX_OPEN_PLATFORM_ACCOUNT_ID: 'synthetic-open-platform', WX_OFFICIAL_OPEN_PLATFORM_ACCOUNT_ID: 'synthetic-open-platform', APPLE_APP_CLIENT_ID: 'invalid.example.app',
+      APPLE_TEAM_ID: 'TEAM123456', APPLE_KEY_ID: 'KEY1234567', APPLE_PRIVATE_KEY: 'synthetic-not-a-real-key',
+    };
+    expect(validate({ ...PROD_BASE, JWT_SECRET: VALID_JWT, SETUP_WIZARD: String(wizard), ...app })).toMatchObject(app);
+  });
   describe('完整生产模式（无 SETUP_WIZARD）', () => {
     it('使用占位 JWT_SECRET 应失败', () => {
       const config = { ...PROD_BASE, JWT_SECRET: 'your-super-secret-key-change-in-production-now' };

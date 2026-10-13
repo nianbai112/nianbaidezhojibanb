@@ -194,7 +194,7 @@
             <small v-if="hasLocation(node)">送达坐标：{{ Number(node.lat).toFixed(6) }}, {{ Number(node.lng).toFixed(6) }}</small>
             <small v-if="['arrived', 'merchant_completed'].includes(node.nodeType) && !nodeProofImages(node).length">暂无送达照片</small>
             <div v-if="nodeProofImages(node).length" class="node-proofs">
-              <el-image v-for="image in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
+              <el-image :initial-index="previewIndex" preview-teleported v-for="(image, previewIndex) in nodeProofImages(node)" :key="image" :src="image" fit="cover" :preview-src-list="nodeProofImages(node)" />
             </div>
           </div>
         </section>
@@ -265,7 +265,7 @@ const total = ref(0)
 const detail = ref<any>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
-const receiptMethodLabel = (value?: string) => ({ user: '用户主动确认', rider: '骑手凭收货码确认', system: '系统自动确认' }[value || ''] || (value ? '其他确认方式' : '尚未确认'))
+const receiptMethodLabel = (value?: string) => ({ user: '用户主动确认', rider: '骑手凭收货码确认', system: '系统自动确认', admin: '管理员代确认' }[value || ''] || (value ? '其他确认方式' : '尚未确认'))
 const timeline = ref<any>(null)
 const currentOrder = ref<any>(null)
 const dateRange = ref<string[]>([])

@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { buildManagementContentData, serializeManagementItem } from './region-management.helpers';
 import { PrismaService } from '../../common/services/prisma.service';
 
 @Injectable()
@@ -60,7 +61,8 @@ export class RegionService {
       }
       fields.forEach(([camelKey, snakeKey]) => {
         const raw = value[camelKey] !== undefined ? value[camelKey] : value[snakeKey];
-        if (raw === undefined || raw === null || raw === '') return;
+        if (raw === undefined) return;
+        if (raw === null || raw === '') { if (rejectUnsafe) delete result[camelKey]; return; }
         const color = String(raw).trim();
         if (!this.isStackFlowColor(color)) {
           if (rejectUnsafe) throw new BadRequestException(`叠纸流颜色格式无效: ${camelKey}`);
@@ -105,7 +107,7 @@ export class RegionService {
   private toMiniLink(path?: string) {
     const clean = this.normalizeMiniPath(path);
     if (!clean) return '';
-    if (clean.startsWith('internal:') || clean.startsWith('miniapp:') || clean.startsWith('miniapp_half:') || clean.startsWith('img:') || clean.startsWith('tel:') || clean.startsWith('http')) {
+    if (clean.startsWith('internal:') || clean.startsWith('miniapp:') || clean.startsWith('miniapp_half:') || clean.startsWith('img:') || clean.startsWith('tel:') || clean.startsWith('contact:') || clean.startsWith('http')) {
       return clean;
     }
     return `internal:${clean}`;
@@ -665,7 +667,8 @@ export class RegionService {
     return this.normalizeRegion(region);
   }
 
-  async updateManagerSettings(id: string, userId: string, dto: any) {
+  async updateManagerSettings(id: string, userId: string, dto: any, isAdmin = false) {
+    if (isAdmin) throw new ForbiddenException('请使用后台区域管理入口');
     if (!userId) throw new BadRequestException('用户身份不能为空');
     const region = await this.prisma.region.findUnique({
       where: { id },
@@ -678,6 +681,12 @@ export class RegionService {
       throw new ForbiddenException('无权修改该区域配置');
     }
 
+    if (!dto || typeof dto !== 'object' || Array.isArray(dto)) throw new BadRequestException('区域配置格式不正确');
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || !dto.name.trim() || dto.name.trim().length > 50)) throw new BadRequestException('区域名称须为 1 至 50 字');
+    if (dto.description !== undefined && (typeof dto.description !== 'string' || dto.description.length > 200)) throw new BadRequestException('区域简介不能超过 200 字');
+    for (const [key, max] of [['latitude', 90], ['longitude', 180]] as const) {
+      if (dto[key] !== undefined && dto[key] !== null && (dto[key] === '' || !Number.isFinite(Number(dto[key])) || Math.abs(Number(dto[key])) > max)) throw new BadRequestException('区域坐标无效');
+    }
     const data: Record<string, any> = {};
     this.setIfDefined(data, 'logo', dto.logo);
     this.setIfDefined(data, 'name', dto.name);
@@ -701,8 +710,8 @@ export class RegionService {
     this.setIfDefined(data, 'profilePageLayout', dto.profile_page_layout ?? dto.profilePageLayout);
     this.setIfDefined(data, 'privateMessageEnabled', this.toOptionalBool(dto.private_message_enabled ?? dto.privateMessageEnabled));
     this.setIfDefined(data, 'isHot', this.toOptionalBool(dto.is_hot ?? dto.isHot));
-    this.setIfDefined(data, 'latitude', this.toOptionalNumber(dto.latitude));
-    this.setIfDefined(data, 'longitude', this.toOptionalNumber(dto.longitude));
+    this.setIfDefined(data, 'latitude', dto.latitude === null ? null : this.toOptionalNumber(dto.latitude));
+    this.setIfDefined(data, 'longitude', dto.longitude === null ? null : this.toOptionalNumber(dto.longitude));
     const stackFlowInput = dto.stack_flow_style ?? dto.stackFlowStyle;
     if (stackFlowInput !== undefined) {
       const settings = region.settings && typeof region.settings === 'object' && !Array.isArray(region.settings)
@@ -718,7 +727,7 @@ export class RegionService {
     }
 
     const updated = await this.prisma.region.update({
-      where: { id },
+      where: { id, managerUserId: userId },
       data,
       include: {
         managerUser: { select: { id: true, uid: true, nickname: true, avatar: true, phone: true, status: true } },
@@ -734,22 +743,55 @@ export class RegionService {
     });
   }
 
-  async addContentItem(id: string, dto: any) {
-    return this.prisma.regionContentItem.create({
-      data: { regionId: id, ...dto },
-    });
+  private async managementAccess(db: any, id: string, actor: any) {
+    if (!actor?.sub || actor.isAdmin === true) throw new ForbiddenException('请使用已登录的区域管理用户账号');
+    const region = await db.region.findUnique({ where: { id } });
+    if (!region) throw new NotFoundException('区域不存在');
+    const user = await db.user.findUnique({ where: { id: actor.sub }, select: { status: true, deletedAt: true } });
+    if (!user || user.status !== 'ACTIVE' || user.deletedAt) throw new ForbiddenException('账号当前不可管理区域');
+    const manager = region.managerUserId === actor.sub;
+    let canEditContent = manager;
+    if (!manager) {
+      const bindings = await db.userRole.findMany({ where: { userId: actor.sub }, include: { role: true } });
+      canEditContent = bindings.some((binding: any) =>
+        (['ADMIN', 'SUPER_ADMIN'].includes(binding.role?.type) && (!binding.regionId || binding.regionId === id)) ||
+        (binding.role?.type === 'REGION_ADMIN' && binding.regionId === id));
+    }
+    if (!canEditContent) throw new ForbiddenException('没有该区域的管理权限');
+    return { region, permissions: { canEditSettings: manager, canEditContent } };
   }
 
-  async updateContentItem(id: string, itemId: string, dto: any) {
-    return this.prisma.regionContentItem.update({
-      where: { id: itemId },
-      data: dto,
-    });
+  async getManagement(id: string, actor: any) {
+    const access = await this.managementAccess(this.prisma, id, actor);
+    const items = await this.prisma.regionContentItem.findMany({ where: { regionId: id }, orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] });
+    return { region: this.normalizeRegion(access.region), permissions: access.permissions, items: items.map(serializeManagementItem) };
   }
 
-  async deleteContentItem(id: string, itemId: string) {
-    await this.prisma.regionContentItem.delete({ where: { id: itemId } });
-    return { success: true };
+  async addContentItem(id: string, dto: any, actor?: any) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.managementAccess(tx, id, actor);
+      const row = await tx.regionContentItem.create({ data: { ...buildManagementContentData(dto), regionId: id } });
+      return serializeManagementItem(row);
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async updateContentItem(id: string, itemId: string, dto: any, actor?: any) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.managementAccess(tx, id, actor);
+      const previous = await tx.regionContentItem.findFirst({ where: { id: itemId, regionId: id } });
+      if (!previous) throw new NotFoundException('该区域内容不存在');
+      const row = await tx.regionContentItem.update({ where: { id: itemId, regionId: id }, data: buildManagementContentData(dto, previous) });
+      return serializeManagementItem(row);
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async deleteContentItem(id: string, itemId: string, actor?: any) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.managementAccess(tx, id, actor);
+      const deleted = await tx.regionContentItem.deleteMany({ where: { id: itemId, regionId: id } });
+      if (deleted.count !== 1) throw new NotFoundException('该区域内容不存在');
+      return { success: true };
+    }, { isolationLevel: 'Serializable' });
   }
 
   async getTabbar(id: string) {

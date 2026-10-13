@@ -48,6 +48,9 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      // Signed callbacks retain /api for the controller and raw-body parser.
+      "/api/wechat-channel/webhook": { target: "http://localhost:3000", changeOrigin: true },
+      "/api/wechat-moments/webhook": { target: "http://localhost:3000", changeOrigin: true },
       "/api": {
         target: "http://localhost:3000",
         changeOrigin: true,

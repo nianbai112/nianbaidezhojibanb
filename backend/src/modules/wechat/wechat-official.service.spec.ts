@@ -108,7 +108,7 @@ describe('WechatOfficialService callback signature', () => {
 
 describe('WechatOfficialService AES callback binding', () => {
   const createAesService = () => {
-    const prisma = {
+    const prisma: any = {
       config: {
         findUnique: jest.fn().mockResolvedValue({
           value: {
@@ -118,8 +118,9 @@ describe('WechatOfficialService AES callback binding', () => {
           },
         }),
       },
-      user: { findFirst: jest.fn() },
-      wechatOfficialBinding: { upsert: jest.fn().mockResolvedValue({}) },
+      user: { findUnique: jest.fn().mockResolvedValue({ id: "user-1", status: "ACTIVE" }) },
+      wechatOfficialBinding: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn().mockResolvedValue({}) },
+      $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     const redis = {
       get: jest.fn().mockResolvedValue('user-1'),

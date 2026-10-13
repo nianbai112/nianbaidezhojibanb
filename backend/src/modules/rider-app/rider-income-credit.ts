@@ -1,3 +1,5 @@
+import { ConflictException } from '@nestjs/common';
+
 export type ConfirmedRiderIncomeInput = {
   orderType: "errand" | "delivery_order";
   orderId: string;
@@ -9,6 +11,7 @@ export type ConfirmedRiderIncomeInput = {
   tipAmount?: number;
   platformFeeAmount?: number;
   now: Date;
+  reserveAutoPayout?: (tx: any, amount: number) => Promise<unknown>;
 };
 
 const roundMoney = (value: unknown) =>
@@ -44,6 +47,8 @@ export async function creditConfirmedRiderIncome(
   if (input.ownerUserId && input.ownerUserId === input.riderId) {
     return { credited: false, reason: "self_fulfillment_blocked" };
   }
+  // Use the delivery price BEFORE customer coupons/member discounts. Their
+  // subsidy is already included here; never subtract it or add it a second time.
   const deliveryFeeAmount = roundMoney(input.deliveryFeeAmount);
   const tipAmount = roundMoney(input.tipAmount);
   const grossAmount = roundMoney(deliveryFeeAmount + tipAmount);
@@ -78,6 +83,8 @@ export async function creditConfirmedRiderIncome(
   let liabilityRecovered = 0;
   const liabilityUpdates: Array<{
     id: string;
+    amount: number;
+    recoveredBefore: number;
     recoveredAmount: number;
     status: string;
   }> = [];
@@ -90,6 +97,8 @@ export async function creditConfirmedRiderIncome(
     const recoveredAmount = roundMoney(recoveredBefore + recovered);
     liabilityUpdates.push({
       id: liability.id,
+      amount: liabilityAmount,
+      recoveredBefore,
       recoveredAmount,
       status: recoveredAmount >= liabilityAmount ? "recovered" : "open",
     });
@@ -98,21 +107,21 @@ export async function creditConfirmedRiderIncome(
   }
   const netPaidAmount = roundMoney(payableAmount - liabilityRecovered);
 
-  const settlement = await tx.riderSettlement.upsert({
-    where: { periodKey },
-    create: {
+  await tx.riderSettlement.createMany({
+    skipDuplicates: true,
+    data: [{
       settlementNo: `AUTO-${day.key.replace(/-/g, "")}-${input.riderId}`,
       riderId: input.riderId,
       regionId: input.regionId || null,
       periodStart: day.start,
       periodEnd: day.end,
-      orderCount: 1,
+      orderCount: 0,
       // Existing finance reporting treats deliveryFeeTotal as fee + tip.
-      deliveryFeeTotal: payableAmount,
+      deliveryFeeTotal: 0,
       rewardAmount: 0,
       penaltyAmount: 0,
-      payableAmount,
-      paidAmount: netPaidAmount,
+      payableAmount: 0,
+      paidAmount: 0,
       status: "PAID",
       confirmedBy: "system:auto_receipt",
       confirmedAt: input.now,
@@ -121,8 +130,16 @@ export async function creditConfirmedRiderIncome(
       periodKey,
       remark:
         "确认收货后按扣除平台抽成的金额自动入账；退款或申诉按既有冲正流程处理",
-    },
-    update: {
+    }],
+  });
+  // The daily header has two unique keys. INSERT ... ON CONFLICT DO NOTHING
+  // handles concurrent first orders against either key before atomic increments.
+  // MySQL REPEATABLE READ may still have a snapshot from before a concurrent
+  // insert committed. updateMany performs a current read; Prisma update's
+  // preliminary snapshot lookup can otherwise report a missing daily header.
+  const headerChanged = await tx.riderSettlement.updateMany({
+    where: { periodKey },
+    data: {
       orderCount: { increment: 1 },
       deliveryFeeTotal: { increment: payableAmount },
       payableAmount: { increment: payableAmount },
@@ -130,6 +147,8 @@ export async function creditConfirmedRiderIncome(
       paidAt: input.now,
     },
   });
+  if (headerChanged.count !== 1) throw new ConflictException('骑手日结算单状态已变化，请重试');
+  const settlement = await tx.riderSettlement.findUniqueOrThrow({ where: { periodKey } });
   await tx.riderSettlementItem.create({
     data: {
       settlementId: settlement.id,
@@ -145,28 +164,31 @@ export async function creditConfirmedRiderIncome(
     },
   });
   for (const liability of liabilityUpdates) {
-    await tx.riderLiability.update({
-      where: { id: liability.id },
+    const changed = await tx.riderLiability.updateMany({
+      where: { id: liability.id, status: 'open', amount: liability.amount, recoveredAmount: liability.recoveredBefore },
       data: {
         recoveredAmount: liability.recoveredAmount,
         status: liability.status,
       },
     });
+    // Different orders (or an admin settlement) can read the same debt. A
+    // stale calculation must roll back the whole receipt/credit transaction.
+    if (changed.count !== 1) throw new ConflictException('骑手负债已由其他订单结算更新，请重试');
   }
 
   if (netPaidAmount > 0) {
-    const wallet = await tx.wallet.upsert({
+    await tx.wallet.createMany({
+      data: [{ userId: input.riderId }], skipDuplicates: true,
+    });
+    const credited = await tx.wallet.updateMany({
       where: { userId: input.riderId },
-      create: {
-        userId: input.riderId,
-        balance: netPaidAmount,
-        totalIn: netPaidAmount,
-      },
-      update: {
+      data: {
         balance: { increment: netPaidAmount },
         totalIn: { increment: netPaidAmount },
       },
     });
+    if (credited.count !== 1) throw new ConflictException('骑手钱包状态已变化，请重试');
+    const wallet = await tx.wallet.findUniqueOrThrow({ where: { userId: input.riderId } });
     const orderLabel =
       input.orderType === "errand" ? "跑腿订单" : "商家配送订单";
     await tx.walletTransaction.create({
@@ -184,6 +206,10 @@ export async function creditConfirmedRiderIncome(
         status: "SUCCESS",
       },
     });
+  }
+
+  if (netPaidAmount > 0 && input.reserveAutoPayout) {
+    await input.reserveAutoPayout(tx, netPaidAmount);
   }
 
   return {

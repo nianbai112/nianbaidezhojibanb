@@ -1,4 +1,6 @@
+import { canStartWechatPayment } from '../../common/payment-client';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { isMiniappOpenid } from '../../common/wechat-identity';
 import { PrismaService } from '../../common/services/prisma.service';
 import { RedisService } from '../../common/services/redis.service';
 import { PaymentService } from '../payment/payment.service';
@@ -103,7 +105,7 @@ export class TopupService {
     };
   }
 
-  private mapOrder(order: any) {
+  private mapOrder(order: any, payment?: { status: string; refundedAmount: any } | null) {
     const pkg = order.packageSnapshot || {};
     const post = order.post || order.Post;
     return {
@@ -127,6 +129,8 @@ export class TopupService {
       duration: order.duration,
       duration_unit: order.durationUnit,
       durationUnit: order.durationUnit,
+      payment_status: payment?.status || '',
+      refunded_amount: this.money(payment?.refundedAmount || 0),
       order_status: order.status,
       status: order.status,
       top_expire_at: order.topExpireAt,
@@ -178,7 +182,7 @@ export class TopupService {
       }),
       this.prisma.topupPackage.findUnique({ where: { id: packageId } }),
     ]);
-    if (!user?.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
+    if (!user || !canStartWechatPayment(user.openid)) throw new BadRequestException('用户未绑定微信，无法发起支付');
     if (!post || post.deletedAt) throw new NotFoundException('笔记不存在');
     if (post.userId !== userId) throw new ForbiddenException('只能置顶自己的笔记');
     // AUD-P1-147: 校验帖子已发布且审核通过（status=PUBLISHED），禁止置顶待审/已拒/草稿笔记
@@ -220,14 +224,11 @@ export class TopupService {
       userId,
     });
 
-    await this.prisma.topupOrder.update({
-      where: { id: order.id },
-      data: {
-        status: 'paying',
-        paymentNo: paymentInfo.paymentNo,
-        payChannel: 'wx_pay',
-      },
+    const saved = await this.prisma.topupOrder.updateMany({
+      where: { id: order.id, userId, status: { in: ['pending', 'paying'] } },
+      data: { status: 'paying', paymentNo: paymentInfo.paymentNo, payChannel: 'wx_pay' },
     });
+    if (saved.count !== 1) throw new BadRequestException('订单状态已变化，请刷新核对，勿继续支付');
 
     return {
       ...this.mapOrder({
@@ -321,7 +322,7 @@ export class TopupService {
       where: { id: userId },
       select: { openid: true },
     });
-    if (!user?.openid) throw new BadRequestException('用户未绑定微信，无法发起支付');
+    if (!user || !canStartWechatPayment(user.openid)) throw new BadRequestException('用户未绑定微信，无法发起支付');
     const paymentInfo = await this.paymentService.wxUnifiedOrder({
       bizType: 'topup',
       bizId: order.id,
@@ -368,7 +369,8 @@ export class TopupService {
       } as any,
     });
     if (!updated) throw new NotFoundException('置顶订单不存在');
-    return this.mapOrder(updated);
+    const payment = await this.prisma.paymentOrder.findFirst({ where: { paymentNo: updated.paymentNo || '', userId, bizType: 'topup', bizId: orderId }, select: { status: true, refundedAmount: true } });
+    return this.mapOrder(updated, payment);
   }
 
   async getUserOrders(userId: string) {
@@ -379,7 +381,9 @@ export class TopupService {
         User: { select: { id: true, nickname: true, avatar: true } },
       } as any,
     });
-    return list.map((item) => this.mapOrder(item));
+    const payments = await this.prisma.paymentOrder.findMany({ where: { userId, bizType: 'topup', paymentNo: { in: list.map(item => item.paymentNo || '').filter(Boolean) } }, select: { paymentNo: true, status: true, refundedAmount: true } });
+    const byNumber = new Map(payments.map(item => [item.paymentNo, item]));
+    return list.map((item) => this.mapOrder(item, byNumber.get(item.paymentNo || '')));
   }
 
   async cancelOrder(orderId: string, userId: string) {
@@ -387,24 +391,24 @@ export class TopupService {
   }
 
   private async cancelOrderUnlocked(orderId: string, userId: string) {
-    const order = await this.prisma.topupOrder.findUnique({
-      where: { id: orderId },
-    });
-    if (!order) throw new NotFoundException('置顶订单不存在');
-    if (order.userId !== userId) throw new ForbiddenException('无权取消该订单');
-    if (order.status === 'success') throw new BadRequestException('已支付订单不能取消');
-    const updated = await this.prisma.topupOrder.update({
-      where: { id: orderId },
-      data: { status: 'cancelled', cancelledAt: new Date() },
-    });
-    if (updated.paymentNo) {
-      await this.prisma.paymentOrder
-        .updateMany({
-          where: { paymentNo: updated.paymentNo, status: { not: 'paid' } },
+    const updated = await this.prisma.$transaction(async tx => {
+      const order = await tx.topupOrder.findUnique({ where: { id: orderId } });
+      if (!order) throw new NotFoundException('置顶订单不存在');
+      if (order.userId !== userId) throw new ForbiddenException('无权取消该订单');
+      if (order.status === 'cancelled') return order;
+      if (!['pending', 'paying'].includes(order.status)) throw new BadRequestException('已支付或已结束订单不能取消');
+      // 与支付回调采用相同加锁顺序：支付单在前，业务单在后。
+      if (order.paymentNo) {
+        const closed = await tx.paymentOrder.updateMany({
+          where: { paymentNo: order.paymentNo, bizType: 'topup', bizId: orderId, status: { in: ['pending', 'paying', 'failed', 'closed'] } },
           data: { status: 'closed' },
-        })
-        .catch(() => {});
-    }
+        });
+        if (closed.count !== 1) throw new BadRequestException('支付状态已变化，请刷新订单后重试');
+      }
+      const cancelled = await tx.topupOrder.updateMany({where:{id:orderId,userId,status:{in:['pending','paying']}},data:{status:'cancelled',cancelledAt:new Date()}});
+      if (cancelled.count !== 1) throw new BadRequestException('订单状态已变化，请刷新后重试');
+      return tx.topupOrder.findUniqueOrThrow({where:{id:orderId}});
+    });
     return this.mapOrder(updated);
   }
 
@@ -453,7 +457,7 @@ export class TopupService {
           where: { id: userId },
           select: { openid: true },
         });
-        if (!user?.openid) throw new BadRequestException('未绑定微信，无法充值');
+        if (!user || !canStartWechatPayment(user.openid)) throw new BadRequestException('未绑定微信，无法充值');
 
         const recharge = await this.prisma.recharge.create({
           data: {
@@ -506,7 +510,7 @@ export class TopupService {
     });
     const [officialBinding, officialConfig] = await Promise.all([this.prisma.wechatOfficialBinding.findUnique({ where: { userId } }), this.prisma.config.findUnique({ where: { key: 'wechat_official' } })]);
     const official = (officialConfig?.value || {}) as Record<string, any>;
-    const miniProgramBound = !!user?.openid;
+    const miniProgramBound = isMiniappOpenid(user?.openid);
     const officialAccountBound = !!officialBinding?.officialOpenid && officialBinding.subscribe !== false;
     const officialConfigured = !!(official.appId || official.appid || official.appSecret || official.secret || official.qrUrl || official.bindUrl);
 
@@ -514,7 +518,7 @@ export class TopupService {
       isBound: miniProgramBound,
       miniprogram: miniProgramBound,
       official_account: officialAccountBound,
-      wx_openid_mp: user?.openid || null,
+      wx_openid_mp: miniProgramBound ? user.openid : null,
       wx_openid_h5: null,
       official_account_name: official.name || official.accountName || '',
       official_account_qr_url: official.qrUrl || '',

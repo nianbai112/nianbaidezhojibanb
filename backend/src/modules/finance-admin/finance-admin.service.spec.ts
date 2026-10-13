@@ -5,6 +5,13 @@ const allRegionScope = () => ({
 });
 
 describe('FinanceAdminService withdrawal completion', () => {
+  it('rejects manually marking an automatic transfer paid without touching the ledger', async () => {
+    const prisma: any = { $transaction: jest.fn() };
+    const service = new FinanceAdminService(prisma, {} as any, allRegionScope() as any);
+    await expect(service.completeWithdrawal(`RWP${'a'.repeat(28)}`, { transferNo: 'manual' }, 'admin-1'))
+      .rejects.toThrow('自动转账只能根据微信查单结果完成');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
   it('requires a transfer number and settles the frozen balance once', async () => {
     const withdraw = { id: 'withdraw-1', userId: 'user-1', amount: 10, channel: 'WX_PAY', status: 'PROCESSING' };
     const tx: any = {
@@ -450,8 +457,8 @@ describe('FinanceAdminService rider settlement payout', () => {
     { name: 'rejected hold', hold: 'rejected', marketing: false, ledger: false, source: 'errand', eligible: false },
     { name: 'unknown hold state', hold: 'unexpected', marketing: false, ledger: false, source: 'errand', eligible: false },
     { name: 'released earning', hold: 'released', marketing: false, ledger: false, source: 'errand', eligible: true },
-    { name: 'marketing earning without explicit release', hold: undefined, marketing: true, ledger: false, source: 'errand', eligible: false },
-    { name: 'subsidy ledger without explicit release', hold: undefined, marketing: false, ledger: true, source: 'errand', eligible: false },
+    { name: 'marketing earning without a timed hold', hold: undefined, marketing: true, ledger: false, source: 'errand', eligible: true },
+    { name: 'subsidy ledger without a timed hold', hold: undefined, marketing: false, ledger: true, source: 'errand', eligible: true },
     { name: 'released marketing earning', hold: 'released', marketing: true, ledger: true, source: 'errand', eligible: true },
     { name: 'non-errand earning with no hold query', hold: undefined, marketing: false, ledger: false, source: 'order', eligible: true },
   ])('preserves settlement eligibility for $name', async ({ hold, marketing, ledger, source, eligible }) => {
@@ -609,7 +616,7 @@ describe('FinanceAdminService rider settlement payout', () => {
       riderSettlementItem: { findMany: jest.fn().mockResolvedValue([]) },
       riderLiability: {
         findMany: jest.fn().mockResolvedValue([{ id: 'liability-1', amount: 5, recoveredAmount: 1 }]),
-        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       wallet: { upsert: jest.fn().mockResolvedValue({ balance: 28.5 }) },
       walletTransaction: { create: jest.fn().mockResolvedValue({}) },
@@ -630,9 +637,12 @@ describe('FinanceAdminService rider settlement payout', () => {
       create: expect.objectContaining({ balance: 8.5 }),
       update: expect.objectContaining({ balance: { increment: 8.5 } }),
     }));
-    expect(tx.riderLiability.update).toHaveBeenCalledWith({
-      where: { id: 'liability-1' }, data: { recoveredAmount: 5, status: 'recovered' },
+    expect(tx.riderLiability.updateMany).toHaveBeenCalledWith({
+      where: { id: 'liability-1', status: 'open', amount: 5, recoveredAmount: 1 }, data: { recoveredAmount: 5, status: 'recovered' },
     });
+    tx.riderLiability.updateMany.mockResolvedValue({ count: 0 });
+    await expect(service.payRiderSettlement(settlement.id, {}, 'admin-1')).rejects.toThrow('负债已由其他订单');
+    expect(tx.walletTransaction.create).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a settlement atomically and unlocks its orders and rider subsidies for regeneration', async () => {

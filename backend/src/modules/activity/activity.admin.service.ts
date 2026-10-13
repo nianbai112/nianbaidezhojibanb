@@ -1,4 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { AdminDataScopeService } from '../../common/services/admin-data-scope.service';
+import { PaymentService } from '../payment/payment.service';
+import { lockActivityOrder, settleActivityRefund } from './activity-settlement';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../common/services/prisma.service';
 import { MembershipService } from '../membership/membership.service';
 
@@ -7,6 +10,7 @@ export class ActivityAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly membershipService: MembershipService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   // ==================== Activity CRUD ====================
@@ -230,29 +234,32 @@ export class ActivityAdminService {
     return item;
   }
 
-  async auditRefund(id: string, dto: any) {
-    const order = await this.prisma.activityOrder.findUnique({ where: { id } });
-    if (!order) throw new NotFoundException('订单不存在');
-    if (order.orderStatus !== 'paid' || !order.refundStatus) {
-      throw new BadRequestException('该订单不在退款申请状态');
-    }
-    const data: any = { refundStatus: dto.status };
-    if (dto.reason) data.refundReason = dto.reason;
-    if (dto.status === 'rejected') {
-      data.refundStatus = null;
-      data.refundReason = dto.reason || '退款已拒绝';
-    }
-    if (['refunded', 'success', 'refund_success'].includes(String(dto.status || '').toLowerCase())) {
-      return this.prisma.$transaction(async (tx) => {
-        await this.membershipService.restoreBenefitUsagesForTarget('activity_order', order.id, tx);
-        await tx.subsidyLedger.updateMany({
-          where: { sourceType: 'membership', orderType: 'activity_order', orderId: order.id },
-          data: { status: 'cancelled' },
-        }).catch(() => undefined);
-        return tx.activityOrder.update({ where: { id }, data });
-      });
-    }
-    return this.prisma.activityOrder.update({ where: { id }, data });
+  async auditRefund(id: string, dto: any, adminId?: string) {
+    if(!adminId)throw new ForbiddenException('缺少真实后台操作者');
+    const scope=await new AdminDataScopeService(this.prisma).getAdminContext(adminId);
+    const status=String(dto?.status||'').toLowerCase(),reason=String(dto?.reason||'退款审核通过').trim().slice(0,200);
+    if(!['approved','refunded','success','refund_success','rejected'].includes(status))throw new BadRequestException('退款审核状态不合法');
+    const row=await this.prisma.$transaction(async tx=>{
+      const order=await lockActivityOrder(tx,id);
+      if(!scope.isSuperAdmin&&(!order.activity?.regionId||!scope.regionIds.includes(order.activity.regionId)))throw new ForbiddenException('无权审核该区域活动退款');
+      if(order.orderStatus==='refunded')return order;
+      if(!['pending','processing'].includes(order.refundStatus||'')||!['paid','pending_refund'].includes(order.orderStatus))throw new BadRequestException('该订单不在退款申请状态');
+      if(status==='rejected') {
+        if(order.refundStatus!=='pending')throw new BadRequestException('已经提交退款，不能撤回');
+        await tx.activityTicket.updateMany({where:{orderId:id,ticketStatus:'refund_pending'},data:{ticketStatus:'valid'}});
+        return tx.activityOrder.update({where:{id},data:{refundStatus:null,refundReason:reason||'退款被拒绝'}});
+      }
+      if(await tx.activityTicket.count({where:{orderId:id,ticketStatus:{in:['used','checked_in']}}}))throw new BadRequestException('订单票券已核销');
+      await tx.activityOrder.update({where:{id},data:{orderStatus:'pending_refund',refundStatus:'processing',refundReason:reason}});
+      if(Number(order.amount)<=0) {
+        await settleActivityRefund(tx,id,true,0);
+        await this.membershipService.restoreBenefitUsagesForTarget('activity_order',id,tx);
+        await tx.subsidyLedger.updateMany({where:{orderType:'activity_order',orderId:id},data:{status:'cancelled'}});
+      }
+      return order;
+    });
+    if(status!=='rejected'&&row.orderStatus!=='refunded'&&Number(row.amount)>0)await this.paymentService.refund({bizType:'activity_order',bizId:id,amount:Number(row.amount),reason,sourceType:'activity_refund',sourceId:id});
+    return this.prisma.activityOrder.findUnique({where:{id},include:{tickets:true}});
   }
 
   // ==================== Reward CRUD ====================

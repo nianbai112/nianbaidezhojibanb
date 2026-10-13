@@ -66,7 +66,29 @@ const productionCorsOrigin = Joi.string()
 // exist, so the setup wizard can collect and persist them. After init completes,
 // set DB_IS_INSTALLED=1 and restart to activate full validation.
 // ---------------------------------------------------------------------------
+// Optional channels: preserve these values through stripUnknown, while allowing
+// existing mini-program deployments to boot without App provider credentials.
+const appLoginSettings = {
+  WX_APP_APPID: Joi.string().optional().allow(''),
+  WX_APP_SECRET: Joi.string().optional().allow(''),
+  WX_OPEN_PLATFORM_ACCOUNT_ID: Joi.string().optional().allow(''),
+  WX_OFFICIAL_OPEN_PLATFORM_ACCOUNT_ID: Joi.string().optional().allow(''),
+  APPLE_APP_CLIENT_ID: Joi.string().optional().allow(''),
+  APPLE_TEAM_ID: Joi.string().optional().allow(''),
+  APPLE_KEY_ID: Joi.string().optional().allow(''),
+  APPLE_PRIVATE_KEY: Joi.string().optional().allow(''),
+  APPLE_TOKEN_ENCRYPTION_KEY_ID: Joi.string().optional().allow(''),
+  APPLE_TOKEN_ENCRYPTION_KEYS: Joi.string().optional().allow(''),
+};
+
+const mapServiceSettings = {
+  TENCENT_MAP_WEB_SERVICE_KEY: Joi.string().optional().allow(''),
+  TENCENT_MAP_WEB_SERVICE_SECRET: Joi.string().optional().allow(''),
+};
+
 const minimalSchema = Joi.object({
+  ...appLoginSettings,
+  ...mapServiceSettings,
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
   HOST: Joi.string().optional().allow(''),
   PORT: Joi.number().default(3000),
@@ -155,6 +177,8 @@ const minimalSchema = Joi.object({
 // Enforces all production-critical variables.
 // ---------------------------------------------------------------------------
 const fullSchema = Joi.object({
+  ...appLoginSettings,
+  ...mapServiceSettings,
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),
@@ -258,6 +282,21 @@ const fullSchema = Joi.object({
   AI_API_KEY: Joi.string().optional().allow('').default(''),
   OPENAI_API_KEY: Joi.string().optional().allow('').default(''),
   DEEPSEEK_API_KEY: Joi.string().optional().allow('').default(''),
+
+  // 朋友圈自动同步（个微协议）
+  WECHAT_MOMENTS_ENABLED: Joi.string().valid('true', 'false', '1', '0', '').default('false'),
+  WECHAT_MOMENTS_SINCE: Joi.string().optional().allow('').default(''),
+  WECHAT_MOMENTS_SHARER_USER_ID: Joi.string().optional().allow('').default(''),
+  WECHAT_MOMENTS_FONT: Joi.string().optional().allow('').default(''),
+  WECHAT_MOMENTS_FONT_FILE: Joi.string().optional().allow('').default(''),
+  WECHATPAD_BASE_URL: Joi.string().uri().optional().allow('').default(''),
+  WECHATPAD_APP_KEY: Joi.string().optional().allow('').default(''),
+  WECHATPAD_APP_SECRET: Joi.string().optional().allow('').default(''),
+  WECHATPAD_DEVICE_ID: Joi.string().optional().allow('').default(''),
+  WECHATPAD_CDN_BASE_URL: Joi.string().uri().optional().allow('').default(''),
+  WECHATPAD_CDN_TOKEN: Joi.string().optional().allow('').default(''),
+  WECHATPAD_WEBHOOK_SECRET: Joi.string().optional().allow('').default(''),
+  WECHATPAD_TIMEOUT_MS: Joi.number().optional().default(30000),
 
   // Ops
   OPS_RESTART_COMMAND: Joi.string().allow('').default(''),

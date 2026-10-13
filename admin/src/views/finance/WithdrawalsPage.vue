@@ -7,6 +7,7 @@
         <el-option label="待审核" value="PENDING" />
         <el-option label="处理中" value="PROCESSING" />
         <el-option label="成功" value="SUCCESS" />
+        <el-option label="失败" value="FAILED" />
         <el-option label="已拒绝" value="REJECTED" />
       </el-select>
       <el-button type="primary" @click="loadData">查询</el-button>
@@ -20,6 +21,7 @@
         <template #default="{ row }">¥{{ Number(row.amount).toFixed(2) }}</template>
       </el-table-column>
       <el-table-column prop="channel" label="渠道" width="80" />
+      <el-table-column label="出款方式" width="110"><template #default="{ row }">{{ row.automatic ? '微信自动到账' : '人工提现' }}</template></el-table-column>
       <el-table-column prop="account" label="收款账号" width="180" show-overflow-tooltip />
       <el-table-column prop="realName" label="真实姓名" width="100" />
       <el-table-column prop="status" label="状态" width="80">
@@ -37,6 +39,7 @@
             <el-button size="small" type="success" @click="review(row, true)">通过</el-button>
             <el-button size="small" type="danger" @click="review(row, false)">拒绝</el-button>
           </template>
+          <el-button v-else-if="row.status === 'PROCESSING' && row.automatic" size="small" type="primary" :loading="checkingId === row.id" @click="reconcile(row)">核对到账</el-button>
           <el-button v-else-if="row.status === 'PROCESSING'" size="small" type="primary" @click="complete(row)">确认打款</el-button>
           <span v-else>-</span>
         </template>
@@ -58,6 +61,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const statusMap: Record<string, string> = { PENDING: '待审核', PROCESSING: '处理中', SUCCESS: '成功', FAILED: '失败', REJECTED: '已拒绝' }
 const statusTypeMap: Record<string, string> = { PENDING: 'warning', PROCESSING: 'primary', SUCCESS: 'success', FAILED: 'danger', REJECTED: 'danger' }
 const loading = ref(false)
+const checkingId = ref('')
 const route = useRoute()
 const list = ref<any[]>([])
 const page = ref(1)
@@ -101,6 +105,18 @@ const complete = async (row: any) => {
     ElMessage.success('已确认打款')
     loadData()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
+}
+
+const reconcile = async (row: any) => {
+  if (checkingId.value) return
+  checkingId.value = row.id
+  try {
+    const response: any = await request.post(`/admin/withdrawals/${row.id}/reconcile`)
+    const result = response?.data || response
+    ElMessage.info([result.statusText, result.reason].filter(Boolean).join('：'))
+    await loadData()
+  } catch (error: any) { ElMessage.error(error.message || '到账结果仍待核实，请稍后重试') }
+  finally { checkingId.value = '' }
 }
 
 const applyRouteQuery = () => {

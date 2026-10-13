@@ -2,27 +2,29 @@
   <div class="page-container">
     <PageHeader title="帖子管理" subtitle="管理所有帖子，支持审核、置顶、精华、删除等操作" icon="Document">
       <template #actions>
-        <el-button @click="loadPosts" :loading="loading">刷新</el-button>
+        <el-button @click="refreshPosts" :loading="loading">刷新</el-button>
         <el-button type="primary" plain @click="router.push('/content/text-cover-templates')">文字封面模板</el-button>
       </template>
     </PageHeader>
 
     <!-- 指标带：大数字 + 小标签，细分隔线，可点击的项直接联动筛选 -->
     <div class="stats-strip glass-card">
-      <div
+      <button
         v-for="item in statItems"
         :key="item.label"
         class="stat-item"
+        type="button"
+        :disabled="!item.status"
         :class="{ clickable: !!item.status, active: !!item.status && filters.status === item.status }"
         @click="item.status && applyStatusTab(item.status)"
       >
         <div class="stat-value" :style="item.tone ? { color: item.tone } : {}">{{ fmtNum(item.value) }}</div>
         <div class="stat-label">{{ item.label }}</div>
-      </div>
+      </button>
     </div>
 
-    <SearchPanel @search="loadPosts" @reset="resetFilters">
-      <el-input v-model="filters.keyword" placeholder="搜索标题/内容" clearable style="width: 200px" />
+    <SearchPanel @search="searchPosts" @reset="resetFilters">
+      <el-input v-model="filters.keyword" placeholder="搜索标题/内容" aria-label="搜索标题或内容" clearable style="width: 240px" />
       <el-input v-model="filters.id" placeholder="帖子ID" clearable style="width: 180px" />
       <el-input v-model="filters.userId" placeholder="发布者ID" clearable style="width: 180px" />
       <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px">
@@ -36,6 +38,7 @@
         <el-option label="图片" value="IMAGE" />
         <el-option label="视频" value="VIDEO" />
         <el-option label="投票" value="VOTE" />
+        <el-option label="音频" value="AUDIO" />
       </el-select>
       <el-select v-model="filters.auditStatus" placeholder="审核状态" clearable style="width: 120px">
         <el-option label="待审核" value="pending" />
@@ -45,6 +48,10 @@
       <RegionSelector v-model="filters.regionId" width="160px" />
       <el-date-picker v-model="dateRange" type="daterange" range-separator="至" start-placeholder="开始" end-placeholder="结束" style="width: 240px" />
     </SearchPanel>
+
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon class="load-error">
+      <el-button link type="primary" @click="loadPosts">重新加载</el-button>
+    </el-alert>
 
     <div class="glass-card table-card">
       <!-- 二级工具条：状态页签（左）+ 总数（右） -->
@@ -56,10 +63,11 @@
             class="status-tab"
             :class="{ active: filters.status === tab.value }"
             role="tab"
+            :aria-selected="filters.status === tab.value"
             @click="applyStatusTab(tab.value)"
           >{{ tab.label }}</button>
         </div>
-        <div class="toolbar-total">共 <b>{{ fmtNum(total) }}</b> 条</div>
+        <div class="toolbar-summary"><span class="table-hint">点击图片放大 · 点击内容查看全文</span><span class="toolbar-total">共 <b>{{ fmtNum(total) }}</b> 条</span></div>
       </div>
 
       <!-- 上下文批量操作条：仅在有选中行时出现 -->
@@ -75,18 +83,21 @@
         </div>
       </transition>
 
-      <el-table ref="tableRef" :data="posts" v-loading="loading" @selection-change="handleSelectionChange" stripe>
+      <el-table ref="tableRef" :data="posts" row-key="id" v-loading="loading" @selection-change="handleSelectionChange" stripe empty-text="没有符合条件的帖子，请调整筛选条件">
         <el-table-column type="selection" width="46" />
-        <el-table-column label="帖子内容" min-width="280">
+        <el-table-column label="帖子内容" min-width="360">
           <template #default="{ row }">
             <div class="post-cell">
               <div class="post-thumb">
-                <el-image v-if="row.images?.length" :src="row.images[0]" fit="cover" :preview-src-list="row.images" :initial-index="0" />
-                <span v-else class="thumb-fallback">{{ postTypeText(row.type)[0] }}</span>
+                <el-image v-if="row.images?.length" :src="row.images[0]" fit="cover" :preview-src-list="row.images" :initial-index="0" preview-teleported :alt="`${postTypeText(row.type)}帖子，点击放大`">
+                  <template #error><span class="thumb-fallback thumb-error">加载失败</span></template>
+                </el-image>
+                <span v-else class="thumb-fallback">{{ postTypeText(row.type) }}</span>
                 <span v-if="row.images?.length > 1" class="thumb-count">{{ row.images.length }}</span>
               </div>
               <div class="post-body">
-                <div class="post-title">{{ row.title || row.content?.slice(0, 60) || '-' }}</div>
+                <button type="button" class="post-title" @click="viewDetail(row)">{{ row.title || row.content || '无文字内容' }}</button>
+                <div v-if="row.title && row.content" class="post-excerpt">{{ row.content }}</div>
                 <div class="post-meta">
                   <el-tag v-if="row.isAnonymous" type="warning" size="small">匿名</el-tag>
                   <el-tag v-if="row.isTop" type="danger" size="small">置顶</el-tag>
@@ -97,16 +108,16 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="发布者" width="130">
+        <el-table-column label="发布者 / 区域" width="200">
           <template #default="{ row }">
             <div class="user-cell">
               <el-avatar :size="26" :src="row.userAvatar">{{ (row.userNickname || '?')[0] }}</el-avatar>
               <span class="user-name">{{ row.userNickname || '-' }}</span>
             </div>
+            <div class="post-region" :title="row.regionName">{{ row.regionName || '未设置区域' }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="regionName" label="区域" width="90" />
-        <el-table-column label="互动" width="200" align="right">
+        <el-table-column label="互动" width="140">
           <template #default="{ row }">
             <div class="engagement-stats">
               <span class="eng-item"><b>{{ fmtNum(row.viewCount) }}</b>浏览</span>
@@ -116,21 +127,21 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="86">
+        <el-table-column label="发布 / 审核状态" width="132">
           <template #default="{ row }">
-            <StatusTag :status="row.status" />
+            <div class="post-status"><StatusTag :status="row.status" size="small" /><span :class="['audit-label', `audit-${row.auditStatus}`]">{{ auditStatusText(row.auditStatus) }}</span></div>
           </template>
         </el-table-column>
-        <el-table-column label="发布时间" width="150">
+        <el-table-column label="发布时间" width="120">
           <template #default="{ row }">
             <TimeText :time="row.createdAt" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="196" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="viewDetail(row)">详情</el-button>
-            <el-button v-if="hasAuditPermission" size="small" link type="success" v-show="row.auditStatus !== 'approved'" @click="approvePost(row)">通过</el-button>
-            <el-button v-if="hasAuditPermission" size="small" link type="warning" v-show="row.auditStatus !== 'rejected'" @click="rejectPost(row)">驳回</el-button>
+            <el-button size="small" link type="primary" @click="viewDetail(row)">查看</el-button>
+            <el-button v-if="hasAuditPermission && row.status !== 'DELETED' && row.auditStatus !== 'approved'" size="small" link type="success" @click="approvePost(row)">通过</el-button>
+            <el-button v-if="hasAuditPermission && row.status !== 'DELETED' && row.auditStatus !== 'rejected'" size="small" link type="warning" @click="rejectPost(row)">驳回</el-button>
             <el-dropdown v-if="hasDeletePermission || hasTopPermission || hasAuditPermission" trigger="click" @command="(cmd: string) => handleCommand(cmd, row)">
               <el-button size="small" link type="primary">更多</el-button>
               <template #dropdown>
@@ -154,35 +165,50 @@
           :page-sizes="[20, 50, 100]"
           layout="total, sizes, prev, pager, next"
           @current-change="loadPosts"
-          @size-change="loadPosts"
+          @size-change="searchPosts"
         />
       </div>
     </div>
 
-    <el-drawer v-model="showDetail" title="帖子详情" size="600px">
+    <el-drawer v-model="showDetail" title="帖子详情" size="min(760px, 100vw)">
       <template v-if="detailData">
+        <div class="detail-section detail-reading">
+          <div class="detail-reading-status"><StatusTag :status="detailData.status" /><span :class="['audit-label', `audit-${detailData.auditStatus}`]">{{ auditStatusText(detailData.auditStatus) }}</span></div>
+          <h2 v-if="detailData.title" class="detail-title">{{ detailData.title }}</h2>
+          <div class="detail-content">{{ detailData.content || '此帖没有文字内容' }}</div>
+        </div>
+        <div v-if="detailData.auditReason" class="detail-section">
+          <h4>审核原因</h4>
+          <div class="audit-reason-card">{{ detailData.auditReason }}</div>
+        </div>
+        <div class="detail-section" v-if="detailData.images?.length">
+          <h4>图片 <small>共 {{ detailData.images.length }} 张，点击放大</small></h4>
+          <div class="detail-images">
+            <el-image v-for="(img, i) in detailData.images" :key="i" :src="img" fit="cover" :preview-src-list="detailData.images" :initial-index="i" preview-teleported :alt="`帖子图片 ${i + 1}`">
+              <template #error><span class="thumb-fallback thumb-error">图片加载失败</span></template>
+            </el-image>
+          </div>
+        </div>
+        <div class="detail-section" v-if="playableMedia.length">
+          <h4>视频 / 音频</h4>
+          <div v-for="media in playableMedia" :key="media.id || media.url" class="detail-media">
+            <video v-if="String(media.type).toUpperCase() === 'VIDEO'" :src="media.url" :poster="media.thumb || undefined" controls preload="none" />
+            <audio v-else :src="media.url" controls preload="none" />
+          </div>
+        </div>
         <div class="detail-section">
           <h4>基本信息</h4>
           <div class="detail-row detail-row-id">
             <span class="label">帖子ID：</span>
             <code>{{ detailData.id }}</code>
             <el-button size="small" type="primary" plain @click="copyPostId(detailData.id)">复制ID</el-button>
-            <el-button size="small" type="primary" plain @click="openAiCommentTask(detailData)">创建AI评论任务</el-button>
+            <el-button v-if="hasAuditPermission" size="small" type="primary" plain @click="openAiCommentTask(detailData)">创建AI评论任务</el-button>
           </div>
           <div class="detail-row"><span class="label">{{ detailData.isAnonymous ? '真实发布者（仅审核权限可见）' : '发布者' }}：</span>{{ detailData.user?.nickname || '-' }}</div>
           <div class="detail-row"><span class="label">区域：</span>{{ detailData.region?.name || '-' }}</div>
           <div class="detail-row"><span class="label">类型：</span>{{ postTypeText(detailData.type) }}</div>
           <div class="detail-row"><span class="label">状态：</span><StatusTag :status="detailData.status" /></div>
           <div class="detail-row"><span class="label">审核状态：</span><StatusTag :status="detailData.auditStatus" /></div>
-          <div v-if="detailData.auditReason" class="detail-row detail-row-block">
-            <span class="label">审核原因：</span>
-            <div class="audit-reason-card">
-              <el-tag size="small" :type="detailData.auditStatus === 'rejected' ? 'danger' : detailData.auditStatus === 'pending' ? 'warning' : 'success'">
-                {{ detailData.auditStatus === 'rejected' ? '拒绝说明' : detailData.auditStatus === 'pending' ? '待复核说明' : '审核说明' }}
-              </el-tag>
-              <span>{{ detailData.auditReason }}</span>
-            </div>
-          </div>
           <div class="detail-row"><span class="label">发布时间：</span>{{ detailData.createdAt }}</div>
         </div>
         <div v-if="detailData.isAnonymous" class="detail-section">
@@ -190,16 +216,6 @@
           <el-alert type="warning" :closable="false" title="小程序只会展示匿名名称和头像；此处为审核追责保留的真实作者。" />
           <div class="detail-row"><span class="label">匿名展示：</span>{{ detailData.anonymousName || '匿名用户' }}</div>
           <div class="detail-row"><span class="label">真实用户 ID：</span><code>{{ detailData.user?.id || '-' }}</code></div>
-        </div>
-        <div class="detail-section">
-          <h4>内容</h4>
-          <div class="detail-content">{{ detailData.content }}</div>
-        </div>
-        <div class="detail-section" v-if="detailData.images?.length">
-          <h4>图片/视频</h4>
-          <div class="detail-images">
-            <el-image v-for="(img, i) in detailData.images" :key="i" :src="img" style="width: 120px; height: 120px; border-radius: 6px; margin: 4px;" fit="cover" :preview-src-list="detailData.images" />
-          </div>
         </div>
         <div class="detail-section" v-if="detailData.topics?.length">
           <h4>话题</h4>
@@ -273,6 +289,15 @@
           </div>
         </div>
       </template>
+      <template #footer>
+        <div class="detail-actions">
+          <el-button @click="showDetail = false">关闭</el-button>
+          <template v-if="detailData && hasAuditPermission && detailData.status !== 'DELETED'">
+            <el-button v-if="detailData.auditStatus !== 'rejected'" type="warning" plain @click="rejectPost(detailData)">驳回帖子</el-button>
+            <el-button v-if="detailData.auditStatus !== 'approved'" type="primary" @click="approvePost(detailData)">审核通过</el-button>
+          </template>
+        </div>
+      </template>
     </el-drawer>
   </div>
 </template>
@@ -296,6 +321,7 @@ const hasAuditPermission = ref(auth.permissions.includes('post:audit'))
 const hasDeletePermission = ref(auth.permissions.includes('post:delete'))
 const hasTopPermission = ref(auth.permissions.includes('post:top'))
 const loading = ref(false)
+const loadError = ref('')
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
@@ -304,10 +330,12 @@ const selectedRows = ref<any[]>([])
 const dateRange = ref<Date[]>([])
 const showDetail = ref(false)
 const detailData = ref<any>(null)
+const playableMedia = computed(() => (detailData.value?.media || []).filter((media: any) => media.url && ['VIDEO', 'AUDIO'].includes(String(media.type).toUpperCase())))
 const autoOpenedPostId = ref('')
 const tableRef = ref()
 const filters = reactive({ id: '', userId: '', keyword: '', status: '', type: '', auditStatus: '', regionId: '' })
 const stats = reactive({ totalPosts: 0, todayPosts: 0, pendingAudit: 0, reportedPosts: 0 })
+let latestListRequest = 0
 
 const statusTabs = [
   { label: '全部', value: '' },
@@ -326,8 +354,9 @@ const statItems = computed(() => [
 
 const fmtNum = (value: any) => Number(value || 0).toLocaleString('en-US')
 
-const postTypeText = (value: string) => ({ TEXT: '文本', IMAGE: '图片', VIDEO: '视频', VOTE: '投票', AUDIO: '音频' } as Record<string, string>)[value] || value || '-'
-const postTypeTag = (value: string) => ({ TEXT: 'info', IMAGE: 'success', VIDEO: 'warning', VOTE: 'primary', AUDIO: 'danger' } as Record<string, any>)[value] || 'info'
+const postTypeText = (value: string) => ({ TEXT: '文本', IMAGE: '图片', VIDEO: '视频', VOTE: '投票', AUDIO: '音频' } as Record<string, string>)[String(value).toUpperCase()] || '其他'
+const postTypeTag = (value: string) => ({ TEXT: 'info', IMAGE: 'success', VIDEO: 'warning', VOTE: 'primary', AUDIO: 'danger' } as Record<string, any>)[String(value).toUpperCase()] || 'info'
+const auditStatusText = (value: string) => ({ pending: '待审核', approved: '审核通过', rejected: '审核驳回' } as Record<string, string>)[value] || '审核状态未知'
 const counterLabel = (value: string | number) => ({ viewCount: '浏览', likeCount: '点赞', commentCount: '评论', favoriteCount: '收藏', reportCount: '举报' } as Record<string, string>)[String(value)] || String(value)
 const coStatusText = (value: string) => ({ accepted: '已接受', rejected: '已拒绝', pending: '待确认' } as Record<string, string>)[value] || value || '-'
 const reportStatusText = (value: string) => ({ pending: '待处理', processing: '处理中', resolved: '已处理', rejected: '已驳回' } as Record<string, string>)[value] || value || '-'
@@ -343,7 +372,9 @@ const clearSelection = () => {
 }
 
 const loadPosts = async () => {
+  const requestId = ++latestListRequest
   loading.value = true
+  loadError.value = ''
   try {
     const params: any = {
       page: page.value,
@@ -355,7 +386,8 @@ const loadPosts = async () => {
       if (startDate) params.startDate = startDate
       if (endDate) params.endDate = endDate
     }
-    const res = await request.get('/admin/posts', { params })
+    const res = await request.get('/admin/posts', { params, skipGetDeduplication: true })
+    if (requestId !== latestListRequest) return
     posts.value = res.data?.list || []
     total.value = res.data?.total || 0
     if (filters.id && autoOpenedPostId.value !== filters.id) {
@@ -363,16 +395,19 @@ const loadPosts = async () => {
       await viewDetail({ id: filters.id })
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
-    posts.value = []
+    if (requestId !== latestListRequest) return
+    loadError.value = e?.message || '帖子加载失败，请重新加载'
   } finally {
-    loading.value = false
+    if (requestId === latestListRequest) loading.value = false
   }
 }
 
+const searchPosts = () => { page.value = 1; loadPosts() }
+const refreshPosts = () => { loadPosts(); loadStats() }
+
 const loadStats = async () => {
   try {
-    const res = await request.get('/admin/posts/stats')
+    const res = await request.get('/admin/posts/stats', { skipGetDeduplication: true })
     if (res.data) Object.assign(stats, res.data)
   } catch (e: any) { ElMessage.error(e?.message || '加载统计失败') }
 }
@@ -396,7 +431,7 @@ const handleSelectionChange = (rows: any[]) => {
 
 const viewDetail = async (row: any) => {
   try {
-    const res = await request.get(`/admin/posts/${row.id}`)
+    const res = await request.get(`/admin/posts/${row.id}`, { skipGetDeduplication: true })
     detailData.value = res.data || res
     showDetail.value = true
   } catch (e: any) {
@@ -444,6 +479,7 @@ const approvePost = async (row: any) => {
   try {
     await request.put(`/admin/posts/${row.id}/audit`, { status: 'approved' })
     ElMessage.success('已通过')
+    if (showDetail.value && detailData.value?.id === row.id) await viewDetail(row)
     loadPosts()
     loadStats()
   } catch (e: any) { ElMessage.error(e?.message || '操作失败') }
@@ -454,6 +490,7 @@ const rejectPost = async (row: any) => {
     const { value: reason } = await ElMessageBox.prompt('请输入驳回原因', '驳回', { inputPlaceholder: '驳回原因（可选）' })
     await request.put(`/admin/posts/${row.id}/audit`, { status: 'rejected', reason })
     ElMessage.success('已驳回')
+    if (showDetail.value && detailData.value?.id === row.id) await viewDetail(row)
     loadPosts()
     loadStats()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '操作失败') }
@@ -531,7 +568,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container { padding: 24px; }
+.page-container { padding: 8px 4px; }
+.load-error { margin-bottom: 16px; }
 
 /* ── 指标带：扁平条 + 细分隔线，大数字小标签 ───────────── */
 .stats-strip {
@@ -541,11 +579,17 @@ onMounted(() => {
   margin: 16px 0;
 }
 .stat-item {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: inherit;
   text-align: center;
   padding: 2px 12px;
   border-right: 1px solid var(--mx-border);
   transition: background 0.15s ease;
 }
+.stat-item:disabled { opacity: 1; }
 .stat-item:last-child { border-right: none; }
 .stat-item.clickable { cursor: pointer; border-radius: 8px; }
 .stat-item.clickable:hover { background: rgba(37, 99, 235, 0.05); }
@@ -576,6 +620,8 @@ onMounted(() => {
   padding: 10px 20px;
   border-bottom: 1px solid var(--mx-border);
 }
+.toolbar-summary { display: flex; align-items: center; gap: 20px; }
+.table-hint { color: var(--mx-muted); font-size: 12px; }
 .status-tabs { display: flex; gap: 22px; }
 .status-tab {
   appearance: none;
@@ -584,13 +630,13 @@ onMounted(() => {
   border-bottom: 2px solid transparent;
   padding: 4px 0;
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--mx-muted);
   cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
-.status-tab:hover { opacity: 0.85; }
+.status-tab:hover { color: var(--mx-primary); }
 .status-tab.active {
   opacity: 1;
   color: var(--mx-text);
@@ -629,27 +675,13 @@ onMounted(() => {
   color: var(--mx-muted);
 }
 
-/* 行交错入场：索引 × 35ms 的级联淡入 */
-:deep(.el-table__body .el-table__row) { animation: row-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) both; }
-:deep(.el-table__body .el-table__row:nth-child(1)) { animation-delay: 0ms; }
-:deep(.el-table__body .el-table__row:nth-child(2)) { animation-delay: 35ms; }
-:deep(.el-table__body .el-table__row:nth-child(3)) { animation-delay: 70ms; }
-:deep(.el-table__body .el-table__row:nth-child(4)) { animation-delay: 105ms; }
-:deep(.el-table__body .el-table__row:nth-child(5)) { animation-delay: 140ms; }
-:deep(.el-table__body .el-table__row:nth-child(6)) { animation-delay: 175ms; }
-:deep(.el-table__body .el-table__row:nth-child(7)) { animation-delay: 210ms; }
-:deep(.el-table__body .el-table__row:nth-child(8)) { animation-delay: 245ms; }
-:deep(.el-table__body .el-table__row:nth-child(9)) { animation-delay: 280ms; }
-:deep(.el-table__body .el-table__row:nth-child(n+10)) { animation-delay: 315ms; }
-@keyframes row-in { from { opacity: 0; } to { opacity: 1; } }
-
 /* 帖子内容单元格：左缩略图 + 右标题/标签，行高更紧凑 */
 .post-cell { display: flex; align-items: center; gap: 12px; }
 .post-thumb {
   position: relative;
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   border-radius: 8px;
   overflow: hidden;
   background: rgba(15, 23, 42, 0.05);
@@ -666,6 +698,7 @@ onMounted(() => {
   color: var(--mx-muted);
 }
 .thumb-count {
+  pointer-events: none;
   position: absolute;
   right: 3px;
   bottom: 3px;
@@ -682,6 +715,12 @@ onMounted(() => {
 }
 .post-body { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .post-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mx-text);
+  text-align: left;
+  cursor: pointer;
   font-size: 14px;
   font-weight: 500;
   line-height: 1.45;
@@ -690,6 +729,16 @@ onMounted(() => {
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
+.post-title:hover { color: var(--mx-primary); }
+.post-excerpt { font-size: 13px; color: var(--mx-sub); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.post-body { flex: 1; }
+.post-region { color: var(--mx-sub); font-size: 12px; line-height: 1.5; margin-top: 6px; }
+.post-status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.audit-label { font-size: 12px; color: var(--mx-sub); }
+.audit-pending { color: #9a4b05; }
+.audit-approved { color: #08785c; }
+.audit-rejected { color: #b91c1c; }
+.thumb-error { font-size: 12px; font-weight: 400; }
 .post-meta { display: flex; gap: 4px; flex-wrap: wrap; }
 
 .user-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -698,11 +747,11 @@ onMounted(() => {
 /* 互动数据：单行、右对齐、等宽数字 */
 .engagement-stats {
   display: flex;
-  justify-content: flex-end;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   white-space: nowrap;
 }
-.eng-item { font-size: 11.5px; color: var(--mx-muted); }
+.eng-item { font-size: 12px; color: var(--mx-muted); }
 .eng-item b {
   font-family: var(--mx-font-mono);
   font-size: 12.5px;
@@ -713,22 +762,31 @@ onMounted(() => {
 }
 .eng-item.danger, .eng-item.danger b { color: #dc2626; }
 
-.table-footer { padding: 14px 16px; display: flex; justify-content: flex-end; }
+.table-footer { padding: 14px 16px; display: flex; justify-content: flex-end; overflow-x: auto; }
 
-.glass-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border-radius: 14px; border: 1px solid rgba(255,255,255,0.8); }
+.glass-card { background: var(--mx-card); border-radius: var(--mx-radius); border: 1px solid var(--mx-border); }
 
 /* ── 详情抽屉 ──────────────────────────────────────────── */
 .detail-section { margin-bottom: 20px; }
-.detail-section h4 { font-size: 15px; font-weight: 600; margin-bottom: 10px; color: var(--mx-text); border-bottom: 1px solid var(--mx-border); padding-bottom: 6px; }
-.detail-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+.detail-section h4 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--mx-text); border-bottom: 1px solid var(--mx-border); padding-bottom: 8px; }
+.detail-section h4 small { color: var(--mx-muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+.detail-reading-status { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.detail-title { font-size: 20px; line-height: 1.5; margin: 0 0 12px; }
+.detail-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: 14px; }
 .detail-row-id { flex-wrap: wrap; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; }
 .detail-row-id code { overflow: hidden; color: #1e40af; font-family: var(--mx-font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .detail-row-block { align-items: flex-start; }
 .detail-row .label { color: var(--mx-muted); min-width: 80px; }
 .audit-reason-card { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 6px; background: #fff7f7; border: 1px solid #fecaca; color: #334155; line-height: 1.6; }
-.detail-content { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
-.detail-images { display: flex; flex-wrap: wrap; gap: 4px; }
-.detail-stats { display: flex; gap: 16px; font-size: 14px; color: var(--mx-muted); }
+.detail-content { font-size: 15px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.detail-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.detail-images .el-image { width: 100%; aspect-ratio: 1; border-radius: var(--mx-radius-sm); background: var(--mx-soft); }
+.detail-media { margin-top: 12px; }
+.detail-media video { display: block; width: 100%; max-height: 420px; background: #0f172a; }
+.detail-media audio { width: 100%; }
+.detail-stats { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; color: var(--mx-sub); }
+.detail-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.detail-actions .el-button + .el-button { margin-left: 0; }
 .counter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .counter-item { border: 1px solid var(--mx-border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
 .counter-name { font-size: 12px; color: var(--mx-muted); }
@@ -738,4 +796,18 @@ onMounted(() => {
 .mini-list { display: flex; flex-direction: column; gap: 8px; }
 .mini-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--mx-border); border-radius: 6px; font-size: 13px; }
 .mini-item.report { border-color: #fecaca; background: #fff7f7; }
+
+@media (max-width: 900px) {
+  .toolbar-summary .table-hint { display: none; }
+}
+@media (max-width: 640px) {
+  .page-container { padding: 0; }
+  .stats-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
+  .stat-item:nth-child(2) { border-right: 0; }
+  .table-toolbar { flex-wrap: wrap; gap: 8px; padding: 12px; }
+  .status-tabs { width: 100%; gap: 20px; overflow-x: auto; }
+  .batch-bar { flex-wrap: wrap; padding: 12px; gap: 8px; }
+  .batch-actions { flex-wrap: wrap; }
+  .counter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 </style>

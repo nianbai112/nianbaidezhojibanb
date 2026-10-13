@@ -241,7 +241,7 @@ const businessScopeLabels: Record<string, string> = {
   all: '通用',
   shop: '外卖/小店',
   mall: '商城',
-  errand: '跑腿',
+  errand: '跑腿/代买',
   activity: '活动',
   membership: '会员权益',
 }

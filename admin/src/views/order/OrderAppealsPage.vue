@@ -134,8 +134,8 @@
           >核验订单 / 发起退款</el-button
         >
         <div v-if="current.evidenceImages?.length" class="evidence">
-          <el-image
-            v-for="url in current.evidenceImages"
+          <el-image :initial-index="previewIndex" preview-teleported
+            v-for="(url, previewIndex) in current.evidenceImages"
             :key="url"
             :src="url"
             :preview-src-list="current.evidenceImages"

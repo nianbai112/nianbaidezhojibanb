@@ -415,7 +415,7 @@
         <section class="detail-section" v-if="selectedProduct.images?.length">
           <h3>商品图片</h3>
           <div class="image-grid">
-            <el-image v-for="img in selectedProduct.images" :key="img" :src="img" fit="cover" :preview-src-list="selectedProduct.images" preview-teleported />
+            <el-image :initial-index="previewIndex" v-for="(img, previewIndex) in selectedProduct.images" :key="img" :src="img" fit="cover" :preview-src-list="selectedProduct.images" preview-teleported />
           </div>
         </section>
 

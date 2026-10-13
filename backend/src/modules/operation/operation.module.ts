@@ -1,3 +1,4 @@
+import { GroupBuyModule } from '../group-buy/group-buy.module';
 import { Module } from '@nestjs/common';
 import { OperationController } from './operation.controller';
 import { OperationService } from './operation.service';
@@ -7,7 +8,7 @@ import { MembershipModule } from '../membership/membership.module';
 import { GrowthModule } from '../growth/growth.module';
 
 @Module({
-  imports: [AiRuntimeModule, PaymentModule, MembershipModule, GrowthModule],
+  imports: [GroupBuyModule, AiRuntimeModule, PaymentModule, MembershipModule, GrowthModule],
   controllers: [OperationController],
   providers: [OperationService],
   exports: [OperationService],

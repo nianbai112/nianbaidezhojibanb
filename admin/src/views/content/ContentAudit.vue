@@ -156,7 +156,7 @@
         <div class="detail-section" v-if="detailData.images?.length">
           <h4>图片</h4>
           <div class="detail-images">
-            <el-image v-for="(img, i) in detailData.images" :key="i" :src="img" style="width: 100px; height: 100px; border-radius: 6px; margin: 4px;" fit="cover" :preview-src-list="detailData.images" />
+            <el-image preview-teleported v-for="(img, i) in detailData.images" :key="i" :src="img" style="width: 100px; height: 100px; border-radius: 6px; margin: 4px;" fit="cover" :preview-src-list="detailData.images" :initial-index="i" />
           </div>
         </div>
         <div class="detail-section" v-if="detailData.targetType === 'report'">

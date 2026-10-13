@@ -1,3 +1,5 @@
+import { canStartWechatPayment } from '../../common/payment-client';
+import { isMiniappOpenid } from '../../common/wechat-identity';
 import {
   Controller,
   Post,
@@ -46,7 +48,7 @@ export class PaymentController {
       select: { id: true, openid: true },
     });
 
-    if (!user || !user.openid) {
+    if (!user || !canStartWechatPayment(user.openid)) {
       throw new BadRequestException('用户不存在或未绑定微信');
     }
 
@@ -73,6 +75,8 @@ export class PaymentController {
         throw new BadRequestException('订单支付已超时，请重新下单');
       }
     }
+
+    if (['mall_order','group_buy'].includes(bizType) && bizOrder.status !== 'pending_pay') throw new BadRequestException('订单状态不允许支付');
 
     // 3. 验证金额：客户端传入的 amount 必须与业务订单金额一致
     const dtoAmount = Number(dto.amount);
@@ -443,7 +447,7 @@ export class PaymentController {
       case 'mall_order': {
         const o = await this.prisma.mallOrder.findUnique({
           where: { id: bizId },
-          select: { userId: true, orderNo: true, payAmount: true },
+          select: { userId: true, orderNo: true, payAmount: true, status: true, createdAt: true },
         });
         if (!o) return null;
         return {
@@ -451,7 +455,14 @@ export class PaymentController {
           orderNo: o.orderNo,
           realAmount: Number(o.payAmount),
           description: `商城订单 ${o.orderNo}`,
+          status: o.status, createdAt: o.createdAt,
         };
+      }
+
+      case 'group_buy': {
+        const order=await this.prisma.groupBuyOrder.findUnique({where:{id:bizId},select:{userId:true,orderNo:true,amount:true,status:true,createdAt:true}});
+        if(!order)return null;
+        return {userId:order.userId,orderNo:order.orderNo,realAmount:Number(order.amount),status:order.status,createdAt:order.createdAt,description:`团购订单 ${order.orderNo}`};
       }
 
       case 'delivery_order': {
@@ -471,9 +482,10 @@ export class PaymentController {
       case 'errand_order': {
         const o = await this.prisma.errandOrder.findUnique({
           where: { id: bizId },
-          select: { userId: true, orderNo: true, payAmount: true },
+          select: { userId: true, orderNo: true, payAmount: true, type: true },
         });
         if (!o) return null;
+        if (o.type === 'purchase') throw new BadRequestException('请从代买入口支付');
         return {
           userId: o.userId,
           orderNo: o.orderNo,

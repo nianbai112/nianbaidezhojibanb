@@ -19,14 +19,15 @@ describe("Realtime control bridge", () => {
       {} as any,
     );
 
-    expect(gateway.disconnectUser("user-1")).toBe(0);
+    expect(gateway.disconnectUser("user-1", 3)).toBe(0);
+    expect(JSON.parse(publish.mock.calls[0][1]).data).toEqual({ userId: "user-1", invalidBeforeVersion: 3 });
     expect(publish).toHaveBeenCalledWith(
       "lm:ws:realtime:control",
       expect.stringContaining('"command":"disconnect_user"'),
     );
   });
 
-  it("disconnects both realtime transports when a command arrives", () => {
+  it("disconnects both realtime transports when a command arrives", async () => {
     const wsNative = {
       disconnectUserLocal: jest.fn().mockReturnValue(2),
     };
@@ -40,14 +41,25 @@ describe("Realtime control bridge", () => {
       messageGateway as any,
     );
 
-    (service as any).handleCommand(
+    await (service as any).handleCommand(
       JSON.stringify({
         command: "disconnect_user",
-        data: { userId: "user-1" },
+        data: { userId: "user-1", invalidBeforeVersion: 3 },
       }),
     );
 
-    expect(wsNative.disconnectUserLocal).toHaveBeenCalledWith("user-1");
-    expect(messageGateway.disconnectUser).toHaveBeenCalledWith("user-1");
+    expect(wsNative.disconnectUserLocal).toHaveBeenCalledWith("user-1", 3);
+    expect(messageGateway.disconnectUser).toHaveBeenCalledWith("user-1", 3);
   });
+  it("ignores old or malformed unbounded disconnect commands", async () => {
+    const wsNative = { disconnectUserLocal: jest.fn() };
+    const messageGateway = { disconnectUser: jest.fn() };
+    const service = new RealtimeControlService({} as any, {} as any, wsNative as any, messageGateway as any);
+    for (const cutoff of [undefined, 0, -1, "1"]) {
+      await (service as any).handleCommand(JSON.stringify({ command: "disconnect_user", data: { userId: "user-1", invalidBeforeVersion: cutoff } }));
+    }
+    expect(wsNative.disconnectUserLocal).not.toHaveBeenCalled();
+    expect(messageGateway.disconnectUser).not.toHaveBeenCalled();
+  });
+
 });

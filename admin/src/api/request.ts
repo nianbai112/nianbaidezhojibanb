@@ -2,6 +2,13 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** Read the server again after an identity decision or explicit refresh. */
+    skipGetDeduplication?: boolean
+  }
+}
+
 export const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000
@@ -24,7 +31,7 @@ function showErrorOnce(message: string) {
 request.interceptors.request.use(config => {
   const token = localStorage.getItem('LM_ADMIN_TOKEN') || localStorage.getItem('admin_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
-  if (String(config.method || 'get').toLowerCase() === 'get') {
+  if (String(config.method || 'get').toLowerCase() === 'get' && !config.skipGetDeduplication) {
     const now = Date.now()
     if (recentGetRequests.size > 200) {
       recentGetRequests.forEach((at, requestKey) => {

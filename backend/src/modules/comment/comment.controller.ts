@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { CommentService } from './comment.service';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { JwtGuard } from '../../guards/jwt.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 
@@ -10,8 +11,15 @@ export class CommentController {
   constructor(private readonly commentService: CommentService) {}
 
   @Get('comments/v2/post/:postId/comments')
+  @UseGuards(OptionalAuthGuard)
   getCommentsV2(@Param('postId') postId: string, @Query() query: any, @Req() req: any) {
     return this.commentService.getCommentsV2(postId, query, req?.user?.sub || req?.user?.id);
+  }
+
+  @Get('comments/:commentId/replies')
+  @UseGuards(OptionalAuthGuard)
+  getReplies(@Param('commentId') commentId: string, @Query() query: any, @Req() req: any) {
+    return this.commentService.getReplies(commentId, query, req?.user?.sub || req?.user?.id);
   }
 
   @Get('comments/my')

@@ -130,7 +130,7 @@ ensure_secret JWT_SECRET 48
 ensure_secret ADMIN_JWT_SECRET 48
 
 cd "$BACKEND_DIR"
-npm ci --no-audit --no-fund
+npm ci --workspaces=false --no-audit --no-fund
 DB_PROVIDER="$configured_provider" npm run db:generate
 
 database_url="$(read_env DATABASE_URL)"
@@ -141,7 +141,7 @@ else
 fi
 
 # Prisma CLI and build/test tooling are needed above, but not by the running service.
-npm prune --omit=dev --no-audit --no-fund
+npm prune --workspaces=false --omit=dev --no-audit --no-fund
 
 realtime_instances="$(read_env REALTIME_INSTANCES)"
 realtime_instances="${realtime_instances:-1}"

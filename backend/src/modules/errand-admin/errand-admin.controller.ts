@@ -6,13 +6,14 @@ import { RequirePermission } from '../../decorators/require-permission.decorator
 import { CurrentUser } from '../../decorators/current-user.decorator'
 import { ErrandAdminService } from './errand-admin.service'
 import {
-  RiderQueryDto, AuditRiderDto, RiderStatusDto,
+  RiderQueryDto, AuditRiderDto, RiderStatusDto, RevokeRiderDto,
   DeliveryOrderQueryDto, AssignOrderDto, CancelOrderDto,
   UpdateFeeConfigDto,
   UpdatePageConfigDto,
   UpdateRewardPunishDto,
   ResolveRiskEventDto,
   RepairErrandCouponDto,
+  ConfirmErrandReceiptDto,
 } from './dto/errand-admin.dto'
 
 @ApiTags('Admin - Errand & Rider')
@@ -45,6 +46,13 @@ export class ErrandAdminController {
     return this.service.auditRider(id, dto, operatorId)
   }
 
+  @Post('admin/riders/:id/revoke')
+  @RequirePermission('rider:audit')
+  @ApiOperation({ summary: '撤销骑手认证，保留符合条件的普通用户接单资格' })
+  revokeRider(@Param('id') id: string, @Body() dto: RevokeRiderDto, @CurrentUser('sub') operatorId: string) {
+    return this.service.revokeRider(id, dto, operatorId)
+  }
+
   @Put('admin/riders/:id/status')
   @RequirePermission('rider:audit')
   @ApiOperation({ summary: '更改骑手状态' })
@@ -73,6 +81,13 @@ export class ErrandAdminController {
   @ApiOperation({ summary: '订单详情' })
   getOrderDetail(@Param('id') id: string, @CurrentUser('sub') operatorId: string) {
     return this.service.getOrderDetail(id, operatorId)
+  }
+
+  @Post('admin/errand/orders/:id/confirm-receipt')
+  @RequirePermission('errand:config')
+  @ApiOperation({ summary: '管理员核实后代用户确认收货' })
+  confirmReceipt(@Param('id') id: string, @Body() dto: ConfirmErrandReceiptDto, @CurrentUser('sub') operatorId: string) {
+    return this.service.confirmReceipt(id, dto, operatorId)
   }
 
   @Put('admin/errand/orders/:id/cancel')

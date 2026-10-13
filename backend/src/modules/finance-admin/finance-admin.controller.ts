@@ -160,6 +160,13 @@ export class FinanceAdminController {
     return this.financeAdminService.completeWithdrawal(id, dto, operatorId, ip);
   }
 
+  @Post('withdrawals/:id/reconcile')
+  @ApiOperation({ summary: '向微信核对自动转账到账结果' })
+  @RequirePermission('withdraw:complete')
+  reconcileWithdrawal(@Param('id') id: string, @CurrentUser('sub') operatorId?: string) {
+    return this.financeAdminService.reconcileAutomaticWithdrawal(id, operatorId);
+  }
+
   // ================= 商家结算 =================
 
   @Get('merchant-settlements')

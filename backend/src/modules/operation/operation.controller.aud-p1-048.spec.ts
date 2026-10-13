@@ -3,6 +3,7 @@ import { RequestMethod, GoneException } from '@nestjs/common';
 import { OperationController } from './operation.controller';
 import { OperationService } from './operation.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 
 // AUD-P1-048 回归：
 // 1) 用户端 `POST circle/user-titles/purchase/:titleId` 直领路由已移除（付费购买 alias 直领 claimTitle）。
@@ -33,6 +34,8 @@ describe('OperationController - AUD-P1-048 安全回归', () => {
     })
       .overrideGuard(JwtGuard)
       .useValue(mockJwtGuard)
+      .overrideGuard(OptionalAuthGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<OperationController>(OperationController);

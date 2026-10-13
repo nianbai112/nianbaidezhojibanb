@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } fro
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { CircleService } from './circle.service';
 import { JwtGuard } from '../../guards/jwt.guard';
+import { OptionalAuthGuard } from '../../guards/optional-auth.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 
 @ApiTags('圈子')
@@ -10,13 +11,15 @@ export class CircleController {
   constructor(private readonly circleService: CircleService) {}
 
   @Get('circles')
-  getList(@Query() query: any) {
-    return this.circleService.getList(query);
+  @UseGuards(OptionalAuthGuard)
+  getList(@Query() query: any, @CurrentUser('sub') userId?: string) {
+    return this.circleService.getList(query, userId);
   }
 
   @Get('circles/region/:regionId')
-  getByRegion(@Param('regionId') regionId: string, @Query() query: any) {
-    return this.circleService.getByRegion(regionId, query);
+  @UseGuards(OptionalAuthGuard)
+  getByRegion(@Param('regionId') regionId: string, @Query() query: any, @CurrentUser('sub') userId?: string) {
+    return this.circleService.getByRegion(regionId, query, userId);
   }
 
   @Get('circles/my/manage')
@@ -27,8 +30,9 @@ export class CircleController {
   }
 
   @Get('circles/:circleId')
-  getDetail(@Param('circleId') circleId: string, @Query() query: any) {
-    return this.circleService.getDetail(circleId, query);
+  @UseGuards(OptionalAuthGuard)
+  getDetail(@Param('circleId') circleId: string, @Query() query: any, @CurrentUser('sub') userId?: string) {
+    return this.circleService.getDetail(circleId, query, userId);
   }
 
   @Post('circles')
@@ -45,6 +49,12 @@ export class CircleController {
     return this.circleService.update(circleId, userId, dto);
   }
 
+  @Post('circles/:circleId/share-code')
+  @UseGuards(JwtGuard)
+  shareCode(@Param('circleId') circleId: string, @CurrentUser('sub') userId: string) {
+    return this.circleService.shareCode(circleId, userId);
+  }
+
   @Post('circles/:circleId/invite')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -53,8 +63,9 @@ export class CircleController {
   }
 
   @Get('circles/:circleId/group-chat')
-  getGroupChat(@Param('circleId') circleId: string, @Query() query: any) {
-    return this.circleService.getGroupChat(circleId, query);
+  @UseGuards(JwtGuard)
+  getGroupChat(@Param('circleId') circleId: string, @Query() query: any, @CurrentUser('sub') userId: string) {
+    return this.circleService.getGroupChat(circleId, query, userId);
   }
 
   @Post('circles/:circleId/create-group-chat')
@@ -79,8 +90,9 @@ export class CircleController {
   }
 
   @Get('circle-members/:circleId/users')
-  getMembers(@Param('circleId') circleId: string, @Query() query: any) {
-    return this.circleService.getMembers(circleId, query);
+  @UseGuards(OptionalAuthGuard)
+  getMembers(@Param('circleId') circleId: string, @Query() query: any, @CurrentUser('sub') userId?: string) {
+    return this.circleService.getMembers(circleId, query, userId);
   }
 
   @Post('circle-members/:circleId')
@@ -105,8 +117,9 @@ export class CircleController {
   }
 
   @Get('circles/:circleId/topic-headers')
-  getTopicHeaders(@Param('circleId') circleId: string, @Query('include_topics') includeTopics: string) {
-    return this.circleService.getTopicHeaders(circleId, includeTopics);
+  @UseGuards(OptionalAuthGuard)
+  getTopicHeaders(@Param('circleId') circleId: string, @Query('include_topics') includeTopics: string, @CurrentUser('sub') userId?: string) {
+    return this.circleService.getTopicHeaders(circleId, includeTopics, userId);
   }
 
   @Post('circles/:circleId/topics')
@@ -114,6 +127,12 @@ export class CircleController {
   @ApiBearerAuth()
   createCircleTopic(@Param('circleId') circleId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
     return this.circleService.createCircleTopic(circleId, userId, dto);
+  }
+
+  @Put('circles/:circleId/topics/:topicId')
+  @UseGuards(JwtGuard)
+  updateCircleTopic(@Param('circleId') circleId: string, @Param('topicId') topicId: string, @CurrentUser('sub') userId: string, @Body() dto: any) {
+    return this.circleService.updateCircleTopic(circleId, topicId, userId, dto);
   }
 
   @Post('circles/:circleId/topic-headers/batch-create')

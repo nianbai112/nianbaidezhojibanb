@@ -1,4 +1,6 @@
 import { Logger, OnApplicationShutdown } from "@nestjs/common";
+import { assertRevocationCutoff, isSessionBeforeVersion } from "../../common/session-refresh-cleanup";
+import { readAccessSession, UserTokenPayload } from "../../common/user-token-policy";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../../common/services/prisma.service";
@@ -48,6 +50,7 @@ interface NativeClient {
   socketId: string;
   regionId?: string;
   lastPongAt: number;
+  authPayload: UserTokenPayload;
 }
 
 export class WsNativeGateway implements OnApplicationShutdown {
@@ -230,6 +233,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       let platform: NativeClient["platform"] = isAdmin ? "admin" : "miniapp";
 
       if (!isAdmin) {
+        await readAccessSession(this.prisma, payload);
         await this.userAccess.assertActiveUser(userId, "连接实时服务");
         const requestedClient = url.searchParams.get("client");
         if (requestedClient === "rider_app") {
@@ -282,6 +286,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
         platform,
         socketId,
         lastPongAt: Date.now(),
+        authPayload: payload,
       };
 
       this.clients.set(socketId, client);
@@ -329,14 +334,14 @@ export class WsNativeGateway implements OnApplicationShutdown {
       });
 
       // 发送连接成功消息
-      this.send(ws, {
+      await this.send(client, {
         event: "connected",
         data: { userId, socketId },
       });
 
       // 推送当前未读数
       try {
-        this.send(ws, {
+        await this.send(client, {
           event: "unreadSummary",
           data: await this.getUnreadSummaryForUser(userId),
         });
@@ -377,7 +382,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       if (eventType === "ping") {
         client.lastPongAt = Date.now();
         this.touchRedisOnline(client).catch(() => {});
-        this.send(client.ws, { event: "pong", data: {} });
+        await this.send(client, { event: "pong", data: {} });
       } else if (eventType === "subscribe") {
         if (
           await this.isRedisRateLimited(
@@ -386,7 +391,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_OP_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: { message: "操作过于频繁，请稍后再试" },
           });
@@ -404,7 +409,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_OP_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: { message: "操作过于频繁，请稍后再试" },
           });
@@ -419,13 +424,13 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_OP_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: { message: "操作过于频繁，请稍后再试" },
           });
           return;
         }
-        this.handleLeaveGroup(client, msg);
+        await this.handleLeaveGroup(client, msg);
       } else if (eventType === "conversation_read") {
         if (
           await this.isRedisRateLimited(
@@ -434,7 +439,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_OP_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: { message: "操作过于频繁，请稍后再试" },
           });
@@ -462,7 +467,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_SEND_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: {
               message: "发送太频繁，请稍后再试",
@@ -482,7 +487,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
             NATIVE_SEND_WINDOW_SEC,
           )
         ) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_error",
             data: {
               message: "发送太频繁，请稍后再试",
@@ -498,7 +503,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
         `Native WS message handling failed: socket=${socketId} event=${eventType} clientMessageId=${clientMessageId || "-"} error=${err.message}`,
       );
       if (eventType === "message" || eventType === "private_message") {
-        this.send(client.ws, {
+        await this.send(client, {
           event: "message_error",
           data: { message: "消息发送失败，请稍后重试", clientMessageId },
         });
@@ -510,12 +515,10 @@ export class WsNativeGateway implements OnApplicationShutdown {
     if (client.isAdmin) return true;
     try {
       await this.userAccess.assertActiveUser(client.userId, "使用实时服务");
+      await readAccessSession(this.prisma, client.authPayload);
       return true;
     } catch (error: any) {
-      this.send(client.ws, {
-        event: "message_error",
-        data: { message: error?.message || "账号当前不可用" },
-      });
+      // No application payload is sent after validation fails (including DB outages).
       client.ws.close(4003, "Account inactive");
       return false;
     }
@@ -1055,19 +1058,19 @@ export class WsNativeGateway implements OnApplicationShutdown {
       });
   }
 
-  private handleRedisPushMessage(message: string) {
+  private async handleRedisPushMessage(message: string) {
     try {
       const event = JSON.parse(message);
       if (!event || event.originInstanceId === this.instanceId) return;
       const payload = event.payload;
       if (event.targetType === "user" && event.targetId) {
-        this.pushToUserLocal(String(event.targetId), payload);
+        await this.pushToUserLocal(String(event.targetId), payload);
       } else if (event.targetType === "group" && event.targetId) {
-        this.pushToGroupLocal(String(event.targetId), payload);
+        await this.pushToGroupLocal(String(event.targetId), payload);
       } else if (event.targetType === "region" && event.targetId) {
-        this.pushToRegionLocal(String(event.targetId), payload);
+        await this.pushToRegionLocal(String(event.targetId), payload);
       } else if (event.targetType === "broadcast") {
-        this.broadcastLocal(payload);
+        await this.broadcastLocal(payload);
       }
     } catch (err: any) {
       this.logger.warn(`Native WS Redis push message ignored: ${err.message}`);
@@ -1168,7 +1171,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       this.logger.warn(
         `Native WS private message rejected: socket=${client.socketId} clientMessageId=${clientMessageId || "-"} missingReceiver=${!receiverId} missingContent=${!content}`,
       );
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: {
           message: !receiverId ? "接收方信息缺失" : "消息内容不能为空",
@@ -1178,7 +1181,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       return;
     }
     if (content.length > NATIVE_MAX_MESSAGE_LENGTH) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: {
           message: `消息长度不能超过 ${NATIVE_MAX_MESSAGE_LENGTH} 字符`,
@@ -1199,7 +1202,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       },
     });
     if (!receiver) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: { message: "接收方不存在", clientMessageId },
       });
@@ -1210,7 +1213,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       receiver,
     );
     if (!permission.allowed) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: {
           message: permission.message || "对方当前不允许接收你的私信",
@@ -1232,7 +1235,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
         ).trim()
       : "";
     if (isOfficialReceiver && !currentRegionId) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: { message: "请选择当前校园后再咨询", clientMessageId },
       });
@@ -1248,7 +1251,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
         : undefined,
     );
     if (conversation.isBlocked) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: {
           message: "该私信会话已被后台屏蔽，暂时不能继续发送消息",
@@ -1270,7 +1273,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
               select: { ticketId: true },
             })
           : null;
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_sent",
         type: "message_sent",
         data: {
@@ -1352,7 +1355,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
                 })
                 .catch(() => null)
             : null;
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_sent",
             type: "message_sent",
             data: {
@@ -1390,7 +1393,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
     this.pushToUser(receiverId, payload);
     await this.clearUnreadSummaryCache(receiverId);
     this.pushUnreadSummary(receiverId).catch(() => undefined);
-    this.send(client.ws, {
+    await this.send(client, {
       event: "message_sent",
       type: "message_sent",
       data: {
@@ -1446,7 +1449,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       select: { id: true },
     });
     if (!member) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: { message: "你不是该群成员，无法加入群聊" },
       });
@@ -1456,14 +1459,14 @@ export class WsNativeGateway implements OnApplicationShutdown {
       this.groupSockets.set(groupId, new Set());
     }
     this.groupSockets.get(groupId)!.add(client.socketId);
-    this.send(client.ws, {
+    await this.send(client, {
       event: "joined_group",
       groupId,
       data: { groupId },
     });
   }
 
-  private handleLeaveGroup(client: NativeClient, msg: any) {
+  private async handleLeaveGroup(client: NativeClient, msg: any) {
     const groupId = String(msg.groupId || msg.group_id || "").trim();
     if (!groupId) return;
     const sockets = this.groupSockets.get(groupId);
@@ -1471,7 +1474,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       sockets.delete(client.socketId);
       if (sockets.size === 0) this.groupSockets.delete(groupId);
     }
-    this.send(client.ws, {
+    await this.send(client, {
       event: "left_group",
       groupId,
       data: { groupId },
@@ -1487,7 +1490,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
     ).trim();
     if (!groupId || !content) return;
     if (content.length > NATIVE_MAX_MESSAGE_LENGTH) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: {
           message: `消息长度不能超过 ${NATIVE_MAX_MESSAGE_LENGTH} 字符`,
@@ -1506,14 +1509,14 @@ export class WsNativeGateway implements OnApplicationShutdown {
       include: { user: { select: { id: true, nickname: true, avatar: true } } },
     });
     if (!member) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: { message: "你不是该群成员，无法发送群聊消息", clientMessageId },
       });
       return;
     }
     if (member.isMuted) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_error",
         data: { message: "你已被禁言，暂时不能发送群聊消息", clientMessageId },
       });
@@ -1539,7 +1542,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
           "发送群聊消息",
         );
       } catch (error: any) {
-        this.send(client.ws, {
+        await this.send(client, {
           event: "message_error",
           data: {
             message:
@@ -1562,7 +1565,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
       clientMessageId,
     );
     if (existing) {
-      this.send(client.ws, {
+      await this.send(client, {
         event: "message_sent",
         type: "message_sent",
         data: {
@@ -1599,7 +1602,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
           clientMessageId,
         );
         if (duplicate) {
-          this.send(client.ws, {
+          await this.send(client, {
             event: "message_sent",
             type: "message_sent",
             data: {
@@ -1659,7 +1662,7 @@ export class WsNativeGateway implements OnApplicationShutdown {
     recipients.forEach((member) =>
       this.pushUnreadSummary(member.userId).catch(() => undefined),
     );
-    this.send(client.ws, {
+    await this.send(client, {
       event: "message_sent",
       type: "message_sent",
       data: {
@@ -1799,105 +1802,58 @@ export class WsNativeGateway implements OnApplicationShutdown {
   // 推送方法（供 NotifyService 调用）
   // ===========================================================================
 
-  private pushToUserLocal(userId: string, payload: any) {
-    const socketIds = this.userSockets.get(userId);
-    if (!socketIds || socketIds.size === 0) return 0;
-
-    const data =
-      typeof payload === "string" ? payload : JSON.stringify(payload);
+  private async deliverClients(clients: NativeClient[], payload: any): Promise<number> {
     let sent = 0;
-    for (const sid of socketIds) {
-      const client = this.clients.get(sid);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        try {
-          client.ws.send(data);
-          sent++;
-        } catch (error: any) {
-          this.logger.warn(
-            `Native WS push failed: socket=${sid} error=${error?.message || error}`,
-          );
-          this.removeClient(sid).catch(() => undefined);
-        }
-      }
-    }
+    for (const client of clients) if (await this.send(client, payload)) sent++;
     return sent;
   }
 
-  pushToUser(userId: string, payload: any) {
-    const sent = this.pushToUserLocal(userId, payload);
+  private async pushToUserLocal(userId: string, payload: any) {
+    const clients = Array.from(this.userSockets.get(userId) || [])
+      .map((id) => this.clients.get(id)).filter((client): client is NativeClient => !!client);
+    return this.deliverClients(clients, payload);
+  }
+
+  async pushToUser(userId: string, payload: any) {
+    const sent = await this.pushToUserLocal(userId, payload);
     this.publishRedisPush("user", userId, payload);
     return sent;
   }
 
   async pushToUserReliable(userId: string, payload: any) {
-    const localSent = this.pushToUserLocal(userId, payload);
-    const subscribers = await this.publishRedisPushRequired(
-      "user",
-      userId,
-      payload,
-    );
+    const localSent = await this.pushToUserLocal(userId, payload);
+    const subscribers = await this.publishRedisPushRequired("user", userId, payload);
     return { localSent, subscribers };
   }
 
-  private pushToRegionLocal(regionId: string, payload: any) {
-    const data =
-      typeof payload === "string" ? payload : JSON.stringify(payload);
-    let sent = 0;
-    this.clients.forEach((client) => {
-      if (
-        client.regionId === regionId &&
-        client.ws.readyState === WebSocket.OPEN
-      ) {
-        client.ws.send(data);
-        sent++;
-      }
-    });
-    return sent;
+  private async pushToRegionLocal(regionId: string, payload: any) {
+    return this.deliverClients(Array.from(this.clients.values()).filter((client) => client.regionId === regionId), payload);
   }
 
-  pushToRegion(regionId: string, payload: any) {
-    const sent = this.pushToRegionLocal(regionId, payload);
+  async pushToRegion(regionId: string, payload: any) {
+    const sent = await this.pushToRegionLocal(regionId, payload);
     this.publishRedisPush("region", regionId, payload);
     return sent;
   }
 
-  private pushToGroupLocal(groupId: string, payload: any) {
-    const socketIds = this.groupSockets.get(groupId);
-    if (!socketIds || socketIds.size === 0) return 0;
-    const data =
-      typeof payload === "string" ? payload : JSON.stringify(payload);
-    let sent = 0;
-    for (const sid of socketIds) {
-      const client = this.clients.get(sid);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(data);
-        sent++;
-      }
-    }
-    return sent;
+  private async pushToGroupLocal(groupId: string, payload: any) {
+    const clients = Array.from(this.groupSockets.get(groupId) || [])
+      .map((id) => this.clients.get(id)).filter((client): client is NativeClient => !!client);
+    return this.deliverClients(clients, payload);
   }
 
-  pushToGroup(groupId: string, payload: any) {
-    const sent = this.pushToGroupLocal(groupId, payload);
+  async pushToGroup(groupId: string, payload: any) {
+    const sent = await this.pushToGroupLocal(groupId, payload);
     this.publishRedisPush("group", groupId, payload);
     return sent;
   }
 
-  private broadcastLocal(payload: any) {
-    const data =
-      typeof payload === "string" ? payload : JSON.stringify(payload);
-    let sent = 0;
-    this.clients.forEach((client) => {
-      if (client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(data);
-        sent++;
-      }
-    });
-    return sent;
+  private async broadcastLocal(payload: any) {
+    return this.deliverClients(Array.from(this.clients.values()), payload);
   }
 
-  broadcast(payload: any) {
-    const sent = this.broadcastLocal(payload);
+  async broadcast(payload: any) {
+    const sent = await this.broadcastLocal(payload);
     this.publishRedisPush("broadcast", null, payload);
     return sent;
   }
@@ -1918,13 +1874,14 @@ export class WsNativeGateway implements OnApplicationShutdown {
    * AUD-P1-181: 断开指定用户的所有 WebSocket 连接。
    * 用于账号注销/删除后主动踢下线。
    */
-  disconnectUserLocal(userId: string): number {
+  disconnectUserLocal(userId: string, invalidBeforeVersion: number): number {
+    assertRevocationCutoff(invalidBeforeVersion);
     const socketIds = this.userSockets.get(userId);
     if (!socketIds || socketIds.size === 0) return 0;
     let count = 0;
     for (const socketId of socketIds) {
       const client = this.clients.get(socketId);
-      if (client) {
+      if (client && !client.isAdmin && isSessionBeforeVersion(client.authPayload, userId, invalidBeforeVersion)) {
         try {
           client.ws.close();
           count++;
@@ -1937,9 +1894,9 @@ export class WsNativeGateway implements OnApplicationShutdown {
     return count;
   }
 
-  disconnectUser(userId: string): number {
-    const count = this.disconnectUserLocal(userId);
-    this.publishRedisControl("disconnect_user", { userId });
+  disconnectUser(userId: string, invalidBeforeVersion: number): number {
+    const count = this.disconnectUserLocal(userId, invalidBeforeVersion);
+    this.publishRedisControl("disconnect_user", { userId, invalidBeforeVersion });
     return count;
   }
 
@@ -1992,9 +1949,17 @@ export class WsNativeGateway implements OnApplicationShutdown {
   // 工具方法
   // ===========================================================================
 
-  private send(ws: WebSocket, payload: any) {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
+  private async send(client: NativeClient, payload: any): Promise<boolean> {
+    if (client.ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      if (!(await this.assertActiveClient(client)) || client.ws.readyState !== WebSocket.OPEN) return false;
+      client.ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+      return true;
+    } catch {
+      // Public push methods remain safe when their callers intentionally don't await.
+      try { client.ws.close(4003, "Session unavailable"); } catch {}
+      await this.removeClient(client.socketId).catch(() => undefined);
+      return false;
     }
   }
 

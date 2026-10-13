@@ -5,6 +5,7 @@ import axios from 'axios';
 import { getManagedWechatTemplateContract } from './wechat-template-contracts';
 import { currentRequestMetadata } from '../../common/request-context';
 import { hasWechatTemplatePayload, wechatFailure } from './wechat-log-presentation';
+import { isMiniappOpenid } from '../../common/wechat-identity';
 
 @Injectable()
 export class WechatSubscribeService {
@@ -76,7 +77,7 @@ export class WechatSubscribeService {
         select: { openid: true },
       });
 
-      if (!user?.openid) {
+      if (!isMiniappOpenid(user?.openid)) {
         await this.writeLog({ userId, platformType: 'miniprogram', templateType, templateId: template.templateId, page, data, status: 'skipped', errorCode: 'openid_missing', errorMessage: '用户无 openid' });
         return { success: false, error: '用户无 openid' };
       }
@@ -166,7 +167,7 @@ export class WechatSubscribeService {
       throw new BadRequestException('不是小程序订阅消息日志');
     }
     if (log.status === 'success') return { success: true, message: '该消息已发送成功' };
-    if (!log.openid || !log.templateId || !hasWechatTemplatePayload(log.payload)) {
+    if (!isMiniappOpenid(log.openid) || !log.templateId || !hasWechatTemplatePayload(log.payload)) {
       throw new BadRequestException('原发送数据不完整，无法重试');
     }
     const consent = log.userId ? await this.prisma.wechatSubscribeConsent.findUnique({

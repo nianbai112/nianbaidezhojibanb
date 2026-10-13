@@ -1,6 +1,8 @@
 import { BadRequestException } from "@nestjs/common";
 
-export const ERRAND_MARKETING_HOLD_MS = 48 * 60 * 60 * 1000;
+// Compatibility only: these old time-based holds are rechecked immediately.
+// New coupon orders do not create a cooling-period hold.
+export const LEGACY_MARKETING_HOLD_REASONS = ['marketing_cooling_period', 'marketing_cooling_period_backfill'];
 
 const money = (value: unknown) =>
   Math.round(Math.max(0, Number(value || 0)) * 100) / 100;

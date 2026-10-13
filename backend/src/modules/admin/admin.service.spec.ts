@@ -1,3 +1,4 @@
+import { StudentIdentityService } from '../student-identity/student-identity.service';
 import { Test, TestingModule } from "@nestjs/testing";
 import {
   BadRequestException,
@@ -313,6 +314,7 @@ describe("AdminService", () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminService,
+        { provide: StudentIdentityService, useValue: { review: jest.fn().mockResolvedValue({ success: true }) } },
         { provide: PrismaService, useValue: createMockPrisma() },
         {
           provide: AdminDataScopeService,
@@ -906,6 +908,23 @@ describe("AdminService", () => {
     });
   });
 
+  describe("durable revocation without the optional gateway service", () => {
+    it("increments the database version even when only the fallback is available", async () => {
+      (service as any).userSessionRevocation = undefined;
+      prisma.user.update.mockResolvedValueOnce({ authVersion: 1 });
+      await (service as any).revokeUserAccess("u1");
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: "u1" }, data: { authVersion: { increment: 1 } }, select: { authVersion: true },
+      });
+    });
+    it("does not swallow a failed persisted revocation", async () => {
+      (service as any).userSessionRevocation = undefined;
+      const failure = new Error("database unavailable");
+      prisma.user.update.mockRejectedValueOnce(failure);
+      await expect((service as any).revokeUserAccess("u1")).rejects.toBe(failure);
+    });
+  });
+
   describe("banUser", () => {
     it("should ban a user", async () => {
       prisma.user.findUnique.mockResolvedValue({ id: "u1" });
@@ -1340,13 +1359,13 @@ describe("AdminService", () => {
 
   describe("auditCert", () => {
     it("should approve student cert", async () => {
-      const result = await service.auditCert("u1", { status: "approved" });
+      const result = await service.auditCert("u1", { status: "approved", applicationId: "v1", submissionVersion: 1 }, "op1");
       expect(result.success).toBe(true);
     });
 
     it("should reject student cert", async () => {
       const result = await service.auditCert("u1", {
-        status: "rejected",
+        status: "rejected", applicationId: "v1", submissionVersion: 1,
         reason: "信息不符",
       });
       expect(result.success).toBe(true);

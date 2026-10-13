@@ -31,7 +31,7 @@ export function redactAuditDetail(value: any, key = '', previous?: any): any {
   if (!key && typeof value === 'string') {
     try { return redactAuditDetail(JSON.parse(value)); } catch { return value; }
   }
-  if (/password|secret|token|authorization|private.?key|api.*key|access.?key|encrypt.*key|bank.?card|id.?card|cert/i.test(key)) {
+  if (/student.?id|real.?name|activation|password|secret|token|authorization|private.?key|api.*key|access.?key|encrypt.*key|encoding.?aes.?key|aes.?key|bank.?card|id.?card|cert/i.test(key)) {
     if (value === null || value === undefined || value === '') return value;
     if (value === '已更新敏感信息') return value;
     return previous !== undefined && previous !== value ? '已更新敏感信息' : '已隐藏敏感信息';

@@ -8,6 +8,7 @@ describe('AUD-P1-071 AdminService regional scope', () => {
       comment: { groupBy: jest.fn().mockResolvedValue([]) },
       adminLoginLog: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       studentVerify: { count: jest.fn().mockResolvedValue(0) },
+      school: { findMany: jest.fn().mockResolvedValue([]) },
       userMembership: { count: jest.fn().mockResolvedValue(0) },
       merchant: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), findUnique: jest.fn() },
       merchantSettlement: {

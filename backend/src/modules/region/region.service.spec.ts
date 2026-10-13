@@ -63,7 +63,7 @@ describe('RegionService.updateManagerSettings', () => {
     });
 
     expect(prisma.region.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'region-1' },
+      where: { id: 'region-1', managerUserId: 'user-1' },
       data: expect.objectContaining({
         name: '新区域',
         managerName: '负责人',

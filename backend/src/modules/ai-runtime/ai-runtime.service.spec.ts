@@ -218,3 +218,47 @@ describe('AiRuntimeService.moderateContent 阀门与抽检', () => {
     expect(call).not.toHaveBeenCalled();
   });
 });
+
+
+describe('AiRuntimeService private conversation logging', () => {
+  afterEach(() => jest.restoreAllMocks());
+  function setupPrivate(riskControl = {}) {
+    const prisma: any = {
+      config: { findUnique: jest.fn().mockResolvedValue({ value: { enabled: true, provider: 'deepseek', apiKey: 'fixture-key', apiBaseUrl: 'https://example.invalid/v1', model: 'test', riskControl } }) },
+      aiCallLog: { create: jest.fn().mockResolvedValue({ id: 'private-log' }), update: jest.fn().mockResolvedValue({}) },
+      aiQuotaUsage: { upsert: jest.fn().mockResolvedValue({}), aggregate: jest.fn() },
+    };
+    return { prisma, service: new AiRuntimeService(prisma, { get: jest.fn() } as any) };
+  }
+  it('keeps private prompts and answers out of common call logs', async () => {
+    const { service, prisma } = setupPrivate();
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: 'PRIVATE_ANSWER_FIXTURE' } }], usage: { total_tokens: 12 } }) } as any);
+    const result = await service.callChatDetailed([{ role: 'user', content: 'PRIVATE_PROMPT_FIXTURE' }], { privateContent: true });
+    expect(result.content).toBe('PRIVATE_ANSWER_FIXTURE');
+    const logText = JSON.stringify([prisma.aiCallLog.create.mock.calls, prisma.aiCallLog.update.mock.calls]);
+    expect(logText).not.toContain('PRIVATE_PROMPT_FIXTURE');
+    expect(logText).not.toContain('PRIVATE_ANSWER_FIXTURE');
+  });
+  it.each([0, 500, undefined])('sends the correct output limit for %s without turning zero into a default', async (maxTokens) => {
+    const { service } = setupPrivate();
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: 'fixture' }, finish_reason: 'length' }], usage: { total_tokens: 12 } }) } as any);
+    const result = await service.callChatDetailed([{ role: 'user', content: 'fixture' }], { maxTokens, taskId: 'job-fixture' });
+    const payload = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
+    if (maxTokens === 0) expect(payload).not.toHaveProperty('max_tokens');
+    else expect(payload.max_tokens).toBe(maxTokens ?? 1000);
+    expect(result.finishReason).toBe('length');
+  });
+  it('redacts provider errors that echo private input', async () => {
+    const { service, prisma } = setupPrivate();
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 500, text: async () => 'PRIVATE_PROVIDER_ECHO' } as any);
+    await expect(service.callChatDetailed([{ role: 'user', content: 'PRIVATE_PROMPT_FIXTURE' }], { privateContent: true })).rejects.toThrow();
+    expect(JSON.stringify(prisma.aiCallLog.update.mock.calls)).not.toContain('PRIVATE_PROVIDER_ECHO');
+  });
+  it('does not call the provider if configured quota data cannot be read', async () => {
+    const { service, prisma } = setupPrivate({ maxDailyCalls: 10 });
+    prisma.aiQuotaUsage.aggregate.mockRejectedValue(new Error('fixture quota database unavailable'));
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    await expect(service.callChatDetailed([{ role: 'user', content: 'PRIVATE_PROMPT_FIXTURE' }], { privateContent: true })).rejects.toThrow('fixture quota database unavailable');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
